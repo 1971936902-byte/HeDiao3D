@@ -683,6 +683,65 @@ button:disabled {
   background: rgba(255, 107, 156, 0.08);
 }
 
+.export-gate {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(234, 181, 88, 0.34);
+  border-radius: 8px;
+  background: rgba(234, 181, 88, 0.08);
+}
+
+.export-gate.ready {
+  border-color: rgba(71, 209, 140, 0.34);
+  background: rgba(71, 209, 140, 0.07);
+}
+
+.export-gate.blocked {
+  border-color: rgba(255, 107, 156, 0.34);
+  background: rgba(255, 107, 156, 0.08);
+}
+
+.export-gate strong {
+  color: #f2f8f5;
+  font-size: 14px;
+}
+
+.export-gate span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.export-gate-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.export-gate-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 7px 9px;
+  color: #d2ddd7;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+
+.export-gate-list label.checked {
+  border-color: rgba(71, 209, 140, 0.28);
+  background: rgba(71, 209, 140, 0.07);
+}
+
+.export-gate-list input {
+  accent-color: var(--teal);
+}
+
 .quality-score {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr);

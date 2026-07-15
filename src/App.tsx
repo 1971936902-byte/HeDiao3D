@@ -104,6 +104,12 @@ type CaptureGuideReport = {
   suggestions: string[];
 };
 
+type ExportGateState = {
+  safetyReportReviewed: boolean;
+  airRunVerified: boolean;
+  fixtureConfirmed: boolean;
+};
+
 const toolpathColors = {
   rough: 0xd2451e,
   finish: 0x8b5cf6,
@@ -176,6 +182,11 @@ export function App() {
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskSnapshots, setTaskSnapshots] = useState<TaskSnapshot[]>([]);
   const [customProcessTemplates, setCustomProcessTemplates] = useState<ProcessTemplate[]>(loadCustomProcessTemplates);
+  const [exportGate, setExportGate] = useState<ExportGateState>({
+    safetyReportReviewed: false,
+    airRunVerified: false,
+    fixtureConfirmed: false
+  });
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -211,6 +222,15 @@ export function App() {
     () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
     [settings, toolpath]
   );
+  const exportGateReady = Boolean(toolpath && !exportBlocked && exportGate.safetyReportReviewed && exportGate.airRunVerified && exportGate.fixtureConfirmed);
+
+  useEffect(() => {
+    setExportGate({
+      safetyReportReviewed: false,
+      airRunVerified: false,
+      fixtureConfirmed: false
+    });
+  }, [toolpath]);
 
   useEffect(() => {
     window.localStorage.setItem(CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY, JSON.stringify(customProcessTemplates));
@@ -445,6 +465,7 @@ export function App() {
   const handleDownloadAirRun = () => {
     if (!airRunProgram) return;
     downloadText(airRunProgram.filename, airRunProgram.gcode);
+    setExportGate((current) => ({ ...current, airRunVerified: true }));
     recordTask({
       category: "cam",
       status: exportBlocked ? "warning" : "ok",
@@ -518,6 +539,7 @@ export function App() {
     } else {
       downloadText("safety-report.md", createSafetyReportMarkdown(reportInput), "text/markdown");
     }
+    setExportGate((current) => ({ ...current, safetyReportReviewed: true }));
     recordTask({
       category: "cam",
       status: exportBlocked ? "warning" : "ok",
@@ -1402,6 +1424,39 @@ export function App() {
                 下载安全报告 JSON
               </button>
             </div>
+            <div className={`export-gate ${exportGateReady ? "ready" : exportBlocked ? "blocked" : "review"}`}>
+              <strong>{exportGateReady ? "正式加工文件已解锁" : exportBlocked ? "正式加工文件锁定" : "正式加工文件待确认"}</strong>
+              <span>{exportGateReady ? "可下载 ZIP/NC/TAP/TXT 正式文件；上机前仍建议先空跑。" : exportBlocked ? "存在阻断项，只允许下载报告和空跑文件。" : "下载正式文件前，请完成安全报告、离料空跑和夹持确认。"}</span>
+            </div>
+            <div className="export-gate-list">
+              <label className={exportGate.safetyReportReviewed ? "checked" : ""}>
+                <input
+                  type="checkbox"
+                  checked={exportGate.safetyReportReviewed}
+                  onChange={(event) => setExportGate((current) => ({ ...current, safetyReportReviewed: event.target.checked }))}
+                  disabled={!toolpath}
+                />
+                <span>已查看安全报告</span>
+              </label>
+              <label className={exportGate.airRunVerified ? "checked" : ""}>
+                <input
+                  type="checkbox"
+                  checked={exportGate.airRunVerified}
+                  onChange={(event) => setExportGate((current) => ({ ...current, airRunVerified: event.target.checked }))}
+                  disabled={!toolpath}
+                />
+                <span>已下载/完成离料空跑</span>
+              </label>
+              <label className={exportGate.fixtureConfirmed ? "checked" : ""}>
+                <input
+                  type="checkbox"
+                  checked={exportGate.fixtureConfirmed}
+                  onChange={(event) => setExportGate((current) => ({ ...current, fixtureConfirmed: event.target.checked }))}
+                  disabled={!toolpath}
+                />
+                <span>已确认夹持区和刀具装夹</span>
+              </label>
+            </div>
           </section>
         )}
 
@@ -1550,7 +1605,7 @@ export function App() {
               <span>质量报告</span>
               <span>安全报告</span>
             </div>
-            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!toolpath || exportBlocked} type="button" title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 ZIP 加工包"}>
+            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!exportGateReady} type="button" title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 ZIP 加工包" : "请先完成正式导出确认"}>
               <Download size={17} />
               下载 ZIP 加工包
             </button>
@@ -1822,37 +1877,37 @@ export function App() {
                 <Download size={17} />
                 下载空跑 NC
               </button>
-              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 NC"}>
+              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 NC" : "请先完成正式导出确认"}>
                 <Download size={17} />
                 下载合并 NC
               </button>
               {toolpath.programs?.rough && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载粗加工 NC"}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载粗加工 NC" : "请先完成正式导出确认"}>
                   <Download size={17} />
                   下载粗加工
                 </button>
               )}
               {toolpath.programs?.finish && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载精加工 NC"}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载精加工 NC" : "请先完成正式导出确认"}>
                   <Download size={17} />
                   下载精加工
                 </button>
               )}
               {toolpath.programs?.rest && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载清残 NC"}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载清残 NC" : "请先完成正式导出确认"}>
                   <Download size={17} />
                   下载清残
                 </button>
               )}
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 TAP"}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 TAP" : "请先完成正式导出确认"}>
                 <Download size={17} />
                 下载 TAP
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 TXT"}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 TXT" : "请先完成正式导出确认"}>
                 <Download size={17} />
                 下载 TXT
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 CSV"}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 CSV" : "请先完成正式导出确认"}>
                 <Download size={17} />
                 下载 CSV
               </button>
