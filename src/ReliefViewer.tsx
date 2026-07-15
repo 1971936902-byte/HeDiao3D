@@ -27,7 +27,7 @@ export function ReliefViewer({ geometry, wireframe, toolpathPoints = [], setting
     const camera = new THREE.PerspectiveCamera(38, host.clientWidth / host.clientHeight, 0.1, 1000);
     camera.position.set(18, -30, 18);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;

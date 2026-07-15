@@ -5,13 +5,13 @@ import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from ".
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
 import { DepthEditor } from "./DepthEditor";
 import { AiMeshViewer } from "./AiMeshViewer";
-import { exportGeometryAsStl } from "./modelExport";
+import { exportGeometryAsStl, geometryToStlString } from "./modelExport";
 import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
 import { createOperatorPackageMarkdown } from "./exportPackage";
 import { createCostEstimate, formatCurrencyRange, type CostEstimate } from "./costEstimate";
 import { createPackageManifest, createQualityReport, createSafetyReport, createSafetyReportMarkdown } from "./reports";
-import { createZipBlob, downloadBlob, type ZipTextFile } from "./zipPackage";
+import { createZipBlob, downloadBlob, type ZipFile } from "./zipPackage";
 import { ai3dProviders, getAi3dProvider, isProviderAvailable, type Ai3dProviderId } from "./aiProviders";
 import { analyzeMaterialRemoval, type MaterialRemovalReport } from "./simulationAnalysis";
 import {
@@ -33,7 +33,7 @@ import {
 import { analyzeDepthMapQuality, createManufacturingQualityReport } from "./quality";
 import type { ManufacturingQualityReport } from "./quality";
 import type { CarvingImage, DepthMap, GeneratedToolpath, MeshQualityReport, ModelSettings } from "./types";
-import type { ProcessTemplate, SafetyIssue } from "./manufacturingProfiles";
+import type { MachineProfile, MaterialProfile, ProcessTemplate, SafetyIssue, ToolProfile } from "./manufacturingProfiles";
 
 const defaultSettings: ModelSettings = {
   lengthMm: 38,
@@ -572,9 +572,28 @@ export function App() {
     if (!reportInput) return;
 
     const operatorNote = createOperatorPackageMarkdown(reportInput);
-    const files: ZipTextFile[] = [
+    const parameters = createPackageParameters({
+      settings,
+      sourceLabel: generationLabel,
+      aiMeshUrl,
+      aiMeshStlUrl,
+      selectedTool,
+      selectedMaterial,
+      selectedMachine,
+      toolpath,
+      manufacturingQuality,
+      materialRemoval,
+      meshQuality,
+      costEstimate,
+      envelopeQuality
+    });
+    const checklist = createPackageChecklist(reportInput, Boolean(exportGateReady), Boolean(aiMeshUrl));
+    const previewPng = captureWorkbenchPreviewPng();
+    const files: ZipFile[] = [
       { name: "manifest.json", content: JSON.stringify(createPackageManifest(reportInput), null, 2), mime: "application/json" },
+      { name: "parameters.json", content: JSON.stringify(parameters, null, 2), mime: "application/json" },
       { name: "operator-note.md", content: operatorNote, mime: "text/markdown" },
+      { name: "reports/package-checklist.md", content: checklist, mime: "text/markdown" },
       { name: "reports/safety-report.json", content: JSON.stringify(createSafetyReport(reportInput), null, 2), mime: "application/json" },
       { name: "reports/quality-report.json", content: JSON.stringify(createQualityReport(reportInput), null, 2), mime: "application/json" },
       { name: "reports/cost-estimate.json", content: JSON.stringify(costEstimate, null, 2), mime: "application/json" },
@@ -584,6 +603,26 @@ export function App() {
       { name: "nc/nuclear-carving-toolpath.txt", content: toolpath.txt },
       { name: "nc/nuclear-carving-toolpath.csv", content: toolpath.csv, mime: "text/csv" }
     ];
+
+    if (previewPng) {
+      files.push({ name: "preview/simulation-result.png", content: previewPng, mime: "image/png" });
+    }
+    if (!aiMeshUrl) {
+      files.push({ name: "models/source.stl", content: geometryToStlString(geometry), mime: "model/stl" });
+    } else {
+      files.push({
+        name: "models/model-download-links.md",
+        content: [
+          "# AI Mesh 模型下载链接",
+          "",
+          aiMeshUrl ? `- GLB：${aiMeshUrl}` : "- GLB：未生成",
+          aiMeshStlUrl ? `- STL：${aiMeshStlUrl}` : "- STL：未生成",
+          "",
+          "说明：AI Mesh 文件可能由本地代理缓存，请在归档前从页面下载 GLB/STL 原文件。"
+        ].join("\n"),
+        mime: "text/markdown"
+      });
+    }
 
     if (toolpath.programs?.rough) {
       files.push({ name: `nc/${toolpath.programs.rough.filename}`, content: toolpath.programs.rough.gcode });
@@ -596,12 +635,14 @@ export function App() {
     }
 
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
-    downloadBlob(`hediao3d-machining-package-${stamp}.zip`, createZipBlob(files));
+    const machineSlug = createFileSlug(selectedMachine.id);
+    const toolSlug = createFileSlug(selectedTool.id);
+    downloadBlob(`hediao3d-${stamp}-${machineSlug}-${toolSlug}-v2.zip`, createZipBlob(files));
     recordTask({
       category: "cam",
       status: exportBlocked ? "warning" : "ok",
       title: "导出 ZIP 加工包",
-      detail: `已打包 ${files.length} 个文件，包含 NC、报告和上机说明。`
+      detail: `已打包 ${files.length} 个文件，包含 NC、报告、参数、预览截图和上机说明。`
     });
   };
 
@@ -1718,8 +1759,12 @@ export function App() {
               <span>精加工 NC</span>
               <span>清残 NC</span>
               <span>CSV 点位</span>
+              <span>参数快照</span>
+              <span>仿真截图</span>
+              <span>源模型</span>
               <span>质量报告</span>
               <span>安全报告</span>
+              <span>交付清单</span>
             </div>
             <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!exportGateReady} type="button" title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 ZIP 加工包" : "请先完成正式导出确认"}>
               <Download size={17} />
@@ -2117,6 +2162,121 @@ function GcodePreview({ toolpath, exportGateReady }: { toolpath: GeneratedToolpa
       </div>
     </div>
   );
+}
+
+function captureWorkbenchPreviewPng() {
+  const canvas = document.querySelector<HTMLCanvasElement>(".workbench .viewer canvas");
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
+  try {
+    const dataUrl = canvas.toDataURL("image/png");
+    return dataUrlToUint8Array(dataUrl);
+  } catch {
+    return null;
+  }
+}
+
+function dataUrlToUint8Array(dataUrl: string) {
+  const [, base64 = ""] = dataUrl.split(",");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function createPackageParameters(input: {
+  settings: ModelSettings;
+  sourceLabel: string;
+  aiMeshUrl: string | null;
+  aiMeshStlUrl: string | null;
+  selectedTool: ToolProfile;
+  selectedMaterial: MaterialProfile;
+  selectedMachine: MachineProfile;
+  toolpath: GeneratedToolpath;
+  manufacturingQuality: ManufacturingQualityReport;
+  materialRemoval: MaterialRemovalReport | null;
+  meshQuality: MeshQualityReport | null;
+  costEstimate: CostEstimate | null;
+  envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality> | null;
+}) {
+  return {
+    packageVersion: "V2",
+    createdAt: new Date().toISOString(),
+    source: {
+      label: input.sourceLabel,
+      aiMeshUrl: input.aiMeshUrl,
+      aiMeshStlUrl: input.aiMeshStlUrl
+    },
+    machine: input.selectedMachine,
+    tool: input.selectedTool,
+    material: input.selectedMaterial,
+    settings: input.settings,
+    toolpath: {
+      postProcessorName: input.toolpath.postProcessorName,
+      estimatedMinutes: input.toolpath.estimatedMinutes,
+      summary: input.toolpath.summary,
+      programFiles: {
+        rough: input.toolpath.programs?.rough?.filename ?? null,
+        finish: input.toolpath.programs?.finish?.filename ?? null,
+        rest: input.toolpath.programs?.rest?.filename ?? null,
+        combined: input.toolpath.programs?.combined?.filename ?? "nuclear-carving-combined.nc",
+        airRun: input.toolpath.programs?.airRun?.filename ?? null
+      }
+    },
+    quality: {
+      manufacturing: input.manufacturingQuality,
+      materialRemoval: input.materialRemoval,
+      mesh: input.meshQuality,
+      envelope: input.envelopeQuality
+    },
+    costEstimate: input.costEstimate
+  };
+}
+
+function createPackageChecklist(
+  input: Parameters<typeof createOperatorPackageMarkdown>[0],
+  exportGateReady: boolean,
+  usesAiMesh: boolean
+) {
+  const criticalCount = input.safetyIssues.filter((issue) => issue.level === "critical").length;
+  const warningCount = input.safetyIssues.filter((issue) => issue.level === "warning").length;
+  return [
+    "# ZIP 加工包交付检查清单",
+    "",
+    `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    `正式导出状态：${exportGateReady ? "已完成确认" : "未完成确认"}`,
+    `风险项：阻断 ${criticalCount} / 提醒 ${warningCount}`,
+    "",
+    "## 必查文件",
+    "",
+    "- [ ] `operator-note.md` 已阅读",
+    "- [ ] `reports/safety-report.json` 已复核",
+    "- [ ] `parameters.json` 已归档",
+    "- [ ] `preview/simulation-result.png` 已查看",
+    "- [ ] `nc/nuclear-carving-air-run.nc` 已先空跑",
+    "- [ ] 正式 NC/TAP/TXT 文件已按目标机床后处理确认",
+    usesAiMesh ? "- [ ] `models/model-download-links.md` 中的 GLB/STL 已单独归档" : "- [ ] `models/source.stl` 已归档",
+    "",
+    "## 上机前确认",
+    "",
+    `- 机床：${input.machine.name}`,
+    `- 刀具：${input.tool.name}`,
+    `- 材料：${input.material.name}`,
+    `- 左/右夹持：${input.settings.leftHoldMm.toFixed(1)} / ${input.settings.rightHoldMm.toFixed(1)} mm`,
+    `- 安全高度：${input.settings.safeZ.toFixed(2)} mm`,
+    `- 估算时间：${input.toolpath.estimatedMinutes.toFixed(1)} min`,
+    "",
+    "## 结论",
+    "",
+    criticalCount > 0
+      ? "- 当前存在阻断项，不建议直接上机。"
+      : "- 当前可进入离料空跑和低风险试雕流程。"
+  ].join("\n");
+}
+
+function createFileSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "default";
 }
 
 type EnvelopeHeatmapCell = {

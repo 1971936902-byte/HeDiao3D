@@ -4,16 +4,24 @@ export type ZipTextFile = {
   mime?: string;
 };
 
+export type ZipBinaryFile = {
+  name: string;
+  content: Uint8Array;
+  mime?: string;
+};
+
+export type ZipFile = ZipTextFile | ZipBinaryFile;
+
 const encoder = new TextEncoder();
 
-export function createZipBlob(files: ZipTextFile[]) {
+export function createZipBlob(files: ZipFile[]) {
   const chunks: Uint8Array[] = [];
   const centralDirectory: Uint8Array[] = [];
   let offset = 0;
 
   files.forEach((file) => {
     const nameBytes = encoder.encode(file.name.replace(/\\/g, "/"));
-    const data = encoder.encode(file.content);
+    const data = typeof file.content === "string" ? encoder.encode(file.content) : file.content;
     const crc = crc32(data);
     const dosTime = dateToDosTime(new Date());
     const localHeader = concatBytes(

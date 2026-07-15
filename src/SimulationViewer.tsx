@@ -29,7 +29,7 @@ export function SimulationViewer({ points, previewPoints = [], settings, envelop
     const camera = new THREE.PerspectiveCamera(38, host.clientWidth / host.clientHeight, 0.1, 1000);
     camera.position.set(18, -30, 18);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;

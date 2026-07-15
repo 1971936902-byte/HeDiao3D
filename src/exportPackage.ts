@@ -24,14 +24,16 @@ type ExportPackageInput = {
 export function createOperatorPackageMarkdown(input: ExportPackageInput) {
   const createdAt = new Date().toLocaleString("zh-CN", { hour12: false });
   const files = [
-    input.aiMeshUrl ? `- \`preview.glb\`：${input.aiMeshUrl}` : "- `nuclear-carving-relief.stl`：本地浮雕 STL",
-    input.aiMeshStlUrl ? `- \`source.stl\`：${input.aiMeshStlUrl}` : "- `source.stl`：请从页面下载当前浮雕 STL",
+    input.aiMeshUrl ? `- \`models/model-download-links.md\`：AI Mesh GLB/STL 下载引用` : "- `models/source.stl`：本地浮雕 STL",
+    "- `preview/simulation-result.png`：导出时右侧 3D/仿真视图截图",
+    "- `parameters.json`：机床、刀具、材料、刀路和质量参数快照",
     "- `nuclear-carving-air-run.nc`：离料空跑程序，主轴关闭，Z 保持安全高度，仅验证机器动作",
     "- `nuclear-carving-combined.nc`：合并加工程序",
     input.toolpath.programs?.rough ? "- `nuclear-carving-rough.nc`：粗加工程序" : "- `nuclear-carving-rough.nc`：当前无独立粗加工程序",
     input.toolpath.programs?.finish ? "- `nuclear-carving-finish.nc`：精加工程序" : "- `nuclear-carving-finish.nc`：当前无独立精加工程序",
     input.toolpath.programs?.rest ? "- `nuclear-carving-rest.nc`：清残补加工程序，用于深纹理和高变化细节区域" : "- `nuclear-carving-rest.nc`：当前无独立清残程序",
     "- `nuclear-carving-toolpath.tap/txt/csv`：兼容导出文件",
+    "- `reports/package-checklist.md`：交付检查清单",
     "- `operator-note.md`：本说明"
   ];
 
