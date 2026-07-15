@@ -10,7 +10,7 @@ import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
 import { createOperatorPackageMarkdown } from "./exportPackage";
 import { createCostEstimate, formatCurrencyRange } from "./costEstimate";
-import { createPackageManifest, createQualityReport, createSafetyReport } from "./reports";
+import { createPackageManifest, createQualityReport, createSafetyReport, createSafetyReportMarkdown } from "./reports";
 import { createZipBlob, downloadBlob, type ZipTextFile } from "./zipPackage";
 import { ai3dProviders, getAi3dProvider, isProviderAvailable, type Ai3dProviderId } from "./aiProviders";
 import {
@@ -399,6 +399,22 @@ export function App() {
       status: exportBlocked ? "warning" : "ok",
       title: "导出 ZIP 加工包",
       detail: `已打包 ${files.length} 个文件，包含 NC、报告和上机说明。`
+    });
+  };
+
+  const handleDownloadSafetyReport = (format: "json" | "md") => {
+    const reportInput = createReportInput();
+    if (!reportInput) return;
+    if (format === "json") {
+      downloadText("safety-report.json", JSON.stringify(createSafetyReport(reportInput), null, 2), "application/json");
+    } else {
+      downloadText("safety-report.md", createSafetyReportMarkdown(reportInput), "text/markdown");
+    }
+    recordTask({
+      category: "cam",
+      status: exportBlocked ? "warning" : "ok",
+      title: `下载安全报告：${format.toUpperCase()}`,
+      detail: exportBlocked ? "安全报告包含阻断项，正式上机前需修复。" : "安全报告可用于离料空跑前复核。"
     });
   };
 
@@ -1224,6 +1240,10 @@ export function App() {
               <ShieldCheck size={18} />
               <h2>导出前安全校验</h2>
             </div>
+            <div className={`safety-verdict ${exportBlocked ? "blocked" : toolpath ? "ready" : "review"}`}>
+              <strong>{exportBlocked ? "禁止直接上机" : toolpath ? "可进入离料空跑验证" : "等待生成刀路"}</strong>
+              <span>{exportBlocked ? "存在 critical 阻断项，正式下载/上机前必须修复。" : toolpath ? "未发现阻断项，仍需离料空跑确认方向和夹持。" : "生成刀路后会输出独立安全报告。"}</span>
+            </div>
             <div className="safety-list">
               {safetyIssues.map((issue, index) => (
                 <div className={`safety-item ${issue.level}`} key={`${issue.title}-${index}`}>
@@ -1232,6 +1252,14 @@ export function App() {
                   {issue.command && <code>{issue.command}</code>}
                 </div>
               ))}
+            </div>
+            <div className="report-actions">
+              <button className="demo-action" type="button" onClick={() => handleDownloadSafetyReport("md")} disabled={!toolpath}>
+                下载安全报告 MD
+              </button>
+              <button className="demo-action" type="button" onClick={() => handleDownloadSafetyReport("json")} disabled={!toolpath}>
+                下载安全报告 JSON
+              </button>
             </div>
           </section>
         )}

@@ -37,6 +37,48 @@ export function createSafetyReport(input: ManufacturingReportInput) {
   };
 }
 
+export function createSafetyReportMarkdown(input: ManufacturingReportInput) {
+  const report = createSafetyReport(input);
+  const criticalCount = input.safetyIssues.filter((issue) => issue.level === "critical").length;
+  const warningCount = input.safetyIssues.filter((issue) => issue.level === "warning").length;
+  return [
+    "# 核雕 CAM 上机前安全报告",
+    "",
+    `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    `结论：${report.verdict === "blocked" ? "禁止直接上机" : "可进入离料空跑验证"}`,
+    `阻断项：${criticalCount}`,
+    `提醒项：${warningCount}`,
+    "",
+    "## 机床与工艺",
+    "",
+    `- 机床：${input.machine.name}`,
+    `- 控制系统：${input.machine.controller}`,
+    `- 刀具：${input.tool.name}`,
+    `- 材料：${input.material.name}`,
+    `- 毛坯左/中/右直径：${input.settings.blankLeftDiameterMm.toFixed(1)} / ${input.settings.blankCenterDiameterMm.toFixed(1)} / ${input.settings.blankRightDiameterMm.toFixed(1)} mm`,
+    `- 左/右夹持：${input.settings.leftHoldMm.toFixed(1)} / ${input.settings.rightHoldMm.toFixed(1)} mm`,
+    `- 安全高度：${input.settings.safeZ.toFixed(2)} mm`,
+    "",
+    "## 刀路范围",
+    "",
+    `- X：${input.toolpath.summary.xMin.toFixed(2)} ~ ${input.toolpath.summary.xMax.toFixed(2)} mm`,
+    `- A：${input.toolpath.summary.aMin.toFixed(2)} ~ ${input.toolpath.summary.aMax.toFixed(2)}°`,
+    `- Z：${input.toolpath.summary.zMin.toFixed(2)} ~ ${input.toolpath.summary.zMax.toFixed(2)} mm`,
+    `- 最大深度：${input.toolpath.summary.maxDepth.toFixed(2)} mm`,
+    "",
+    "## 风险项",
+    "",
+    ...input.safetyIssues.map((issue) => `- [${issue.level}] ${issue.title}：${issue.detail}${issue.command ? `\n  - 指令：\`${issue.command}\`` : ""}`),
+    "",
+    "## 操作建议",
+    "",
+    "- 首次上机必须先离料空跑，确认 X/A/Z 方向和 A 轴连续性。",
+    "- 存在 critical 阻断项时，不建议下载后的 NC/TAP 直接上机。",
+    "- 存在 A 轴跳变提醒时，请确认控制系统是否支持该角度跳转，必要时调整包覆策略或后处理。",
+    "- 毛坯直径差异较大时，请保守增加端部过渡和夹持保留。"
+  ].join("\n");
+}
+
 export function createQualityReport(input: ManufacturingReportInput) {
   return {
     createdAt: new Date().toISOString(),
