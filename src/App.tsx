@@ -70,14 +70,14 @@ const defaultSettings: ModelSettings = {
 };
 
 type ToolpathKind = "rough" | "finish";
-type WorkflowStage = "source" | "model" | "process" | "cam" | "tasks";
+type WorkflowStage = "source" | "model" | "process" | "cam" | "tasks" | "feedback";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
 type TaskEvent = {
   id: string;
   title: string;
   detail: string;
   status: "ok" | "warning" | "error";
-  category: "source" | "model" | "process" | "cam";
+  category: "source" | "model" | "process" | "cam" | "feedback";
   timestamp: string;
 };
 
@@ -113,6 +113,33 @@ type TaskSnapshot = {
   createdAt: string;
 };
 
+type MachineFeedback = {
+  id: string;
+  createdAt: string;
+  outcome: "success" | "review" | "failed";
+  sourceLabel: string;
+  machineName: string;
+  toolName: string;
+  materialName: string;
+  estimatedMinutes: number | null;
+  actualMinutes: number | null;
+  costEstimateRange: string | null;
+  issues: string[];
+  notes: string;
+  photoName: string | null;
+  photoUrl: string | null;
+  settings: ModelSettings;
+};
+
+type FeedbackDraft = {
+  outcome: MachineFeedback["outcome"];
+  actualMinutes: string;
+  notes: string;
+  issues: string[];
+  photoName: string | null;
+  photoUrl: string | null;
+};
+
 type CaptureGuideSlot = {
   label: string;
   imageName: string | null;
@@ -146,10 +173,21 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "model", label: "建模", hint: "3D/Meshy" },
   { id: "process", label: "工艺", hint: "刀具/机床" },
   { id: "cam", label: "CAM", hint: "刀路/导出" },
-  { id: "tasks", label: "任务", hint: "历史/版本" }
+  { id: "tasks", label: "任务", hint: "历史/版本" },
+  { id: "feedback", label: "反馈", hint: "实机闭环" }
 ];
 
 const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
+const MACHINE_FEEDBACK_STORAGE_KEY = "hediao3d.machineFeedback.v1";
+const defaultFeedbackDraft: FeedbackDraft = {
+  outcome: "success",
+  actualMinutes: "",
+  notes: "",
+  issues: [],
+  photoName: null,
+  photoUrl: null
+};
+const feedbackIssueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "A轴错位"];
 
 function loadCustomProcessTemplates(): ProcessTemplate[] {
   try {
@@ -158,6 +196,18 @@ function loadCustomProcessTemplates(): ProcessTemplate[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isProcessTemplate).slice(0, 16);
+  } catch {
+    return [];
+  }
+}
+
+function loadMachineFeedback(): MachineFeedback[] {
+  try {
+    const raw = window.localStorage.getItem(MACHINE_FEEDBACK_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isMachineFeedback).slice(0, 40);
   } catch {
     return [];
   }
@@ -180,6 +230,23 @@ function isProcessTemplate(value: unknown): value is ProcessTemplate {
     typeof template.spindleRpm === "number" &&
     typeof template.finishingStrategy === "string" &&
     typeof template.notes === "string"
+  );
+}
+
+function isMachineFeedback(value: unknown): value is MachineFeedback {
+  if (!value || typeof value !== "object") return false;
+  const feedback = value as Partial<MachineFeedback>;
+  return (
+    typeof feedback.id === "string" &&
+    typeof feedback.createdAt === "string" &&
+    (feedback.outcome === "success" || feedback.outcome === "review" || feedback.outcome === "failed") &&
+    typeof feedback.sourceLabel === "string" &&
+    typeof feedback.machineName === "string" &&
+    typeof feedback.toolName === "string" &&
+    typeof feedback.materialName === "string" &&
+    Array.isArray(feedback.issues) &&
+    typeof feedback.notes === "string" &&
+    Boolean(feedback.settings)
   );
 }
 
@@ -210,6 +277,8 @@ export function App() {
   const [selectedTaskJobId, setSelectedTaskJobId] = useState<string | null>(null);
   const [taskSnapshots, setTaskSnapshots] = useState<TaskSnapshot[]>([]);
   const [customProcessTemplates, setCustomProcessTemplates] = useState<ProcessTemplate[]>(loadCustomProcessTemplates);
+  const [machineFeedback, setMachineFeedback] = useState<MachineFeedback[]>(loadMachineFeedback);
+  const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft>(defaultFeedbackDraft);
   const [exportGate, setExportGate] = useState<ExportGateState>({
     safetyReportReviewed: false,
     airRunVerified: false,
@@ -285,6 +354,10 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY, JSON.stringify(customProcessTemplates));
   }, [customProcessTemplates]);
+
+  useEffect(() => {
+    window.localStorage.setItem(MACHINE_FEEDBACK_STORAGE_KEY, JSON.stringify(machineFeedback));
+  }, [machineFeedback]);
 
   useEffect(() => {
     if (!aiMeshStlUrl) {
@@ -535,6 +608,84 @@ export function App() {
       status: "ok",
       title: `保存自定义工艺模板：${template.name}`,
       detail: template.notes
+    });
+  };
+
+  const toggleFeedbackIssue = (issue: string) => {
+    setFeedbackDraft((current) => ({
+      ...current,
+      issues: current.issues.includes(issue)
+        ? current.issues.filter((item) => item !== issue)
+        : [...current.issues, issue]
+    }));
+  };
+
+  const handleFeedbackPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const photoUrl = await fileToDataUrl(file);
+    setFeedbackDraft((current) => ({
+      ...current,
+      photoName: file.name,
+      photoUrl
+    }));
+    event.target.value = "";
+  };
+
+  const handleSaveMachineFeedback = () => {
+    const actualMinutes = Number(feedbackDraft.actualMinutes);
+    const normalizedActual = Number.isFinite(actualMinutes) && actualMinutes > 0 ? actualMinutes : null;
+    const feedback: MachineFeedback = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+      outcome: feedbackDraft.outcome,
+      sourceLabel: generationLabel,
+      machineName: selectedMachine.name,
+      toolName: selectedTool.name,
+      materialName: selectedMaterial.name,
+      estimatedMinutes: toolpath?.estimatedMinutes ?? null,
+      actualMinutes: normalizedActual,
+      costEstimateRange: costEstimate ? formatCurrencyRange(costEstimate.totalCostLow, costEstimate.totalCostHigh) : null,
+      issues: feedbackDraft.issues,
+      notes: feedbackDraft.notes.trim(),
+      photoName: feedbackDraft.photoName,
+      photoUrl: feedbackDraft.photoUrl,
+      settings: { ...settings }
+    };
+    setMachineFeedback((current) => [feedback, ...current].slice(0, 40));
+    if (feedback.outcome === "success") {
+      saveSnapshot("实机成功参数", settings, `真实耗时 ${feedback.actualMinutes ?? "-"} min；${feedback.notes || "无备注"}`);
+    }
+    setFeedbackDraft(defaultFeedbackDraft);
+    recordTask({
+      category: "feedback",
+      status: feedback.outcome === "success" ? "ok" : feedback.outcome === "review" ? "warning" : "error",
+      title: `记录实机反馈：${formatFeedbackOutcome(feedback.outcome)}`,
+      detail: `${feedback.machineName} / ${feedback.toolName} / ${feedback.issues.length > 0 ? feedback.issues.join("、") : "无缺陷标签"}`
+    });
+  };
+
+  const restoreFeedbackSettings = (feedback: MachineFeedback) => {
+    setSettings(feedback.settings);
+    setToolpath(null);
+    setIsSimulationMode(false);
+    setWorkbenchView("model");
+    setActiveStage("process");
+    recordTask({
+      category: "feedback",
+      status: "ok",
+      title: "复用实机反馈参数",
+      detail: `${feedback.createdAt} / ${formatFeedbackOutcome(feedback.outcome)} / ${feedback.toolName}`
+    });
+  };
+
+  const deleteMachineFeedback = (feedback: MachineFeedback) => {
+    setMachineFeedback((current) => current.filter((item) => item.id !== feedback.id));
+    recordTask({
+      category: "feedback",
+      status: "warning",
+      title: "删除实机反馈记录",
+      detail: `${feedback.createdAt} / ${formatFeedbackOutcome(feedback.outcome)}`
     });
   };
 
@@ -2003,6 +2154,115 @@ export function App() {
             </section>
           </>
         )}
+
+        {activeStage === "feedback" && (
+          <>
+            <section className="panel">
+              <div className="panel-title">
+                <Hammer size={18} />
+                <h2>实机反馈</h2>
+              </div>
+              <p className="panel-note">记录空跑、软材料试雕或正式材料结果，把真实耗时、缺陷和照片绑定到当前参数。</p>
+              <div className="feedback-outcomes" role="radiogroup" aria-label="实机结果">
+                {(["success", "review", "failed"] as const).map((outcome) => (
+                  <button
+                    className={feedbackDraft.outcome === outcome ? "active" : ""}
+                    key={outcome}
+                    type="button"
+                    onClick={() => setFeedbackDraft((current) => ({ ...current, outcome }))}
+                  >
+                    {formatFeedbackOutcome(outcome)}
+                  </button>
+                ))}
+              </div>
+              <label className="field-control">
+                <span>真实耗时 min</span>
+                <input
+                  min="0"
+                  step="0.1"
+                  type="number"
+                  value={feedbackDraft.actualMinutes}
+                  onChange={(event) => setFeedbackDraft((current) => ({ ...current, actualMinutes: event.target.value }))}
+                  placeholder={toolpath ? toolpath.estimatedMinutes.toFixed(1) : "待试雕"}
+                />
+              </label>
+              <div className="feedback-issues">
+                {feedbackIssueOptions.map((issue) => (
+                  <button className={feedbackDraft.issues.includes(issue) ? "active" : ""} key={issue} type="button" onClick={() => toggleFeedbackIssue(issue)}>
+                    {issue}
+                  </button>
+                ))}
+              </div>
+              <label className="field-control">
+                <span>试雕备注</span>
+                <textarea
+                  value={feedbackDraft.notes}
+                  onChange={(event) => setFeedbackDraft((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="例如：顶部欠切轻微，端部保留正常，进给可提高 10%。"
+                />
+              </label>
+              <label className="upload photo-upload">
+                <Camera size={18} />
+                <span>{feedbackDraft.photoName ? `已选择：${feedbackDraft.photoName}` : "上传试雕照片"}</span>
+                <input accept="image/*" type="file" onChange={handleFeedbackPhoto} />
+              </label>
+              {feedbackDraft.photoUrl && <img className="feedback-photo-preview" src={feedbackDraft.photoUrl} alt="试雕照片预览" />}
+              <button className="primary-action package-action" type="button" onClick={handleSaveMachineFeedback}>
+                <Save size={17} />
+                保存实机反馈
+              </button>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <BadgeInfo size={18} />
+                <h2>反馈统计</h2>
+              </div>
+              <div className="feedback-summary">
+                <span><strong>{machineFeedback.length}</strong> 记录</span>
+                <span><strong>{machineFeedback.filter((item) => item.outcome === "success").length}</strong> 成功</span>
+                <span><strong>{machineFeedback.filter((item) => item.outcome !== "success").length}</strong> 待优化</span>
+                <span><strong>{calculateAverageActualMinutes(machineFeedback)}</strong> 平均耗时</span>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <Library size={18} />
+                <h2>反馈记录</h2>
+              </div>
+              {machineFeedback.length === 0 ? (
+                <p className="panel-note">还没有实机反馈。完成空跑或试雕后，把结果记录在这里，后续可复用成功参数。</p>
+              ) : (
+                <div className="feedback-list">
+                  {machineFeedback.map((feedback) => (
+                    <div className={`feedback-card ${feedback.outcome}`} key={feedback.id}>
+                      <div>
+                        <strong>{formatFeedbackOutcome(feedback.outcome)}</strong>
+                        <span>{feedback.createdAt}</span>
+                      </div>
+                      <p>{feedback.machineName} / {feedback.toolName} / {feedback.materialName}</p>
+                      <small>
+                        估算 {feedback.estimatedMinutes?.toFixed(1) ?? "-"} min / 实际 {feedback.actualMinutes?.toFixed(1) ?? "-"} min
+                        {feedback.issues.length > 0 ? ` / ${feedback.issues.join("、")}` : " / 无缺陷标签"}
+                      </small>
+                      {feedback.notes && <p>{feedback.notes}</p>}
+                      {feedback.photoUrl && <img src={feedback.photoUrl} alt={feedback.photoName ?? "实机反馈照片"} />}
+                      <div className="feedback-actions">
+                        <button className="demo-action snapshot-action" type="button" onClick={() => restoreFeedbackSettings(feedback)}>
+                          复用这组参数
+                        </button>
+                        <button className="mini-action" type="button" onClick={() => deleteMachineFeedback(feedback)}>
+                          删除记录
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
       </aside>
 
       <section className="workbench">
@@ -2304,6 +2564,18 @@ function formatTaskJobStatus(status: TaskJob["status"]) {
   return "失败";
 }
 
+function formatFeedbackOutcome(outcome: MachineFeedback["outcome"]) {
+  if (outcome === "success") return "试雕成功";
+  if (outcome === "review") return "需复核";
+  return "失败/断刀";
+}
+
+function calculateAverageActualMinutes(feedback: MachineFeedback[]) {
+  const values = feedback.map((item) => item.actualMinutes).filter((value): value is number => typeof value === "number" && value > 0);
+  if (values.length === 0) return "-";
+  return `${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)} min`;
+}
+
 function captureWorkbenchPreviewPng() {
   const canvas = document.querySelector<HTMLCanvasElement>(".workbench .viewer canvas");
   if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
@@ -2313,6 +2585,15 @@ function captureWorkbenchPreviewPng() {
   } catch {
     return null;
   }
+}
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function dataUrlToUint8Array(dataUrl: string) {
