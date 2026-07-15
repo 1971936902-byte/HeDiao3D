@@ -9,11 +9,11 @@ import { exportGeometryAsStl } from "./modelExport";
 import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
 import { createOperatorPackageMarkdown } from "./exportPackage";
-import { createCostEstimate, formatCurrencyRange } from "./costEstimate";
+import { createCostEstimate, formatCurrencyRange, type CostEstimate } from "./costEstimate";
 import { createPackageManifest, createQualityReport, createSafetyReport, createSafetyReportMarkdown } from "./reports";
 import { createZipBlob, downloadBlob, type ZipTextFile } from "./zipPackage";
 import { ai3dProviders, getAi3dProvider, isProviderAvailable, type Ai3dProviderId } from "./aiProviders";
-import { analyzeMaterialRemoval } from "./simulationAnalysis";
+import { analyzeMaterialRemoval, type MaterialRemovalReport } from "./simulationAnalysis";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -31,8 +31,9 @@ import {
   validateManufacturingSetup
 } from "./manufacturingProfiles";
 import { analyzeDepthMapQuality, createManufacturingQualityReport } from "./quality";
+import type { ManufacturingQualityReport } from "./quality";
 import type { CarvingImage, DepthMap, GeneratedToolpath, MeshQualityReport, ModelSettings } from "./types";
-import type { ProcessTemplate } from "./manufacturingProfiles";
+import type { ProcessTemplate, SafetyIssue } from "./manufacturingProfiles";
 
 const defaultSettings: ModelSettings = {
   lengthMm: 38,
@@ -70,6 +71,7 @@ const defaultSettings: ModelSettings = {
 
 type ToolpathKind = "rough" | "finish";
 type WorkflowStage = "source" | "model" | "process" | "cam" | "tasks";
+type WorkbenchView = "model" | "simulation" | "gcode" | "report";
 type TaskEvent = {
   id: string;
   title: string;
@@ -188,6 +190,7 @@ export function App() {
   const [isMeshRepairing, setIsMeshRepairing] = useState(false);
   const [isToolpathGenerating, setIsToolpathGenerating] = useState(false);
   const [isSimulationMode, setIsSimulationMode] = useState(false);
+  const [workbenchView, setWorkbenchView] = useState<WorkbenchView>("model");
   const [toolpathKind, setToolpathKind] = useState<ToolpathKind>("rough");
   const [meshQuality, setMeshQuality] = useState<MeshQualityReport | null>(null);
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
@@ -236,6 +239,23 @@ export function App() {
     [settings, toolpath]
   );
   const exportGateReady = Boolean(toolpath && !exportBlocked && exportGate.safetyReportReviewed && exportGate.airRunVerified && exportGate.fixtureConfirmed);
+  const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
+  const workbenchTitle =
+    workbenchView === "simulation" && toolpath
+      ? "模拟雕刻"
+      : workbenchView === "gcode" && toolpath
+        ? "G-code 预览"
+        : workbenchView === "report" && toolpath
+          ? "报告摘要"
+          : generationLabel;
+  const workbenchHint =
+    workbenchView === "simulation" && toolpath
+      ? "按当前刀路反推雕刻包络曲面，用于下载前检查方向、深浅和包覆范围"
+      : workbenchView === "gcode" && toolpath
+        ? "查看合并程序的前后处理、运动指令和安全高度，不在这里编辑机床代码"
+        : workbenchView === "report" && toolpath
+          ? "汇总安全、质量、材料去除和成本指标，辅助试雕前复核"
+          : "拖动旋转查看 360° 视图，滚轮缩放，右键平移";
 
   useEffect(() => {
     setExportGate({
@@ -291,6 +311,7 @@ export function App() {
     setSettings((current) => ({ ...current, [key]: value }));
     setToolpath(null);
     setIsSimulationMode(false);
+    setWorkbenchView("model");
   };
 
   const recordTask = (event: Omit<TaskEvent, "id" | "timestamp">) => {
@@ -355,6 +376,7 @@ export function App() {
     setSettings(snapshot.settings);
     setToolpath(null);
     setIsSimulationMode(false);
+    setWorkbenchView("model");
     recordTask({
       category: "process",
       status: "ok",
@@ -377,6 +399,7 @@ export function App() {
     setSettings(nextSettings);
     setToolpath(null);
     setIsSimulationMode(false);
+    setWorkbenchView("model");
   };
 
   const handleToolProfileChange = (toolId: string) => {
@@ -472,6 +495,7 @@ export function App() {
       setGenerationLabel("图片已载入，待生成3D");
       setToolpath(null);
       setIsSimulationMode(false);
+      setWorkbenchView("model");
       recordTask({
         category: "source",
         status: "ok",
@@ -631,6 +655,7 @@ export function App() {
         setToolpath(data);
         setToolpathKind(finishing ? "finish" : "rough");
         setIsSimulationMode(true);
+        setWorkbenchView("simulation");
         saveSnapshot(finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路", meshCamSettings, `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
         setAiMeshStatus(finishing ? "Mesh 精加工刀路已生成，可下载 NC/TAP 文件" : "Mesh 360° 表面采样刀路已生成，可下载 NC/TAP 文件");
         finishTaskJob(jobId, "done", `完成：${data.points.length} 点，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
@@ -664,6 +689,7 @@ export function App() {
     setToolpath(generatedToolpath);
     setToolpathKind(finishing ? "finish" : "rough");
     setIsSimulationMode(true);
+    setWorkbenchView("simulation");
     saveSnapshot(finishing ? "本地精加工刀路" : "本地粗精刀路", baseSettings, `点数 ${generatedToolpath.points.length}，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min。`);
     finishTaskJob(localJobId, "done", `完成：${generatedToolpath.points.length} 点，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min。`);
     recordTask({
@@ -715,6 +741,7 @@ export function App() {
     }
     setToolpath(null);
     setIsSimulationMode(false);
+    setWorkbenchView("model");
   };
 
   const handleDepthEdit = (depth: DepthMap) => {
@@ -724,6 +751,7 @@ export function App() {
     setMeshQuality(null);
     setToolpath(null);
     setIsSimulationMode(false);
+    setWorkbenchView("model");
   };
 
   const handleClearAiMesh = () => {
@@ -734,6 +762,7 @@ export function App() {
     setGenerationLabel(generatedDepth ? "本地浮雕网格" : images.length > 0 ? "图片已载入，待生成3D" : "内置示例");
     setToolpath(null);
     setIsSimulationMode(false);
+    setWorkbenchView("model");
   };
 
   const handleLoadDemoImages = () => {
@@ -755,6 +784,8 @@ export function App() {
     setMeshQuality(null);
     setGenerationLabel("示例图案已载入，待生成3D");
     setToolpath(null);
+    setIsSimulationMode(false);
+    setWorkbenchView("model");
     recordTask({
       category: "source",
       status: "ok",
@@ -789,6 +820,7 @@ export function App() {
       setGenerationLabel("素材01已载入，待生成3D");
       setToolpath(null);
       setIsSimulationMode(false);
+      setWorkbenchView("model");
       recordTask({
         category: "source",
         status: "ok",
@@ -1802,16 +1834,34 @@ export function App() {
       <section className="workbench">
         <header className="topbar">
           <div>
-            <h2>{isSimulationMode && toolpath ? "模拟雕刻" : generationLabel}</h2>
-            <p>{isSimulationMode && toolpath ? "按当前刀路反推雕刻包络曲面，用于下载前检查方向、深浅和包覆范围" : "拖动旋转查看 360° 视图，滚轮缩放，右键平移"}</p>
+            <h2>{workbenchTitle}</h2>
+            <p>{workbenchHint}</p>
           </div>
           <div className="status-pill">
             <BadgeInfo size={16} />
-            <span>{isSimulationMode && toolpath ? "正在查看刀路模拟结果" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
+            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
           </div>
         </header>
 
-        {isSimulationMode && toolpath ? (
+        <div className="workbench-tabs" role="tablist" aria-label="workbench views">
+          <button className={workbenchView === "model" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("model"); setIsSimulationMode(false); }}>3D模型</button>
+          <button className={workbenchView === "simulation" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("simulation"); setIsSimulationMode(true); }} disabled={!toolpath}>模拟雕刻</button>
+          <button className={workbenchView === "gcode" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("gcode"); setIsSimulationMode(false); }} disabled={!toolpath}>G-code</button>
+          <button className={workbenchView === "report" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("report"); setIsSimulationMode(false); }} disabled={!toolpath}>报告</button>
+        </div>
+
+        {workbenchView === "gcode" && toolpath ? (
+          <GcodePreview toolpath={toolpath} exportGateReady={exportGateReady} />
+        ) : workbenchView === "report" && toolpath ? (
+          <WorkbenchReportSummary
+            exportBlocked={exportBlocked}
+            manufacturingQuality={manufacturingQuality}
+            materialRemoval={materialRemoval}
+            costEstimate={costEstimate}
+            envelopeQuality={envelopeQuality}
+            safetyIssues={safetyIssues}
+          />
+        ) : viewingSimulation ? (
           <SimulationViewer
             points={toolpath.points}
             previewPoints={toolpath.previewPoints ?? []}
@@ -1963,17 +2013,21 @@ export function App() {
               <div className="metric legend-metric">
                 <span>颜色标识</span>
                 <strong>
-                  <i className={`legend-dot ${isSimulationMode ? "simulation" : toolpathKind}`} />
-                  {isSimulationMode
+                  <i className={`legend-dot ${viewingSimulation ? "simulation" : toolpathKind}`} />
+                  {viewingSimulation
                     ? "青绿=模拟包络，粉色=未贴合"
                     : aiMeshUrl
                       ? `${toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=未贴合`
                       : `${toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=夹持区，琥珀=过渡区`}
                 </strong>
               </div>
-              <button className="download secondary" onClick={() => setIsSimulationMode((current) => !current)}>
+              <button className="download secondary" onClick={() => {
+                const nextView: WorkbenchView = viewingSimulation ? "model" : "simulation";
+                setWorkbenchView(nextView);
+                setIsSimulationMode(nextView === "simulation");
+              }}>
                 <Layers3 size={17} />
-                {isSimulationMode ? "返回3D视图" : "模拟雕刻"}
+                {viewingSimulation ? "返回3D视图" : "模拟雕刻"}
               </button>
               <button className="download secondary" onClick={handleDownloadOperatorPackage}>
                 <Download size={17} />
@@ -2028,6 +2082,91 @@ export function App() {
         </footer>
       </section>
     </main>
+  );
+}
+
+function GcodePreview({ toolpath, exportGateReady }: { toolpath: GeneratedToolpath; exportGateReady: boolean }) {
+  const lines = toolpath.gcode.split(/\r?\n/).filter(Boolean);
+  const head = lines.slice(0, 18);
+  const tail = lines.slice(Math.max(18, lines.length - 18));
+
+  return (
+    <div className="workbench-panel">
+      <div className="gcode-summary">
+        <span><strong>{lines.length.toLocaleString()}</strong> 行 G-code</span>
+        <span><strong>{toolpath.summary.xMin.toFixed(1)}~{toolpath.summary.xMax.toFixed(1)}</strong> X 范围</span>
+        <span><strong>{toolpath.summary.aMin.toFixed(0)}~{toolpath.summary.aMax.toFixed(0)}</strong> A 范围</span>
+        <span><strong>{exportGateReady ? "已解锁" : "待确认"}</strong> 正式导出</span>
+      </div>
+      <div className="gcode-preview-grid">
+        <section>
+          <h3>程序开头</h3>
+          <pre>{head.join("\n")}</pre>
+        </section>
+        <section>
+          <h3>程序结尾</h3>
+          <pre>{tail.join("\n")}</pre>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function WorkbenchReportSummary({
+  exportBlocked,
+  manufacturingQuality,
+  materialRemoval,
+  costEstimate,
+  envelopeQuality,
+  safetyIssues
+}: {
+  exportBlocked: boolean;
+  manufacturingQuality: ManufacturingQualityReport;
+  materialRemoval: MaterialRemovalReport | null;
+  costEstimate: CostEstimate | null;
+  envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality> | null;
+  safetyIssues: SafetyIssue[];
+}) {
+  const criticalCount = safetyIssues.filter((issue) => issue.level === "critical").length;
+  const warningCount = safetyIssues.filter((issue) => issue.level === "warning").length;
+
+  return (
+    <div className="workbench-panel report-preview">
+      <div className={`report-verdict ${exportBlocked ? "blocked" : manufacturingQuality.verdict}`}>
+        <strong>{exportBlocked ? "禁止直接上机" : manufacturingQuality.summary}</strong>
+        <span>阻断 {criticalCount} 项 / 提醒 {warningCount} 项</span>
+      </div>
+      <div className="report-preview-grid">
+        <div>
+          <span>加工质量</span>
+          <strong>{manufacturingQuality.score.toFixed(1)} / 100</strong>
+          <small>{manufacturingQuality.summary}</small>
+        </div>
+        <div>
+          <span>材料去除</span>
+          <strong>{materialRemoval ? `${materialRemoval.score.toFixed(1)} / 100` : "待生成"}</strong>
+          <small>{materialRemoval?.summary ?? "生成刀路后显示仿真指标"}</small>
+        </div>
+        <div>
+          <span>包络贴合</span>
+          <strong>{envelopeQuality ? `${envelopeQuality.fitRate.toFixed(1)}%` : "待生成"}</strong>
+          <small>{envelopeQuality ? `未贴合 ${envelopeQuality.missCount} 点` : "生成刀路后计算"}</small>
+        </div>
+        <div>
+          <span>成本估算</span>
+          <strong>{costEstimate ? formatCurrencyRange(costEstimate.totalCostLow, costEstimate.totalCostHigh) : "待生成"}</strong>
+          <small>{costEstimate ? `总占机 ${costEstimate.totalMinutes.toFixed(1)} min` : "生成刀路后估算"}</small>
+        </div>
+      </div>
+      <div className="report-preview-list">
+        {manufacturingQuality.items.slice(0, 5).map((item) => (
+          <div className={item.status} key={item.label}>
+            <strong>{item.label}：{item.value}</strong>
+            <span>{item.detail}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
