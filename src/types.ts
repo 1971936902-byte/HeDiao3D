@@ -9,6 +9,22 @@ export type CarvingImage = {
   name: string;
   url: string;
   depthMap: DepthMap;
+  quality?: ImageQualityReport;
+};
+
+export type ImageQualityMetric = {
+  label: string;
+  value: number;
+  unit: string;
+  status: "ok" | "warning" | "critical";
+};
+
+export type ImageQualityReport = {
+  score: number;
+  verdict: "ready" | "usable" | "retake";
+  summary: string;
+  metrics: ImageQualityMetric[];
+  suggestions: string[];
 };
 
 export type ModelSettings = {

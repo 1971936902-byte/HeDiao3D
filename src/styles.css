@@ -574,6 +574,131 @@ button:disabled {
   background: rgba(255, 107, 156, 0.08);
 }
 
+.quality-score {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.quality-score strong {
+  color: #f7fbf9;
+  font-size: 25px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quality-score span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.quality-score.ready,
+.quality-score.ok {
+  border-color: rgba(71, 209, 140, 0.34);
+}
+
+.quality-score.usable,
+.quality-score.review {
+  border-color: rgba(234, 181, 88, 0.34);
+}
+
+.quality-score.retake,
+.quality-score.blocked {
+  border-color: rgba(255, 107, 156, 0.34);
+  background: rgba(255, 107, 156, 0.07);
+}
+
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quality-metric,
+.inspection-item {
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.quality-metric {
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+}
+
+.quality-metric span,
+.inspection-item span {
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.quality-metric strong,
+.inspection-item strong {
+  color: #f2f8f5;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quality-metric.ok,
+.inspection-item.ok {
+  border-left-color: var(--green);
+}
+
+.quality-metric.warning,
+.inspection-item.warning {
+  border-left-color: var(--amber);
+}
+
+.quality-metric.critical,
+.inspection-item.critical {
+  border-left-color: var(--rose);
+}
+
+.quality-notes,
+.inspection-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quality-notes span {
+  display: block;
+  padding: 8px 10px;
+  color: #d9e2dc;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.inspection-item {
+  padding: 9px 10px;
+}
+
+.inspection-item div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.inspection-item p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .ai-links {
   display: flex;
   gap: 8px;

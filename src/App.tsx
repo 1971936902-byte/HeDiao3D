@@ -21,6 +21,7 @@ import {
   toolProfiles,
   validateManufacturingSetup
 } from "./manufacturingProfiles";
+import { analyzeDepthMapQuality, createManufacturingQualityReport } from "./quality";
 import type { CarvingImage, DepthMap, GeneratedToolpath, ModelSettings } from "./types";
 
 const defaultSettings: ModelSettings = {
@@ -101,6 +102,11 @@ export function App() {
   const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
   const safetyIssues = useMemo(() => validateManufacturingSetup(settings, toolpath), [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
+  const activeQuality = activeImage?.quality;
+  const manufacturingQuality = useMemo(
+    () => createManufacturingQualityReport(settings, toolpath, safetyIssues, envelopeQuality),
+    [settings, toolpath, safetyIssues, envelopeQuality]
+  );
 
   const updateSetting = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -138,6 +144,7 @@ export function App() {
           return {
             id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
             name: file.name,
+            quality: analyzeDepthMapQuality(result.depthMap),
             ...result
           };
         })
@@ -259,7 +266,8 @@ export function App() {
     ].map((demo) => ({
       ...demo,
       id: `${demo.name}-${crypto.randomUUID()}`,
-      url: depthMapToPreviewUrl(demo.depthMap)
+      url: depthMapToPreviewUrl(demo.depthMap),
+      quality: analyzeDepthMapQuality(demo.depthMap)
     }));
 
     setImages(demos);
@@ -282,6 +290,7 @@ export function App() {
           return {
             id: `素材01-${name}-${crypto.randomUUID()}`,
             name: `素材01/${name}`,
+            quality: analyzeDepthMapQuality(result.depthMap),
             ...result
           };
         })
@@ -507,6 +516,32 @@ export function App() {
           </section>
         )}
 
+        {activeStage === "source" && activeQuality && (
+          <section className="panel">
+            <div className="panel-title">
+              <ShieldCheck size={18} />
+              <h2>采集质量检测</h2>
+            </div>
+            <div className={`quality-score ${activeQuality.verdict}`}>
+              <strong>{activeQuality.score.toFixed(1)}</strong>
+              <span>{activeQuality.summary}</span>
+            </div>
+            <div className="quality-grid">
+              {activeQuality.metrics.map((metric) => (
+                <div className={`quality-metric ${metric.status}`} key={metric.label}>
+                  <span>{metric.label}</span>
+                  <strong>{metric.value.toFixed(metric.unit === "%" ? 1 : 2)}{metric.unit}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="quality-notes">
+              {activeQuality.suggestions.map((suggestion) => (
+                <span key={suggestion}>{suggestion}</span>
+              ))}
+            </div>
+          </section>
+        )}
+
         {activeStage === "model" && (
           <>
             <section className="panel">
@@ -691,6 +726,30 @@ export function App() {
                 <div className={`safety-item ${issue.level}`} key={`${issue.title}-${index}`}>
                   <strong>{issue.title}</strong>
                   <span>{issue.detail}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
+              <BadgeInfo size={18} />
+              <h2>加工质量体检</h2>
+            </div>
+            <div className={`quality-score ${manufacturingQuality.verdict}`}>
+              <strong>{manufacturingQuality.score.toFixed(1)}</strong>
+              <span>{manufacturingQuality.summary}</span>
+            </div>
+            <div className="inspection-list">
+              {manufacturingQuality.items.map((item) => (
+                <div className={`inspection-item ${item.status}`} key={item.label}>
+                  <div>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                  <p>{item.detail}</p>
                 </div>
               ))}
             </div>
