@@ -472,18 +472,20 @@ export function App() {
             <Sparkles size={18} />
             {isAiGenerating ? "AI生成中..." : "Meshy生成3D Mesh"}
           </button>
-          <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
-            <FileImage size={17} />
-            载入Meshy测试结果
-          </button>
-          <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing}>
-            <Sparkles size={17} />
-            {isMeshRepairing ? "修复处理中..." : "修复Mesh缺损"}
-          </button>
-          <button className="demo-action repair-action" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing}>
-            <Layers3 size={17} />
-            重建可雕刻网格
-          </button>
+          <div className="ai-tool-grid">
+            <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
+              <FileImage size={17} />
+              载入测试结果
+            </button>
+            <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing}>
+              <Sparkles size={17} />
+              {isMeshRepairing ? "修复中..." : "修复缺损"}
+            </button>
+            <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing}>
+              <Layers3 size={17} />
+              重建可雕刻网格
+            </button>
+          </div>
           <div className="ai-status">{aiMeshStatus}</div>
           {aiMeshUrl && (
             <div className="ai-links">

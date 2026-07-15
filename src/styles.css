@@ -201,7 +201,6 @@ button:disabled {
 }
 
 .material-action {
-  margin-top: -4px;
   color: #f8dfb0;
   border-color: rgba(234, 181, 88, 0.28);
   background: rgba(234, 181, 88, 0.09);
@@ -216,10 +215,33 @@ button:disabled {
 }
 
 .repair-action {
-  margin-top: 8px;
   color: #dcfff5;
   border-color: rgba(71, 209, 140, 0.28);
   background: rgba(71, 209, 140, 0.10);
+}
+
+.ai-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ai-tool-grid .demo-action {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 9px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ai-tool-grid .demo-action svg {
+  flex: 0 0 auto;
+}
+
+.ai-tool-wide {
+  grid-column: 1 / -1;
 }
 
 .panel {
@@ -452,6 +474,7 @@ button:disabled {
   background: rgba(234, 181, 88, 0.075);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .ai-links {
