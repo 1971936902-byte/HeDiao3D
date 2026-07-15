@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { BadgeInfo, Box, Calculator, Camera, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { createAirRunProgram, generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
@@ -85,12 +85,23 @@ type TaskJob = {
   id: string;
   title: string;
   detail: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "canceled";
   category: TaskEvent["category"];
   startedAt: number;
   startedLabel: string;
   finishedLabel?: string;
   durationMs?: number;
+  progress: number;
+  retryAction?: TaskRetryAction;
+  logs: TaskJobLog[];
+};
+
+type TaskRetryAction = "generate-ai-mesh" | "repair-mesh" | "remesh" | "generate-toolpath" | "generate-finish-toolpath";
+
+type TaskJobLog = {
+  id: string;
+  time: string;
+  message: string;
 };
 
 type TaskSnapshot = {
@@ -196,6 +207,7 @@ export function App() {
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
+  const [selectedTaskJobId, setSelectedTaskJobId] = useState<string | null>(null);
   const [taskSnapshots, setTaskSnapshots] = useState<TaskSnapshot[]>([]);
   const [customProcessTemplates, setCustomProcessTemplates] = useState<ProcessTemplate[]>(loadCustomProcessTemplates);
   const [exportGate, setExportGate] = useState<ExportGateState>({
@@ -203,6 +215,7 @@ export function App() {
     airRunVerified: false,
     fixtureConfirmed: false
   });
+  const canceledTaskJobIdsRef = useRef<Set<string>>(new Set());
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -329,16 +342,19 @@ export function App() {
     ].slice(0, 80));
   };
 
-  const startTaskJob = (job: Pick<TaskJob, "title" | "detail" | "category">) => {
+  const startTaskJob = (job: Pick<TaskJob, "title" | "detail" | "category" | "retryAction">) => {
     const id = crypto.randomUUID();
     const startedAt = Date.now();
+    canceledTaskJobIdsRef.current.delete(id);
     setTaskJobs((current) => [
       {
         ...job,
         id,
         status: "running",
         startedAt,
-        startedLabel: new Date(startedAt).toLocaleString("zh-CN", { hour12: false })
+        startedLabel: new Date(startedAt).toLocaleString("zh-CN", { hour12: false }),
+        progress: 8,
+        logs: [createTaskJobLog(`开始：${job.detail}`)]
       },
       ...current
     ].slice(0, 24));
@@ -350,16 +366,78 @@ export function App() {
     setTaskJobs((current) =>
       current.map((job) =>
         job.id === id
-          ? {
+          ? job.status === "canceled"
+            ? job
+            : {
               ...job,
               status,
               detail,
+              progress: status === "done" ? 100 : status === "error" ? Math.max(job.progress, 100) : job.progress,
               durationMs: Math.max(0, finishedAt - job.startedAt),
-              finishedLabel: new Date(finishedAt).toLocaleString("zh-CN", { hour12: false })
+              finishedLabel: new Date(finishedAt).toLocaleString("zh-CN", { hour12: false }),
+              logs: [...job.logs, createTaskJobLog(`${status === "done" ? "完成" : status === "error" ? "失败" : "结束"}：${detail}`)]
             }
           : job
       )
     );
+  };
+
+  const appendTaskJobLog = (id: string, message: string, progress?: number) => {
+    setTaskJobs((current) =>
+      current.map((job) =>
+        job.id === id
+          ? {
+              ...job,
+              progress: progress === undefined ? job.progress : THREEClamp(progress, job.progress, 98),
+              logs: [...job.logs, createTaskJobLog(message)].slice(-40),
+              detail: message
+            }
+          : job
+      )
+    );
+  };
+
+  const isTaskJobCanceled = (id: string) => canceledTaskJobIdsRef.current.has(id);
+
+  const cancelTaskJob = (job: TaskJob) => {
+    if (job.status !== "running") return;
+    canceledTaskJobIdsRef.current.add(job.id);
+    const finishedAt = Date.now();
+    setTaskJobs((current) =>
+      current.map((item) =>
+        item.id === job.id
+          ? {
+              ...item,
+              status: "canceled",
+              detail: "用户已取消。若远端任务已经提交，后台服务可能仍会完成，但本页面不会自动采用结果。",
+              durationMs: Math.max(0, finishedAt - item.startedAt),
+              finishedLabel: new Date(finishedAt).toLocaleString("zh-CN", { hour12: false }),
+              logs: [...item.logs, createTaskJobLog("用户取消任务。")]
+            }
+          : item
+      )
+    );
+    recordTask({
+      category: job.category,
+      status: "warning",
+      title: `取消任务：${job.title}`,
+      detail: "已在任务中心标记取消；如为远端 AI 任务，请以服务端最终状态为准。"
+    });
+  };
+
+  const retryTaskJob = async (job: TaskJob) => {
+    if (!job.retryAction || job.status === "running") return;
+    recordTask({
+      category: job.category,
+      status: "warning",
+      title: `重试任务：${job.title}`,
+      detail: "已按当前页面参数重新发起任务。"
+    });
+    if (job.retryAction === "generate-ai-mesh") await handleGenerateAiMesh();
+    if (job.retryAction === "repair-mesh") await handleRepairMesh();
+    if (job.retryAction === "remesh") await handleRemesh();
+    if (job.retryAction === "generate-toolpath") await generateToolpathForSettings(settings, false);
+    if (job.retryAction === "generate-finish-toolpath") await handleGenerateFinishingToolpath();
   };
 
   const saveSnapshot = (label: string, snapshotSettings: ModelSettings, detail: string) => {
@@ -685,9 +763,11 @@ export function App() {
       const jobId = startTaskJob({
         category: "cam",
         title: finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路",
-        detail: "正在采样 STL 表面并生成四轴刀路。"
+        detail: "正在采样 STL 表面并生成四轴刀路。",
+        retryAction: finishing ? "generate-finish-toolpath" : "generate-toolpath"
       });
       try {
+        appendTaskJobLog(jobId, "提交 Mesh CAM 采样请求。", 24);
         const response = await fetch("/api/cam/mesh-toolpath", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -697,6 +777,8 @@ export function App() {
         if (!response.ok) {
           throw new Error(data.error ?? "Mesh CAM 刀路生成失败");
         }
+        if (isTaskJobCanceled(jobId)) return;
+        appendTaskJobLog(jobId, "服务端已返回刀路，正在写入预览和报告。", 86);
         setToolpath(data);
         setToolpathKind(finishing ? "finish" : "rough");
         setIsSimulationMode(true);
@@ -728,9 +810,13 @@ export function App() {
     const localJobId = startTaskJob({
       category: "cam",
       title: finishing ? "本地精加工刀路" : "本地粗精清残刀路",
-      detail: "正在生成粗加工、精加工、清残和空跑程序。"
+      detail: "正在生成粗加工、精加工、清残和空跑程序。",
+      retryAction: finishing ? "generate-finish-toolpath" : "generate-toolpath"
     });
+    appendTaskJobLog(localJobId, "读取当前深度场与工艺参数。", 28);
     const generatedToolpath = generateToolpath(processedDepth, baseSettings);
+    if (isTaskJobCanceled(localJobId)) return;
+    appendTaskJobLog(localJobId, "刀路计算完成，正在生成仿真与质量指标。", 88);
     setToolpath(generatedToolpath);
     setToolpathKind(finishing ? "finish" : "rough");
     setIsSimulationMode(true);
@@ -902,14 +988,18 @@ export function App() {
     const jobId = startTaskJob({
       category: "model",
       title: `${selectedAiProvider.name} 生成 3D Mesh`,
-      detail: `正在上传 ${selected.length} 张图片并等待 AI 3D 任务完成。`
+      detail: `正在上传 ${selected.length} 张图片并等待 AI 3D 任务完成。`,
+      retryAction: "generate-ai-mesh"
     });
 
     try {
       setAiMeshStatus(`准备上传 ${selected.length} 张图片到 ${selectedAiProvider.name}`);
+      appendTaskJobLog(jobId, `准备 ${selected.length} 张输入图。`, 18);
       const imageUrls = await Promise.all(selected.map((image) => imageToDataUri(image.url)));
+      if (isTaskJobCanceled(jobId)) return;
 
       setAiMeshStatus(`已提交 ${selectedAiProvider.name} 任务，等待排队`);
+      appendTaskJobLog(jobId, "图片已转换，正在创建远端 AI 任务。", 32);
       const createResponse = await fetch(selectedAiProvider.endpoint!, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -929,7 +1019,9 @@ export function App() {
         throw new Error(`${selectedAiProvider.name}响应中没有任务ID`);
       }
 
+      appendTaskJobLog(jobId, `远端任务已创建：${taskId}`, 45);
       const task = await pollAi3dTask(selectedAiProvider.taskEndpoint!(taskId), setAiMeshStatus, `${selectedAiProvider.name}任务`);
+      if (isTaskJobCanceled(jobId)) return;
       const glb = task.local_model_urls?.glb ?? task.model_urls?.glb ?? task.output?.model_urls?.glb ?? task.model_url;
       const stl = task.local_model_urls?.stl ?? task.model_urls?.stl ?? task.output?.model_urls?.stl;
       if (!glb) {
@@ -941,6 +1033,7 @@ export function App() {
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
       setGenerationLabel(`${selectedAiProvider.name} AI 3D Mesh：${selected.length}张图片`);
       setAiMeshStatus(task.local_model_urls?.glb ? `${selectedAiProvider.name} 3D Mesh 生成完成，已缓存到本地` : `${selectedAiProvider.name} 3D Mesh 生成完成`);
+      appendTaskJobLog(jobId, "AI Mesh 文件已返回，正在载入预览。", 92);
       finishTaskJob(jobId, "done", `完成：生成 GLB${stl ? "/STL" : ""}，输入 ${selected.length} 张图片。`);
       recordTask({
         category: "model",
@@ -990,9 +1083,11 @@ export function App() {
     const jobId = startTaskJob({
       category: "model",
       title: "Mesh 缺损修复",
-      detail: "正在提交 Meshy Repair Printability 并等待修复 STL。"
+      detail: "正在提交 Meshy Repair Printability 并等待修复 STL。",
+      retryAction: "repair-mesh"
     });
     try {
+      appendTaskJobLog(jobId, "提交 Meshy Repair Printability 请求。", 24);
       const createResponse = await fetch("/api/meshy/repair-printability", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1006,7 +1101,9 @@ export function App() {
       const taskId = createData.result ?? createData.id;
       if (!taskId) throw new Error("Mesh 修复响应中没有任务ID");
 
+      appendTaskJobLog(jobId, `修复任务已创建：${taskId}`, 42);
       const task = await pollMeshyTaskByEndpoint(`/api/meshy/repair-printability/${encodeURIComponent(taskId)}`, setAiMeshStatus, "Mesh修复");
+      if (isTaskJobCanceled(jobId)) return;
       const repairedStl = task.local_model_urls?.stl ?? task.model_urls?.stl ?? task.output?.model_urls?.stl;
       if (!repairedStl) throw new Error("Mesh 修复完成，但没有返回 STL");
 
@@ -1015,6 +1112,7 @@ export function App() {
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 缺损修复完成，已替换刀路用 STL，请重新生成刀路");
+      appendTaskJobLog(jobId, "修复 STL 已返回，已替换刀路输入模型。", 92);
       finishTaskJob(jobId, "done", "完成：已替换刀路用 STL。");
       recordTask({
         category: "model",
@@ -1048,9 +1146,11 @@ export function App() {
     const jobId = startTaskJob({
       category: "model",
       title: "Mesh 重网格",
-      detail: "正在提交 Meshy Remesh 并等待可雕刻网格。"
+      detail: "正在提交 Meshy Remesh 并等待可雕刻网格。",
+      retryAction: "remesh"
     });
     try {
+      appendTaskJobLog(jobId, "提交 Meshy Remesh 请求。", 24);
       const createResponse = await fetch("/api/meshy/remesh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1064,7 +1164,9 @@ export function App() {
       const taskId = createData.result ?? createData.id;
       if (!taskId) throw new Error("Mesh 重网格响应中没有任务ID");
 
+      appendTaskJobLog(jobId, `重网格任务已创建：${taskId}`, 42);
       const task = await pollMeshyTaskByEndpoint(`/api/meshy/remesh/${encodeURIComponent(taskId)}`, setAiMeshStatus, "Mesh重网格");
+      if (isTaskJobCanceled(jobId)) return;
       const remeshGlb = task.local_model_urls?.glb ?? task.model_urls?.glb ?? task.output?.model_urls?.glb ?? task.model_url;
       const remeshStl = task.local_model_urls?.stl ?? task.model_urls?.stl ?? task.output?.model_urls?.stl;
       if (!remeshGlb && !remeshStl) throw new Error("Mesh 重网格完成，但没有返回模型文件");
@@ -1076,6 +1178,7 @@ export function App() {
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 重网格完成，已替换当前模型，请重新生成刀路");
+      appendTaskJobLog(jobId, "重网格模型已返回，正在更新当前模型。", 92);
       finishTaskJob(jobId, "done", `完成：${remeshGlb ? "GLB" : ""}${remeshGlb && remeshStl ? "/" : ""}${remeshStl ? "STL" : ""} 已替换。`);
       recordTask({
         category: "model",
@@ -1794,8 +1897,9 @@ export function App() {
                 <span><strong>{taskEvents.filter((event) => event.status === "ok").length}</strong> 成功</span>
                 <span><strong>{taskEvents.filter((event) => event.status === "warning").length}</strong> 提醒</span>
                 <span><strong>{taskEvents.filter((event) => event.status === "error").length}</strong> 失败</span>
+                <span><strong>{taskJobs.filter((job) => job.status === "canceled").length}</strong> 已取消</span>
               </div>
-              <button className="demo-action package-action" onClick={() => { setTaskEvents([]); setTaskJobs([]); }} disabled={taskEvents.length === 0 && taskJobs.length === 0} type="button">
+              <button className="demo-action package-action" onClick={() => { setTaskEvents([]); setTaskJobs([]); setSelectedTaskJobId(null); }} disabled={taskEvents.length === 0 && taskJobs.length === 0} type="button">
                 清空任务记录
               </button>
               <button className="demo-action package-action" onClick={handleSaveCurrentSnapshot} type="button">
@@ -1815,13 +1919,34 @@ export function App() {
                     <div className={`job-card ${job.status}`} key={job.id}>
                       <div>
                         <strong>{job.title}</strong>
-                        <span>{job.status === "running" ? "运行中" : job.status === "done" ? "完成" : "失败"}</span>
+                        <span>{formatTaskJobStatus(job.status)}</span>
                       </div>
                       <p>{job.detail}</p>
+                      <div className="job-progress" aria-label={`${job.title}进度`}>
+                        <i style={{ width: `${job.progress}%` }} />
+                      </div>
                       <small>
                         {job.category.toUpperCase()} / 开始 {job.startedLabel}
                         {job.durationMs !== undefined ? ` / 耗时 ${(job.durationMs / 1000).toFixed(1)}s` : ""}
                       </small>
+                      <div className="job-actions">
+                        <button className="mini-action" type="button" onClick={() => setSelectedTaskJobId(selectedTaskJobId === job.id ? null : job.id)}>
+                          {selectedTaskJobId === job.id ? "收起日志" : "查看日志"}
+                        </button>
+                        <button className="mini-action" type="button" onClick={() => cancelTaskJob(job)} disabled={job.status !== "running"}>
+                          取消
+                        </button>
+                        <button className="mini-action" type="button" onClick={() => void retryTaskJob(job)} disabled={!job.retryAction || job.status === "running"}>
+                          重试
+                        </button>
+                      </div>
+                      {selectedTaskJobId === job.id && (
+                        <div className="job-log">
+                          {job.logs.map((log) => (
+                            <p key={log.id}><span>{log.time}</span>{log.message}</p>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2162,6 +2287,21 @@ function GcodePreview({ toolpath, exportGateReady }: { toolpath: GeneratedToolpa
       </div>
     </div>
   );
+}
+
+function createTaskJobLog(message: string): TaskJobLog {
+  return {
+    id: crypto.randomUUID(),
+    time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+    message
+  };
+}
+
+function formatTaskJobStatus(status: TaskJob["status"]) {
+  if (status === "running") return "运行中";
+  if (status === "done") return "完成";
+  if (status === "canceled") return "已取消";
+  return "失败";
 }
 
 function captureWorkbenchPreviewPng() {

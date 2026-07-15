@@ -1567,6 +1567,11 @@ button:disabled {
   background: rgba(255, 107, 156, 0.07);
 }
 
+.job-card.canceled {
+  border-left-color: var(--amber);
+  background: rgba(234, 181, 88, 0.07);
+}
+
 .job-card div {
   display: flex;
   align-items: baseline;
@@ -1592,6 +1597,10 @@ button:disabled {
   color: #ffd7e5;
 }
 
+.job-card.canceled span {
+  color: #ffe1a8;
+}
+
 .job-card p {
   margin: 0;
   color: var(--muted);
@@ -1603,6 +1612,84 @@ button:disabled {
   color: var(--subtle);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.job-card .job-progress {
+  display: block;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.job-card .job-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), var(--green));
+}
+
+.job-card.error .job-progress i {
+  background: var(--rose);
+}
+
+.job-card.canceled .job-progress i {
+  background: var(--amber);
+}
+
+.job-card .job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.mini-action {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #d8e3dd;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+}
+
+.mini-action:not(:disabled):hover {
+  border-color: rgba(25, 199, 180, 0.42);
+  background: rgba(25, 199, 180, 0.08);
+}
+
+.mini-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.job-card .job-log {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.job-log p {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  color: #dce8e2;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.job-log span {
+  color: var(--subtle);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .snapshot-list {
