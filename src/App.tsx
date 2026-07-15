@@ -1,5 +1,5 @@
 import { ChangeEvent, useMemo, useState } from "react";
-import { BadgeInfo, Box, Download, FileImage, Hammer, ImagePlus, Layers3, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
 import { generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -8,6 +8,19 @@ import { AiMeshViewer } from "./AiMeshViewer";
 import { exportGeometryAsStl } from "./modelExport";
 import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
+import {
+  applyMachineProfile,
+  applyMaterialProfile,
+  applyToolProfile,
+  getMachineProfile,
+  getMaterialProfile,
+  getToolProfile,
+  hasCriticalIssue,
+  machineProfiles,
+  materialProfiles,
+  toolProfiles,
+  validateManufacturingSetup
+} from "./manufacturingProfiles";
 import type { CarvingImage, DepthMap, GeneratedToolpath, ModelSettings } from "./types";
 
 const defaultSettings: ModelSettings = {
@@ -29,11 +42,18 @@ const defaultSettings: ModelSettings = {
   toolDiameter: 0.6,
   stepoverDeg: 1.2,
   stepoverMm: 0.12,
+  toolProfileId: "ball-0.6",
+  materialProfileId: "olive-core",
+  machineProfileId: "desktop-4axis-generic",
+  maxCutDepth: 0.16,
+  stockAllowance: 0.12,
+  finishingStrategy: "x-scan",
   generationMode: "active",
   postProcessor: "generic"
 };
 
 type ToolpathKind = "rough" | "finish";
+type WorkflowStage = "source" | "model" | "process" | "cam";
 
 const toolpathColors = {
   rough: 0xd2451e,
@@ -41,10 +61,18 @@ const toolpathColors = {
   simulation: 0x00a676
 };
 
+const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> = [
+  { id: "source", label: "素材", hint: "上传/载入" },
+  { id: "model", label: "建模", hint: "3D/Meshy" },
+  { id: "process", label: "工艺", hint: "刀具/机床" },
+  { id: "cam", label: "CAM", hint: "刀路/导出" }
+];
+
 export function App() {
   const [images, setImages] = useState<CarvingImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
+  const [activeStage, setActiveStage] = useState<WorkflowStage>("source");
   const [wireframe, setWireframe] = useState(false);
   const [toolpath, setToolpath] = useState<GeneratedToolpath | null>(null);
   const [isReading, setIsReading] = useState(false);
@@ -68,11 +96,34 @@ export function App() {
   const geometry = useMemo(() => createReliefGeometry(processedDepth, settings), [processedDepth, settings]);
   const isMultiviewGenerated = generationLabel.startsWith("本地360°环绕浮雕");
   const envelopeQuality = useMemo(() => (toolpath ? analyzeEnvelopeQuality(toolpath, settings) : null), [toolpath, settings]);
+  const selectedTool = useMemo(() => getToolProfile(settings.toolProfileId), [settings.toolProfileId]);
+  const selectedMaterial = useMemo(() => getMaterialProfile(settings.materialProfileId), [settings.materialProfileId]);
+  const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
+  const safetyIssues = useMemo(() => validateManufacturingSetup(settings, toolpath), [settings, toolpath]);
+  const exportBlocked = hasCriticalIssue(safetyIssues);
 
   const updateSetting = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
     setToolpath(null);
     setIsSimulationMode(false);
+  };
+
+  const applySettingsPreset = (nextSettings: ModelSettings) => {
+    setSettings(nextSettings);
+    setToolpath(null);
+    setIsSimulationMode(false);
+  };
+
+  const handleToolProfileChange = (toolId: string) => {
+    applySettingsPreset(applyToolProfile(settings, getToolProfile(toolId)));
+  };
+
+  const handleMaterialProfileChange = (materialId: string) => {
+    applySettingsPreset(applyMaterialProfile(settings, getMaterialProfile(materialId)));
+  };
+
+  const handleMachineProfileChange = (machineId: string) => {
+    applySettingsPreset(applyMachineProfile(settings, getMachineProfile(machineId)));
   };
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -405,21 +456,34 @@ export function App() {
           </div>
         </section>
 
-        <label className="upload-panel">
-          <UploadCloud size={24} />
-          <span>{isReading ? "正在读取图片..." : "上传一张或多张核雕图片"}</span>
-          <input type="file" accept="image/*" multiple onChange={handleFiles} disabled={isReading} />
-        </label>
-        <button className="demo-action" onClick={handleLoadDemoImages} type="button">
-          <Sparkles size={17} />
-          载入示例图案
-        </button>
-        <button className="demo-action material-action" onClick={handleLoadMaterial01} type="button" disabled={isReading}>
-          <FileImage size={17} />
-          载入素材01
-        </button>
+        <nav className="workflow-nav" aria-label="V2 workflow stages">
+          {workflowStages.map((stage) => (
+            <button className={stage.id === activeStage ? "active" : ""} key={stage.id} onClick={() => setActiveStage(stage.id)} type="button">
+              <strong>{stage.label}</strong>
+              <span>{stage.hint}</span>
+            </button>
+          ))}
+        </nav>
 
-        {images.length > 0 && (
+        {activeStage === "source" && (
+          <>
+            <label className="upload-panel">
+              <UploadCloud size={24} />
+              <span>{isReading ? "正在读取图片..." : "上传一张或多张核雕图片"}</span>
+              <input type="file" accept="image/*" multiple onChange={handleFiles} disabled={isReading} />
+            </label>
+            <button className="demo-action" onClick={handleLoadDemoImages} type="button">
+              <Sparkles size={17} />
+              载入示例图案
+            </button>
+            <button className="demo-action material-action" onClick={handleLoadMaterial01} type="button" disabled={isReading}>
+              <FileImage size={17} />
+              载入素材01
+            </button>
+          </>
+        )}
+
+        {activeStage === "source" && images.length > 0 && (
           <section className="panel">
             <div className="panel-title">
               <FileImage size={18} />
@@ -443,59 +507,63 @@ export function App() {
           </section>
         )}
 
-        <section className="panel">
-          <div className="panel-title">
-            <Layers3 size={18} />
-            <h2>生成控制</h2>
-          </div>
-          <label className="select-row">
-            <span>生成模式</span>
-            <select value={settings.generationMode} onChange={(event) => updateSetting("generationMode", event.target.value as ModelSettings["generationMode"])} disabled={images.length < 2}>
-              <option value="active">当前选中图片</option>
-              <option value="blend">多图平均融合</option>
-              <option value="multiview">本地360°环绕浮雕（非AI Mesh）</option>
-            </select>
-          </label>
-          <button className="primary-action generate-3d" onClick={handleGenerate3D}>
-            <Layers3 size={18} />
-            3D生成
-          </button>
-        </section>
+        {activeStage === "model" && (
+          <>
+            <section className="panel">
+              <div className="panel-title">
+                <Layers3 size={18} />
+                <h2>生成控制</h2>
+              </div>
+              <label className="select-row">
+                <span>生成模式</span>
+                <select value={settings.generationMode} onChange={(event) => updateSetting("generationMode", event.target.value as ModelSettings["generationMode"])} disabled={images.length < 2}>
+                  <option value="active">当前选中图片</option>
+                  <option value="blend">多图平均融合</option>
+                  <option value="multiview">本地360°环绕浮雕（非AI Mesh）</option>
+                </select>
+              </label>
+              <button className="primary-action generate-3d" onClick={handleGenerate3D}>
+                <Layers3 size={18} />
+                3D生成
+              </button>
+            </section>
 
-        <section className="panel">
-          <div className="panel-title">
-            <Sparkles size={18} />
-            <h2>推荐：真实3D网格</h2>
-          </div>
-          <p className="panel-note">使用前 1-4 张图片调用 Meshy 多图转 3D，生成真正的 GLB/STL 三维网格。</p>
-          <button className="primary-action ai-action" onClick={handleGenerateAiMesh} disabled={isAiGenerating || images.length === 0}>
-            <Sparkles size={18} />
-            {isAiGenerating ? "AI生成中..." : "Meshy生成3D Mesh"}
-          </button>
-          <div className="ai-tool-grid">
-            <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
-              <FileImage size={17} />
-              载入测试结果
-            </button>
-            <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing}>
-              <Sparkles size={17} />
-              {isMeshRepairing ? "修复中..." : "修复缺损"}
-            </button>
-            <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing}>
-              <Layers3 size={17} />
-              重建可雕刻网格
-            </button>
-          </div>
-          <div className="ai-status">{aiMeshStatus}</div>
-          {aiMeshUrl && (
-            <div className="ai-links">
-              <a href={aiMeshUrl} target="_blank" rel="noreferrer">下载 GLB</a>
-              {aiMeshStlUrl && <a href={aiMeshStlUrl} target="_blank" rel="noreferrer">下载 AI STL</a>}
-            </div>
-          )}
-        </section>
+            <section className="panel">
+              <div className="panel-title">
+                <Sparkles size={18} />
+                <h2>推荐：真实3D网格</h2>
+              </div>
+              <p className="panel-note">使用前 1-4 张图片调用 Meshy 多图转 3D，生成真正的 GLB/STL 三维网格。</p>
+              <button className="primary-action ai-action" onClick={handleGenerateAiMesh} disabled={isAiGenerating || images.length === 0}>
+                <Sparkles size={18} />
+                {isAiGenerating ? "AI生成中..." : "Meshy生成3D Mesh"}
+              </button>
+              <div className="ai-tool-grid">
+                <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
+                  <FileImage size={17} />
+                  载入测试结果
+                </button>
+                <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing}>
+                  <Sparkles size={17} />
+                  {isMeshRepairing ? "修复中..." : "修复缺损"}
+                </button>
+                <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing}>
+                  <Layers3 size={17} />
+                  重建可雕刻网格
+                </button>
+              </div>
+              <div className="ai-status">{aiMeshStatus}</div>
+              {aiMeshUrl && (
+                <div className="ai-links">
+                  <a href={aiMeshUrl} target="_blank" rel="noreferrer">下载 GLB</a>
+                  {aiMeshStlUrl && <a href={aiMeshStlUrl} target="_blank" rel="noreferrer">下载 AI STL</a>}
+                </div>
+              )}
+            </section>
+          </>
+        )}
 
-        <section className="panel">
+        {activeStage === "process" && <section className="panel">
           <div className="panel-title">
             <SlidersHorizontal size={18} />
             <h2>3D微调</h2>
@@ -514,9 +582,9 @@ export function App() {
             <input type="checkbox" checked={wireframe} onChange={(event) => setWireframe(event.target.checked)} />
             <span>显示网格</span>
           </label>
-        </section>
+        </section>}
 
-        {aiMeshUrl ? (
+        {activeStage === "process" && (aiMeshUrl ? (
           <section className="panel ai-mesh-note">
             <div className="panel-title">
               <Sparkles size={18} />
@@ -531,9 +599,47 @@ export function App() {
           </section>
         ) : (
           <DepthEditor depthMap={generatedDepth} onChange={handleDepthEdit} />
+        ))}
+
+        {activeStage === "process" && (
+          <section className="panel">
+            <div className="panel-title">
+              <Library size={18} />
+              <h2>工艺预设</h2>
+            </div>
+            <label className="select-row">
+              <span>刀具</span>
+              <select value={settings.toolProfileId} onChange={(event) => handleToolProfileChange(event.target.value)}>
+                {toolProfiles.map((tool) => (
+                  <option value={tool.id} key={tool.id}>{tool.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="select-row">
+              <span>材料</span>
+              <select value={settings.materialProfileId} onChange={(event) => handleMaterialProfileChange(event.target.value)}>
+                {materialProfiles.map((material) => (
+                  <option value={material.id} key={material.id}>{material.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="select-row">
+              <span>机床</span>
+              <select value={settings.machineProfileId} onChange={(event) => handleMachineProfileChange(event.target.value)}>
+                {machineProfiles.map((machine) => (
+                  <option value={machine.id} key={machine.id}>{machine.name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="profile-summary">
+              <span>刀具：{selectedTool.diameterMm.toFixed(2)}mm / 最大切深 {selectedTool.maxCutDepthMm.toFixed(2)}mm</span>
+              <span>材料：{selectedMaterial.notes}</span>
+              <span>机床：{selectedMachine.notes}</span>
+            </div>
+          </section>
         )}
 
-        <section className="panel">
+        {activeStage === "cam" && <section className="panel">
           <div className="panel-title">
             <Hammer size={18} />
             <h2>刀路参数</h2>
@@ -544,8 +650,18 @@ export function App() {
           <Control label="端部过渡" value={settings.endTransitionMm} min={0} max={6} step={0.1} suffix="mm" onChange={(v) => updateSetting("endTransitionMm", v)} />
           <Control label="X步距" value={settings.stepoverMm} min={0.03} max={0.8} step={0.01} suffix="mm" onChange={(v) => updateSetting("stepoverMm", v)} />
           <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" onChange={(v) => updateSetting("stepoverDeg", v)} />
+          <Control label="最大单层切深" value={settings.maxCutDepth} min={0.02} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("maxCutDepth", v)} />
+          <Control label="粗加工余量" value={settings.stockAllowance} min={0} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("stockAllowance", v)} />
           <Control label="进给" value={settings.feedRate} min={30} max={600} step={10} suffix="mm/min" onChange={(v) => updateSetting("feedRate", v)} />
           <Control label="主轴" value={settings.spindleRpm} min={3000} max={24000} step={500} suffix="rpm" onChange={(v) => updateSetting("spindleRpm", v)} />
+          <label className="select-row">
+            <span>精修策略</span>
+            <select value={settings.finishingStrategy} onChange={(event) => updateSetting("finishingStrategy", event.target.value as ModelSettings["finishingStrategy"])}>
+              <option value="x-scan">沿 X 扫描</option>
+              <option value="a-scan">沿 A 轴环扫</option>
+              <option value="cross">交叉精修</option>
+            </select>
+          </label>
           <label className="select-row">
             <span>后处理</span>
             <select value={settings.postProcessor} onChange={(event) => updateSetting("postProcessor", event.target.value as ModelSettings["postProcessor"])}>
@@ -562,7 +678,24 @@ export function App() {
             <Hammer size={17} />
             生成精加工刀路
           </button>
-        </section>
+        </section>}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
+              <ShieldCheck size={18} />
+              <h2>导出前安全校验</h2>
+            </div>
+            <div className="safety-list">
+              {safetyIssues.map((issue, index) => (
+                <div className={`safety-item ${issue.level}`} key={`${issue.title}-${index}`}>
+                  <strong>{issue.title}</strong>
+                  <span>{issue.detail}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </aside>
 
       <section className="workbench">
@@ -666,6 +799,10 @@ export function App() {
                 <span>后处理</span>
                 <strong>{toolpath.postProcessorName}</strong>
               </div>
+              <div className={`metric ${exportBlocked ? "warning" : "ok"}`}>
+                <span>导出校验</span>
+                <strong>{exportBlocked ? "存在阻断项" : "可导出"}</strong>
+              </div>
               <div className="metric wide">
                 <span>范围</span>
                 <strong>
@@ -707,19 +844,19 @@ export function App() {
                 <Layers3 size={17} />
                 {isSimulationMode ? "返回3D视图" : "模拟雕刻"}
               </button>
-              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)}>
+              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 NC"}>
                 <Download size={17} />
                 下载 NC
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 TAP"}>
                 <Download size={17} />
                 下载 TAP
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 TXT"}>
                 <Download size={17} />
                 下载 TXT
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 CSV"}>
                 <Download size={17} />
                 下载 CSV
               </button>

@@ -30,6 +30,12 @@ export type ModelSettings = {
   toolDiameter: number;
   stepoverDeg: number;
   stepoverMm: number;
+  toolProfileId: string;
+  materialProfileId: string;
+  machineProfileId: string;
+  maxCutDepth: number;
+  stockAllowance: number;
+  finishingStrategy: "x-scan" | "a-scan" | "cross";
   generationMode: "active" | "blend" | "multiview";
   postProcessor: "generic" | "weihong" | "syntec";
 };
