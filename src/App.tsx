@@ -1187,6 +1187,33 @@ export function App() {
           </section>
         )}
 
+        {activeStage === "cam" && envelopeQuality && (
+          <section className="panel">
+            <div className="panel-title">
+              <ShieldCheck size={18} />
+              <h2>包络诊断</h2>
+            </div>
+            <div className={`envelope-diagnosis ${envelopeQuality.diagnosis.level}`}>
+              <strong>{envelopeQuality.diagnosis.title}</strong>
+              <span>{envelopeQuality.diagnosis.detail}</span>
+            </div>
+            <div className="envelope-region-grid">
+              {envelopeQuality.regions.map((region) => (
+                <div className={`envelope-region ${region.status}`} key={region.label}>
+                  <span>{region.label}</span>
+                  <strong>{region.fitRate.toFixed(1)}%</strong>
+                  <small>未贴合 {region.missCount}/{region.total}</small>
+                </div>
+              ))}
+            </div>
+            <div className="quality-notes">
+              {envelopeQuality.diagnosis.suggestions.map((suggestion) => (
+                <span key={suggestion}>{suggestion}</span>
+              ))}
+            </div>
+          </section>
+        )}
+
         {activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
@@ -1558,6 +1585,8 @@ function analyzeEnvelopeQuality(toolpath: GeneratedToolpath, settings: ModelSett
   const continuityRate = preview.length > 1 ? calculateContinuityRate(preview) : 100;
   const zJumpRate = calculateZJumpRate(toolpath.points, settings);
   const score = THREEClamp(fitRate * 0.58 + continuityRate * 0.28 + (100 - safeRate) * 0.1 + (100 - zJumpRate) * 0.04, 0, 100);
+  const regions = createEnvelopeRegionStats(preview, toolpath.points, settings);
+  const diagnosis = createEnvelopeDiagnosis({ fitRate, missCount, continuityRate, zJumpRate, regions });
 
   return {
     score,
@@ -1565,8 +1594,116 @@ function analyzeEnvelopeQuality(toolpath: GeneratedToolpath, settings: ModelSett
     missCount,
     continuityRate,
     safeRate,
-    zJumpRate
+    zJumpRate,
+    regions,
+    diagnosis
   };
+}
+
+type EnvelopeRegionStat = {
+  label: string;
+  total: number;
+  missCount: number;
+  fitRate: number;
+  status: "ok" | "warning" | "critical";
+};
+
+function createEnvelopeRegionStats(
+  preview: Array<{ x: number; y: number; z: number; hit: boolean }>,
+  toolpathPoints: Array<{ x: number; a: number }>,
+  settings: ModelSettings
+): EnvelopeRegionStat[] {
+  const regions = [
+    createRegionBucket("左端"),
+    createRegionBucket("主体"),
+    createRegionBucket("右端"),
+    createRegionBucket("顶部"),
+    createRegionBucket("底部")
+  ];
+
+  const samples = preview.length > 0
+    ? preview.map((point) => ({ x: point.x, angle: Math.atan2(point.y, point.z), hit: point.hit }))
+    : toolpathPoints.map((point) => ({ x: point.x, angle: (point.a * Math.PI) / 180, hit: true }));
+
+  const halfLength = settings.lengthMm / 2;
+  const leftLimit = -halfLength + settings.leftHoldMm + Math.max(settings.endTransitionMm, settings.toolDiameter);
+  const rightLimit = halfLength - settings.rightHoldMm - Math.max(settings.endTransitionMm, settings.toolDiameter);
+
+  for (const point of samples) {
+    if (point.x <= leftLimit) addRegionSample(regions[0], point.hit);
+    else if (point.x >= rightLimit) addRegionSample(regions[2], point.hit);
+    else addRegionSample(regions[1], point.hit);
+
+    if (point.angle > Math.PI * 0.22 && point.angle < Math.PI * 0.78) {
+      addRegionSample(regions[3], point.hit);
+    }
+    if (point.angle < -Math.PI * 0.22 && point.angle > -Math.PI * 0.78) {
+      addRegionSample(regions[4], point.hit);
+    }
+  }
+
+  return regions.map((region) => finalizeRegion(region));
+}
+
+function createRegionBucket(label: string) {
+  return { label, total: 0, missCount: 0 };
+}
+
+function addRegionSample(region: { total: number; missCount: number }, hit: boolean) {
+  region.total += 1;
+  if (!hit) region.missCount += 1;
+}
+
+function finalizeRegion(region: { label: string; total: number; missCount: number }): EnvelopeRegionStat {
+  const fitRate = region.total > 0 ? ((region.total - region.missCount) / region.total) * 100 : 100;
+  return {
+    ...region,
+    fitRate,
+    status: fitRate >= 96 ? "ok" : fitRate >= 88 ? "warning" : "critical"
+  };
+}
+
+function createEnvelopeDiagnosis(input: {
+  fitRate: number;
+  missCount: number;
+  continuityRate: number;
+  zJumpRate: number;
+  regions: EnvelopeRegionStat[];
+}) {
+  const problematic = input.regions.filter((region) => region.total > 0 && region.status !== "ok").sort((a, b) => a.fitRate - b.fitRate);
+  const worst = problematic[0];
+  const suggestions: string[] = [];
+  let title = "包络贴合正常";
+  let detail = "当前刀路采样与目标网格整体贴合，未发现明显区域性缺损。";
+  let level: "ok" | "warning" | "critical" = "ok";
+
+  if (input.fitRate < 88 || input.continuityRate < 82) {
+    level = "critical";
+    title = "存在明显未贴合区域";
+    detail = worst ? `${worst.label}贴合率最低，仅 ${worst.fitRate.toFixed(1)}%，可能来自 Mesh 缺损、姿态偏轴或端部过渡过窄。` : "整体贴合率偏低，请优先检查 Mesh 质量和旋转轴。";
+  } else if (input.fitRate < 96 || problematic.length > 0) {
+    level = "warning";
+    title = "局部区域建议复核";
+    detail = worst ? `${worst.label}存在局部未贴合，贴合率 ${worst.fitRate.toFixed(1)}%。` : "整体贴合可用，但建议上机前复核局部细节。";
+  }
+
+  if (problematic.some((region) => region.label === "左端" || region.label === "右端")) {
+    suggestions.push("未贴合集中在两端时，优先检查夹持区、端部过渡和 AI Mesh 端部是否缺面。");
+  }
+  if (problematic.some((region) => region.label === "顶部" || region.label === "底部")) {
+    suggestions.push("未贴合集中在顶部/底部时，优先使用 Mesh 修复、重网格或重新校准旋转轴。");
+  }
+  if (input.zJumpRate > 8) {
+    suggestions.push("Z 向跳变偏多，建议降低步距、平滑 Mesh 或减小单层切深。");
+  }
+  if (input.missCount > 0 && suggestions.length === 0) {
+    suggestions.push("存在少量未贴合点，可先模拟雕刻并查看粉色标记是否集中成片。");
+  }
+  if (suggestions.length === 0) {
+    suggestions.push("包络指标正常，可继续做模拟雕刻和空跑验证。");
+  }
+
+  return { level, title, detail, suggestions };
 }
 
 function calculateContinuityRate(points: Array<{ hit: boolean }>) {
