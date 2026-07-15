@@ -95,6 +95,28 @@ export type GeneratedToolpath = {
   summary: ToolpathSummary;
 };
 
+export type MeshQualityCheck = {
+  label: string;
+  value: string;
+  status: "ok" | "warning" | "critical";
+};
+
+export type MeshQualityReport = {
+  score: number;
+  verdict: "ready" | "review" | "repair";
+  triangleCount: number;
+  vertexCount: number;
+  edgeCount: number;
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  degenerateFaces: number;
+  dimensions: { x: number; y: number; z: number };
+  center: { x: number; y: number; z: number };
+  detectedLongAxis: "x" | "y" | "z";
+  checks: MeshQualityCheck[];
+  recommendations: string[];
+};
+
 export type ToolpathSummary = {
   xMin: number;
   xMax: number;

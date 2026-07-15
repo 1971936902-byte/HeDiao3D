@@ -1,4 +1,4 @@
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { BadgeInfo, Box, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
 import { generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
@@ -22,7 +22,7 @@ import {
   validateManufacturingSetup
 } from "./manufacturingProfiles";
 import { analyzeDepthMapQuality, createManufacturingQualityReport } from "./quality";
-import type { CarvingImage, DepthMap, GeneratedToolpath, ModelSettings } from "./types";
+import type { CarvingImage, DepthMap, GeneratedToolpath, MeshQualityReport, ModelSettings } from "./types";
 
 const defaultSettings: ModelSettings = {
   lengthMm: 38,
@@ -87,6 +87,8 @@ export function App() {
   const [isToolpathGenerating, setIsToolpathGenerating] = useState(false);
   const [isSimulationMode, setIsSimulationMode] = useState(false);
   const [toolpathKind, setToolpathKind] = useState<ToolpathKind>("rough");
+  const [meshQuality, setMeshQuality] = useState<MeshQualityReport | null>(null);
+  const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -107,6 +109,44 @@ export function App() {
     () => createManufacturingQualityReport(settings, toolpath, safetyIssues, envelopeQuality),
     [settings, toolpath, safetyIssues, envelopeQuality]
   );
+
+  useEffect(() => {
+    if (!aiMeshStlUrl) {
+      setMeshQuality(null);
+      setMeshQualityStatus("等待 STL 模型");
+      return;
+    }
+
+    let cancelled = false;
+    setMeshQuality(null);
+    setMeshQualityStatus("正在体检 Mesh");
+
+    fetch("/api/mesh/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stlUrl: aiMeshStlUrl })
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error ?? "Mesh 体检失败");
+        }
+        return data as MeshQualityReport;
+      })
+      .then((report) => {
+        if (cancelled) return;
+        setMeshQuality(report);
+        setMeshQualityStatus(report.verdict === "ready" ? "Mesh 体检通过" : report.verdict === "review" ? "Mesh 需要复核" : "Mesh 建议修复");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setMeshQualityStatus(error instanceof Error ? error.message : "Mesh 体检失败");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [aiMeshStlUrl]);
 
   const updateSetting = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -153,6 +193,8 @@ export function App() {
       setActiveId(loaded[0].id);
       setGeneratedDepth(null);
       setAiMeshUrl(null);
+      setAiMeshStlUrl(null);
+      setMeshQuality(null);
       setGenerationLabel("图片已载入，待生成3D");
       setToolpath(null);
       setIsSimulationMode(false);
@@ -231,6 +273,7 @@ export function App() {
     setGeneratedDepth(depth);
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setMeshQuality(null);
     setAiMeshStatus("未生成");
     if (settings.generationMode === "multiview") {
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
@@ -246,6 +289,7 @@ export function App() {
     setGeneratedDepth(depth);
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setMeshQuality(null);
     setToolpath(null);
     setIsSimulationMode(false);
   };
@@ -253,6 +297,7 @@ export function App() {
   const handleClearAiMesh = () => {
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setMeshQuality(null);
     setAiMeshStatus("未生成");
     setGenerationLabel(generatedDepth ? "本地浮雕网格" : images.length > 0 ? "图片已载入，待生成3D" : "内置示例");
     setToolpath(null);
@@ -275,6 +320,7 @@ export function App() {
     setGeneratedDepth(null);
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setMeshQuality(null);
     setGenerationLabel("示例图案已载入，待生成3D");
     setToolpath(null);
   };
@@ -301,6 +347,7 @@ export function App() {
       setGeneratedDepth(null);
       setAiMeshUrl(null);
       setAiMeshStlUrl(null);
+      setMeshQuality(null);
       setGenerationLabel("素材01已载入，待生成3D");
       setToolpath(null);
       setIsSimulationMode(false);
@@ -318,6 +365,7 @@ export function App() {
     setIsAiGenerating(true);
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setMeshQuality(null);
     setToolpath(null);
 
     try {
@@ -367,6 +415,7 @@ export function App() {
   const handleLoadLocalMeshyResult = () => {
     setAiMeshUrl("/meshy-results/material01-meshy.glb");
     setAiMeshStlUrl("/meshy-results/material01-meshy.stl");
+    setMeshQuality(null);
     setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
     setGenerationLabel("AI 3D Mesh：素材01测试结果");
     setAiMeshStatus("已载入本地 Meshy 测试结果");
@@ -401,6 +450,7 @@ export function App() {
       if (!repairedStl) throw new Error("Mesh 修复完成，但没有返回 STL");
 
       setAiMeshStlUrl(repairedStl);
+      setMeshQuality(null);
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 缺损修复完成，已替换刀路用 STL，请重新生成刀路");
@@ -441,6 +491,7 @@ export function App() {
 
       if (remeshGlb) setAiMeshUrl(remeshGlb);
       if (remeshStl) setAiMeshStlUrl(remeshStl);
+      setMeshQuality(null);
       setGenerationLabel("AI 3D Mesh：已重建可雕刻网格");
       setToolpath(null);
       setIsSimulationMode(false);
@@ -593,6 +644,61 @@ export function App() {
                   <a href={aiMeshUrl} target="_blank" rel="noreferrer">下载 GLB</a>
                   {aiMeshStlUrl && <a href={aiMeshStlUrl} target="_blank" rel="noreferrer">下载 AI STL</a>}
                 </div>
+              )}
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <ShieldCheck size={18} />
+                <h2>Mesh质量体检</h2>
+              </div>
+              {!aiMeshStlUrl ? (
+                <p className="panel-note">载入或生成带 STL 的 Meshy 模型后，会自动检查封闭性、非流形边、退化面和模型尺寸。</p>
+              ) : meshQuality ? (
+                <>
+                  <div className={`quality-score ${meshQuality.verdict === "ready" ? "ready" : meshQuality.verdict === "review" ? "usable" : "retake"}`}>
+                    <strong>{meshQuality.score.toFixed(1)}</strong>
+                    <span>{meshQuality.verdict === "ready" ? "Mesh 可进入刀路生成" : meshQuality.verdict === "review" ? "Mesh 建议复核后加工" : "Mesh 建议先修复"}</span>
+                  </div>
+                  <div className="mesh-stats">
+                    <span>面数 <strong>{meshQuality.triangleCount.toLocaleString()}</strong></span>
+                    <span>边界边 <strong>{meshQuality.boundaryEdges}</strong></span>
+                    <span>非流形 <strong>{meshQuality.nonManifoldEdges}</strong></span>
+                    <span>长轴 <strong>{meshQuality.detectedLongAxis.toUpperCase()}</strong></span>
+                    <span>尺寸 <strong>{meshQuality.dimensions.x.toFixed(1)} x {meshQuality.dimensions.y.toFixed(1)} x {meshQuality.dimensions.z.toFixed(1)}</strong></span>
+                  </div>
+                  <div className="inspection-list">
+                    {meshQuality.checks.map((check) => (
+                      <div className={`inspection-item ${check.status}`} key={check.label}>
+                        <div>
+                          <span>{check.label}</span>
+                          <strong>{check.value}</strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="quality-notes">
+                    {meshQuality.recommendations.map((recommendation) => (
+                      <span key={recommendation}>{recommendation}</span>
+                    ))}
+                  </div>
+                  <div className="repair-steps">
+                    <div className={meshQuality.boundaryEdges > 0 ? "active" : ""}>
+                      <strong>1. 修复缺损</strong>
+                      <span>优先处理孔洞、开口和打印可制造性。</span>
+                    </div>
+                    <div className={meshQuality.nonManifoldEdges > 0 || meshQuality.degenerateFaces > 0 ? "active" : ""}>
+                      <strong>2. 重建可雕刻网格</strong>
+                      <span>处理非流形边、退化面和网格密度不均。</span>
+                    </div>
+                    <div>
+                      <strong>3. 重新生成刀路</strong>
+                      <span>修复后重新采样并查看未命中点变化。</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="ai-status">{meshQualityStatus}</div>
               )}
             </section>
           </>

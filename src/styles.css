@@ -699,6 +699,70 @@ button:disabled {
   line-height: 1.45;
 }
 
+.mesh-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mesh-stats span {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  color: var(--subtle);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+
+.mesh-stats strong {
+  overflow: hidden;
+  color: #f2f8f5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mesh-stats span:last-child {
+  grid-column: 1 / -1;
+}
+
+.repair-steps {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.repair-steps div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  color: #d9e2dc;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.repair-steps div.active {
+  border-left-color: var(--amber);
+  background: rgba(234, 181, 88, 0.07);
+}
+
+.repair-steps strong {
+  color: #f2f8f5;
+  font-size: 13px;
+}
+
+.repair-steps span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .ai-links {
   display: flex;
   gap: 8px;

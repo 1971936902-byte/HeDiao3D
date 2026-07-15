@@ -37,6 +37,10 @@ const server = createServer(async (req, res) => {
       return createMeshToolpath(req, res);
     }
 
+    if (req.method === "POST" && req.url === "/api/mesh/analyze") {
+      return analyzeMesh(req, res);
+    }
+
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
     if (req.method === "GET" && taskMatch) {
       return getMultiImageTask(taskMatch[1], res);
@@ -231,6 +235,31 @@ async function createMeshToolpath(req, res) {
   return json(res, 200, toolpath);
 }
 
+async function analyzeMesh(req, res) {
+  const input = await readJson(req);
+  const stlUrl = String(input.stlUrl ?? "");
+
+  if (!stlUrl.startsWith("/meshy-results/") || stlUrl.includes("..")) {
+    return json(res, 400, { error: "本地 Meshy STL 地址无效" });
+  }
+
+  const stlPath = join(process.cwd(), "public", stlUrl.replace(/^\//, ""));
+  if (!existsSync(stlPath)) {
+    return json(res, 404, { error: "找不到本地 Meshy STL 文件，请重新生成或载入测试结果" });
+  }
+
+  const file = readFileSync(stlPath);
+  const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+  const geometry = new STLLoader().parse(buffer);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+
+  const report = buildMeshQualityReport(geometry);
+  geometry.dispose();
+  return json(res, 200, report);
+}
+
 async function proxyJson(response, res) {
   const text = await response.text();
   res.writeHead(response.status, {
@@ -422,6 +451,133 @@ function generateMeshSurfaceToolpath(mesh, settings) {
     postProcessorName: postProcessorName(settings.postProcessor),
     summary: summarizePoints(points, warnings)
   };
+}
+
+function buildMeshQualityReport(geometry) {
+  const position = geometry.getAttribute("position");
+  const triangleCount = Math.floor(position.count / 3);
+  const vertexCount = position.count;
+  const box = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(position);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const edgeStats = analyzeMeshEdges(position);
+  const degenerateFaces = countDegenerateFaces(position);
+  const largest = Math.max(size.x, size.y, size.z, 0.0001);
+  const smallest = Math.min(size.x || largest, size.y || largest, size.z || largest);
+  const axis = largestAxis(size);
+  const boundaryRate = edgeStats.boundaryEdges / Math.max(1, edgeStats.totalEdges);
+  const nonManifoldRate = edgeStats.nonManifoldEdges / Math.max(1, edgeStats.totalEdges);
+  const degenerateRate = degenerateFaces / Math.max(1, triangleCount);
+  const recommendations = [];
+  const checks = [];
+
+  checks.push(createMeshCheck("面数", triangleCount >= 1500, triangleCount >= 400, `${triangleCount} triangles`));
+  checks.push(createMeshCheck("封闭性", boundaryRate < 0.003, boundaryRate < 0.02, `${edgeStats.boundaryEdges} boundary edges`));
+  checks.push(createMeshCheck("非流形边", nonManifoldRate === 0, nonManifoldRate < 0.003, `${edgeStats.nonManifoldEdges} non-manifold edges`));
+  checks.push(createMeshCheck("退化面", degenerateRate < 0.001, degenerateRate < 0.01, `${degenerateFaces} degenerate faces`));
+  checks.push(createMeshCheck("长轴识别", largest / Math.max(0.001, smallest) < 8, largest / Math.max(0.001, smallest) < 12, `long axis ${axis.toUpperCase()}`));
+
+  if (edgeStats.boundaryEdges > 0) recommendations.push("存在边界开口，建议先执行 Mesh 修复，再生成刀路。");
+  if (edgeStats.nonManifoldEdges > 0) recommendations.push("存在非流形边，建议执行重建可雕刻网格。");
+  if (degenerateFaces > triangleCount * 0.01) recommendations.push("退化面偏多，建议重网格后再进入 CAM。");
+  if (triangleCount < 1500) recommendations.push("面数偏少，细节可能不足，建议重新生成或提高重网格目标面数。");
+  if (largest / Math.max(0.001, smallest) >= 8) recommendations.push("模型比例差异较大，请检查姿态是否已对齐核胚长轴。");
+  if (recommendations.length === 0) recommendations.push("Mesh 基础体检正常，可进入刀路生成和包络检查。");
+
+  const critical = checks.filter((check) => check.status === "critical").length;
+  const warning = checks.filter((check) => check.status === "warning").length;
+  const score = Math.max(0, Math.min(100, 100 - critical * 24 - warning * 8 - boundaryRate * 600 - nonManifoldRate * 1000 - degenerateRate * 500));
+
+  return {
+    score,
+    verdict: critical > 0 ? "repair" : warning > 0 ? "review" : "ready",
+    triangleCount,
+    vertexCount,
+    edgeCount: edgeStats.totalEdges,
+    boundaryEdges: edgeStats.boundaryEdges,
+    nonManifoldEdges: edgeStats.nonManifoldEdges,
+    degenerateFaces,
+    dimensions: {
+      x: size.x,
+      y: size.y,
+      z: size.z
+    },
+    center: {
+      x: center.x,
+      y: center.y,
+      z: center.z
+    },
+    detectedLongAxis: axis,
+    checks,
+    recommendations
+  };
+}
+
+function createMeshCheck(label, ok, warning, value) {
+  return {
+    label,
+    value,
+    status: ok ? "ok" : warning ? "warning" : "critical"
+  };
+}
+
+function analyzeMeshEdges(position) {
+  const edges = new Map();
+
+  for (let i = 0; i < position.count; i += 3) {
+    const a = vertexKey(position, i);
+    const b = vertexKey(position, i + 1);
+    const c = vertexKey(position, i + 2);
+    addEdge(edges, a, b);
+    addEdge(edges, b, c);
+    addEdge(edges, c, a);
+  }
+
+  let boundaryEdges = 0;
+  let nonManifoldEdges = 0;
+  for (const count of edges.values()) {
+    if (count === 1) boundaryEdges += 1;
+    if (count > 2) nonManifoldEdges += 1;
+  }
+
+  return {
+    totalEdges: edges.size,
+    boundaryEdges,
+    nonManifoldEdges
+  };
+}
+
+function addEdge(edges, a, b) {
+  const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+  edges.set(key, (edges.get(key) ?? 0) + 1);
+}
+
+function vertexKey(position, index) {
+  const scale = 10000;
+  const x = Math.round(position.getX(index) * scale);
+  const y = Math.round(position.getY(index) * scale);
+  const z = Math.round(position.getZ(index) * scale);
+  return `${x},${y},${z}`;
+}
+
+function countDegenerateFaces(position) {
+  let count = 0;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+
+  for (let i = 0; i < position.count; i += 3) {
+    a.fromBufferAttribute(position, i);
+    b.fromBufferAttribute(position, i + 1);
+    c.fromBufferAttribute(position, i + 2);
+    ab.subVectors(b, a);
+    ac.subVectors(c, a);
+    if (ab.cross(ac).lengthSq() < 1e-12) count += 1;
+  }
+
+  return count;
 }
 
 function toDisplayPreviewPoint(hit, center, displayScale) {
