@@ -329,12 +329,17 @@ function generateMeshSurfaceToolpath(mesh, settings) {
   const lengthAxis = largestAxis(size);
   const radialAxes = ["x", "y", "z"].filter((axis) => axis !== lengthAxis);
   const halfLength = Number(settings.lengthMm) / 2;
+  const leftHold = Number(settings.leftHoldMm ?? 0);
+  const rightHold = Number(settings.rightHoldMm ?? 0);
+  const xStart = -halfLength + leftHold;
+  const xEnd = halfLength - rightHold;
+  const carveLength = Math.max(Number(settings.stepoverMm), xEnd - xStart);
   const machineRadius = Number(settings.diameterMm) / 2;
   const toolRadius = Number(settings.toolDiameter) / 2;
   const aMin = Number(settings.reliefAngleDeg) >= 360 ? -180 : -Number(settings.reliefAngleDeg) / 2;
   const aMax = Number(settings.reliefAngleDeg) >= 360 ? 180 : Number(settings.reliefAngleDeg) / 2;
   const passes = Math.max(2, Math.ceil(Number(settings.reliefAngleDeg) / Number(settings.stepoverDeg)));
-  const xSteps = Math.max(2, Math.ceil(Number(settings.lengthMm) / Number(settings.stepoverMm)));
+  const xSteps = Math.max(2, Math.ceil(carveLength / Number(settings.stepoverMm)));
   const radialMax = Math.max(axisValue(size, radialAxes[0]), axisValue(size, radialAxes[1])) / 2 || 1;
   const outerRadius = radialMax * 2.2 + 1;
   const displayScale = 3.2 / Math.max(size.x, size.y, size.z, 0.001);
@@ -353,8 +358,9 @@ function generateMeshSurfaceToolpath(mesh, settings) {
 
     for (let step = 0; step <= xSteps; step += 1) {
       const index = serpentine ? xSteps - step : step;
-      const u = index / xSteps;
-      const x = -halfLength + u * Number(settings.lengthMm);
+      const carveU = index / xSteps;
+      const x = xStart + carveU * carveLength;
+      const u = (x + halfLength) / Number(settings.lengthMm);
       const centerline = center.clone();
       setAxisValue(centerline, lengthAxis, axisValue(box.min, lengthAxis) + u * axisValue(size, lengthAxis));
 
@@ -387,12 +393,16 @@ function generateMeshSurfaceToolpath(mesh, settings) {
     warnings.push(`Mesh表面采样有 ${missCount} 个点未命中，已抬到安全Z；请检查模型朝向和包覆角度。`);
   }
 
-  if (Number(settings.safeZ) <= maxPointZ(points)) {
+  if (Number(settings.safeZ) <= maxCuttingZ(points, Number(settings.safeZ))) {
     warnings.push("安全高度低于或接近最高刀位，请提高安全高度。");
   }
 
   if (Number(settings.stepoverMm) > Number(settings.toolDiameter) * 0.6) {
     warnings.push("X步距偏大，可能留下明显刀痕。");
+  }
+
+  if (leftHold > 0 || rightHold > 0) {
+    warnings.push(`已避开端部夹持区：左 ${fmt(leftHold, 1)}mm / 右 ${fmt(rightHold, 1)}mm。`);
   }
 
   warnings.push("Mesh CAM 已按模型外表面采样生成；首次实机请务必空跑并使用低进给试雕。");
@@ -476,9 +486,10 @@ function summarizePoints(points, warnings) {
   return { ...values, warnings };
 }
 
-function maxPointZ(points) {
+function maxCuttingZ(points, safeZ) {
   let max = Number.NEGATIVE_INFINITY;
   for (const point of points) {
+    if (point.z >= safeZ * 0.92) continue;
     max = Math.max(max, point.z);
   }
   return max;
@@ -514,6 +525,7 @@ function toGcode(points, settings, estimatedMinutes, sourceName) {
     `(Nuclear carving ${sourceName} - ${postProcessorName(settings.postProcessor)})`,
     "(Coordinate: X length axis, A rotary axis, Z radial tool center)",
     `(Length=${fmt(settings.lengthMm, 3)}mm Diameter=${fmt(settings.diameterMm, 3)}mm ToolDiameter=${fmt(settings.toolDiameter, 3)}mm)`,
+    `(HoldLeft=${fmt(settings.leftHoldMm ?? 0, 3)}mm HoldRight=${fmt(settings.rightHoldMm ?? 0, 3)}mm EndTransition=${fmt(settings.endTransitionMm ?? 0, 3)}mm)`,
     `(Estimated=${fmt(estimatedMinutes, 2)}min)`,
     "G21",
     "G90",

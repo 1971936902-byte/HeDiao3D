@@ -24,6 +24,9 @@ export type ModelSettings = {
   spindleRpm: number;
   feedRate: number;
   safeZ: number;
+  leftHoldMm: number;
+  rightHoldMm: number;
+  endTransitionMm: number;
   toolDiameter: number;
   stepoverDeg: number;
   stepoverMm: number;

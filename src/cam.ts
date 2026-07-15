@@ -12,11 +12,14 @@ const postProcessorNames = {
 export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): GeneratedToolpath {
   const points: ToolpathPoint[] = [];
   const halfLength = settings.lengthMm / 2;
+  const xStart = -halfLength + settings.leftHoldMm;
+  const xEnd = halfLength - settings.rightHoldMm;
+  const carveLength = Math.max(settings.stepoverMm, xEnd - xStart);
   const radius = settings.diameterMm / 2;
   const aMin = settings.reliefAngleDeg >= 360 ? -180 : -settings.reliefAngleDeg / 2;
   const aMax = settings.reliefAngleDeg >= 360 ? 180 : settings.reliefAngleDeg / 2;
   const passes = Math.max(2, Math.ceil(settings.reliefAngleDeg / settings.stepoverDeg));
-  const xSteps = Math.max(2, Math.ceil(settings.lengthMm / settings.stepoverMm));
+  const xSteps = Math.max(2, Math.ceil(carveLength / settings.stepoverMm));
 
   for (let pass = 0; pass <= passes; pass += 1) {
     const serpentine = pass % 2 === 1;
@@ -25,9 +28,11 @@ export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): G
 
     for (let step = 0; step <= xSteps; step += 1) {
       const index = serpentine ? xSteps - step : step;
-      const u = index / xSteps;
-      const x = -halfLength + u * settings.lengthMm;
-      const depth = sampleDepth(depthMap, u, 1 - v) * settings.depthMm;
+      const carveU = index / xSteps;
+      const x = xStart + carveU * carveLength;
+      const sourceU = (x + halfLength) / settings.lengthMm;
+      const transition = endTransitionFactor(x, xStart, xEnd, settings.endTransitionMm);
+      const depth = sampleDepth(depthMap, sourceU, 1 - v) * settings.depthMm * transition;
       const z = radius + depth + settings.toolDiameter / 2;
       points.push({ x, a, z, depth });
     }
@@ -83,7 +88,22 @@ function summarizeToolpath(points: ToolpathPoint[], settings: ModelSettings) {
     warnings.push("包覆角度较大，请确认夹具与A轴连续旋转方向。");
   }
 
+  if (settings.leftHoldMm > 0 || settings.rightHoldMm > 0) {
+    warnings.push(`已避开端部夹持区：左 ${fmt(settings.leftHoldMm, 1)}mm / 右 ${fmt(settings.rightHoldMm, 1)}mm。`);
+  }
+
   return { ...values, warnings };
+}
+
+function endTransitionFactor(x: number, xStart: number, xEnd: number, transitionMm: number) {
+  if (transitionMm <= 0) return 1;
+  const left = THREEClamp((x - xStart) / transitionMm, 0, 1);
+  const right = THREEClamp((xEnd - x) / transitionMm, 0, 1);
+  return Math.min(left, right);
+}
+
+function THREEClamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function toGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinutes: number): string {
@@ -92,6 +112,7 @@ function toGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinu
     `(Nuclear carving relief CAM MVP - ${postProcessorNames[settings.postProcessor]})`,
     "(Coordinate: X length axis, A rotary axis, Z radial tool center)",
     `(Length=${fmt(settings.lengthMm, 3)}mm Diameter=${fmt(settings.diameterMm, 3)}mm MaxDepth=${fmt(settings.depthMm, 3)}mm)`,
+    `(HoldLeft=${fmt(settings.leftHoldMm, 3)}mm HoldRight=${fmt(settings.rightHoldMm, 3)}mm EndTransition=${fmt(settings.endTransitionMm, 3)}mm)`,
     `(ToolDiameter=${fmt(settings.toolDiameter, 3)}mm Estimated=${fmt(estimatedMinutes, 2)}min)`,
     "G21",
     "G90",

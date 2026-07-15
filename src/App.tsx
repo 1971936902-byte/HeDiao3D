@@ -23,6 +23,9 @@ const defaultSettings: ModelSettings = {
   spindleRpm: 12000,
   feedRate: 180,
   safeZ: 22,
+  leftHoldMm: 2,
+  rightHoldMm: 2,
+  endTransitionMm: 1.2,
   toolDiameter: 0.6,
   stepoverDeg: 1.2,
   stepoverMm: 0.12,
@@ -534,6 +537,9 @@ export function App() {
             <h2>刀路参数</h2>
           </div>
           <Control label="刀具直径" value={settings.toolDiameter} min={0.2} max={2} step={0.05} suffix="mm" onChange={(v) => updateSetting("toolDiameter", v)} />
+          <Control label="左端夹持" value={settings.leftHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("leftHoldMm", v)} />
+          <Control label="右端夹持" value={settings.rightHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("rightHoldMm", v)} />
+          <Control label="端部过渡" value={settings.endTransitionMm} min={0} max={6} step={0.1} suffix="mm" onChange={(v) => updateSetting("endTransitionMm", v)} />
           <Control label="X步距" value={settings.stepoverMm} min={0.03} max={0.8} step={0.01} suffix="mm" onChange={(v) => updateSetting("stepoverMm", v)} />
           <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" onChange={(v) => updateSetting("stepoverDeg", v)} />
           <Control label="进给" value={settings.feedRate} min={30} max={600} step={10} suffix="mm/min" onChange={(v) => updateSetting("feedRate", v)} />
