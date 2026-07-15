@@ -90,10 +90,10 @@ export function createManufacturingQualityReport(
 
     items.push({
       label: "粗精加工",
-      value: toolpath.programs?.rough && toolpath.programs.finish ? "已分离" : "未分离",
-      status: toolpath.programs?.rough && toolpath.programs.finish ? "ok" : "warning",
+      value: toolpath.programs?.rough && toolpath.programs.finish && toolpath.programs.rest ? "粗/精/清残" : toolpath.programs?.rough && toolpath.programs.finish ? "已分离" : "未分离",
+      status: toolpath.programs?.rough && toolpath.programs.finish && toolpath.programs.rest ? "ok" : toolpath.programs?.rough && toolpath.programs.finish ? "ok" : "warning",
       detail: toolpath.programs?.rough
-        ? `粗加工 ${toolpath.programs.rough.points.length} 点，精加工 ${toolpath.programs.finish?.points.length ?? 0} 点。`
+        ? `粗加工 ${toolpath.programs.rough.points.length} 点，精加工 ${toolpath.programs.finish?.points.length ?? 0} 点，清残 ${toolpath.programs.rest?.points.length ?? 0} 点。`
         : "当前没有粗精加工独立程序。"
     });
   } else {

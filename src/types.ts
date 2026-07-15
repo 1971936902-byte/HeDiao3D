@@ -92,6 +92,7 @@ export type GeneratedToolpath = {
   programs?: {
     rough?: ToolpathProgram;
     finish?: ToolpathProgram;
+    rest?: ToolpathProgram;
     combined?: ToolpathProgram;
     airRun?: ToolpathProgram;
   };

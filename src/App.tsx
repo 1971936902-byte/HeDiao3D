@@ -492,6 +492,9 @@ export function App() {
     if (toolpath.programs?.finish) {
       files.push({ name: `nc/${toolpath.programs.finish.filename}`, content: toolpath.programs.finish.gcode });
     }
+    if (toolpath.programs?.rest) {
+      files.push({ name: `nc/${toolpath.programs.rest.filename}`, content: toolpath.programs.rest.gcode });
+    }
 
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
     downloadBlob(`hediao3d-machining-package-${stamp}.zip`, createZipBlob(files));
@@ -582,7 +585,7 @@ export function App() {
       category: "cam",
       status: generatedToolpath.summary.warnings.length > 0 ? "warning" : "ok",
       title: finishing ? "生成本地精加工刀路" : "生成本地粗精加工刀路",
-      detail: `点数 ${generatedToolpath.points.length}，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min，粗加工 ${generatedToolpath.programs?.rough?.estimatedMinutes.toFixed(1) ?? "-"} min。`
+      detail: `点数 ${generatedToolpath.points.length}，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min，粗加工 ${generatedToolpath.programs?.rough?.estimatedMinutes.toFixed(1) ?? "-"} min，清残 ${generatedToolpath.programs?.rest?.points.length ?? 0} 点。`
     });
   };
 
@@ -1503,6 +1506,7 @@ export function App() {
               <span>合并 NC</span>
               <span>粗加工 NC</span>
               <span>精加工 NC</span>
+              <span>清残 NC</span>
               <span>CSV 点位</span>
               <span>质量报告</span>
               <span>安全报告</span>
@@ -1712,6 +1716,12 @@ export function App() {
                   <strong>{toolpath.programs.finish.estimatedMinutes.toFixed(1)} min</strong>
                 </div>
               )}
+              {toolpath.programs?.rest && (
+                <div className="metric">
+                  <span>清残</span>
+                  <strong>{toolpath.programs.rest.estimatedMinutes.toFixed(1)} min</strong>
+                </div>
+              )}
               <div className="metric">
                 <span>后处理</span>
                 <strong>{toolpath.postProcessorName}</strong>
@@ -1787,6 +1797,12 @@ export function App() {
                 <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载精加工 NC"}>
                   <Download size={17} />
                   下载精加工
+                </button>
+              )}
+              {toolpath.programs?.rest && (
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载清残 NC"}>
+                  <Download size={17} />
+                  下载清残
                 </button>
               )}
               <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 TAP"}>

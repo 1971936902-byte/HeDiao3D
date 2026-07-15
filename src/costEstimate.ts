@@ -57,13 +57,15 @@ export function createCostEstimate(
 
   const programMinutes = {
     rough: toolpath.programs?.rough?.estimatedMinutes ?? 0,
-    finish: toolpath.programs?.finish?.estimatedMinutes ?? 0
+    finish: toolpath.programs?.finish?.estimatedMinutes ?? 0,
+    rest: toolpath.programs?.rest?.estimatedMinutes ?? 0
   };
-  const knownSplitMinutes = programMinutes.rough + programMinutes.finish;
+  const knownSplitMinutes = programMinutes.rough + programMinutes.finish + programMinutes.rest;
   const machiningMinutes = Math.max(toolpath.estimatedMinutes, knownSplitMinutes);
   const hasSeparatePrograms = Boolean(toolpath.programs?.rough && toolpath.programs?.finish);
+  const hasRestProgram = Boolean(toolpath.programs?.rest && toolpath.programs.rest.points.length > 0);
   const setupMinutes = 12 + (settings.meshLengthAxis === "auto" ? 2 : 0) + (material.density === "hard" ? 3 : 0);
-  const toolChangeMinutes = hasSeparatePrograms ? 4 : 0;
+  const toolChangeMinutes = hasSeparatePrograms ? (hasRestProgram ? 6 : 4) : 0;
   const inspectionMinutes = 5 + (machiningMinutes > 180 ? 5 : 0);
   const totalMinutes = machiningMinutes + setupMinutes + toolChangeMinutes + inspectionMinutes;
   const rate = machineHourlyRate[machine.controller];
@@ -85,7 +87,7 @@ export function createCostEstimate(
   const assumptions = [
     `机床小时费按 ${rate.low}-${rate.high} 元/小时估算。`,
     `准备 ${setupMinutes.toFixed(0)} 分钟，换刀 ${toolChangeMinutes.toFixed(0)} 分钟，首件检查 ${inspectionMinutes.toFixed(0)} 分钟。`,
-    hasSeparatePrograms ? "已按粗加工/精加工独立程序估算。" : "当前未完整区分粗精加工，机时误差会偏大。",
+    hasSeparatePrograms ? `已按粗加工/精加工${hasRestProgram ? "/清残" : ""}独立程序估算。` : "当前未完整区分粗精加工，机时误差会偏大。",
     "未计入装夹返工、断刀、人工修边和批量排产等待时间。"
   ];
 

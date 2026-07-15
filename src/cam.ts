@@ -16,18 +16,22 @@ export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): G
     strategy: settings.finishingStrategy
   });
   const roughPoints = createRoughingPoints(depthMap, settings);
-  const combinedPoints = [...roughPoints, ...finishPoints];
+  const restPoints = createRestMachiningPoints(depthMap, settings);
+  const combinedPoints = [...roughPoints, ...finishPoints, ...restPoints];
   const radius = settings.diameterMm / 2;
   const roughMinutes = estimateTravel(roughPoints, radius) / Math.max(1, settings.feedRate);
   const finishMinutes = estimateTravel(finishPoints, radius) / Math.max(1, settings.feedRate);
-  const combinedMinutes = roughMinutes + finishMinutes;
+  const restMinutes = estimateTravel(restPoints, radius) / Math.max(1, settings.feedRate * 0.78);
+  const combinedMinutes = roughMinutes + finishMinutes + restMinutes;
   const roughGcode = toGcode(roughPoints, settings, roughMinutes, "Roughing pass");
   const finishGcode = toGcode(finishPoints, settings, finishMinutes, "Finishing pass");
-  const combinedGcode = toGcode(combinedPoints, settings, combinedMinutes, "Roughing + finishing");
+  const restGcode = toGcode(restPoints, { ...settings, feedRate: Math.max(30, settings.feedRate * 0.78) }, restMinutes, "Rest machining pass");
+  const combinedGcode = toGcode(combinedPoints, settings, combinedMinutes, "Roughing + finishing + rest machining");
   const airRunProgram = createAirRunProgram(combinedPoints, settings, combinedMinutes, "Air run - no cutting");
   const programs: GeneratedToolpath["programs"] = {
     rough: createProgram("粗加工", "nuclear-carving-rough.nc", roughGcode, roughPoints, roughMinutes),
     finish: createProgram("精加工", "nuclear-carving-finish.nc", finishGcode, finishPoints, finishMinutes),
+    rest: createProgram("清残", "nuclear-carving-rest.nc", restGcode, restPoints, restMinutes),
     combined: createProgram("合并程序", "nuclear-carving-combined.nc", combinedGcode, combinedPoints, combinedMinutes),
     airRun: airRunProgram
   };
@@ -44,7 +48,8 @@ export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): G
     summary: summarizeToolpath(combinedPoints, settings, {
       roughPasses: countRoughLayers(settings),
       roughPoints: roughPoints.length,
-      finishPoints: finishPoints.length
+      finishPoints: finishPoints.length,
+      restPoints: restPoints.length
     })
   };
 }
@@ -132,6 +137,60 @@ function createRoughingPoints(depthMap: DepthMap, settings: ModelSettings): Tool
   return points;
 }
 
+function createRestMachiningPoints(depthMap: DepthMap, settings: ModelSettings): ToolpathPoint[] {
+  const points: ToolpathPoint[] = [];
+  const halfLength = settings.lengthMm / 2;
+  const xStart = -halfLength + settings.leftHoldMm;
+  const xEnd = halfLength - settings.rightHoldMm;
+  const carveLength = Math.max(settings.stepoverMm, xEnd - xStart);
+  const radius = settings.diameterMm / 2;
+  const aMin = settings.reliefAngleDeg >= 360 ? -180 : -settings.reliefAngleDeg / 2;
+  const aMax = settings.reliefAngleDeg >= 360 ? 180 : settings.reliefAngleDeg / 2;
+  const restStepoverMm = Math.max(0.018, settings.stepoverMm * 0.62);
+  const restStepoverDeg = Math.max(0.16, settings.stepoverDeg * 0.62);
+  const passes = Math.max(2, Math.ceil(settings.reliefAngleDeg / restStepoverDeg));
+  const xSteps = Math.max(2, Math.ceil(carveLength / restStepoverMm));
+  const gradientThreshold = Math.max(0.04, settings.toolDiameter * 0.16);
+  const deepThreshold = settings.depthMm * 0.72;
+
+  for (let pass = 0; pass <= passes; pass += 1) {
+    const serpentine = pass % 2 === 1;
+    const v = pass / passes;
+    const a = aMin + v * (aMax - aMin);
+
+    for (let step = 0; step <= xSteps; step += 1) {
+      const index = serpentine ? xSteps - step : step;
+      const carveU = index / xSteps;
+      const x = xStart + carveU * carveLength;
+      const sourceU = (x + halfLength) / settings.lengthMm;
+      const sourceV = 1 - v;
+      const transition = endTransitionFactor(x, xStart, xEnd, settings.endTransitionMm);
+      const centerDepth = sampleDepth(depthMap, sourceU, sourceV) * settings.depthMm * transition;
+      if (centerDepth <= 0.01) continue;
+
+      const gradient = estimateDepthGradient(depthMap, sourceU, sourceV) * settings.depthMm * transition;
+      const likelyResidual = gradient >= gradientThreshold || centerDepth >= deepThreshold;
+      const checker = (pass + step) % 2 === 0;
+      if (!likelyResidual || !checker) continue;
+
+      const z = radius + centerDepth + settings.toolDiameter / 2;
+      points.push({ x, a, z, depth: centerDepth });
+    }
+  }
+
+  return points;
+}
+
+function estimateDepthGradient(depthMap: DepthMap, u: number, v: number) {
+  const du = 1 / Math.max(2, depthMap.width - 1);
+  const dv = 1 / Math.max(2, depthMap.height - 1);
+  const left = sampleDepth(depthMap, THREEClamp(u - du, 0, 1), v);
+  const right = sampleDepth(depthMap, THREEClamp(u + du, 0, 1), v);
+  const top = sampleDepth(depthMap, u, THREEClamp(v - dv, 0, 1));
+  const bottom = sampleDepth(depthMap, u, THREEClamp(v + dv, 0, 1));
+  return Math.sqrt((right - left) ** 2 + (bottom - top) ** 2);
+}
+
 function countRoughLayers(settings: ModelSettings) {
   const maxRoughDepth = Math.max(0, settings.depthMm - settings.stockAllowance);
   return Math.max(1, Math.ceil(maxRoughDepth / Math.max(0.02, settings.maxCutDepth)));
@@ -158,7 +217,7 @@ export function createAirRunProgram(
 function summarizeToolpath(
   points: ToolpathPoint[],
   settings: ModelSettings,
-  process?: { roughPasses: number; roughPoints: number; finishPoints: number }
+  process?: { roughPasses: number; roughPoints: number; finishPoints: number; restPoints: number }
 ) {
   const values = points.reduce(
     (acc, point) => ({
@@ -199,7 +258,7 @@ function summarizeToolpath(
   }
 
   if (process) {
-    warnings.push(`粗加工 ${process.roughPasses} 层，余量 ${fmt(settings.stockAllowance, 2)}mm；粗加工点 ${process.roughPoints}，精加工点 ${process.finishPoints}。`);
+    warnings.push(`粗加工 ${process.roughPasses} 层，余量 ${fmt(settings.stockAllowance, 2)}mm；粗加工点 ${process.roughPoints}，精加工点 ${process.finishPoints}，清残点 ${process.restPoints}。`);
   }
 
   return { ...values, warnings };

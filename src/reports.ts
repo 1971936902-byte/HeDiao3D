@@ -90,6 +90,7 @@ export function createQualityReport(input: ManufacturingReportInput) {
       estimatedMinutes: input.toolpath.estimatedMinutes,
       roughMinutes: input.toolpath.programs?.rough?.estimatedMinutes ?? null,
       finishMinutes: input.toolpath.programs?.finish?.estimatedMinutes ?? null,
+      restMinutes: input.toolpath.programs?.rest?.estimatedMinutes ?? null,
       warnings: input.toolpath.summary.warnings
     }
   };
@@ -105,6 +106,7 @@ export function createPackageManifest(input: ManufacturingReportInput) {
       "nc/nuclear-carving-combined.nc",
       input.toolpath.programs?.rough ? "nc/nuclear-carving-rough.nc" : null,
       input.toolpath.programs?.finish ? "nc/nuclear-carving-finish.nc" : null,
+      input.toolpath.programs?.rest ? "nc/nuclear-carving-rest.nc" : null,
       "nc/nuclear-carving-toolpath.tap",
       "nc/nuclear-carving-toolpath.txt",
       "nc/nuclear-carving-toolpath.csv",

@@ -28,6 +28,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     "- `nuclear-carving-combined.nc`：合并加工程序",
     input.toolpath.programs?.rough ? "- `nuclear-carving-rough.nc`：粗加工程序" : "- `nuclear-carving-rough.nc`：当前无独立粗加工程序",
     input.toolpath.programs?.finish ? "- `nuclear-carving-finish.nc`：精加工程序" : "- `nuclear-carving-finish.nc`：当前无独立精加工程序",
+    input.toolpath.programs?.rest ? "- `nuclear-carving-rest.nc`：清残补加工程序，用于深纹理和高变化细节区域" : "- `nuclear-carving-rest.nc`：当前无独立清残程序",
     "- `nuclear-carving-toolpath.tap/txt/csv`：兼容导出文件",
     "- `operator-note.md`：本说明"
   ];
@@ -66,6 +67,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     `- 估算总时间：${input.toolpath.estimatedMinutes.toFixed(1)} min`,
     input.toolpath.programs?.rough ? `- 粗加工时间：${input.toolpath.programs.rough.estimatedMinutes.toFixed(1)} min` : "- 粗加工时间：无独立程序",
     input.toolpath.programs?.finish ? `- 精加工时间：${input.toolpath.programs.finish.estimatedMinutes.toFixed(1)} min` : "- 精加工时间：无独立程序",
+    input.toolpath.programs?.rest ? `- 清残时间：${input.toolpath.programs.rest.estimatedMinutes.toFixed(1)} min` : "- 清残时间：无独立程序",
     `- X 范围：${input.toolpath.summary.xMin.toFixed(2)} ~ ${input.toolpath.summary.xMax.toFixed(2)} mm`,
     `- A 范围：${input.toolpath.summary.aMin.toFixed(2)} ~ ${input.toolpath.summary.aMax.toFixed(2)}°`,
     `- Z 范围：${input.toolpath.summary.zMin.toFixed(2)} ~ ${input.toolpath.summary.zMax.toFixed(2)} mm`,
