@@ -10,6 +10,8 @@ import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
 import { createOperatorPackageMarkdown } from "./exportPackage";
 import { createCostEstimate, formatCurrencyRange } from "./costEstimate";
+import { createPackageManifest, createQualityReport, createSafetyReport } from "./reports";
+import { createZipBlob, downloadBlob, type ZipTextFile } from "./zipPackage";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -274,6 +276,58 @@ export function App() {
       costEstimate
     });
     downloadText("operator-note.md", content, "text/markdown");
+  };
+
+  const createReportInput = () => {
+    if (!toolpath) return null;
+    return {
+      settings,
+      toolpath,
+      sourceLabel: generationLabel,
+      aiMeshUrl,
+      aiMeshStlUrl,
+      tool: selectedTool,
+      material: selectedMaterial,
+      machine: selectedMachine,
+      safetyIssues,
+      manufacturingQuality,
+      meshQuality,
+      costEstimate
+    };
+  };
+
+  const handleDownloadZipPackage = () => {
+    const reportInput = createReportInput();
+    if (!reportInput) return;
+
+    const operatorNote = createOperatorPackageMarkdown(reportInput);
+    const files: ZipTextFile[] = [
+      { name: "manifest.json", content: JSON.stringify(createPackageManifest(reportInput), null, 2), mime: "application/json" },
+      { name: "operator-note.md", content: operatorNote, mime: "text/markdown" },
+      { name: "reports/safety-report.json", content: JSON.stringify(createSafetyReport(reportInput), null, 2), mime: "application/json" },
+      { name: "reports/quality-report.json", content: JSON.stringify(createQualityReport(reportInput), null, 2), mime: "application/json" },
+      { name: "reports/cost-estimate.json", content: JSON.stringify(costEstimate, null, 2), mime: "application/json" },
+      { name: "nc/nuclear-carving-combined.nc", content: toolpath.gcode },
+      { name: "nc/nuclear-carving-toolpath.tap", content: toolpath.tap },
+      { name: "nc/nuclear-carving-toolpath.txt", content: toolpath.txt },
+      { name: "nc/nuclear-carving-toolpath.csv", content: toolpath.csv, mime: "text/csv" }
+    ];
+
+    if (toolpath.programs?.rough) {
+      files.push({ name: `nc/${toolpath.programs.rough.filename}`, content: toolpath.programs.rough.gcode });
+    }
+    if (toolpath.programs?.finish) {
+      files.push({ name: `nc/${toolpath.programs.finish.filename}`, content: toolpath.programs.finish.gcode });
+    }
+
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+    downloadBlob(`hediao3d-machining-package-${stamp}.zip`, createZipBlob(files));
+    recordTask({
+      category: "cam",
+      status: exportBlocked ? "warning" : "ok",
+      title: "导出 ZIP 加工包",
+      detail: `已打包 ${files.length} 个文件，包含 NC、报告和上机说明。`
+    });
   };
 
   const handleGenerateFinishingToolpath = async () => {
@@ -1101,15 +1155,19 @@ export function App() {
               <Download size={18} />
               <h2>加工包交付</h2>
             </div>
-            <p className="panel-note">下载加工包说明，包含机床参数、刀具材料、质量报告、安全校验、文件清单和上机建议。</p>
+            <p className="panel-note">下载完整加工包，包含 NC/TAP/TXT/CSV、质量报告、安全校验、成本估算和上机说明。</p>
             <div className="package-list">
               <span>合并 NC</span>
               <span>粗加工 NC</span>
               <span>精加工 NC</span>
-              <span>STL/GLB 模型</span>
+              <span>CSV 点位</span>
               <span>质量报告</span>
-              <span>上机说明</span>
+              <span>安全报告</span>
             </div>
+            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!toolpath || exportBlocked} type="button" title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 ZIP 加工包"}>
+              <Download size={17} />
+              下载 ZIP 加工包
+            </button>
             <button className="demo-action package-action" onClick={handleDownloadOperatorPackage} disabled={!toolpath} type="button">
               <Download size={17} />
               下载加工包说明
