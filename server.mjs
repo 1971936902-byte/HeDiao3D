@@ -355,7 +355,7 @@ function generateMeshSurfaceToolpath(mesh, settings) {
   const box = new THREE.Box3().setFromObject(mesh);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  const lengthAxis = largestAxis(size);
+  const lengthAxis = selectLengthAxis(size, settings.meshLengthAxis);
   const radialAxes = ["x", "y", "z"].filter((axis) => axis !== lengthAxis);
   const halfLength = Number(settings.lengthMm) / 2;
   const leftHold = Number(settings.leftHoldMm ?? 0);
@@ -389,7 +389,8 @@ function generateMeshSurfaceToolpath(mesh, settings) {
       const index = serpentine ? xSteps - step : step;
       const carveU = index / xSteps;
       const x = xStart + carveU * carveLength;
-      const u = (x + halfLength) / Number(settings.lengthMm);
+      const rawU = (x + halfLength) / Number(settings.lengthMm);
+      const u = settings.meshAxisReverse ? 1 - rawU : rawU;
       const centerline = center.clone();
       setAxisValue(centerline, lengthAxis, axisValue(box.min, lengthAxis) + u * axisValue(size, lengthAxis));
 
@@ -599,6 +600,13 @@ function largestAxis(size) {
   if (size.y >= size.x && size.y >= size.z) return "y";
   if (size.z >= size.x && size.z >= size.y) return "z";
   return "x";
+}
+
+function selectLengthAxis(size, requestedAxis) {
+  if (requestedAxis === "x" || requestedAxis === "y" || requestedAxis === "z") {
+    return requestedAxis;
+  }
+  return largestAxis(size);
 }
 
 function axisValue(vector, axis) {

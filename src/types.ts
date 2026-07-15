@@ -49,6 +49,8 @@ export type ModelSettings = {
   toolProfileId: string;
   materialProfileId: string;
   machineProfileId: string;
+  meshLengthAxis: "auto" | "x" | "y" | "z";
+  meshAxisReverse: boolean;
   maxCutDepth: number;
   stockAllowance: number;
   finishingStrategy: "x-scan" | "a-scan" | "cross";

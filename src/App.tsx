@@ -46,6 +46,8 @@ const defaultSettings: ModelSettings = {
   toolProfileId: "ball-0.6",
   materialProfileId: "olive-core",
   machineProfileId: "desktop-4axis-generic",
+  meshLengthAxis: "auto",
+  meshAxisReverse: false,
   maxCutDepth: 0.16,
   stockAllowance: 0.12,
   finishingStrategy: "x-scan",
@@ -682,6 +684,25 @@ export function App() {
                       <span key={recommendation}>{recommendation}</span>
                     ))}
                   </div>
+                  <div className="calibration-controls">
+                    <label className="select-row">
+                      <span>CAM长轴</span>
+                      <select value={settings.meshLengthAxis} onChange={(event) => updateSetting("meshLengthAxis", event.target.value as ModelSettings["meshLengthAxis"])}>
+                        <option value="auto">自动识别</option>
+                        <option value="x">X 轴</option>
+                        <option value="y">Y 轴</option>
+                        <option value="z">Z 轴</option>
+                      </select>
+                    </label>
+                    <label className="toggle-row">
+                      <input type="checkbox" checked={settings.meshAxisReverse} onChange={(event) => updateSetting("meshAxisReverse", event.target.checked)} />
+                      <span>反转长轴采样方向</span>
+                    </label>
+                    <button className="demo-action" type="button" onClick={() => updateSetting("meshLengthAxis", meshQuality.detectedLongAxis)}>
+                      <Layers3 size={17} />
+                      采用体检长轴 {meshQuality.detectedLongAxis.toUpperCase()}
+                    </button>
+                  </div>
                   <div className="repair-steps">
                     <div className={meshQuality.boundaryEdges > 0 ? "active" : ""}>
                       <strong>1. 修复缺损</strong>
@@ -889,6 +910,8 @@ export function App() {
             toolpathPoints={toolpath?.points ?? []}
             previewPoints={toolpath?.previewPoints ?? []}
             toolpathColor={toolpathKind === "finish" ? toolpathColors.finish : toolpathColors.rough}
+            meshLengthAxis={settings.meshLengthAxis}
+            meshAxisReverse={settings.meshAxisReverse}
           />
         ) : (
           <ReliefViewer geometry={geometry} wireframe={wireframe} toolpathPoints={toolpath?.points ?? []} settings={settings} />

@@ -736,6 +736,24 @@ button:disabled {
   margin-top: 10px;
 }
 
+.calibration-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(25, 199, 180, 0.18);
+  border-radius: 8px;
+  background: rgba(25, 199, 180, 0.055);
+}
+
+.calibration-controls .select-row {
+  margin-top: 0;
+}
+
+.calibration-controls .demo-action {
+  width: 100%;
+}
+
 .repair-steps div {
   display: grid;
   gap: 4px;

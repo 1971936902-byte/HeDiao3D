@@ -14,9 +14,18 @@ type AiMeshViewerProps = {
   toolpathPoints?: ToolpathPoint[];
   previewPoints?: ToolpathPreviewPoint[];
   toolpathColor?: number;
+  meshLengthAxis?: "auto" | "x" | "y" | "z";
+  meshAxisReverse?: boolean;
 };
 
-export function AiMeshViewer({ modelUrl, toolpathPoints = [], previewPoints = [], toolpathColor = 0xd2451e }: AiMeshViewerProps) {
+export function AiMeshViewer({
+  modelUrl,
+  toolpathPoints = [],
+  previewPoints = [],
+  toolpathColor = 0xd2451e,
+  meshLengthAxis = "auto",
+  meshAxisReverse = false
+}: AiMeshViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const toolpathRef = useRef<THREE.LineSegments | null>(null);
   const mismatchRef = useRef<THREE.LineSegments | null>(null);
@@ -145,10 +154,10 @@ export function AiMeshViewer({ modelUrl, toolpathPoints = [], previewPoints = []
 
     const geometries =
       toolpathPoints.length > 0 && loadedModelRef.current
-        ? createDisplayedMeshProjectionGeometries(toolpathPoints, loadedModelRef.current)
+        ? createDisplayedMeshProjectionGeometries(toolpathPoints, loadedModelRef.current, meshLengthAxis, meshAxisReverse)
         : previewPoints.length > 0
           ? createSurfacePreviewGeometries(previewPoints)
-          : { fit: createAlignedToolpathGeometry(toolpathPoints, modelBoundsRef.current), mismatch: createEmptyGeometry() };
+          : { fit: createAlignedToolpathGeometry(toolpathPoints, modelBoundsRef.current, meshLengthAxis, meshAxisReverse), mismatch: createEmptyGeometry() };
 
     toolpathRef.current.geometry = geometries.fit;
     if (mismatchRef.current) {
@@ -156,7 +165,7 @@ export function AiMeshViewer({ modelUrl, toolpathPoints = [], previewPoints = []
       mismatchRef.current.visible = toolpathPoints.length > 0 || previewPoints.length > 0;
     }
     toolpathRef.current.visible = previewPoints.length > 0 || toolpathPoints.length > 0;
-  }, [toolpathPoints, previewPoints, modelVersion]);
+  }, [toolpathPoints, previewPoints, modelVersion, meshLengthAxis, meshAxisReverse]);
 
   return (
     <div className="viewer ai-viewer" ref={hostRef}>
@@ -170,7 +179,12 @@ export function AiMeshViewer({ modelUrl, toolpathPoints = [], previewPoints = []
   );
 }
 
-function createDisplayedMeshProjectionGeometries(points: ToolpathPoint[], model: THREE.Group) {
+function createDisplayedMeshProjectionGeometries(
+  points: ToolpathPoint[],
+  model: THREE.Group,
+  meshLengthAxis: "auto" | Axis,
+  meshAxisReverse: boolean
+) {
   const fitGeometry = new THREE.BufferGeometry();
   const mismatchGeometry = new THREE.BufferGeometry();
   const previewPoints = removeSafeZMoves(points);
@@ -193,7 +207,7 @@ function createDisplayedMeshProjectionGeometries(points: ToolpathPoint[], model:
   const box = new THREE.Box3().setFromObject(model);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  const lengthAxis = largestAxis(size);
+  const lengthAxis = selectLengthAxis(size, meshLengthAxis);
   const radialAxes = (["x", "y", "z"] as Axis[]).filter((axis) => axis !== lengthAxis) as [Axis, Axis];
   const xMin = previewPoints.reduce((min, point) => Math.min(min, point.x), Number.POSITIVE_INFINITY);
   const xMax = previewPoints.reduce((max, point) => Math.max(max, point.x), Number.NEGATIVE_INFINITY);
@@ -209,7 +223,8 @@ function createDisplayedMeshProjectionGeometries(points: ToolpathPoint[], model:
 
   for (let i = 0; i < previewPoints.length; i += stride) {
     const point = previewPoints[i];
-    const t = (point.x - xMin) / xSpan;
+    const rawT = (point.x - xMin) / xSpan;
+    const t = meshAxisReverse ? 1 - rawT : rawT;
     const theta = THREE.MathUtils.degToRad(point.a);
     const centerline = center.clone();
     setAxisValue(centerline, lengthAxis, axisValue(box.min, lengthAxis) + t * axisValue(size, lengthAxis));
@@ -289,7 +304,12 @@ function addMismatchMarker(positions: number[], center: THREE.Vector3, size: THR
   positions.push(center.x, center.y, center.z - markerSize, center.x, center.y, center.z + markerSize);
 }
 
-function createAlignedToolpathGeometry(points: ToolpathPoint[], modelBounds: THREE.Box3 | null): THREE.BufferGeometry {
+function createAlignedToolpathGeometry(
+  points: ToolpathPoint[],
+  modelBounds: THREE.Box3 | null,
+  meshLengthAxis: "auto" | Axis,
+  meshAxisReverse: boolean
+): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
   const previewPoints = removeSafeZMoves(points);
   if (previewPoints.length === 0) {
@@ -303,7 +323,7 @@ function createAlignedToolpathGeometry(points: ToolpathPoint[], modelBounds: THR
   const maxRadius = previewPoints.reduce((max, point) => Math.max(max, Math.abs(point.z)), 0.001);
   const xCenter = (xMin + xMax) / 2;
   const positions: number[] = [];
-  const mapper = createPreviewMapper(modelBounds, xMin, xMax, xCenter, maxRadius);
+  const mapper = createPreviewMapper(modelBounds, xMin, xMax, xCenter, maxRadius, meshLengthAxis, meshAxisReverse);
 
   let previous: THREE.Vector3 | null = null;
   for (let i = 0; i < previewPoints.length; i += stride) {
@@ -327,7 +347,15 @@ function removeSafeZMoves(points: ToolpathPoint[]) {
   return points.filter((point) => Math.abs(point.z) <= cutoff);
 }
 
-function createPreviewMapper(modelBounds: THREE.Box3 | null, xMin: number, xMax: number, xCenter: number, maxRadius: number) {
+function createPreviewMapper(
+  modelBounds: THREE.Box3 | null,
+  xMin: number,
+  xMax: number,
+  xCenter: number,
+  maxRadius: number,
+  meshLengthAxis: "auto" | Axis,
+  meshAxisReverse: boolean
+) {
   if (!modelBounds || modelBounds.isEmpty()) {
     const scale = 3.6 / Math.max(xMax - xMin, maxRadius * 2, 0.001);
     return (point: ToolpathPoint) => {
@@ -338,7 +366,7 @@ function createPreviewMapper(modelBounds: THREE.Box3 | null, xMin: number, xMax:
 
   const size = modelBounds.getSize(new THREE.Vector3());
   const center = modelBounds.getCenter(new THREE.Vector3());
-  const lengthAxis = largestAxis(size);
+  const lengthAxis = selectLengthAxis(size, meshLengthAxis);
   const radialAxes = (["x", "y", "z"] as Axis[]).filter((axis) => axis !== lengthAxis) as [Axis, Axis];
   const lengthMin = axisValue(modelBounds.min, lengthAxis);
   const lengthSize = axisValue(size, lengthAxis);
@@ -346,7 +374,8 @@ function createPreviewMapper(modelBounds: THREE.Box3 | null, xMin: number, xMax:
   const xSpan = Math.max(xMax - xMin, 0.001);
 
   return (point: ToolpathPoint) => {
-    const t = (point.x - xMin) / xSpan;
+    const rawT = (point.x - xMin) / xSpan;
+    const t = meshAxisReverse ? 1 - rawT : rawT;
     const theta = THREE.MathUtils.degToRad(point.a);
     const radius = (point.z / Math.max(maxRadius, 0.001)) * radialMax;
     const current = center.clone();
@@ -363,6 +392,10 @@ function largestAxis(size: THREE.Vector3): Axis {
   if (size.y >= size.x && size.y >= size.z) return "y";
   if (size.z >= size.x && size.z >= size.y) return "z";
   return "x";
+}
+
+function selectLengthAxis(size: THREE.Vector3, requestedAxis: "auto" | Axis): Axis {
+  return requestedAxis === "auto" ? largestAxis(size) : requestedAxis;
 }
 
 function axisValue(vector: THREE.Vector3, axis: Axis) {
