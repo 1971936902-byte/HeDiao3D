@@ -71,7 +71,7 @@ const defaultSettings: ModelSettings = {
 
 type ToolpathKind = "rough" | "finish";
 type WorkflowStage = "source" | "model" | "process" | "cam" | "tasks";
-type WorkbenchView = "model" | "simulation" | "gcode" | "report";
+type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
 type TaskEvent = {
   id: string;
   title: string;
@@ -243,6 +243,8 @@ export function App() {
   const workbenchTitle =
     workbenchView === "simulation" && toolpath
       ? "模拟雕刻"
+      : workbenchView === "heatmap" && toolpath
+        ? "误差热力图"
       : workbenchView === "gcode" && toolpath
         ? "G-code 预览"
         : workbenchView === "report" && toolpath
@@ -251,6 +253,8 @@ export function App() {
   const workbenchHint =
     workbenchView === "simulation" && toolpath
       ? "按当前刀路反推雕刻包络曲面，用于下载前检查方向、深浅和包覆范围"
+      : workbenchView === "heatmap" && toolpath
+        ? "按 X/A 网格显示包络贴合率，粉红区域代表未贴合或采样风险"
       : workbenchView === "gcode" && toolpath
         ? "查看合并程序的前后处理、运动指令和安全高度，不在这里编辑机床代码"
         : workbenchView === "report" && toolpath
@@ -1839,19 +1843,22 @@ export function App() {
           </div>
           <div className="status-pill">
             <BadgeInfo size={16} />
-            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
+            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "heatmap" && toolpath ? "正在查看包络误差热力图" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
           </div>
         </header>
 
         <div className="workbench-tabs" role="tablist" aria-label="workbench views">
           <button className={workbenchView === "model" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("model"); setIsSimulationMode(false); }}>3D模型</button>
           <button className={workbenchView === "simulation" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("simulation"); setIsSimulationMode(true); }} disabled={!toolpath}>模拟雕刻</button>
+          <button className={workbenchView === "heatmap" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("heatmap"); setIsSimulationMode(false); }} disabled={!toolpath}>热力图</button>
           <button className={workbenchView === "gcode" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("gcode"); setIsSimulationMode(false); }} disabled={!toolpath}>G-code</button>
           <button className={workbenchView === "report" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("report"); setIsSimulationMode(false); }} disabled={!toolpath}>报告</button>
         </div>
 
         {workbenchView === "gcode" && toolpath ? (
           <GcodePreview toolpath={toolpath} exportGateReady={exportGateReady} />
+        ) : workbenchView === "heatmap" && toolpath && envelopeQuality ? (
+          <EnvelopeHeatmapPreview toolpath={toolpath} settings={settings} envelopeQuality={envelopeQuality} />
         ) : workbenchView === "report" && toolpath ? (
           <WorkbenchReportSummary
             exportBlocked={exportBlocked}
@@ -2110,6 +2117,159 @@ function GcodePreview({ toolpath, exportGateReady }: { toolpath: GeneratedToolpa
       </div>
     </div>
   );
+}
+
+type EnvelopeHeatmapCell = {
+  key: string;
+  xIndex: number;
+  aIndex: number;
+  total: number;
+  missCount: number;
+  fitRate: number;
+  status: "ok" | "warning" | "critical" | "empty";
+};
+
+function EnvelopeHeatmapPreview({
+  toolpath,
+  settings,
+  envelopeQuality
+}: {
+  toolpath: GeneratedToolpath;
+  settings: ModelSettings;
+  envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality>;
+}) {
+  const heatmap = createEnvelopeHeatmapCells(toolpath, settings);
+  const maxSamples = Math.max(1, ...heatmap.cells.map((cell) => cell.total));
+  const sourceLabel = toolpath.previewPoints && toolpath.previewPoints.length > 0 ? "Mesh 表面采样" : "刀路覆盖估算";
+
+  return (
+    <div className="workbench-panel heatmap-panel">
+      <div className={`heatmap-verdict ${envelopeQuality.diagnosis.level}`}>
+        <div>
+          <span>{sourceLabel}</span>
+          <strong>{envelopeQuality.diagnosis.title}</strong>
+          <small>{envelopeQuality.diagnosis.detail}</small>
+        </div>
+        <b>{envelopeQuality.score.toFixed(1)}</b>
+      </div>
+
+      <div className="heatmap-summary">
+        <div>
+          <span>包络评分</span>
+          <strong>{envelopeQuality.score.toFixed(1)} / 100</strong>
+        </div>
+        <div>
+          <span>贴合率</span>
+          <strong>{envelopeQuality.fitRate.toFixed(1)}%</strong>
+        </div>
+        <div>
+          <span>未贴合点</span>
+          <strong>{envelopeQuality.missCount.toLocaleString()}</strong>
+        </div>
+        <div>
+          <span>连续贴合</span>
+          <strong>{envelopeQuality.continuityRate.toFixed(1)}%</strong>
+        </div>
+      </div>
+
+      <div className="heatmap-layout">
+        <div className="heatmap-axis y-axis">A 轴角度</div>
+        <div
+          className="heatmap-grid"
+          style={{ gridTemplateColumns: `repeat(${heatmap.xBins}, minmax(0, 1fr))` }}
+          aria-label="包络误差热力图"
+        >
+          {heatmap.cells.map((cell) => {
+            const opacity = cell.total > 0 ? 0.38 + (cell.total / maxSamples) * 0.62 : 1;
+            const xStart = heatmap.xLabels[cell.xIndex] ?? "";
+            const aStart = heatmap.aLabels[cell.aIndex] ?? "";
+            const title = `X ${xStart} / A ${aStart} / 样本 ${cell.total} / 未贴合 ${cell.missCount} / 贴合 ${cell.fitRate.toFixed(1)}%`;
+            return (
+              <span
+                className={`heatmap-cell ${cell.status}`}
+                key={cell.key}
+                style={{ opacity }}
+                title={title}
+              />
+            );
+          })}
+        </div>
+        <div className="heatmap-axis x-axis">X 长度方向</div>
+      </div>
+
+      <div className="heatmap-legend">
+        <span><i className="ok" />贴合良好</span>
+        <span><i className="warning" />局部风险</span>
+        <span><i className="critical" />未贴合集中</span>
+        <span><i className="empty" />无采样</span>
+      </div>
+
+      <div className="heatmap-suggestions">
+        {envelopeQuality.diagnosis.suggestions.map((suggestion) => (
+          <p key={suggestion}>{suggestion}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function createEnvelopeHeatmapCells(toolpath: GeneratedToolpath, settings: ModelSettings) {
+  const xBins = 28;
+  const aBins = 18;
+  const halfLength = settings.lengthMm / 2;
+  const samples = toolpath.previewPoints && toolpath.previewPoints.length > 0
+    ? toolpath.previewPoints.map((point) => ({
+      x: point.x,
+      a: normalizeAngleDeg((Math.atan2(point.y, point.z) * 180) / Math.PI),
+      hit: point.hit
+    }))
+    : toolpath.points.map((point) => ({
+      x: point.x,
+      a: normalizeAngleDeg(point.a),
+      hit: true
+    }));
+  const buckets = Array.from({ length: xBins * aBins }, (_, index) => ({
+    total: 0,
+    missCount: 0,
+    xIndex: index % xBins,
+    aIndex: Math.floor(index / xBins)
+  }));
+
+  for (const sample of samples) {
+    const xRatio = THREEClamp((sample.x + halfLength) / Math.max(0.001, settings.lengthMm), 0, 0.999999);
+    const aRatio = THREEClamp(sample.a / 360, 0, 0.999999);
+    const xIndex = Math.floor(xRatio * xBins);
+    const aIndex = aBins - 1 - Math.floor(aRatio * aBins);
+    const bucket = buckets[aIndex * xBins + xIndex];
+    bucket.total += 1;
+    if (!sample.hit) bucket.missCount += 1;
+  }
+
+  const cells: EnvelopeHeatmapCell[] = buckets.map((bucket) => {
+    const fitRate = bucket.total > 0 ? ((bucket.total - bucket.missCount) / bucket.total) * 100 : 100;
+    const status = bucket.total === 0 ? "empty" : fitRate >= 96 ? "ok" : fitRate >= 88 ? "warning" : "critical";
+    return {
+      key: `${bucket.xIndex}-${bucket.aIndex}`,
+      xIndex: bucket.xIndex,
+      aIndex: bucket.aIndex,
+      total: bucket.total,
+      missCount: bucket.missCount,
+      fitRate,
+      status
+    };
+  });
+
+  return {
+    cells,
+    xBins,
+    aBins,
+    xLabels: Array.from({ length: xBins }, (_, index) => `${(-halfLength + (settings.lengthMm * index) / xBins).toFixed(1)}mm`),
+    aLabels: Array.from({ length: aBins }, (_, index) => `${Math.round((360 * (aBins - 1 - index)) / aBins)}deg`)
+  };
+}
+
+function normalizeAngleDeg(angle: number) {
+  return ((angle % 360) + 360) % 360;
 }
 
 function WorkbenchReportSummary({
