@@ -79,6 +79,18 @@ type TaskEvent = {
   timestamp: string;
 };
 
+type TaskJob = {
+  id: string;
+  title: string;
+  detail: string;
+  status: "running" | "done" | "error";
+  category: TaskEvent["category"];
+  startedAt: number;
+  startedLabel: string;
+  finishedLabel?: string;
+  durationMs?: number;
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -180,6 +192,7 @@ export function App() {
   const [meshQuality, setMeshQuality] = useState<MeshQualityReport | null>(null);
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
+  const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
   const [taskSnapshots, setTaskSnapshots] = useState<TaskSnapshot[]>([]);
   const [customProcessTemplates, setCustomProcessTemplates] = useState<ProcessTemplate[]>(loadCustomProcessTemplates);
   const [exportGate, setExportGate] = useState<ExportGateState>({
@@ -289,6 +302,39 @@ export function App() {
       },
       ...current
     ].slice(0, 80));
+  };
+
+  const startTaskJob = (job: Pick<TaskJob, "title" | "detail" | "category">) => {
+    const id = crypto.randomUUID();
+    const startedAt = Date.now();
+    setTaskJobs((current) => [
+      {
+        ...job,
+        id,
+        status: "running",
+        startedAt,
+        startedLabel: new Date(startedAt).toLocaleString("zh-CN", { hour12: false })
+      },
+      ...current
+    ].slice(0, 24));
+    return id;
+  };
+
+  const finishTaskJob = (id: string, status: TaskJob["status"], detail: string) => {
+    const finishedAt = Date.now();
+    setTaskJobs((current) =>
+      current.map((job) =>
+        job.id === id
+          ? {
+              ...job,
+              status,
+              detail,
+              durationMs: Math.max(0, finishedAt - job.startedAt),
+              finishedLabel: new Date(finishedAt).toLocaleString("zh-CN", { hour12: false })
+            }
+          : job
+      )
+    );
   };
 
   const saveSnapshot = (label: string, snapshotSettings: ModelSettings, detail: string) => {
@@ -567,6 +613,11 @@ export function App() {
       }
       setIsToolpathGenerating(true);
       setAiMeshStatus(finishing ? "正在生成 360° Mesh 精加工刀路" : "正在按 360° 包覆对 Meshy STL 做表面采样并生成四轴刀路");
+      const jobId = startTaskJob({
+        category: "cam",
+        title: finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路",
+        detail: "正在采样 STL 表面并生成四轴刀路。"
+      });
       try {
         const response = await fetch("/api/cam/mesh-toolpath", {
           method: "POST",
@@ -582,6 +633,7 @@ export function App() {
         setIsSimulationMode(true);
         saveSnapshot(finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路", meshCamSettings, `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
         setAiMeshStatus(finishing ? "Mesh 精加工刀路已生成，可下载 NC/TAP 文件" : "Mesh 360° 表面采样刀路已生成，可下载 NC/TAP 文件");
+        finishTaskJob(jobId, "done", `完成：${data.points.length} 点，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
         recordTask({
           category: "cam",
           status: data.summary.warnings.length > 0 ? "warning" : "ok",
@@ -590,6 +642,7 @@ export function App() {
         });
       } catch (error) {
         setAiMeshStatus(error instanceof Error ? error.message : "Mesh CAM 刀路生成失败");
+        finishTaskJob(jobId, "error", error instanceof Error ? error.message : "Mesh CAM 刀路生成失败");
         recordTask({
           category: "cam",
           status: "error",
@@ -602,11 +655,17 @@ export function App() {
       return;
     }
 
+    const localJobId = startTaskJob({
+      category: "cam",
+      title: finishing ? "本地精加工刀路" : "本地粗精清残刀路",
+      detail: "正在生成粗加工、精加工、清残和空跑程序。"
+    });
     const generatedToolpath = generateToolpath(processedDepth, baseSettings);
     setToolpath(generatedToolpath);
     setToolpathKind(finishing ? "finish" : "rough");
     setIsSimulationMode(true);
     saveSnapshot(finishing ? "本地精加工刀路" : "本地粗精刀路", baseSettings, `点数 ${generatedToolpath.points.length}，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min。`);
+    finishTaskJob(localJobId, "done", `完成：${generatedToolpath.points.length} 点，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min。`);
     recordTask({
       category: "cam",
       status: generatedToolpath.summary.warnings.length > 0 ? "warning" : "ok",
@@ -762,9 +821,14 @@ export function App() {
     setAiMeshStlUrl(null);
     setMeshQuality(null);
     setToolpath(null);
+    const selected = images.slice(0, selectedAiProvider.maxImages);
+    const jobId = startTaskJob({
+      category: "model",
+      title: `${selectedAiProvider.name} 生成 3D Mesh`,
+      detail: `正在上传 ${selected.length} 张图片并等待 AI 3D 任务完成。`
+    });
 
     try {
-      const selected = images.slice(0, selectedAiProvider.maxImages);
       setAiMeshStatus(`准备上传 ${selected.length} 张图片到 ${selectedAiProvider.name}`);
       const imageUrls = await Promise.all(selected.map((image) => imageToDataUri(image.url)));
 
@@ -800,6 +864,7 @@ export function App() {
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
       setGenerationLabel(`${selectedAiProvider.name} AI 3D Mesh：${selected.length}张图片`);
       setAiMeshStatus(task.local_model_urls?.glb ? `${selectedAiProvider.name} 3D Mesh 生成完成，已缓存到本地` : `${selectedAiProvider.name} 3D Mesh 生成完成`);
+      finishTaskJob(jobId, "done", `完成：生成 GLB${stl ? "/STL" : ""}，输入 ${selected.length} 张图片。`);
       recordTask({
         category: "model",
         status: stl ? "ok" : "warning",
@@ -808,6 +873,7 @@ export function App() {
       });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : `${selectedAiProvider.name}生成失败`);
+      finishTaskJob(jobId, "error", error instanceof Error ? error.message : `${selectedAiProvider.name}生成失败`);
       recordTask({
         category: "model",
         status: "error",
@@ -844,6 +910,11 @@ export function App() {
 
     setIsMeshRepairing(true);
     setAiMeshStatus("正在提交 Meshy 可制造性修复任务");
+    const jobId = startTaskJob({
+      category: "model",
+      title: "Mesh 缺损修复",
+      detail: "正在提交 Meshy Repair Printability 并等待修复 STL。"
+    });
     try {
       const createResponse = await fetch("/api/meshy/repair-printability", {
         method: "POST",
@@ -867,6 +938,7 @@ export function App() {
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 缺损修复完成，已替换刀路用 STL，请重新生成刀路");
+      finishTaskJob(jobId, "done", "完成：已替换刀路用 STL。");
       recordTask({
         category: "model",
         status: "ok",
@@ -875,6 +947,7 @@ export function App() {
       });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : "Mesh 修复失败");
+      finishTaskJob(jobId, "error", error instanceof Error ? error.message : "Mesh 修复失败");
       recordTask({
         category: "model",
         status: "error",
@@ -895,6 +968,11 @@ export function App() {
 
     setIsMeshRepairing(true);
     setAiMeshStatus("正在提交 Meshy 重网格任务");
+    const jobId = startTaskJob({
+      category: "model",
+      title: "Mesh 重网格",
+      detail: "正在提交 Meshy Remesh 并等待可雕刻网格。"
+    });
     try {
       const createResponse = await fetch("/api/meshy/remesh", {
         method: "POST",
@@ -921,6 +999,7 @@ export function App() {
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 重网格完成，已替换当前模型，请重新生成刀路");
+      finishTaskJob(jobId, "done", `完成：${remeshGlb ? "GLB" : ""}${remeshGlb && remeshStl ? "/" : ""}${remeshStl ? "STL" : ""} 已替换。`);
       recordTask({
         category: "model",
         status: "ok",
@@ -929,6 +1008,7 @@ export function App() {
       });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : "Mesh 重网格失败");
+      finishTaskJob(jobId, "error", error instanceof Error ? error.message : "Mesh 重网格失败");
       recordTask({
         category: "model",
         status: "error",
@@ -1629,16 +1709,42 @@ export function App() {
               </div>
               <div className="task-summary">
                 <span><strong>{taskEvents.length}</strong> 事件</span>
+                <span><strong>{taskJobs.filter((job) => job.status === "running").length}</strong> 运行中</span>
                 <span><strong>{taskEvents.filter((event) => event.status === "ok").length}</strong> 成功</span>
                 <span><strong>{taskEvents.filter((event) => event.status === "warning").length}</strong> 提醒</span>
                 <span><strong>{taskEvents.filter((event) => event.status === "error").length}</strong> 失败</span>
               </div>
-              <button className="demo-action package-action" onClick={() => setTaskEvents([])} disabled={taskEvents.length === 0} type="button">
+              <button className="demo-action package-action" onClick={() => { setTaskEvents([]); setTaskJobs([]); }} disabled={taskEvents.length === 0 && taskJobs.length === 0} type="button">
                 清空任务记录
               </button>
               <button className="demo-action package-action" onClick={handleSaveCurrentSnapshot} type="button">
                 保存当前参数版本
               </button>
+            </section>
+            <section className="panel">
+              <div className="panel-title">
+                <Clock3 size={18} />
+                <h2>任务队列</h2>
+              </div>
+              {taskJobs.length === 0 ? (
+                <p className="panel-note">AI 生成、Mesh 修复、重网格、CAM 生成等长任务会显示在这里。</p>
+              ) : (
+                <div className="job-list">
+                  {taskJobs.map((job) => (
+                    <div className={`job-card ${job.status}`} key={job.id}>
+                      <div>
+                        <strong>{job.title}</strong>
+                        <span>{job.status === "running" ? "运行中" : job.status === "done" ? "完成" : "失败"}</span>
+                      </div>
+                      <p>{job.detail}</p>
+                      <small>
+                        {job.category.toUpperCase()} / 开始 {job.startedLabel}
+                        {job.durationMs !== undefined ? ` / 耗时 ${(job.durationMs / 1000).toFixed(1)}s` : ""}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="panel">
               <div className="panel-title">
