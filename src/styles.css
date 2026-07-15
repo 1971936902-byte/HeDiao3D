@@ -1265,6 +1265,51 @@ button:disabled {
   margin-top: 10px;
 }
 
+.template-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.template-toolbar .demo-action {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.template-toolbar span {
+  color: var(--subtle);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.template-section-title {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.template-section-title strong {
+  color: #f2f8f5;
+  font-size: 12px;
+}
+
+.template-section-title span,
+.empty-inline {
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.empty-inline {
+  margin: 8px 0 0;
+}
+
 .template-card {
   display: grid;
   gap: 4px;
@@ -1297,6 +1342,52 @@ button:disabled {
   color: var(--subtle);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.custom-template-card {
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px;
+  cursor: default;
+}
+
+.custom-template-card:hover {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.template-apply {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.template-apply:hover strong {
+  color: var(--teal);
+}
+
+.template-delete {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  min-width: 30px;
+  border: 1px solid rgba(255, 107, 156, 0.25);
+  border-radius: 7px;
+  color: #ffd7e5;
+  background: rgba(255, 107, 156, 0.08);
+  cursor: pointer;
+}
+
+.template-delete:hover {
+  border-color: rgba(255, 107, 156, 0.5);
+  background: rgba(255, 107, 156, 0.14);
 }
 
 .ai-links {

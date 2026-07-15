@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { BadgeInfo, Box, Calculator, Camera, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Calculator, Camera, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -20,7 +20,6 @@ import {
   applyToolProfile,
   getMachineProfile,
   getMaterialProfile,
-  getProcessTemplate,
   getToolProfile,
   hasCriticalIssue,
   machineProfiles,
@@ -32,6 +31,7 @@ import {
 } from "./manufacturingProfiles";
 import { analyzeDepthMapQuality, createManufacturingQualityReport } from "./quality";
 import type { CarvingImage, DepthMap, GeneratedToolpath, MeshQualityReport, ModelSettings } from "./types";
+import type { ProcessTemplate } from "./manufacturingProfiles";
 
 const defaultSettings: ModelSettings = {
   lengthMm: 38,
@@ -117,6 +117,40 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "tasks", label: "任务", hint: "历史/版本" }
 ];
 
+const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
+
+function loadCustomProcessTemplates(): ProcessTemplate[] {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isProcessTemplate).slice(0, 16);
+  } catch {
+    return [];
+  }
+}
+
+function isProcessTemplate(value: unknown): value is ProcessTemplate {
+  if (!value || typeof value !== "object") return false;
+  const template = value as Partial<ProcessTemplate>;
+  return (
+    typeof template.id === "string" &&
+    typeof template.name === "string" &&
+    typeof template.intent === "string" &&
+    typeof template.toolProfileId === "string" &&
+    typeof template.materialProfileId === "string" &&
+    typeof template.maxCutDepth === "number" &&
+    typeof template.stockAllowance === "number" &&
+    typeof template.stepoverMm === "number" &&
+    typeof template.stepoverDeg === "number" &&
+    typeof template.feedRate === "number" &&
+    typeof template.spindleRpm === "number" &&
+    typeof template.finishingStrategy === "string" &&
+    typeof template.notes === "string"
+  );
+}
+
 export function App() {
   const [images, setImages] = useState<CarvingImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -140,6 +174,7 @@ export function App() {
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskSnapshots, setTaskSnapshots] = useState<TaskSnapshot[]>([]);
+  const [customProcessTemplates, setCustomProcessTemplates] = useState<ProcessTemplate[]>(loadCustomProcessTemplates);
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -154,6 +189,10 @@ export function App() {
   const selectedMaterial = useMemo(() => getMaterialProfile(settings.materialProfileId), [settings.materialProfileId]);
   const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
   const selectedAiProvider = useMemo(() => getAi3dProvider(aiProviderId), [aiProviderId]);
+  const allProcessTemplates = useMemo(
+    () => [...processTemplates, ...customProcessTemplates],
+    [customProcessTemplates]
+  );
   const safetyIssues = useMemo(() => [...validateManufacturingSetup(settings, toolpath), ...validateGcodeProgram(settings, toolpath)], [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
   const activeQuality = activeImage?.quality;
@@ -166,6 +205,10 @@ export function App() {
     () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
     [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
   );
+
+  useEffect(() => {
+    window.localStorage.setItem(CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY, JSON.stringify(customProcessTemplates));
+  }, [customProcessTemplates]);
 
   useEffect(() => {
     if (!aiMeshStlUrl) {
@@ -277,7 +320,7 @@ export function App() {
   };
 
   const handleProcessTemplateChange = (templateId: string) => {
-    const template = getProcessTemplate(templateId);
+    const template = allProcessTemplates.find((item) => item.id === templateId) ?? processTemplates[0];
     const nextSettings = applyProcessTemplate(settings, template);
     applySettingsPreset(nextSettings);
     saveSnapshot(`模板：${template.name}`, nextSettings, `${template.intent}；${template.notes}`);
@@ -287,6 +330,48 @@ export function App() {
       title: `应用工艺模板：${template.name}`,
       detail: `${template.intent}；${template.notes}`
     });
+  };
+
+  const handleSaveCustomProcessTemplate = () => {
+    const now = new Date();
+    const tool = getToolProfile(settings.toolProfileId);
+    const material = getMaterialProfile(settings.materialProfileId);
+    const template: ProcessTemplate = {
+      id: `custom-${now.getTime()}`,
+      name: `自定义模板 ${customProcessTemplates.length + 1}`,
+      intent: "用户保存的当前工艺参数",
+      toolProfileId: settings.toolProfileId,
+      materialProfileId: settings.materialProfileId,
+      maxCutDepth: settings.maxCutDepth,
+      stockAllowance: settings.stockAllowance,
+      stepoverMm: settings.stepoverMm,
+      stepoverDeg: settings.stepoverDeg,
+      feedRate: settings.feedRate,
+      spindleRpm: settings.spindleRpm,
+      finishingStrategy: settings.finishingStrategy,
+      notes: `${tool.name} / ${material.name} / X步距 ${settings.stepoverMm.toFixed(3)}mm / A步距 ${settings.stepoverDeg.toFixed(1)}°`
+    };
+    setCustomProcessTemplates((current) => [template, ...current].slice(0, 16));
+    saveSnapshot(`保存模板：${template.name}`, settings, template.notes);
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: `保存自定义工艺模板：${template.name}`,
+      detail: template.notes
+    });
+  };
+
+  const handleDeleteCustomProcessTemplate = (templateId: string) => {
+    const template = customProcessTemplates.find((item) => item.id === templateId);
+    setCustomProcessTemplates((current) => current.filter((item) => item.id !== templateId));
+    if (template) {
+      recordTask({
+        category: "process",
+        status: "warning",
+        title: `删除自定义工艺模板：${template.name}`,
+        detail: "模板已从本机浏览器保存区移除，不影响已有参数快照。"
+      });
+    }
   };
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1086,7 +1171,18 @@ export function App() {
               <Sparkles size={18} />
               <h2>工艺模板</h2>
             </div>
-            <p className="panel-note">按加工目标一键套用刀具、材料、进给、步距、切深和精修策略。应用后会清空旧刀路。</p>
+            <p className="panel-note">按加工目标一键套用刀具、材料、进给、步距、切深和精修策略。应用后会清空旧刀路，并保存参数快照。</p>
+            <div className="template-toolbar">
+              <button className="demo-action" type="button" onClick={handleSaveCustomProcessTemplate}>
+                <Save size={16} />
+                保存当前为模板
+              </button>
+              <span>{customProcessTemplates.length}/16 个自定义模板</span>
+            </div>
+            <div className="template-section-title">
+              <strong>内置模板</strong>
+              <span>低风险、快速验证、标准核雕和高精细场景</span>
+            </div>
             <div className="template-grid">
               {processTemplates.map((template) => (
                 <button className="template-card" type="button" key={template.id} onClick={() => handleProcessTemplateChange(template.id)}>
@@ -1096,6 +1192,28 @@ export function App() {
                 </button>
               ))}
             </div>
+            <div className="template-section-title">
+              <strong>自定义模板</strong>
+              <span>保存在当前浏览器，用于复用试雕成功参数</span>
+            </div>
+            {customProcessTemplates.length > 0 ? (
+              <div className="template-grid custom-template-grid">
+                {customProcessTemplates.map((template) => (
+                  <div className="template-card custom-template-card" key={template.id}>
+                    <button className="template-apply" type="button" onClick={() => handleProcessTemplateChange(template.id)}>
+                      <strong>{template.name}</strong>
+                      <span>{template.intent}</span>
+                      <small>{template.notes}</small>
+                    </button>
+                    <button className="template-delete" type="button" onClick={() => handleDeleteCustomProcessTemplate(template.id)} title="删除自定义模板" aria-label={`删除 ${template.name}`}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-inline">还没有自定义模板。调整好刀具、材料、步距和进给后，可保存当前参数。</p>
+            )}
           </section>
         )}
 
