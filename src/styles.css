@@ -1141,6 +1141,53 @@ button:disabled {
   line-height: 1.45;
 }
 
+.snapshot-list {
+  display: grid;
+  gap: 8px;
+}
+
+.snapshot-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: 8px;
+  background: rgba(25, 199, 180, 0.045);
+}
+
+.snapshot-card div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.snapshot-card strong {
+  color: #f2f8f5;
+  font-size: 13px;
+}
+
+.snapshot-card span,
+.snapshot-card small {
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.snapshot-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.snapshot-action {
+  width: 100%;
+  min-height: 34px;
+  font-size: 12px;
+}
+
 .template-grid {
   display: grid;
   gap: 8px;

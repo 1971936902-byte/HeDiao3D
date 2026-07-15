@@ -75,6 +75,15 @@ type TaskEvent = {
   timestamp: string;
 };
 
+type TaskSnapshot = {
+  id: string;
+  label: string;
+  detail: string;
+  settings: ModelSettings;
+  sourceLabel: string;
+  createdAt: string;
+};
+
 type CaptureGuideSlot = {
   label: string;
   imageName: string | null;
@@ -127,6 +136,7 @@ export function App() {
   const [meshQuality, setMeshQuality] = useState<MeshQualityReport | null>(null);
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
+  const [taskSnapshots, setTaskSnapshots] = useState<TaskSnapshot[]>([]);
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -209,6 +219,42 @@ export function App() {
     ].slice(0, 80));
   };
 
+  const saveSnapshot = (label: string, snapshotSettings: ModelSettings, detail: string) => {
+    setTaskSnapshots((current) => [
+      {
+        id: crypto.randomUUID(),
+        label,
+        detail,
+        settings: { ...snapshotSettings },
+        sourceLabel: generationLabel,
+        createdAt: new Date().toLocaleString("zh-CN", { hour12: false })
+      },
+      ...current
+    ].slice(0, 24));
+  };
+
+  const restoreSnapshot = (snapshot: TaskSnapshot) => {
+    setSettings(snapshot.settings);
+    setToolpath(null);
+    setIsSimulationMode(false);
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: `回退参数版本：${snapshot.label}`,
+      detail: `${snapshot.detail}；请重新生成刀路验证。`
+    });
+  };
+
+  const handleSaveCurrentSnapshot = () => {
+    saveSnapshot("手动保存参数", settings, `来源：${generationLabel}`);
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: "手动保存参数版本",
+      detail: "已保存当前刀具、材料、机床、步距、进给和夹持参数。"
+    });
+  };
+
   const applySettingsPreset = (nextSettings: ModelSettings) => {
     setSettings(nextSettings);
     setToolpath(null);
@@ -229,7 +275,9 @@ export function App() {
 
   const handleProcessTemplateChange = (templateId: string) => {
     const template = getProcessTemplate(templateId);
-    applySettingsPreset(applyProcessTemplate(settings, template));
+    const nextSettings = applyProcessTemplate(settings, template);
+    applySettingsPreset(nextSettings);
+    saveSnapshot(`模板：${template.name}`, nextSettings, `${template.intent}；${template.notes}`);
     recordTask({
       category: "process",
       status: "ok",
@@ -383,6 +431,7 @@ export function App() {
         setToolpath(data);
         setToolpathKind(finishing ? "finish" : "rough");
         setIsSimulationMode(true);
+        saveSnapshot(finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路", meshCamSettings, `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
         setAiMeshStatus(finishing ? "Mesh 精加工刀路已生成，可下载 NC/TAP 文件" : "Mesh 360° 表面采样刀路已生成，可下载 NC/TAP 文件");
         recordTask({
           category: "cam",
@@ -408,6 +457,7 @@ export function App() {
     setToolpath(generatedToolpath);
     setToolpathKind(finishing ? "finish" : "rough");
     setIsSimulationMode(true);
+    saveSnapshot(finishing ? "本地精加工刀路" : "本地粗精刀路", baseSettings, `点数 ${generatedToolpath.points.length}，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min。`);
     recordTask({
       category: "cam",
       status: generatedToolpath.summary.warnings.length > 0 ? "warning" : "ok",
@@ -1300,6 +1350,36 @@ export function App() {
               <button className="demo-action package-action" onClick={() => setTaskEvents([])} disabled={taskEvents.length === 0} type="button">
                 清空任务记录
               </button>
+              <button className="demo-action package-action" onClick={handleSaveCurrentSnapshot} type="button">
+                保存当前参数版本
+              </button>
+            </section>
+            <section className="panel">
+              <div className="panel-title">
+                <Library size={18} />
+                <h2>参数版本</h2>
+              </div>
+              {taskSnapshots.length === 0 ? (
+                <p className="panel-note">应用工艺模板或生成刀路后，会自动保存参数快照，可在这里回退并重新生成。</p>
+              ) : (
+                <div className="snapshot-list">
+                  {taskSnapshots.map((snapshot) => (
+                    <div className="snapshot-card" key={snapshot.id}>
+                      <div>
+                        <strong>{snapshot.label}</strong>
+                        <span>{snapshot.createdAt}</span>
+                      </div>
+                      <p>{snapshot.detail}</p>
+                      <small>
+                        刀具 {snapshot.settings.toolDiameter.toFixed(2)}mm / 进给 {snapshot.settings.feedRate.toFixed(0)} / X步距 {snapshot.settings.stepoverMm.toFixed(3)} / A步距 {snapshot.settings.stepoverDeg.toFixed(2)}
+                      </small>
+                      <button className="demo-action snapshot-action" type="button" onClick={() => restoreSnapshot(snapshot)}>
+                        回退到此版本
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="panel">
               <div className="panel-title">
