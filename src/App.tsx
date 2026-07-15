@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { BadgeInfo, Box, Calculator, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Calculator, Camera, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
 import { generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -74,6 +74,22 @@ type TaskEvent = {
   timestamp: string;
 };
 
+type CaptureGuideSlot = {
+  label: string;
+  imageName: string | null;
+  score: number | null;
+  status: "ready" | "usable" | "retake" | "missing";
+  hint: string;
+};
+
+type CaptureGuideReport = {
+  score: number;
+  verdict: "ready" | "usable" | "retake";
+  summary: string;
+  slots: CaptureGuideSlot[];
+  suggestions: string[];
+};
+
 const toolpathColors = {
   rough: 0xd2451e,
   finish: 0x8b5cf6,
@@ -127,6 +143,7 @@ export function App() {
   const safetyIssues = useMemo(() => validateManufacturingSetup(settings, toolpath), [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
   const activeQuality = activeImage?.quality;
+  const captureGuide = useMemo(() => createCaptureGuideReport(images), [images]);
   const manufacturingQuality = useMemo(
     () => createManufacturingQualityReport(settings, toolpath, safetyIssues, envelopeQuality),
     [settings, toolpath, safetyIssues, envelopeQuality]
@@ -761,6 +778,41 @@ export function App() {
               载入素材01
             </button>
           </>
+        )}
+
+        {activeStage === "source" && images.length > 0 && (
+          <section className="panel">
+            <div className="panel-title">
+              <Camera size={18} />
+              <h2>采集向导</h2>
+            </div>
+            <div className={`capture-summary ${captureGuide.verdict}`}>
+              <strong>{captureGuide.score.toFixed(1)}</strong>
+              <span>{captureGuide.summary}</span>
+            </div>
+            <div className="capture-slots">
+              {captureGuide.slots.map((slot, index) => (
+                <button
+                  className={`capture-slot ${slot.status}`}
+                  key={slot.label}
+                  type="button"
+                  disabled={!images[index]}
+                  onClick={() => {
+                    if (images[index]) setActiveId(images[index].id);
+                  }}
+                >
+                  <span>{slot.label}</span>
+                  <strong>{slot.imageName ?? "待补拍"}</strong>
+                  <small>{slot.hint}</small>
+                </button>
+              ))}
+            </div>
+            <div className="quality-notes">
+              {captureGuide.suggestions.map((suggestion) => (
+                <span key={suggestion}>{suggestion}</span>
+              ))}
+            </div>
+          </section>
         )}
 
         {activeStage === "source" && images.length > 0 && (
@@ -1565,6 +1617,59 @@ function depthMapToPreviewUrl(depthMap: DepthMap): string {
 
   ctx.putImageData(image, 0, 0);
   return canvas.toDataURL("image/png");
+}
+
+function createCaptureGuideReport(images: CarvingImage[]): CaptureGuideReport {
+  const angleLabels = ["正面", "左侧", "右侧", "背面"];
+  const slots = angleLabels.map((label, index): CaptureGuideSlot => {
+    const image = images[index];
+    if (!image) {
+      return {
+        label,
+        imageName: null,
+        score: null,
+        status: "missing",
+        hint: "缺少该角度"
+      };
+    }
+
+    const score = image.quality?.score ?? 60;
+    const status: CaptureGuideSlot["status"] = score >= 82 ? "ready" : score >= 64 ? "usable" : "retake";
+    return {
+      label,
+      imageName: image.name,
+      score,
+      status,
+      hint: status === "ready" ? `${score.toFixed(1)} 分，可用` : status === "usable" ? `${score.toFixed(1)} 分，建议复核` : `${score.toFixed(1)} 分，建议重拍`
+    };
+  });
+
+  const presentSlots = slots.filter((slot) => slot.status !== "missing");
+  const missingCount = slots.length - presentSlots.length;
+  const retakeCount = slots.filter((slot) => slot.status === "retake").length;
+  const usableCount = slots.filter((slot) => slot.status === "usable").length;
+  const averageQuality = presentSlots.length > 0 ? presentSlots.reduce((sum, slot) => sum + (slot.score ?? 0), 0) / presentSlots.length : 0;
+  const coverageScore = Math.min(1, images.length / 4) * 42;
+  const qualityScore = Math.min(1, averageQuality / 90) * 48;
+  const penalty = retakeCount * 12 + usableCount * 4 + Math.max(0, images.length - 4) * 2;
+  const score = THREEClamp(coverageScore + qualityScore + (missingCount === 0 ? 10 : 0) - penalty, 0, 100);
+  const verdict: CaptureGuideReport["verdict"] = score >= 82 && missingCount === 0 && retakeCount === 0 ? "ready" : score >= 62 && images.length >= 2 ? "usable" : "retake";
+  const summary =
+    verdict === "ready"
+      ? "适合进入 AI 多图 3D 生成"
+      : verdict === "usable"
+        ? "可用于测试，建议补齐或复核角度"
+        : "建议补拍后再生成 3D Mesh";
+
+  const suggestions: string[] = [];
+  if (images.length < 4) suggestions.push(`建议补齐 4 个角度，目前还缺 ${4 - images.length} 张。`);
+  if (images.length > 4) suggestions.push("Meshy 多图入口最多使用前 4 张，请把最佳角度排在前面。");
+  if (missingCount > 0) suggestions.push(`缺少：${slots.filter((slot) => slot.status === "missing").map((slot) => slot.label).join("、")}。`);
+  if (retakeCount > 0) suggestions.push("存在低质量照片，建议固定手机、加强补光并使用纯色背景重拍。");
+  if (usableCount > 0) suggestions.push("部分照片可用于测试，但正式生成前建议复核主体是否居中、边缘是否清晰。");
+  if (suggestions.length === 0) suggestions.push("角度覆盖和基础质量正常，可以进入 Meshy 或其他 AI Provider 生成。");
+
+  return { score, verdict, summary, slots, suggestions };
 }
 
 async function imageToDataUri(url: string): Promise<string> {
