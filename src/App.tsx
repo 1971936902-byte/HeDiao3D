@@ -12,6 +12,7 @@ import { createOperatorPackageMarkdown } from "./exportPackage";
 import { createCostEstimate, formatCurrencyRange } from "./costEstimate";
 import { createPackageManifest, createQualityReport, createSafetyReport } from "./reports";
 import { createZipBlob, downloadBlob, type ZipTextFile } from "./zipPackage";
+import { ai3dProviders, getAi3dProvider, isProviderAvailable, type Ai3dProviderId } from "./aiProviders";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -100,6 +101,7 @@ export function App() {
   const [aiMeshUrl, setAiMeshUrl] = useState<string | null>(null);
   const [aiMeshStlUrl, setAiMeshStlUrl] = useState<string | null>(null);
   const [aiMeshStatus, setAiMeshStatus] = useState("未生成");
+  const [aiProviderId, setAiProviderId] = useState<Ai3dProviderId>("meshy");
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isMeshRepairing, setIsMeshRepairing] = useState(false);
   const [isToolpathGenerating, setIsToolpathGenerating] = useState(false);
@@ -121,6 +123,7 @@ export function App() {
   const selectedTool = useMemo(() => getToolProfile(settings.toolProfileId), [settings.toolProfileId]);
   const selectedMaterial = useMemo(() => getMaterialProfile(settings.materialProfileId), [settings.materialProfileId]);
   const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
+  const selectedAiProvider = useMemo(() => getAi3dProvider(aiProviderId), [aiProviderId]);
   const safetyIssues = useMemo(() => validateManufacturingSetup(settings, toolpath), [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
   const activeQuality = activeImage?.quality;
@@ -526,6 +529,16 @@ export function App() {
       setAiMeshStatus("请先上传图片或载入素材");
       return;
     }
+    if (!isProviderAvailable(selectedAiProvider)) {
+      setAiMeshStatus(`${selectedAiProvider.name} 尚未接入，当前请选择 Meshy 生成。`);
+      recordTask({
+        category: "model",
+        status: "warning",
+        title: "AI Provider 未接入",
+        detail: `${selectedAiProvider.name} 已预留接口，但还没有可调用的后端服务。`
+      });
+      return;
+    }
 
     setIsAiGenerating(true);
     setAiMeshUrl(null);
@@ -534,54 +547,54 @@ export function App() {
     setToolpath(null);
 
     try {
-      const selected = images.slice(0, 4);
-      setAiMeshStatus(`准备上传 ${selected.length} 张图片到 Meshy`);
+      const selected = images.slice(0, selectedAiProvider.maxImages);
+      setAiMeshStatus(`准备上传 ${selected.length} 张图片到 ${selectedAiProvider.name}`);
       const imageUrls = await Promise.all(selected.map((image) => imageToDataUri(image.url)));
 
-      setAiMeshStatus("已提交 Meshy 任务，等待排队");
-      const createResponse = await fetch("/api/meshy/multi-image-to-3d", {
+      setAiMeshStatus(`已提交 ${selectedAiProvider.name} 任务，等待排队`);
+      const createResponse = await fetch(selectedAiProvider.endpoint!, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image_urls: imageUrls,
-          target_formats: ["glb", "stl"]
+          target_formats: selectedAiProvider.targetFormats
         })
       });
 
       const createData = await createResponse.json();
       if (!createResponse.ok) {
-        throw new Error(createData.error ?? createData.message ?? "Meshy任务创建失败");
+        throw new Error(createData.error ?? createData.message ?? `${selectedAiProvider.name}任务创建失败`);
       }
 
       const taskId = createData.result ?? createData.id;
       if (!taskId) {
-        throw new Error("Meshy响应中没有任务ID");
+        throw new Error(`${selectedAiProvider.name}响应中没有任务ID`);
       }
 
-      const task = await pollMeshyTask(taskId, setAiMeshStatus);
+      const task = await pollAi3dTask(selectedAiProvider.taskEndpoint!(taskId), setAiMeshStatus, `${selectedAiProvider.name}任务`);
       const glb = task.local_model_urls?.glb ?? task.model_urls?.glb ?? task.output?.model_urls?.glb ?? task.model_url;
       const stl = task.local_model_urls?.stl ?? task.model_urls?.stl ?? task.output?.model_urls?.stl;
       if (!glb) {
-        throw new Error("Meshy任务已完成，但没有返回GLB模型地址");
+        throw new Error(`${selectedAiProvider.name}任务已完成，但没有返回GLB模型地址`);
       }
 
       setAiMeshUrl(glb);
       setAiMeshStlUrl(stl ?? null);
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
-      setGenerationLabel(`AI 3D Mesh：${selected.length}张图片`);
-      setAiMeshStatus(task.local_model_urls?.glb ? "Meshy 3D Mesh 生成完成，已缓存到本地" : "Meshy 3D Mesh 生成完成");
+      setGenerationLabel(`${selectedAiProvider.name} AI 3D Mesh：${selected.length}张图片`);
+      setAiMeshStatus(task.local_model_urls?.glb ? `${selectedAiProvider.name} 3D Mesh 生成完成，已缓存到本地` : `${selectedAiProvider.name} 3D Mesh 生成完成`);
       recordTask({
         category: "model",
         status: stl ? "ok" : "warning",
-        title: "Meshy 生成 3D Mesh",
+        title: `${selectedAiProvider.name} 生成 3D Mesh`,
         detail: `使用 ${selected.length} 张图片生成 GLB${stl ? "/STL" : ""}。`
       });
     } catch (error) {
-      setAiMeshStatus(error instanceof Error ? error.message : "Meshy生成失败");
+      setAiMeshStatus(error instanceof Error ? error.message : `${selectedAiProvider.name}生成失败`);
       recordTask({
         category: "model",
         status: "error",
-        title: "Meshy 生成失败",
+        title: `${selectedAiProvider.name} 生成失败`,
         detail: error instanceof Error ? error.message : "未知错误"
       });
     } finally {
@@ -826,10 +839,25 @@ export function App() {
                 <Sparkles size={18} />
                 <h2>推荐：真实3D网格</h2>
               </div>
-              <p className="panel-note">使用前 1-4 张图片调用 Meshy 多图转 3D，生成真正的 GLB/STL 三维网格。</p>
+              <p className="panel-note">选择 AI 3D Provider，将多角度图片生成真正的 GLB/STL 三维网格；当前 Meshy 已接入，其他服务为预留接口。</p>
+              <label className="select-row">
+                <span>AI Provider</span>
+                <select value={aiProviderId} onChange={(event) => setAiProviderId(event.target.value as Ai3dProviderId)}>
+                  {ai3dProviders.map((provider) => (
+                    <option value={provider.id} key={provider.id}>
+                      {provider.name}{provider.status === "available" ? "（已接入）" : provider.status === "local" ? "（本地预留）" : "（预留）"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className={`provider-card ${selectedAiProvider.status}`}>
+                <strong>{selectedAiProvider.name}</strong>
+                <span>{selectedAiProvider.note}</span>
+                <small>{selectedAiProvider.capabilities.join(" / ")}</small>
+              </div>
               <button className="primary-action ai-action" onClick={handleGenerateAiMesh} disabled={isAiGenerating || images.length === 0}>
                 <Sparkles size={18} />
-                {isAiGenerating ? "AI生成中..." : "Meshy生成3D Mesh"}
+                {isAiGenerating ? "AI生成中..." : `${selectedAiProvider.name}生成3D Mesh`}
               </button>
               <div className="ai-tool-grid">
                 <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
@@ -1552,10 +1580,14 @@ async function imageToDataUri(url: string): Promise<string> {
 }
 
 async function pollMeshyTask(taskId: string, onStatus: (status: string) => void) {
-  return pollMeshyTaskByEndpoint(`/api/meshy/multi-image-to-3d/${encodeURIComponent(taskId)}`, onStatus, "Meshy任务");
+  return pollAi3dTask(`/api/meshy/multi-image-to-3d/${encodeURIComponent(taskId)}`, onStatus, "Meshy任务");
 }
 
 async function pollMeshyTaskByEndpoint(endpoint: string, onStatus: (status: string) => void, label: string) {
+  return pollAi3dTask(endpoint, onStatus, label);
+}
+
+async function pollAi3dTask(endpoint: string, onStatus: (status: string) => void, label: string) {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     const response = await fetch(endpoint);
     const data = await response.json();
@@ -1578,5 +1610,5 @@ async function pollMeshyTaskByEndpoint(endpoint: string, onStatus: (status: stri
     await new Promise((resolve) => window.setTimeout(resolve, 6000));
   }
 
-  throw new Error("Meshy任务等待超时");
+  throw new Error(`${label}等待超时`);
 }

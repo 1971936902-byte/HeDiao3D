@@ -289,6 +289,34 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.provider-card {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 10px;
+  padding: 10px;
+  border: 1px solid rgba(25, 199, 180, 0.28);
+  border-radius: 7px;
+  background: rgba(25, 199, 180, 0.075);
+}
+
+.provider-card.planned,
+.provider-card.local {
+  border-color: rgba(234, 181, 88, 0.28);
+  background: rgba(234, 181, 88, 0.07);
+}
+
+.provider-card strong {
+  color: #f3f9f6;
+  font-size: 14px;
+}
+
+.provider-card span,
+.provider-card small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .panel {
   padding: 14px;
   border: 1px solid var(--line);
