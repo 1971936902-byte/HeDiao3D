@@ -50,6 +50,8 @@ export type SafetyIssue = {
   level: "ok" | "warning" | "critical";
   title: string;
   detail: string;
+  line?: number;
+  command?: string;
 };
 
 export type ProcessTemplate = {
@@ -463,6 +465,96 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
   return issues;
 }
 
+export function validateGcodeProgram(settings: ModelSettings, toolpath: GeneratedToolpath | null): SafetyIssue[] {
+  if (!toolpath) return [];
+
+  const machine = getMachineProfile(settings.machineProfileId);
+  const issues: SafetyIssue[] = [];
+  const lines = toolpath.gcode.split(/\r?\n/);
+  let previousA: number | null = null;
+  let sawSafeRetract = false;
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("(") || trimmed === "%" || trimmed.startsWith(";")) return;
+
+    const lineNumber = index + 1;
+    const x = readAxis(trimmed, "X");
+    const z = readAxis(trimmed, "Z");
+    const a = readAxis(trimmed, "A");
+    const feed = readAxis(trimmed, "F");
+    const spindle = readAxis(trimmed, "S");
+    const isMotion = /\bG0?0\b|\bG0?1\b/.test(trimmed);
+
+    if (x !== null && (x < machine.xMin || x > machine.xMax)) {
+      issues.push(createGcodeIssue("critical", "G-code X 轴越界", lineNumber, trimmed, `X=${x.toFixed(3)}mm，机床范围 ${machine.xMin}~${machine.xMax}mm。`));
+    }
+
+    if (z !== null && (z < machine.zMin || z > machine.zMax)) {
+      issues.push(createGcodeIssue("critical", "G-code Z 轴越界", lineNumber, trimmed, `Z=${z.toFixed(3)}mm，机床范围 ${machine.zMin}~${machine.zMax}mm。`));
+    }
+
+    if (a !== null && (a < machine.aMin || a > machine.aMax)) {
+      issues.push(createGcodeIssue("critical", "G-code A 轴越界", lineNumber, trimmed, `A=${a.toFixed(3)}°，机床范围 ${machine.aMin}~${machine.aMax}°。`));
+    }
+
+    if (feed !== null && feed > machine.maxFeed) {
+      issues.push(createGcodeIssue("critical", "G-code 进给超限", lineNumber, trimmed, `F=${feed.toFixed(1)}mm/min，机床上限 ${machine.maxFeed}mm/min。`));
+    }
+
+    if (spindle !== null && spindle > machine.maxRpm) {
+      issues.push(createGcodeIssue("critical", "G-code 主轴超限", lineNumber, trimmed, `S=${spindle.toFixed(0)}rpm，机床上限 ${machine.maxRpm}rpm。`));
+    }
+
+    if (a !== null && previousA !== null && Math.abs(a - previousA) > 120) {
+      issues.push(createGcodeIssue("warning", "A 轴角度跳变较大", lineNumber, trimmed, `上一 A=${previousA.toFixed(2)}°，当前 A=${a.toFixed(2)}°。请空跑确认旋转方向和连续性。`));
+    }
+    if (a !== null) previousA = a;
+
+    if (isMotion && z !== null && z >= settings.safeZ - 0.01) {
+      sawSafeRetract = true;
+    }
+  });
+
+  if (!sawSafeRetract) {
+    issues.push({
+      level: "warning",
+      title: "未发现安全高度抬刀行",
+      detail: `程序中未检测到 Z>=${settings.safeZ.toFixed(2)}mm 的运动行，请确认后处理程序头/程序尾是否有安全抬刀。`
+    });
+  }
+
+  if (issues.length === 0) {
+    issues.push({
+      level: "ok",
+      title: "G-code 行级校验通过",
+      detail: "已扫描合并程序，未发现坐标越界、进给超限、主轴超限或异常 A 轴跳变。"
+    });
+  }
+
+  return prioritizeGcodeIssues(issues).slice(0, 16);
+}
+
 export function hasCriticalIssue(issues: SafetyIssue[]) {
   return issues.some((issue) => issue.level === "critical");
+}
+
+function readAxis(line: string, axis: string) {
+  const match = line.match(new RegExp(`(?:^|\\s)${axis}(-?\\d+(?:\\.\\d+)?)`, "i"));
+  return match ? Number(match[1]) : null;
+}
+
+function createGcodeIssue(level: SafetyIssue["level"], title: string, line: number, command: string, detail: string): SafetyIssue {
+  return {
+    level,
+    title,
+    line,
+    command,
+    detail: `第 ${line} 行：${detail}`
+  };
+}
+
+function prioritizeGcodeIssues(issues: SafetyIssue[]) {
+  const rank = { critical: 0, warning: 1, ok: 2 } satisfies Record<SafetyIssue["level"], number>;
+  return [...issues].sort((a, b) => rank[a.level] - rank[b.level]);
 }

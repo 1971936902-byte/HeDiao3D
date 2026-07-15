@@ -27,6 +27,7 @@ import {
   materialProfiles,
   processTemplates,
   toolProfiles,
+  validateGcodeProgram,
   validateManufacturingSetup
 } from "./manufacturingProfiles";
 import { analyzeDepthMapQuality, createManufacturingQualityReport } from "./quality";
@@ -140,7 +141,7 @@ export function App() {
   const selectedMaterial = useMemo(() => getMaterialProfile(settings.materialProfileId), [settings.materialProfileId]);
   const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
   const selectedAiProvider = useMemo(() => getAi3dProvider(aiProviderId), [aiProviderId]);
-  const safetyIssues = useMemo(() => validateManufacturingSetup(settings, toolpath), [settings, toolpath]);
+  const safetyIssues = useMemo(() => [...validateManufacturingSetup(settings, toolpath), ...validateGcodeProgram(settings, toolpath)], [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
   const activeQuality = activeImage?.quality;
   const captureGuide = useMemo(() => createCaptureGuideReport(images), [images]);
@@ -1157,6 +1158,7 @@ export function App() {
                 <div className={`safety-item ${issue.level}`} key={`${issue.title}-${index}`}>
                   <strong>{issue.title}</strong>
                   <span>{issue.detail}</span>
+                  {issue.command && <code>{issue.command}</code>}
                 </div>
               ))}
             </div>

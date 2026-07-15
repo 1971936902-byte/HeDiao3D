@@ -589,6 +589,16 @@ button:disabled {
   line-height: 1.45;
 }
 
+.safety-item code {
+  display: block;
+  margin-top: 6px;
+  overflow: hidden;
+  color: #f4e2bf;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .safety-item.ok {
   border-left-color: var(--green);
 }
