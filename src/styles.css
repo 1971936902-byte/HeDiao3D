@@ -781,6 +781,30 @@ button:disabled {
   line-height: 1.45;
 }
 
+.package-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.package-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 9px;
+  color: #d8e3dd;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+}
+
+.package-action {
+  width: 100%;
+  margin-top: 10px;
+}
+
 .ai-links {
   display: flex;
   gap: 8px;

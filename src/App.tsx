@@ -8,6 +8,7 @@ import { AiMeshViewer } from "./AiMeshViewer";
 import { exportGeometryAsStl } from "./modelExport";
 import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
+import { createOperatorPackageMarkdown } from "./exportPackage";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -208,6 +209,24 @@ export function App() {
 
   const handleGenerateToolpath = async () => {
     await generateToolpathForSettings(settings, false);
+  };
+
+  const handleDownloadOperatorPackage = () => {
+    if (!toolpath) return;
+    const content = createOperatorPackageMarkdown({
+      settings,
+      toolpath,
+      sourceLabel: generationLabel,
+      aiMeshUrl,
+      aiMeshStlUrl,
+      tool: selectedTool,
+      material: selectedMaterial,
+      machine: selectedMachine,
+      safetyIssues,
+      manufacturingQuality,
+      meshQuality
+    });
+    downloadText("operator-note.md", content, "text/markdown");
   };
 
   const handleGenerateFinishingToolpath = async () => {
@@ -882,6 +901,28 @@ export function App() {
             </div>
           </section>
         )}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
+              <Download size={18} />
+              <h2>加工包交付</h2>
+            </div>
+            <p className="panel-note">下载加工包说明，包含机床参数、刀具材料、质量报告、安全校验、文件清单和上机建议。</p>
+            <div className="package-list">
+              <span>合并 NC</span>
+              <span>粗加工 NC</span>
+              <span>精加工 NC</span>
+              <span>STL/GLB 模型</span>
+              <span>质量报告</span>
+              <span>上机说明</span>
+            </div>
+            <button className="demo-action package-action" onClick={handleDownloadOperatorPackage} disabled={!toolpath} type="button">
+              <Download size={17} />
+              下载加工包说明
+            </button>
+          </section>
+        )}
       </aside>
 
       <section className="workbench">
@@ -1047,6 +1088,10 @@ export function App() {
               <button className="download secondary" onClick={() => setIsSimulationMode((current) => !current)}>
                 <Layers3 size={17} />
                 {isSimulationMode ? "返回3D视图" : "模拟雕刻"}
+              </button>
+              <button className="download secondary" onClick={handleDownloadOperatorPackage}>
+                <Download size={17} />
+                加工包说明
               </button>
               <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 NC"}>
                 <Download size={17} />
