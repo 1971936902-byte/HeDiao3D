@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { BadgeInfo, Box, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
 import { generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -57,7 +57,15 @@ const defaultSettings: ModelSettings = {
 };
 
 type ToolpathKind = "rough" | "finish";
-type WorkflowStage = "source" | "model" | "process" | "cam";
+type WorkflowStage = "source" | "model" | "process" | "cam" | "tasks";
+type TaskEvent = {
+  id: string;
+  title: string;
+  detail: string;
+  status: "ok" | "warning" | "error";
+  category: "source" | "model" | "process" | "cam";
+  timestamp: string;
+};
 
 const toolpathColors = {
   rough: 0xd2451e,
@@ -69,7 +77,8 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "source", label: "素材", hint: "上传/载入" },
   { id: "model", label: "建模", hint: "3D/Meshy" },
   { id: "process", label: "工艺", hint: "刀具/机床" },
-  { id: "cam", label: "CAM", hint: "刀路/导出" }
+  { id: "cam", label: "CAM", hint: "刀路/导出" },
+  { id: "tasks", label: "任务", hint: "历史/版本" }
 ];
 
 export function App() {
@@ -92,6 +101,7 @@ export function App() {
   const [toolpathKind, setToolpathKind] = useState<ToolpathKind>("rough");
   const [meshQuality, setMeshQuality] = useState<MeshQualityReport | null>(null);
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
+  const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -157,6 +167,17 @@ export function App() {
     setIsSimulationMode(false);
   };
 
+  const recordTask = (event: Omit<TaskEvent, "id" | "timestamp">) => {
+    setTaskEvents((current) => [
+      {
+        ...event,
+        id: crypto.randomUUID(),
+        timestamp: new Date().toLocaleString("zh-CN", { hour12: false })
+      },
+      ...current
+    ].slice(0, 80));
+  };
+
   const applySettingsPreset = (nextSettings: ModelSettings) => {
     setSettings(nextSettings);
     setToolpath(null);
@@ -201,6 +222,12 @@ export function App() {
       setGenerationLabel("图片已载入，待生成3D");
       setToolpath(null);
       setIsSimulationMode(false);
+      recordTask({
+        category: "source",
+        status: "ok",
+        title: "上传图片素材",
+        detail: `已读取 ${loaded.length} 张图片，首张质量评分 ${loaded[0].quality?.score.toFixed(1) ?? "-"}。`
+      });
     } finally {
       setIsReading(false);
       event.target.value = "";
@@ -262,17 +289,36 @@ export function App() {
         setToolpathKind(finishing ? "finish" : "rough");
         setIsSimulationMode(true);
         setAiMeshStatus(finishing ? "Mesh 精加工刀路已生成，可下载 NC/TAP 文件" : "Mesh 360° 表面采样刀路已生成，可下载 NC/TAP 文件");
+        recordTask({
+          category: "cam",
+          status: data.summary.warnings.length > 0 ? "warning" : "ok",
+          title: finishing ? "生成 Mesh 精加工刀路" : "生成 Mesh 四轴刀路",
+          detail: `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min，警告 ${data.summary.warnings.length} 条。`
+        });
       } catch (error) {
         setAiMeshStatus(error instanceof Error ? error.message : "Mesh CAM 刀路生成失败");
+        recordTask({
+          category: "cam",
+          status: "error",
+          title: "Mesh CAM 刀路生成失败",
+          detail: error instanceof Error ? error.message : "未知错误"
+        });
       } finally {
         setIsToolpathGenerating(false);
       }
       return;
     }
 
-    setToolpath(generateToolpath(processedDepth, baseSettings));
+    const generatedToolpath = generateToolpath(processedDepth, baseSettings);
+    setToolpath(generatedToolpath);
     setToolpathKind(finishing ? "finish" : "rough");
     setIsSimulationMode(true);
+    recordTask({
+      category: "cam",
+      status: generatedToolpath.summary.warnings.length > 0 ? "warning" : "ok",
+      title: finishing ? "生成本地精加工刀路" : "生成本地粗精加工刀路",
+      detail: `点数 ${generatedToolpath.points.length}，估算 ${generatedToolpath.estimatedMinutes.toFixed(1)} min，粗加工 ${generatedToolpath.programs?.rough?.estimatedMinutes.toFixed(1) ?? "-"} min。`
+    });
   };
 
   const handleGenerate3D = () => {
@@ -299,8 +345,20 @@ export function App() {
     if (settings.generationMode === "multiview") {
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
       setGenerationLabel(`本地360°环绕浮雕：${images.length}张图片`);
+      recordTask({
+        category: "model",
+        status: "ok",
+        title: "生成本地 360° 环绕浮雕",
+        detail: `使用 ${images.length} 张图片生成本地环绕深度场。`
+      });
     } else {
       setGenerationLabel(settings.generationMode === "blend" ? `多图融合：${images.length}张图片` : `当前图片：${activeImage?.name ?? images[0].name}`);
+      recordTask({
+        category: "model",
+        status: "ok",
+        title: settings.generationMode === "blend" ? "生成多图融合浮雕" : "生成单图浮雕",
+        detail: settings.generationMode === "blend" ? `融合 ${images.length} 张图片。` : `使用 ${activeImage?.name ?? images[0].name}。`
+      });
     }
     setToolpath(null);
     setIsSimulationMode(false);
@@ -344,6 +402,12 @@ export function App() {
     setMeshQuality(null);
     setGenerationLabel("示例图案已载入，待生成3D");
     setToolpath(null);
+    recordTask({
+      category: "source",
+      status: "ok",
+      title: "载入示例图案",
+      detail: "已载入内置莲纹和云纹示例。"
+    });
   };
 
   const handleLoadMaterial01 = async () => {
@@ -372,6 +436,12 @@ export function App() {
       setGenerationLabel("素材01已载入，待生成3D");
       setToolpath(null);
       setIsSimulationMode(false);
+      recordTask({
+        category: "source",
+        status: "ok",
+        title: "载入素材01",
+        detail: `已载入 ${loaded.length} 张测试素材，首张质量评分 ${loaded[0].quality?.score.toFixed(1) ?? "-"}。`
+      });
     } finally {
       setIsReading(false);
     }
@@ -426,8 +496,20 @@ export function App() {
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
       setGenerationLabel(`AI 3D Mesh：${selected.length}张图片`);
       setAiMeshStatus(task.local_model_urls?.glb ? "Meshy 3D Mesh 生成完成，已缓存到本地" : "Meshy 3D Mesh 生成完成");
+      recordTask({
+        category: "model",
+        status: stl ? "ok" : "warning",
+        title: "Meshy 生成 3D Mesh",
+        detail: `使用 ${selected.length} 张图片生成 GLB${stl ? "/STL" : ""}。`
+      });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : "Meshy生成失败");
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "Meshy 生成失败",
+        detail: error instanceof Error ? error.message : "未知错误"
+      });
     } finally {
       setIsAiGenerating(false);
     }
@@ -442,6 +524,12 @@ export function App() {
     setAiMeshStatus("已载入本地 Meshy 测试结果");
     setToolpath(null);
     setIsSimulationMode(false);
+    recordTask({
+      category: "model",
+      status: "ok",
+      title: "载入 Meshy 测试结果",
+      detail: "已载入本地 GLB/STL 测试模型。"
+    });
   };
 
   const handleRepairMesh = async () => {
@@ -475,8 +563,20 @@ export function App() {
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 缺损修复完成，已替换刀路用 STL，请重新生成刀路");
+      recordTask({
+        category: "model",
+        status: "ok",
+        title: "Mesh 缺损修复完成",
+        detail: "已替换刀路用 STL，请重新生成刀路并查看未命中点。"
+      });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : "Mesh 修复失败");
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "Mesh 修复失败",
+        detail: error instanceof Error ? error.message : "未知错误"
+      });
     } finally {
       setIsMeshRepairing(false);
     }
@@ -517,8 +617,20 @@ export function App() {
       setToolpath(null);
       setIsSimulationMode(false);
       setAiMeshStatus("Mesh 重网格完成，已替换当前模型，请重新生成刀路");
+      recordTask({
+        category: "model",
+        status: "ok",
+        title: "Mesh 重网格完成",
+        detail: "已替换当前模型，请重新生成刀路。"
+      });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : "Mesh 重网格失败");
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "Mesh 重网格失败",
+        detail: error instanceof Error ? error.message : "未知错误"
+      });
     } finally {
       setIsMeshRepairing(false);
     }
@@ -922,6 +1034,48 @@ export function App() {
               下载加工包说明
             </button>
           </section>
+        )}
+
+        {activeStage === "tasks" && (
+          <>
+            <section className="panel">
+              <div className="panel-title">
+                <Clock3 size={18} />
+                <h2>任务中心</h2>
+              </div>
+              <div className="task-summary">
+                <span><strong>{taskEvents.length}</strong> 事件</span>
+                <span><strong>{taskEvents.filter((event) => event.status === "ok").length}</strong> 成功</span>
+                <span><strong>{taskEvents.filter((event) => event.status === "warning").length}</strong> 提醒</span>
+                <span><strong>{taskEvents.filter((event) => event.status === "error").length}</strong> 失败</span>
+              </div>
+              <button className="demo-action package-action" onClick={() => setTaskEvents([])} disabled={taskEvents.length === 0} type="button">
+                清空任务记录
+              </button>
+            </section>
+            <section className="panel">
+              <div className="panel-title">
+                <BadgeInfo size={18} />
+                <h2>历史版本时间线</h2>
+              </div>
+              {taskEvents.length === 0 ? (
+                <p className="panel-note">当前会话还没有任务记录。载入素材、生成模型、修复 Mesh 或生成刀路后会自动记录。</p>
+              ) : (
+                <div className="task-timeline">
+                  {taskEvents.map((event) => (
+                    <div className={`task-event ${event.status}`} key={event.id}>
+                      <div>
+                        <strong>{event.title}</strong>
+                        <span>{event.timestamp}</span>
+                      </div>
+                      <p>{event.detail}</p>
+                      <small>{event.category.toUpperCase()}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
         )}
       </aside>
 
