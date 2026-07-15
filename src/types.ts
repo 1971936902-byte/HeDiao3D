@@ -93,6 +93,7 @@ export type GeneratedToolpath = {
     rough?: ToolpathProgram;
     finish?: ToolpathProgram;
     combined?: ToolpathProgram;
+    airRun?: ToolpathProgram;
   };
   previewPoints?: ToolpathPreviewPoint[];
   estimatedMinutes: number;

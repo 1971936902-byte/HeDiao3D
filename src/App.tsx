@@ -1,6 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { BadgeInfo, Box, Calculator, Camera, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
-import { generateToolpath, downloadText } from "./cam";
+import { createAirRunProgram, generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
 import { DepthEditor } from "./DepthEditor";
@@ -204,6 +204,10 @@ export function App() {
   const costEstimate = useMemo(
     () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
     [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
+  );
+  const airRunProgram = useMemo(
+    () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
+    [settings, toolpath]
   );
 
   useEffect(() => {
@@ -435,6 +439,17 @@ export function App() {
     downloadText("operator-note.md", content, "text/markdown");
   };
 
+  const handleDownloadAirRun = () => {
+    if (!airRunProgram) return;
+    downloadText(airRunProgram.filename, airRunProgram.gcode);
+    recordTask({
+      category: "cam",
+      status: exportBlocked ? "warning" : "ok",
+      title: "下载离料空跑程序",
+      detail: exportBlocked ? "当前正式程序存在阻断项，空跑前仍需确认 X/A 行程和夹具距离。" : "空跑程序主轴关闭，Z 保持安全高度，用于验证机器动作。"
+    });
+  };
+
   const createReportInput = () => {
     if (!toolpath) return null;
     return {
@@ -464,6 +479,7 @@ export function App() {
       { name: "reports/safety-report.json", content: JSON.stringify(createSafetyReport(reportInput), null, 2), mime: "application/json" },
       { name: "reports/quality-report.json", content: JSON.stringify(createQualityReport(reportInput), null, 2), mime: "application/json" },
       { name: "reports/cost-estimate.json", content: JSON.stringify(costEstimate, null, 2), mime: "application/json" },
+      ...(airRunProgram ? [{ name: `nc/${airRunProgram.filename}`, content: airRunProgram.gcode }] : []),
       { name: "nc/nuclear-carving-combined.nc", content: toolpath.gcode },
       { name: "nc/nuclear-carving-toolpath.tap", content: toolpath.tap },
       { name: "nc/nuclear-carving-toolpath.txt", content: toolpath.txt },
@@ -1483,6 +1499,7 @@ export function App() {
             </div>
             <p className="panel-note">下载完整加工包，包含 NC/TAP/TXT/CSV、质量报告、安全校验、成本估算和上机说明。</p>
             <div className="package-list">
+              <span>离料空跑 NC</span>
               <span>合并 NC</span>
               <span>粗加工 NC</span>
               <span>精加工 NC</span>
@@ -1493,6 +1510,10 @@ export function App() {
             <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!toolpath || exportBlocked} type="button" title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 ZIP 加工包"}>
               <Download size={17} />
               下载 ZIP 加工包
+            </button>
+            <button className="demo-action package-action" onClick={handleDownloadAirRun} disabled={!airRunProgram} type="button" title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
+              <Download size={17} />
+              下载离料空跑 NC
             </button>
             <button className="demo-action package-action" onClick={handleDownloadOperatorPackage} disabled={!toolpath} type="button">
               <Download size={17} />
@@ -1747,6 +1768,10 @@ export function App() {
               <button className="download secondary" onClick={handleDownloadOperatorPackage}>
                 <Download size={17} />
                 加工包说明
+              </button>
+              <button className="download secondary" onClick={handleDownloadAirRun} disabled={!airRunProgram} title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
+                <Download size={17} />
+                下载空跑 NC
               </button>
               <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 NC"}>
                 <Download size={17} />

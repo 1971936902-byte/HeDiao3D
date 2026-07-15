@@ -72,7 +72,8 @@ export function createSafetyReportMarkdown(input: ManufacturingReportInput) {
     "",
     "## 操作建议",
     "",
-    "- 首次上机必须先离料空跑，确认 X/A/Z 方向和 A 轴连续性。",
+    "- 首次上机必须先运行 `nuclear-carving-air-run.nc` 离料空跑，确认 X/A/Z 方向和 A 轴连续性。",
+    "- 空跑程序主轴关闭且 Z 保持安全高度，仅用于验证运动范围和夹具间隙。",
     "- 存在 critical 阻断项时，不建议下载后的 NC/TAP 直接上机。",
     "- 存在 A 轴跳变提醒时，请确认控制系统是否支持该角度跳转，必要时调整包覆策略或后处理。",
     "- 毛坯直径差异较大时，请保守增加端部过渡和夹持保留。"
@@ -100,6 +101,7 @@ export function createPackageManifest(input: ManufacturingReportInput) {
     createdAt: new Date().toISOString(),
     sourceLabel: input.sourceLabel,
     files: [
+      "nc/nuclear-carving-air-run.nc",
       "nc/nuclear-carving-combined.nc",
       input.toolpath.programs?.rough ? "nc/nuclear-carving-rough.nc" : null,
       input.toolpath.programs?.finish ? "nc/nuclear-carving-finish.nc" : null,

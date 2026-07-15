@@ -24,10 +24,12 @@ export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): G
   const roughGcode = toGcode(roughPoints, settings, roughMinutes, "Roughing pass");
   const finishGcode = toGcode(finishPoints, settings, finishMinutes, "Finishing pass");
   const combinedGcode = toGcode(combinedPoints, settings, combinedMinutes, "Roughing + finishing");
+  const airRunProgram = createAirRunProgram(combinedPoints, settings, combinedMinutes, "Air run - no cutting");
   const programs: GeneratedToolpath["programs"] = {
     rough: createProgram("粗加工", "nuclear-carving-rough.nc", roughGcode, roughPoints, roughMinutes),
     finish: createProgram("精加工", "nuclear-carving-finish.nc", finishGcode, finishPoints, finishMinutes),
-    combined: createProgram("合并程序", "nuclear-carving-combined.nc", combinedGcode, combinedPoints, combinedMinutes)
+    combined: createProgram("合并程序", "nuclear-carving-combined.nc", combinedGcode, combinedPoints, combinedMinutes),
+    airRun: airRunProgram
   };
 
   return {
@@ -139,6 +141,20 @@ function createProgram(name: string, filename: string, gcode: string, points: To
   return { name, filename, gcode, points, estimatedMinutes };
 }
 
+export function createAirRunProgram(
+  points: ToolpathPoint[],
+  settings: ModelSettings,
+  estimatedMinutes: number,
+  programName = "Air run - no cutting"
+): ToolpathProgram {
+  const airPoints = points.map((point) => ({
+    ...point,
+    z: settings.safeZ,
+    depth: 0
+  }));
+  return createProgram("离料空跑", "nuclear-carving-air-run.nc", toAirRunGcode(airPoints, settings, estimatedMinutes, programName), airPoints, estimatedMinutes);
+}
+
 function summarizeToolpath(
   points: ToolpathPoint[],
   settings: ModelSettings,
@@ -229,6 +245,33 @@ function toGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinu
   return `${lines.join("\n")}\n`;
 }
 
+function toAirRunGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinutes: number, programName = "Air run - no cutting"): string {
+  const lines = [
+    `%`,
+    `(Nuclear carving relief CAM V2 - ${programName} - ${postProcessorNames[settings.postProcessor]})`,
+    "(AIR RUN ONLY: spindle stays off, Z remains at safe height, do not use for cutting)",
+    "(Purpose: verify X/A direction, travel range, fixture clearance and program continuity)",
+    `(SafeZ=${fmt(settings.safeZ, 3)}mm EstimatedMotion=${fmt(estimatedMinutes, 2)}min)`,
+    "G21",
+    "G90",
+    "G94",
+    ...postAirRunStart(settings)
+  ];
+
+  if (points.length > 0) {
+    lines.push(`G0 X${fmt(points[0].x)} A${fmt(points[0].a, 3)} Z${fmt(settings.safeZ)}`);
+  }
+
+  for (const point of points) {
+    lines.push(`G1 X${fmt(point.x)} A${fmt(point.a, 3)} Z${fmt(settings.safeZ)} F${fmt(Math.min(settings.feedRate, 180), 1)}`);
+  }
+
+  lines.push(`G0 Z${fmt(settings.safeZ)}`);
+  lines.push(...postEnd(settings));
+  lines.push("%");
+  return `${lines.join("\n")}\n`;
+}
+
 function postStart(settings: ModelSettings): string[] {
   const shared = [`F${fmt(settings.feedRate, 1)}`, `S${Math.round(settings.spindleRpm)} M3`, `G0 Z${fmt(settings.safeZ)}`];
 
@@ -241,6 +284,20 @@ function postStart(settings: ModelSettings): string[] {
   }
 
   return ["(POST: GENERIC 4AXIS)", ...shared];
+}
+
+function postAirRunStart(settings: ModelSettings): string[] {
+  const shared = [`F${fmt(Math.min(settings.feedRate, 180), 1)}`, "M5", `G0 Z${fmt(settings.safeZ)}`];
+
+  if (settings.postProcessor === "weihong") {
+    return ["(POST: WEIHONG STYLE AIR RUN)", "G17", ...shared];
+  }
+
+  if (settings.postProcessor === "syntec") {
+    return ["(POST: SYNTEC STYLE AIR RUN)", "G17 G40 G49 G80", ...shared];
+  }
+
+  return ["(POST: GENERIC 4AXIS AIR RUN)", ...shared];
 }
 
 function postEnd(settings: ModelSettings): string[] {

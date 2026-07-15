@@ -24,6 +24,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
   const files = [
     input.aiMeshUrl ? `- \`preview.glb\`：${input.aiMeshUrl}` : "- `nuclear-carving-relief.stl`：本地浮雕 STL",
     input.aiMeshStlUrl ? `- \`source.stl\`：${input.aiMeshStlUrl}` : "- `source.stl`：请从页面下载当前浮雕 STL",
+    "- `nuclear-carving-air-run.nc`：离料空跑程序，主轴关闭，Z 保持安全高度，仅验证机器动作",
     "- `nuclear-carving-combined.nc`：合并加工程序",
     input.toolpath.programs?.rough ? "- `nuclear-carving-rough.nc`：粗加工程序" : "- `nuclear-carving-rough.nc`：当前无独立粗加工程序",
     input.toolpath.programs?.finish ? "- `nuclear-carving-finish.nc`：精加工程序" : "- `nuclear-carving-finish.nc`：当前无独立精加工程序",
@@ -113,7 +114,8 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     "",
     "## 8. 上机建议",
     "",
-    "- 首次使用请先离料空跑，确认 X/A/Z 方向正确。",
+    "- 首次使用请先运行 `nuclear-carving-air-run.nc` 离料空跑，确认 X/A/Z 方向正确。",
+    "- 空跑程序主轴关闭且 Z 保持安全高度，但仍需确认 X/A 行程和夹具距离。",
     "- 首刀建议把进给降低到 50%-70%，确认无撞刀后再恢复。",
     "- 检查夹具两端是否留有足够夹持区，粉色区域不应进入雕刻范围。",
     "- 若安全校验存在 critical 阻断项，不建议直接上机。",
