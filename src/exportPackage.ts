@@ -1,6 +1,8 @@
 import type { GeneratedToolpath, MeshQualityReport, ModelSettings } from "./types";
 import type { MachineProfile, MaterialProfile, SafetyIssue, ToolProfile } from "./manufacturingProfiles";
 import type { ManufacturingQualityReport } from "./quality";
+import type { CostEstimate } from "./costEstimate";
+import { formatCurrencyRange } from "./costEstimate";
 
 type ExportPackageInput = {
   settings: ModelSettings;
@@ -14,6 +16,7 @@ type ExportPackageInput = {
   safetyIssues: SafetyIssue[];
   manufacturingQuality: ManufacturingQualityReport;
   meshQuality: MeshQualityReport | null;
+  costEstimate: CostEstimate | null;
 };
 
 export function createOperatorPackageMarkdown(input: ExportPackageInput) {
@@ -65,17 +68,33 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     `- A 范围：${input.toolpath.summary.aMin.toFixed(2)} ~ ${input.toolpath.summary.aMax.toFixed(2)}°`,
     `- Z 范围：${input.toolpath.summary.zMin.toFixed(2)} ~ ${input.toolpath.summary.zMax.toFixed(2)} mm`,
     "",
-    "## 4. 导出前安全校验",
+    "## 4. 工时与成本估算",
+    "",
+    ...(input.costEstimate
+      ? [
+          `- 切削机时：${input.costEstimate.machiningMinutes.toFixed(1)} min`,
+          `- 准备/换刀/检查：${(input.costEstimate.setupMinutes + input.costEstimate.toolChangeMinutes + input.costEstimate.inspectionMinutes).toFixed(1)} min`,
+          `- 预计总占机：${input.costEstimate.totalMinutes.toFixed(1)} min`,
+          `- 机床费用：${formatCurrencyRange(input.costEstimate.machineCostLow, input.costEstimate.machineCostHigh)}`,
+          `- 材料成本：¥${input.costEstimate.materialCost.toFixed(0)}`,
+          `- 刀具损耗：¥${input.costEstimate.toolWearCost.toFixed(0)}`,
+          `- 综合估算：${formatCurrencyRange(input.costEstimate.totalCostLow, input.costEstimate.totalCostHigh)}`,
+          `- 可信度：${input.costEstimate.confidence}`,
+          ...input.costEstimate.assumptions.map((item) => `- 估算依据：${item}`)
+        ]
+      : ["- 尚未生成刀路，无法估算工时和成本。"]),
+    "",
+    "## 5. 导出前安全校验",
     "",
     ...input.safetyIssues.map((issue) => `- [${issue.level}] ${issue.title}：${issue.detail}`),
     "",
-    "## 5. 加工质量体检",
+    "## 6. 加工质量体检",
     "",
     `- 综合评分：${input.manufacturingQuality.score.toFixed(1)} / 100`,
     `- 结论：${input.manufacturingQuality.summary}`,
     ...input.manufacturingQuality.items.map((item) => `- [${item.status}] ${item.label}：${item.value}，${item.detail}`),
     "",
-    "## 6. Mesh 质量体检",
+    "## 7. Mesh 质量体检",
     "",
     ...(input.meshQuality
       ? [
@@ -91,7 +110,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
         ]
       : ["- 当前为本地浮雕或尚未完成 Mesh 体检。"]),
     "",
-    "## 7. 上机建议",
+    "## 8. 上机建议",
     "",
     "- 首次使用请先离料空跑，确认 X/A/Z 方向正确。",
     "- 首刀建议把进给降低到 50%-70%，确认无撞刀后再恢复。",

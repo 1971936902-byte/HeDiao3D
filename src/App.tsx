@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { BadgeInfo, Box, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Calculator, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
 import { generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -9,6 +9,7 @@ import { exportGeometryAsStl } from "./modelExport";
 import { ReliefViewer } from "./ReliefViewer";
 import { SimulationViewer } from "./SimulationViewer";
 import { createOperatorPackageMarkdown } from "./exportPackage";
+import { createCostEstimate, formatCurrencyRange } from "./costEstimate";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -124,6 +125,10 @@ export function App() {
   const manufacturingQuality = useMemo(
     () => createManufacturingQualityReport(settings, toolpath, safetyIssues, envelopeQuality),
     [settings, toolpath, safetyIssues, envelopeQuality]
+  );
+  const costEstimate = useMemo(
+    () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
+    [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
   );
 
   useEffect(() => {
@@ -265,7 +270,8 @@ export function App() {
       machine: selectedMachine,
       safetyIssues,
       manufacturingQuality,
-      meshQuality
+      meshQuality,
+      costEstimate
     });
     downloadText("operator-note.md", content, "text/markdown");
   };
@@ -1050,6 +1056,48 @@ export function App() {
         {activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
+              <Calculator size={18} />
+              <h2>工时与成本估算</h2>
+            </div>
+            {costEstimate ? (
+              <>
+                <div className={`estimate-confidence ${costEstimate.confidence}`}>
+                  <strong>{formatCurrencyRange(costEstimate.totalCostLow, costEstimate.totalCostHigh)}</strong>
+                  <span>{costEstimate.confidence === "usable" ? "可用于试报价" : costEstimate.confidence === "review" ? "建议结合空跑复核" : "粗估，需实机校正"}</span>
+                </div>
+                <div className="estimate-grid">
+                  <div>
+                    <span>总占机</span>
+                    <strong>{costEstimate.totalMinutes.toFixed(1)} min</strong>
+                  </div>
+                  <div>
+                    <span>切削机时</span>
+                    <strong>{costEstimate.machiningMinutes.toFixed(1)} min</strong>
+                  </div>
+                  <div>
+                    <span>准备/检查</span>
+                    <strong>{(costEstimate.setupMinutes + costEstimate.inspectionMinutes).toFixed(1)} min</strong>
+                  </div>
+                  <div>
+                    <span>刀具损耗</span>
+                    <strong>¥{costEstimate.toolWearCost.toFixed(0)}</strong>
+                  </div>
+                </div>
+                <div className="estimate-assumptions">
+                  {costEstimate.assumptions.slice(0, 3).map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="panel-note">生成刀路后会按机床小时费、准备时间、材料和刀具损耗估算总占机时间与成本区间。</p>
+            )}
+          </section>
+        )}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
               <Download size={18} />
               <h2>加工包交付</h2>
             </div>
@@ -1211,6 +1259,12 @@ export function App() {
                 <span>估算时间</span>
                 <strong>{toolpath.estimatedMinutes.toFixed(1)} min</strong>
               </div>
+              {costEstimate && (
+                <div className="metric">
+                  <span>成本估算</span>
+                  <strong>{formatCurrencyRange(costEstimate.totalCostLow, costEstimate.totalCostHigh)}</strong>
+                </div>
+              )}
               {toolpath.programs?.rough && (
                 <div className="metric">
                   <span>粗加工</span>
