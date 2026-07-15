@@ -3,6 +3,7 @@ import type { MachineProfile, MaterialProfile, SafetyIssue, ToolProfile } from "
 import type { ManufacturingQualityReport } from "./quality";
 import type { CostEstimate } from "./costEstimate";
 import { formatCurrencyRange } from "./costEstimate";
+import type { MaterialRemovalReport } from "./simulationAnalysis";
 
 type ExportPackageInput = {
   settings: ModelSettings;
@@ -15,6 +16,7 @@ type ExportPackageInput = {
   machine: MachineProfile;
   safetyIssues: SafetyIssue[];
   manufacturingQuality: ManufacturingQualityReport;
+  materialRemoval: MaterialRemovalReport | null;
   meshQuality: MeshQualityReport | null;
   costEstimate: CostEstimate | null;
 };
@@ -98,7 +100,22 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     `- 结论：${input.manufacturingQuality.summary}`,
     ...input.manufacturingQuality.items.map((item) => `- [${item.status}] ${item.label}：${item.value}，${item.detail}`),
     "",
-    "## 7. Mesh 质量体检",
+    "## 7. 材料去除仿真",
+    "",
+    ...(input.materialRemoval
+      ? [
+          `- 综合评分：${input.materialRemoval.score.toFixed(1)} / 100`,
+          `- 结论：${input.materialRemoval.summary}`,
+          `- 估算最大刀痕：${(input.materialRemoval.maxTextureMm * 1000).toFixed(0)} μm`,
+          `- 刀路覆盖率：${input.materialRemoval.coverageRate.toFixed(1)}%`,
+          `- 清残占比：${input.materialRemoval.restAreaRate.toFixed(1)}%`,
+          `- 最大过切风险：${input.materialRemoval.maxOvercutMm.toFixed(3)} mm`,
+          `- 最大欠切/残料：${input.materialRemoval.maxUndercutMm.toFixed(3)} mm`,
+          ...input.materialRemoval.suggestions.map((item) => `- 建议：${item}`)
+        ]
+      : ["- 尚未生成刀路，无法完成材料去除仿真。"]),
+    "",
+    "## 8. Mesh 质量体检",
     "",
     ...(input.meshQuality
       ? [
@@ -114,7 +131,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
         ]
       : ["- 当前为本地浮雕或尚未完成 Mesh 体检。"]),
     "",
-    "## 8. 上机建议",
+    "## 9. 上机建议",
     "",
     "- 首次使用请先运行 `nuclear-carving-air-run.nc` 离料空跑，确认 X/A/Z 方向正确。",
     "- 空跑程序主轴关闭且 Z 保持安全高度，但仍需确认 X/A 行程和夹具距离。",

@@ -2,6 +2,7 @@ import type { CostEstimate } from "./costEstimate";
 import type { MachineProfile, MaterialProfile, SafetyIssue, ToolProfile } from "./manufacturingProfiles";
 import type { ManufacturingQualityReport } from "./quality";
 import type { GeneratedToolpath, MeshQualityReport, ModelSettings } from "./types";
+import type { MaterialRemovalReport } from "./simulationAnalysis";
 
 export type ManufacturingReportInput = {
   settings: ModelSettings;
@@ -14,6 +15,7 @@ export type ManufacturingReportInput = {
   machine: MachineProfile;
   safetyIssues: SafetyIssue[];
   manufacturingQuality: ManufacturingQualityReport;
+  materialRemoval: MaterialRemovalReport | null;
   meshQuality: MeshQualityReport | null;
   costEstimate: CostEstimate | null;
 };
@@ -84,6 +86,7 @@ export function createQualityReport(input: ManufacturingReportInput) {
   return {
     createdAt: new Date().toISOString(),
     manufacturingQuality: input.manufacturingQuality,
+    materialRemoval: input.materialRemoval,
     meshQuality: input.meshQuality,
     toolpath: {
       points: input.toolpath.points.length,

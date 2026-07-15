@@ -13,6 +13,7 @@ import { createCostEstimate, formatCurrencyRange } from "./costEstimate";
 import { createPackageManifest, createQualityReport, createSafetyReport, createSafetyReportMarkdown } from "./reports";
 import { createZipBlob, downloadBlob, type ZipTextFile } from "./zipPackage";
 import { ai3dProviders, getAi3dProvider, isProviderAvailable, type Ai3dProviderId } from "./aiProviders";
+import { analyzeMaterialRemoval } from "./simulationAnalysis";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -201,6 +202,7 @@ export function App() {
     () => createManufacturingQualityReport(settings, toolpath, safetyIssues, envelopeQuality),
     [settings, toolpath, safetyIssues, envelopeQuality]
   );
+  const materialRemoval = useMemo(() => analyzeMaterialRemoval(settings, toolpath), [settings, toolpath]);
   const costEstimate = useMemo(
     () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
     [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
@@ -433,6 +435,7 @@ export function App() {
       machine: selectedMachine,
       safetyIssues,
       manufacturingQuality,
+      materialRemoval,
       meshQuality,
       costEstimate
     });
@@ -463,6 +466,7 @@ export function App() {
       machine: selectedMachine,
       safetyIssues,
       manufacturingQuality,
+      materialRemoval,
       meshQuality,
       costEstimate
     };
@@ -1449,6 +1453,41 @@ export function App() {
                 <span key={suggestion}>{suggestion}</span>
               ))}
             </div>
+          </section>
+        )}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
+              <Layers3 size={18} />
+              <h2>材料去除仿真</h2>
+            </div>
+            {materialRemoval ? (
+              <>
+                <div className={`simulation-verdict ${materialRemoval.verdict}`}>
+                  <strong>{materialRemoval.score.toFixed(1)} / 100</strong>
+                  <span>{materialRemoval.summary}</span>
+                </div>
+                <div className="simulation-metric-grid">
+                  {materialRemoval.metrics.map((metric) => (
+                    <div className={`simulation-metric ${metric.status}`} key={metric.label}>
+                      <div>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                      <p>{metric.detail}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="quality-notes">
+                  {materialRemoval.suggestions.slice(0, 3).map((suggestion) => (
+                    <span key={suggestion}>{suggestion}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="panel-note">生成刀路后会按球刀半径、X/A 步距、清残占比和覆盖率估算材料去除效果。</p>
+            )}
           </section>
         )}
 
