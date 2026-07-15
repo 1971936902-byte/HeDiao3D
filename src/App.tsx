@@ -726,7 +726,7 @@ export function App() {
             toolpathColor={toolpathKind === "finish" ? toolpathColors.finish : toolpathColors.rough}
           />
         ) : (
-          <ReliefViewer geometry={geometry} wireframe={wireframe} toolpathPoints={toolpath?.points ?? []} />
+          <ReliefViewer geometry={geometry} wireframe={wireframe} toolpathPoints={toolpath?.points ?? []} settings={settings} />
         )}
 
         <footer className="output-bar">
@@ -795,6 +795,18 @@ export function App() {
                 <span>估算时间</span>
                 <strong>{toolpath.estimatedMinutes.toFixed(1)} min</strong>
               </div>
+              {toolpath.programs?.rough && (
+                <div className="metric">
+                  <span>粗加工</span>
+                  <strong>{toolpath.programs.rough.estimatedMinutes.toFixed(1)} min</strong>
+                </div>
+              )}
+              {toolpath.programs?.finish && (
+                <div className="metric">
+                  <span>精加工</span>
+                  <strong>{toolpath.programs.finish.estimatedMinutes.toFixed(1)} min</strong>
+                </div>
+              )}
               <div className="metric">
                 <span>后处理</span>
                 <strong>{toolpath.postProcessorName}</strong>
@@ -837,7 +849,11 @@ export function App() {
                 <span>颜色标识</span>
                 <strong>
                   <i className={`legend-dot ${isSimulationMode ? "simulation" : toolpathKind}`} />
-                  {isSimulationMode ? "青绿=模拟包络" : toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=未贴合
+                  {isSimulationMode
+                    ? "青绿=模拟包络，粉色=未贴合"
+                    : aiMeshUrl
+                      ? `${toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=未贴合`
+                      : `${toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=夹持区，琥珀=过渡区`}
                 </strong>
               </div>
               <button className="download secondary" onClick={() => setIsSimulationMode((current) => !current)}>
@@ -846,8 +862,20 @@ export function App() {
               </button>
               <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 NC"}>
                 <Download size={17} />
-                下载 NC
+                下载合并 NC
               </button>
+              {toolpath.programs?.rough && (
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载粗加工 NC"}>
+                  <Download size={17} />
+                  下载粗加工
+                </button>
+              )}
+              {toolpath.programs?.finish && (
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载精加工 NC"}>
+                  <Download size={17} />
+                  下载精加工
+                </button>
+              )}
               <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={exportBlocked} title={exportBlocked ? "导出前安全校验存在阻断项" : "下载 TAP"}>
                 <Download size={17} />
                 下载 TAP

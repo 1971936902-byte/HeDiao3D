@@ -54,12 +54,25 @@ export type ToolpathPreviewPoint = {
   hit: boolean;
 };
 
+export type ToolpathProgram = {
+  name: string;
+  filename: string;
+  gcode: string;
+  points: ToolpathPoint[];
+  estimatedMinutes: number;
+};
+
 export type GeneratedToolpath = {
   gcode: string;
   tap: string;
   txt: string;
   csv: string;
   points: ToolpathPoint[];
+  programs?: {
+    rough?: ToolpathProgram;
+    finish?: ToolpathProgram;
+    combined?: ToolpathProgram;
+  };
   previewPoints?: ToolpathPreviewPoint[];
   estimatedMinutes: number;
   postProcessorName: string;

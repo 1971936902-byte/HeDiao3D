@@ -1,5 +1,5 @@
 import { sampleDepth } from "./imageProcessing";
-import type { DepthMap, GeneratedToolpath, ModelSettings, ToolpathPoint } from "./types";
+import type { DepthMap, GeneratedToolpath, ModelSettings, ToolpathPoint, ToolpathProgram } from "./types";
 
 const fmt = (value: number, digits = 4) => value.toFixed(digits);
 
@@ -10,6 +10,50 @@ const postProcessorNames = {
 } satisfies Record<ModelSettings["postProcessor"], string>;
 
 export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): GeneratedToolpath {
+  const finishPoints = createScanPoints(depthMap, settings, {
+    stockAllowance: 0,
+    maxLayerDepth: settings.depthMm,
+    strategy: settings.finishingStrategy
+  });
+  const roughPoints = createRoughingPoints(depthMap, settings);
+  const combinedPoints = [...roughPoints, ...finishPoints];
+  const radius = settings.diameterMm / 2;
+  const roughMinutes = estimateTravel(roughPoints, radius) / Math.max(1, settings.feedRate);
+  const finishMinutes = estimateTravel(finishPoints, radius) / Math.max(1, settings.feedRate);
+  const combinedMinutes = roughMinutes + finishMinutes;
+  const roughGcode = toGcode(roughPoints, settings, roughMinutes, "Roughing pass");
+  const finishGcode = toGcode(finishPoints, settings, finishMinutes, "Finishing pass");
+  const combinedGcode = toGcode(combinedPoints, settings, combinedMinutes, "Roughing + finishing");
+  const programs: GeneratedToolpath["programs"] = {
+    rough: createProgram("粗加工", "nuclear-carving-rough.nc", roughGcode, roughPoints, roughMinutes),
+    finish: createProgram("精加工", "nuclear-carving-finish.nc", finishGcode, finishPoints, finishMinutes),
+    combined: createProgram("合并程序", "nuclear-carving-combined.nc", combinedGcode, combinedPoints, combinedMinutes)
+  };
+
+  return {
+    points: finishPoints,
+    programs,
+    gcode: combinedGcode,
+    tap: combinedGcode,
+    txt: combinedGcode,
+    csv: toCsv(finishPoints),
+    estimatedMinutes: combinedMinutes,
+    postProcessorName: postProcessorNames[settings.postProcessor],
+    summary: summarizeToolpath(combinedPoints, settings, {
+      roughPasses: countRoughLayers(settings),
+      roughPoints: roughPoints.length,
+      finishPoints: finishPoints.length
+    })
+  };
+}
+
+type ScanOptions = {
+  stockAllowance: number;
+  maxLayerDepth: number;
+  strategy: ModelSettings["finishingStrategy"];
+};
+
+function createScanPoints(depthMap: DepthMap, settings: ModelSettings, options: ScanOptions): ToolpathPoint[] {
   const points: ToolpathPoint[] = [];
   const halfLength = settings.lengthMm / 2;
   const xStart = -halfLength + settings.leftHoldMm;
@@ -21,39 +65,85 @@ export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): G
   const passes = Math.max(2, Math.ceil(settings.reliefAngleDeg / settings.stepoverDeg));
   const xSteps = Math.max(2, Math.ceil(carveLength / settings.stepoverMm));
 
-  for (let pass = 0; pass <= passes; pass += 1) {
-    const serpentine = pass % 2 === 1;
+  const pushPoint = (pass: number, step: number, serpentine: boolean) => {
     const a = aMin + (pass / passes) * (aMax - aMin);
     const v = pass / passes;
+    const index = serpentine ? xSteps - step : step;
+    const carveU = index / xSteps;
+    const x = xStart + carveU * carveLength;
+    const sourceU = (x + halfLength) / settings.lengthMm;
+    const transition = endTransitionFactor(x, xStart, xEnd, settings.endTransitionMm);
+    const targetDepth = sampleDepth(depthMap, sourceU, 1 - v) * settings.depthMm * transition;
+    const roughDepth = Math.max(0, targetDepth - options.stockAllowance);
+    const depth = Math.min(roughDepth, options.maxLayerDepth);
+    const z = radius + depth + settings.toolDiameter / 2;
+    points.push({ x, a, z, depth });
+  };
 
+  if (options.strategy === "a-scan") {
     for (let step = 0; step <= xSteps; step += 1) {
-      const index = serpentine ? xSteps - step : step;
-      const carveU = index / xSteps;
-      const x = xStart + carveU * carveLength;
-      const sourceU = (x + halfLength) / settings.lengthMm;
-      const transition = endTransitionFactor(x, xStart, xEnd, settings.endTransitionMm);
-      const depth = sampleDepth(depthMap, sourceU, 1 - v) * settings.depthMm * transition;
-      const z = radius + depth + settings.toolDiameter / 2;
-      points.push({ x, a, z, depth });
+      const serpentine = step % 2 === 1;
+      for (let pass = 0; pass <= passes; pass += 1) {
+        const passIndex = serpentine ? passes - pass : pass;
+        pushPoint(passIndex, step, false);
+      }
+    }
+    return points;
+  }
+
+  for (let pass = 0; pass <= passes; pass += 1) {
+    const serpentine = pass % 2 === 1;
+    for (let step = 0; step <= xSteps; step += 1) {
+      pushPoint(pass, step, serpentine);
     }
   }
 
-  const travelMm = estimateTravel(points, radius);
-  const estimatedMinutes = travelMm / Math.max(1, settings.feedRate);
-  const gcode = toGcode(points, settings, estimatedMinutes);
-  return {
-    points,
-    gcode,
-    tap: gcode,
-    txt: gcode,
-    csv: toCsv(points),
-    estimatedMinutes,
-    postProcessorName: postProcessorNames[settings.postProcessor],
-    summary: summarizeToolpath(points, settings)
-  };
+  if (options.strategy === "cross") {
+    points.push(
+      ...createScanPoints(depthMap, settings, {
+        ...options,
+        strategy: "a-scan"
+      })
+    );
+  }
+
+  return points;
 }
 
-function summarizeToolpath(points: ToolpathPoint[], settings: ModelSettings) {
+function createRoughingPoints(depthMap: DepthMap, settings: ModelSettings): ToolpathPoint[] {
+  const layerDepth = Math.max(0.02, settings.maxCutDepth);
+  const maxRoughDepth = Math.max(0, settings.depthMm - settings.stockAllowance);
+  const layers = Math.max(1, Math.ceil(maxRoughDepth / layerDepth));
+  const points: ToolpathPoint[] = [];
+
+  for (let layer = 1; layer <= layers; layer += 1) {
+    const currentDepth = Math.min(maxRoughDepth, layer * layerDepth);
+    points.push(
+      ...createScanPoints(depthMap, settings, {
+        stockAllowance: settings.stockAllowance,
+        maxLayerDepth: currentDepth,
+        strategy: "x-scan"
+      })
+    );
+  }
+
+  return points;
+}
+
+function countRoughLayers(settings: ModelSettings) {
+  const maxRoughDepth = Math.max(0, settings.depthMm - settings.stockAllowance);
+  return Math.max(1, Math.ceil(maxRoughDepth / Math.max(0.02, settings.maxCutDepth)));
+}
+
+function createProgram(name: string, filename: string, gcode: string, points: ToolpathPoint[], estimatedMinutes: number): ToolpathProgram {
+  return { name, filename, gcode, points, estimatedMinutes };
+}
+
+function summarizeToolpath(
+  points: ToolpathPoint[],
+  settings: ModelSettings,
+  process?: { roughPasses: number; roughPoints: number; finishPoints: number }
+) {
   const values = points.reduce(
     (acc, point) => ({
       xMin: Math.min(acc.xMin, point.x),
@@ -92,6 +182,10 @@ function summarizeToolpath(points: ToolpathPoint[], settings: ModelSettings) {
     warnings.push(`已避开端部夹持区：左 ${fmt(settings.leftHoldMm, 1)}mm / 右 ${fmt(settings.rightHoldMm, 1)}mm。`);
   }
 
+  if (process) {
+    warnings.push(`粗加工 ${process.roughPasses} 层，余量 ${fmt(settings.stockAllowance, 2)}mm；粗加工点 ${process.roughPoints}，精加工点 ${process.finishPoints}。`);
+  }
+
   return { ...values, warnings };
 }
 
@@ -106,14 +200,14 @@ function THREEClamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function toGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinutes: number): string {
+function toGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinutes: number, programName = "Relief toolpath"): string {
   const lines = [
     `%`,
-    `(Nuclear carving relief CAM MVP - ${postProcessorNames[settings.postProcessor]})`,
+    `(Nuclear carving relief CAM V2 - ${programName} - ${postProcessorNames[settings.postProcessor]})`,
     "(Coordinate: X length axis, A rotary axis, Z radial tool center)",
     `(Length=${fmt(settings.lengthMm, 3)}mm Diameter=${fmt(settings.diameterMm, 3)}mm MaxDepth=${fmt(settings.depthMm, 3)}mm)`,
     `(HoldLeft=${fmt(settings.leftHoldMm, 3)}mm HoldRight=${fmt(settings.rightHoldMm, 3)}mm EndTransition=${fmt(settings.endTransitionMm, 3)}mm)`,
-    `(ToolDiameter=${fmt(settings.toolDiameter, 3)}mm Estimated=${fmt(estimatedMinutes, 2)}min)`,
+    `(ToolDiameter=${fmt(settings.toolDiameter, 3)}mm MaxCutDepth=${fmt(settings.maxCutDepth, 3)}mm StockAllowance=${fmt(settings.stockAllowance, 3)}mm Estimated=${fmt(estimatedMinutes, 2)}min)`,
     "G21",
     "G90",
     "G94",

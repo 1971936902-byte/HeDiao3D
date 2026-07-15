@@ -1,19 +1,21 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { ToolpathPoint } from "./types";
+import type { ModelSettings, ToolpathPoint } from "./types";
 
 type ReliefViewerProps = {
   geometry: THREE.BufferGeometry;
   wireframe: boolean;
   toolpathPoints?: ToolpathPoint[];
+  settings: ModelSettings;
 };
 
-export function ReliefViewer({ geometry, wireframe, toolpathPoints = [] }: ReliefViewerProps) {
+export function ReliefViewer({ geometry, wireframe, toolpathPoints = [], settings }: ReliefViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const meshRef = useRef<THREE.Mesh | null>(null);
   const wireRef = useRef<THREE.LineSegments | null>(null);
   const toolpathRef = useRef<THREE.Line | null>(null);
+  const holdZonesRef = useRef<THREE.Group | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -74,6 +76,11 @@ export function ReliefViewer({ geometry, wireframe, toolpathPoints = [] }: Relie
     scene.add(toolpathLine);
     toolpathRef.current = toolpathLine;
 
+    const holdZones = new THREE.Group();
+    holdZones.rotation.x = mesh.rotation.x;
+    scene.add(holdZones);
+    holdZonesRef.current = holdZones;
+
     const grid = new THREE.GridHelper(42, 14, 0x8d7b68, 0xd8cfc2);
     grid.position.y = -13;
     scene.add(grid);
@@ -110,6 +117,7 @@ export function ReliefViewer({ geometry, wireframe, toolpathPoints = [] }: Relie
       lineMaterial.dispose();
       toolpathMaterial.dispose();
       toolpathLine.geometry.dispose();
+      disposeHoldZones(holdZones);
       host.removeChild(renderer.domElement);
     };
   }, []);
@@ -140,6 +148,11 @@ export function ReliefViewer({ geometry, wireframe, toolpathPoints = [] }: Relie
     toolpathRef.current.visible = toolpathPoints.length > 0;
   }, [toolpathPoints]);
 
+  useEffect(() => {
+    if (!holdZonesRef.current) return;
+    updateHoldZones(holdZonesRef.current, settings);
+  }, [settings]);
+
   return <div className="viewer" ref={hostRef} />;
 }
 
@@ -163,4 +176,57 @@ function createToolpathGeometry(points: ToolpathPoint[]): THREE.BufferGeometry {
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+function updateHoldZones(group: THREE.Group, settings: ModelSettings) {
+  disposeHoldZones(group);
+  group.clear();
+
+  const radius = settings.diameterMm / 2 + settings.depthMm + 0.36;
+  const halfLength = settings.lengthMm / 2;
+  const leftHold = Math.max(0, settings.leftHoldMm);
+  const rightHold = Math.max(0, settings.rightHoldMm);
+  const transition = Math.max(0, settings.endTransitionMm);
+
+  if (leftHold > 0) {
+    group.add(createZoneCylinder(-halfLength + leftHold / 2, leftHold, radius, 0xff6b9c, 0.28));
+  }
+
+  if (rightHold > 0) {
+    group.add(createZoneCylinder(halfLength - rightHold / 2, rightHold, radius, 0xff6b9c, 0.28));
+  }
+
+  if (transition > 0) {
+    group.add(createZoneCylinder(-halfLength + leftHold + transition / 2, transition, radius * 1.01, 0xeab558, 0.18));
+    group.add(createZoneCylinder(halfLength - rightHold - transition / 2, transition, radius * 1.01, 0xeab558, 0.18));
+  }
+}
+
+function createZoneCylinder(x: number, length: number, radius: number, color: number, opacity: number) {
+  const geometry = new THREE.CylinderGeometry(radius, radius, Math.max(0.02, length), 48, 1, true);
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.z = Math.PI / 2;
+  mesh.position.x = x;
+  return mesh;
+}
+
+function disposeHoldZones(group: THREE.Group) {
+  for (const child of group.children) {
+    if (child instanceof THREE.Mesh) {
+      child.geometry.dispose();
+      const material = child.material;
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose());
+      } else {
+        material.dispose();
+      }
+    }
+  }
 }
