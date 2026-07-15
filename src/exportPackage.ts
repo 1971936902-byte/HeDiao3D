@@ -52,6 +52,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     `- 刀具直径：${input.settings.toolDiameter.toFixed(2)} mm`,
     `- 最大单层切深：${input.settings.maxCutDepth.toFixed(2)} mm`,
     `- 粗加工余量：${input.settings.stockAllowance.toFixed(2)} mm`,
+    `- 毛坯左/中/右直径：${input.settings.blankLeftDiameterMm.toFixed(1)} / ${input.settings.blankCenterDiameterMm.toFixed(1)} / ${input.settings.blankRightDiameterMm.toFixed(1)} mm`,
     `- X 步距：${input.settings.stepoverMm.toFixed(3)} mm`,
     `- A 步距：${input.settings.stepoverDeg.toFixed(2)}°`,
     `- 安全高度：${input.settings.safeZ.toFixed(2)} mm`,

@@ -36,6 +36,9 @@ import type { CarvingImage, DepthMap, GeneratedToolpath, MeshQualityReport, Mode
 const defaultSettings: ModelSettings = {
   lengthMm: 38,
   diameterMm: 15,
+  blankLeftDiameterMm: 13.8,
+  blankCenterDiameterMm: 15,
+  blankRightDiameterMm: 13.8,
   depthMm: 1.25,
   reliefAngleDeg: 220,
   contrast: 1.45,
@@ -1101,6 +1104,24 @@ export function App() {
           </label>
         </section>}
 
+        {activeStage === "process" && (
+          <section className="panel">
+            <div className="panel-title">
+              <SlidersHorizontal size={18} />
+              <h2>毛坯截面标定</h2>
+            </div>
+            <p className="panel-note">真实核胚通常不是标准圆柱。用左/中/右三段直径近似毛坯外形，用于风险提示、报告和后续刀路补偿。</p>
+            <Control label="左端直径" value={settings.blankLeftDiameterMm} min={6} max={30} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankLeftDiameterMm", v)} />
+            <Control label="中部直径" value={settings.blankCenterDiameterMm} min={6} max={32} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankCenterDiameterMm", v)} />
+            <Control label="右端直径" value={settings.blankRightDiameterMm} min={6} max={30} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankRightDiameterMm", v)} />
+            <div className="blank-profile">
+              <span>左 {settings.blankLeftDiameterMm.toFixed(1)}mm</span>
+              <strong>中 {settings.blankCenterDiameterMm.toFixed(1)}mm</strong>
+              <span>右 {settings.blankRightDiameterMm.toFixed(1)}mm</span>
+            </div>
+          </section>
+        )}
+
         {activeStage === "process" && (aiMeshUrl ? (
           <section className="panel ai-mesh-note">
             <div className="panel-title">
@@ -1371,7 +1392,7 @@ export function App() {
                       </div>
                       <p>{snapshot.detail}</p>
                       <small>
-                        刀具 {snapshot.settings.toolDiameter.toFixed(2)}mm / 进给 {snapshot.settings.feedRate.toFixed(0)} / X步距 {snapshot.settings.stepoverMm.toFixed(3)} / A步距 {snapshot.settings.stepoverDeg.toFixed(2)}
+                        刀具 {snapshot.settings.toolDiameter.toFixed(2)}mm / 进给 {snapshot.settings.feedRate.toFixed(0)} / 毛坯 {snapshot.settings.blankLeftDiameterMm.toFixed(1)}-{snapshot.settings.blankCenterDiameterMm.toFixed(1)}-{snapshot.settings.blankRightDiameterMm.toFixed(1)} / X步距 {snapshot.settings.stepoverMm.toFixed(3)}
                       </small>
                       <button className="demo-action snapshot-action" type="button" onClick={() => restoreSnapshot(snapshot)}>
                         回退到此版本

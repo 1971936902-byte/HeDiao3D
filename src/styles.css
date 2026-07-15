@@ -568,6 +568,33 @@ button:disabled {
   line-height: 1.45;
 }
 
+.blank-profile {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.blank-profile span,
+.blank-profile strong {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  color: #dce8e2;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.blank-profile strong {
+  color: #f3f9f6;
+  border-color: rgba(25, 199, 180, 0.32);
+  background: rgba(25, 199, 180, 0.075);
+}
+
 .safety-item {
   display: grid;
   gap: 4px;

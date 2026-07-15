@@ -30,6 +30,9 @@ export type ImageQualityReport = {
 export type ModelSettings = {
   lengthMm: number;
   diameterMm: number;
+  blankLeftDiameterMm: number;
+  blankCenterDiameterMm: number;
+  blankRightDiameterMm: number;
   depthMm: number;
   reliefAngleDeg: number;
   contrast: number;

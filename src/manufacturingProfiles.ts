@@ -413,6 +413,24 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     });
   }
 
+  const minBlankDiameter = Math.min(settings.blankLeftDiameterMm, settings.blankCenterDiameterMm, settings.blankRightDiameterMm);
+  const blankTaper = Math.max(settings.blankLeftDiameterMm, settings.blankCenterDiameterMm, settings.blankRightDiameterMm) - minBlankDiameter;
+  if (minBlankDiameter < settings.diameterMm - 2.5) {
+    issues.push({
+      level: "warning",
+      title: "毛坯截面小于目标最大直径",
+      detail: `三段毛坯最小直径 ${minBlankDiameter.toFixed(1)}mm，目标最大直径 ${settings.diameterMm.toFixed(1)}mm。请确认模型缩放和夹持区不会切空。`
+    });
+  }
+
+  if (blankTaper > 3) {
+    issues.push({
+      level: "warning",
+      title: "毛坯左右直径差异较大",
+      detail: `左/中/右毛坯直径为 ${settings.blankLeftDiameterMm.toFixed(1)} / ${settings.blankCenterDiameterMm.toFixed(1)} / ${settings.blankRightDiameterMm.toFixed(1)}mm，建议先空跑并保守设置端部过渡。`
+    });
+  }
+
   if (!toolpath) {
     issues.push({
       level: "warning",
