@@ -12,13 +12,16 @@ import { createOperatorPackageMarkdown } from "./exportPackage";
 import {
   applyMachineProfile,
   applyMaterialProfile,
+  applyProcessTemplate,
   applyToolProfile,
   getMachineProfile,
   getMaterialProfile,
+  getProcessTemplate,
   getToolProfile,
   hasCriticalIssue,
   machineProfiles,
   materialProfiles,
+  processTemplates,
   toolProfiles,
   validateManufacturingSetup
 } from "./manufacturingProfiles";
@@ -194,6 +197,17 @@ export function App() {
 
   const handleMachineProfileChange = (machineId: string) => {
     applySettingsPreset(applyMachineProfile(settings, getMachineProfile(machineId)));
+  };
+
+  const handleProcessTemplateChange = (templateId: string) => {
+    const template = getProcessTemplate(templateId);
+    applySettingsPreset(applyProcessTemplate(settings, template));
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: `应用工艺模板：${template.name}`,
+      detail: `${template.intent}；${template.notes}`
+    });
   };
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -854,6 +868,25 @@ export function App() {
               )}
             </section>
           </>
+        )}
+
+        {activeStage === "process" && (
+          <section className="panel">
+            <div className="panel-title">
+              <Sparkles size={18} />
+              <h2>工艺模板</h2>
+            </div>
+            <p className="panel-note">按加工目标一键套用刀具、材料、进给、步距、切深和精修策略。应用后会清空旧刀路。</p>
+            <div className="template-grid">
+              {processTemplates.map((template) => (
+                <button className="template-card" type="button" key={template.id} onClick={() => handleProcessTemplateChange(template.id)}>
+                  <strong>{template.name}</strong>
+                  <span>{template.intent}</span>
+                  <small>{template.notes}</small>
+                </button>
+              ))}
+            </div>
+          </section>
         )}
 
         {activeStage === "process" && <section className="panel">

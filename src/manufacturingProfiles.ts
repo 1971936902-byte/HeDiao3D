@@ -52,6 +52,22 @@ export type SafetyIssue = {
   detail: string;
 };
 
+export type ProcessTemplate = {
+  id: string;
+  name: string;
+  intent: string;
+  toolProfileId: string;
+  materialProfileId: string;
+  maxCutDepth: number;
+  stockAllowance: number;
+  stepoverMm: number;
+  stepoverDeg: number;
+  feedRate: number;
+  spindleRpm: number;
+  finishingStrategy: ModelSettings["finishingStrategy"];
+  notes: string;
+};
+
 export const toolProfiles: ToolProfile[] = [
   {
     id: "ball-0.6",
@@ -214,6 +230,69 @@ export const machineProfiles: MachineProfile[] = [
   }
 ];
 
+export const processTemplates: ProcessTemplate[] = [
+  {
+    id: "first-safe-cut",
+    name: "低风险首刀",
+    intent: "首次上机空跑/浅雕验证方向",
+    toolProfileId: "ball-0.6",
+    materialProfileId: "olive-core",
+    maxCutDepth: 0.08,
+    stockAllowance: 0.18,
+    stepoverMm: 0.16,
+    stepoverDeg: 1.8,
+    feedRate: 90,
+    spindleRpm: 12000,
+    finishingStrategy: "x-scan",
+    notes: "优先安全，时间较长但切削负担低。"
+  },
+  {
+    id: "quick-test",
+    name: "快速试雕",
+    intent: "快速验证图案方向和整体比例",
+    toolProfileId: "flat-1.0",
+    materialProfileId: "resin-test",
+    maxCutDepth: 0.24,
+    stockAllowance: 0.18,
+    stepoverMm: 0.28,
+    stepoverDeg: 2.4,
+    feedRate: 240,
+    spindleRpm: 9000,
+    finishingStrategy: "x-scan",
+    notes: "适合树脂或废料验证，不建议直接用于橄榄核成品。"
+  },
+  {
+    id: "standard-olive",
+    name: "标准核雕",
+    intent: "橄榄核常规粗精加工",
+    toolProfileId: "ball-0.6",
+    materialProfileId: "olive-core",
+    maxCutDepth: 0.16,
+    stockAllowance: 0.12,
+    stepoverMm: 0.1,
+    stepoverDeg: 1.2,
+    feedRate: 150,
+    spindleRpm: 13000,
+    finishingStrategy: "x-scan",
+    notes: "平衡时间、细节和上机风险。"
+  },
+  {
+    id: "fine-detail",
+    name: "高精细雕刻",
+    intent: "佛头五官、衣纹等细节精修",
+    toolProfileId: "ball-0.3",
+    materialProfileId: "olive-core",
+    maxCutDepth: 0.06,
+    stockAllowance: 0.05,
+    stepoverMm: 0.045,
+    stepoverDeg: 0.6,
+    feedRate: 85,
+    spindleRpm: 16000,
+    finishingStrategy: "cross",
+    notes: "加工时间长，适合作为最终精修模板。"
+  }
+];
+
 export function getToolProfile(id: string) {
   return toolProfiles.find((profile) => profile.id === id) ?? toolProfiles[0];
 }
@@ -224,6 +303,26 @@ export function getMaterialProfile(id: string) {
 
 export function getMachineProfile(id: string) {
   return machineProfiles.find((profile) => profile.id === id) ?? machineProfiles[0];
+}
+
+export function getProcessTemplate(id: string) {
+  return processTemplates.find((template) => template.id === id) ?? processTemplates[0];
+}
+
+export function applyProcessTemplate(settings: ModelSettings, template: ProcessTemplate): ModelSettings {
+  return {
+    ...settings,
+    toolProfileId: template.toolProfileId,
+    materialProfileId: template.materialProfileId,
+    toolDiameter: getToolProfile(template.toolProfileId).diameterMm,
+    maxCutDepth: template.maxCutDepth,
+    stockAllowance: template.stockAllowance,
+    stepoverMm: template.stepoverMm,
+    stepoverDeg: template.stepoverDeg,
+    feedRate: template.feedRate,
+    spindleRpm: template.spindleRpm,
+    finishingStrategy: template.finishingStrategy
+  };
 }
 
 export function applyToolProfile(settings: ModelSettings, tool: ToolProfile): ModelSettings {
