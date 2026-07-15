@@ -140,6 +140,17 @@ type FeedbackDraft = {
   photoUrl: string | null;
 };
 
+type CostCalibrationReport = {
+  sampleCount: number;
+  averageRatio: number;
+  averageErrorRate: number;
+  calibratedTotalMinutes: number;
+  calibratedCostLow: number;
+  calibratedCostHigh: number;
+  confidence: "none" | "low" | "medium" | "high";
+  matchedSamples: MachineFeedback[];
+};
+
 type CaptureGuideSlot = {
   label: string;
   imageName: string | null;
@@ -315,6 +326,10 @@ export function App() {
   const costEstimate = useMemo(
     () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
     [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
+  );
+  const costCalibration = useMemo(
+    () => createCostCalibrationReport(costEstimate, machineFeedback, selectedMachine.name, selectedTool.name),
+    [costEstimate, machineFeedback, selectedMachine.name, selectedTool.name]
   );
   const airRunProgram = useMemo(
     () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
@@ -1987,6 +2002,20 @@ export function App() {
                     <strong>¥{costEstimate.toolWearCost.toFixed(0)}</strong>
                   </div>
                 </div>
+                <div className={`calibration-card ${costCalibration.confidence}`}>
+                  <div>
+                    <span>实机校正</span>
+                    <strong>{costCalibration.sampleCount > 0 ? `${costCalibration.calibratedTotalMinutes.toFixed(1)} min` : "待反馈"}</strong>
+                  </div>
+                  <p>
+                    {costCalibration.sampleCount > 0
+                      ? `基于 ${costCalibration.sampleCount} 条同机床/同刀具反馈，耗时系数 ${costCalibration.averageRatio.toFixed(2)}x，平均误差 ${(costCalibration.averageErrorRate * 100).toFixed(1)}%。`
+                      : "完成空跑或试雕后，在“反馈”阶段录入真实耗时，系统会自动校正后续估算。"}
+                  </p>
+                  {costCalibration.sampleCount > 0 && (
+                    <small>校正成本 {formatCurrencyRange(costCalibration.calibratedCostLow, costCalibration.calibratedCostHigh)} / 可信度 {formatCalibrationConfidence(costCalibration.confidence)}</small>
+                  )}
+                </div>
                 <div className="estimate-assumptions">
                   {costEstimate.assumptions.slice(0, 3).map((item) => (
                     <span key={item}>{item}</span>
@@ -2223,6 +2252,8 @@ export function App() {
                 <span><strong>{machineFeedback.filter((item) => item.outcome === "success").length}</strong> 成功</span>
                 <span><strong>{machineFeedback.filter((item) => item.outcome !== "success").length}</strong> 待优化</span>
                 <span><strong>{calculateAverageActualMinutes(machineFeedback)}</strong> 平均耗时</span>
+                <span><strong>{costCalibration.sampleCount}</strong> 校正样本</span>
+                <span><strong>{costCalibration.sampleCount > 0 ? `${(costCalibration.averageErrorRate * 100).toFixed(1)}%` : "-"}</strong> 估算误差</span>
               </div>
             </section>
 
@@ -2574,6 +2605,60 @@ function calculateAverageActualMinutes(feedback: MachineFeedback[]) {
   const values = feedback.map((item) => item.actualMinutes).filter((value): value is number => typeof value === "number" && value > 0);
   if (values.length === 0) return "-";
   return `${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)} min`;
+}
+
+function createCostCalibrationReport(
+  costEstimate: CostEstimate | null,
+  feedback: MachineFeedback[],
+  machineName: string,
+  toolName: string
+): CostCalibrationReport {
+  const empty: CostCalibrationReport = {
+    sampleCount: 0,
+    averageRatio: 1,
+    averageErrorRate: 0,
+    calibratedTotalMinutes: costEstimate?.totalMinutes ?? 0,
+    calibratedCostLow: costEstimate?.totalCostLow ?? 0,
+    calibratedCostHigh: costEstimate?.totalCostHigh ?? 0,
+    confidence: "none",
+    matchedSamples: []
+  };
+  if (!costEstimate) return empty;
+
+  const usable = feedback.filter((item) => item.actualMinutes && item.actualMinutes > 0 && item.estimatedMinutes && item.estimatedMinutes > 0);
+  const matched = usable.filter((item) => item.machineName === machineName && item.toolName === toolName);
+  const samples = (matched.length >= 2 ? matched : usable).slice(0, 12);
+  if (samples.length === 0) return empty;
+
+  const ratios = samples.map((item) => (item.actualMinutes ?? 0) / Math.max(1, item.estimatedMinutes ?? 1));
+  const averageRatio = THREEClamp(ratios.reduce((sum, value) => sum + value, 0) / ratios.length, 0.45, 2.4);
+  const averageErrorRate = samples.reduce((sum, item) => {
+    const estimated = Math.max(1, item.estimatedMinutes ?? 1);
+    return sum + Math.abs((item.actualMinutes ?? estimated) - estimated) / estimated;
+  }, 0) / samples.length;
+  const calibratedTotalMinutes = costEstimate.totalMinutes * averageRatio;
+  const timeRatio = calibratedTotalMinutes / Math.max(1, costEstimate.totalMinutes);
+  const calibratedCostLow = costEstimate.totalCostLow * timeRatio;
+  const calibratedCostHigh = costEstimate.totalCostHigh * timeRatio;
+  const confidence: CostCalibrationReport["confidence"] = samples.length >= 6 ? "high" : samples.length >= 3 ? "medium" : "low";
+
+  return {
+    sampleCount: samples.length,
+    averageRatio,
+    averageErrorRate,
+    calibratedTotalMinutes,
+    calibratedCostLow,
+    calibratedCostHigh,
+    confidence,
+    matchedSamples: samples
+  };
+}
+
+function formatCalibrationConfidence(confidence: CostCalibrationReport["confidence"]) {
+  if (confidence === "high") return "高";
+  if (confidence === "medium") return "中";
+  if (confidence === "low") return "低";
+  return "无样本";
 }
 
 function captureWorkbenchPreviewPng() {

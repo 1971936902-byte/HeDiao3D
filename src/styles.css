@@ -1460,6 +1460,47 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.calibration-card {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(234, 181, 88, 0.28);
+  border-radius: 7px;
+  background: rgba(234, 181, 88, 0.06);
+}
+
+.calibration-card.medium,
+.calibration-card.high {
+  border-color: rgba(71, 209, 140, 0.32);
+  background: rgba(71, 209, 140, 0.06);
+}
+
+.calibration-card div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.calibration-card span,
+.calibration-card p,
+.calibration-card small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.calibration-card p {
+  margin: 0;
+}
+
+.calibration-card strong {
+  color: #f2f8f5;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
 .estimate-assumptions {
   display: grid;
   gap: 6px;
