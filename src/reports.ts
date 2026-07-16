@@ -167,10 +167,12 @@ export function createPackageManifest(input: ManufacturingReportInput) {
       "nc/nuclear-carving-toolpath.csv",
       "parameters.json",
       "preview/simulation-result.png",
+      "preview/preview-index.md",
       input.aiMeshUrl ? "models/model-download-links.md" : "models/source.stl",
       "reports/safety-report.json",
       "reports/quality-report.json",
       "reports/cost-estimate.json",
+      "reports/manufacturing-summary.md",
       "reports/package-checklist.md",
       "operator-note.md"
     ].filter(Boolean),

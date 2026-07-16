@@ -1282,6 +1282,23 @@ export function App() {
     if (!reportInput) return;
 
     const operatorNote = createOperatorPackageMarkdown(reportInput);
+    const previewPng = captureWorkbenchPreviewPng();
+    const previewIndex = createPreviewIndexMarkdown({
+      sourceLabel: generationLabel,
+      workbenchView,
+      hasPreviewPng: Boolean(previewPng),
+      envelopeQuality,
+      envelopeHeatmapDiagnosis,
+      meshQuality,
+      materialRemoval
+    });
+    const manufacturingSummary = createManufacturingSummaryMarkdown({
+      reportInput,
+      costEstimate,
+      envelopeQuality,
+      envelopeHeatmapDiagnosis,
+      safetyGateStatus
+    });
     const parameters = createPackageParameters({
       projectProfile,
       deploymentProfile,
@@ -1304,11 +1321,12 @@ export function App() {
       safetyGateStatus
     });
     const checklist = createPackageChecklist(reportInput, Boolean(exportGateReady), Boolean(aiMeshUrl), safetyGateStatus);
-    const previewPng = captureWorkbenchPreviewPng();
     const files: ZipFile[] = [
       { name: "manifest.json", content: JSON.stringify(createPackageManifest(reportInput), null, 2), mime: "application/json" },
       { name: "parameters.json", content: JSON.stringify(parameters, null, 2), mime: "application/json" },
       { name: "operator-note.md", content: operatorNote, mime: "text/markdown" },
+      { name: "preview/preview-index.md", content: previewIndex, mime: "text/markdown" },
+      { name: "reports/manufacturing-summary.md", content: manufacturingSummary, mime: "text/markdown" },
       { name: "reports/package-checklist.md", content: checklist, mime: "text/markdown" },
       { name: "reports/safety-report.json", content: JSON.stringify(createSafetyReport(reportInput), null, 2), mime: "application/json" },
       { name: "reports/quality-report.json", content: JSON.stringify(createQualityReport(reportInput), null, 2), mime: "application/json" },
@@ -3759,6 +3777,98 @@ function dataUrlToUint8Array(dataUrl: string) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function createPreviewIndexMarkdown(input: {
+  sourceLabel: string;
+  workbenchView: WorkbenchView;
+  hasPreviewPng: boolean;
+  envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality> | null;
+  envelopeHeatmapDiagnosis: ReturnType<typeof createEnvelopeHeatmapDiagnosis> | null;
+  meshQuality: MeshQualityReport | null;
+  materialRemoval: MaterialRemovalReport | null;
+}) {
+  return [
+    "# 加工包预览索引",
+    "",
+    `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    `模型来源：${input.sourceLabel}`,
+    `导出时右侧视图：${formatWorkbenchView(input.workbenchView)}`,
+    "",
+    "## 自动归档",
+    "",
+    input.hasPreviewPng ? "- `preview/simulation-result.png`：导出瞬间右侧工作区截图" : "- 未捕获到工作区截图，可能是当前视图没有 Canvas。",
+    "- `reports/manufacturing-summary.md`：上机前关键指标摘要",
+    "- `parameters.json`：完整参数、质量、包络和成本快照",
+    "",
+    "## 建议复核视图",
+    "",
+    "- 3D模型：检查模型朝向、长轴、端部是否完整。",
+    "- 模拟雕刻：检查刀路包络是否贴合目标曲面。",
+    "- 热力图：检查风险格、最差 X/A 区域和连续风险带。",
+    "- 报告摘要：检查安全闸口、材料去除、成本和质量评分。",
+    "",
+    "## 当前关键指标",
+    "",
+    input.meshQuality ? `- Mesh 评分：${input.meshQuality.score.toFixed(1)} / 100，长轴 ${input.meshQuality.detectedLongAxis.toUpperCase()}` : "- Mesh 评分：未生成",
+    input.envelopeQuality ? `- 包络贴合率：${input.envelopeQuality.fitRate.toFixed(1)}%，未贴合 ${input.envelopeQuality.missCount}` : "- 包络贴合率：未生成",
+    input.envelopeHeatmapDiagnosis ? `- 热力图风险格：${input.envelopeHeatmapDiagnosis.riskCellRate.toFixed(1)}%，最差区域 ${input.envelopeHeatmapDiagnosis.worstCellLabel}` : "- 热力图风险格：未生成",
+    input.materialRemoval ? `- 材料去除评分：${input.materialRemoval.score.toFixed(1)} / 100，残料风险 ${input.materialRemoval.residualRiskMm.toFixed(3)}mm` : "- 材料去除评分：未生成"
+  ].join("\n");
+}
+
+function createManufacturingSummaryMarkdown(input: {
+  reportInput: Parameters<typeof createOperatorPackageMarkdown>[0];
+  costEstimate: CostEstimate | null;
+  envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality> | null;
+  envelopeHeatmapDiagnosis: ReturnType<typeof createEnvelopeHeatmapDiagnosis> | null;
+  safetyGateStatus: SafetyGateStatus;
+}) {
+  const { reportInput } = input;
+  const criticalCount = reportInput.safetyIssues.filter((issue) => issue.level === "critical").length;
+  const warningCount = reportInput.safetyIssues.filter((issue) => issue.level === "warning").length;
+  return [
+    "# 制造摘要",
+    "",
+    `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    `安全闸口：${input.safetyGateStatus.title}`,
+    `阻断/提醒：${criticalCount} / ${warningCount}`,
+    "",
+    "## 加工程序",
+    "",
+    `- 合并程序：${reportInput.toolpath.estimatedMinutes.toFixed(1)} min`,
+    reportInput.toolpath.programs?.rough ? `- 粗加工：${reportInput.toolpath.programs.rough.estimatedMinutes.toFixed(1)} min` : "- 粗加工：无独立程序",
+    reportInput.toolpath.programs?.finish ? `- 精加工：${reportInput.toolpath.programs.finish.estimatedMinutes.toFixed(1)} min` : "- 精加工：无独立程序",
+    reportInput.toolpath.programs?.rest ? `- 清残：${reportInput.toolpath.programs.rest.estimatedMinutes.toFixed(1)} min` : "- 清残：无独立程序",
+    "",
+    "## 质量与风险",
+    "",
+    `- 加工质量：${reportInput.manufacturingQuality.score.toFixed(1)} / 100，${reportInput.manufacturingQuality.summary}`,
+    reportInput.materialRemoval ? `- 材料去除：${reportInput.materialRemoval.score.toFixed(1)} / 100，${reportInput.materialRemoval.summary}` : "- 材料去除：未生成",
+    input.envelopeQuality ? `- 包络贴合：${input.envelopeQuality.fitRate.toFixed(1)}%，连续贴合 ${input.envelopeQuality.continuityRate.toFixed(1)}%` : "- 包络贴合：未生成",
+    input.envelopeHeatmapDiagnosis ? `- 热力图：风险格 ${input.envelopeHeatmapDiagnosis.riskCellRate.toFixed(1)}%，最差 ${input.envelopeHeatmapDiagnosis.worstCellLabel}` : "- 热力图：未生成",
+    reportInput.meshQuality ? `- Mesh：${reportInput.meshQuality.score.toFixed(1)} / 100，边界边 ${reportInput.meshQuality.boundaryEdges}` : "- Mesh：未生成",
+    "",
+    "## 工时与成本",
+    "",
+    input.costEstimate
+      ? `- 总占机：${input.costEstimate.totalMinutes.toFixed(1)} min，综合估算 ${formatCurrencyRange(input.costEstimate.totalCostLow, input.costEstimate.totalCostHigh)}`
+      : "- 尚未生成成本估算。",
+    "",
+    "## 上机顺序",
+    "",
+    "1. 先运行离料空跑 NC，确认 X/A/Z 方向和夹具间隙。",
+    "2. 若热力图或包络诊断存在风险，先修复 Mesh 或调整步距后重新导出。",
+    "3. 首次正式材料建议降进给试雕，再逐步恢复模板参数。"
+  ].join("\n");
+}
+
+function formatWorkbenchView(view: WorkbenchView) {
+  if (view === "simulation") return "模拟雕刻";
+  if (view === "heatmap") return "包络热力图";
+  if (view === "gcode") return "G-code";
+  if (view === "report") return "报告摘要";
+  return "3D模型";
 }
 
 function createPackageParameters(input: {
