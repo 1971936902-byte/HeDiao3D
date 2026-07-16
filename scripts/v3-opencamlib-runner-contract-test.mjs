@@ -41,6 +41,30 @@ try {
   assert(neutral.runner?.geometry?.dimensions?.x === 10, "runner geometry X dimension mismatch");
   assert(neutral.runner?.geometry?.dimensions?.y === 5, "runner geometry Y dimension mismatch");
 
+  const heightfieldOutput = join(workDir, "neutral-heightfield.json");
+  const heightfieldRun = spawnSync(python, [runnerPath, jobPath, planPath, heightfieldOutput], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS: "3",
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS: "4"
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(heightfieldRun.status === 0, `heightfield runner exited ${heightfieldRun.status}: ${heightfieldRun.stderr || heightfieldRun.stdout}`);
+  const heightfield = JSON.parse(readFileSync(heightfieldOutput, "utf8"));
+  assert(heightfield.schema === "hediao3d.neutral-toolpath.v1", "heightfield neutral schema mismatch");
+  assert(heightfield.synthetic === false, "heightfield neutral must be non-synthetic");
+  assert(heightfield.fixture === false, "heightfield neutral must not be fixture output");
+  assert(heightfield.experimentalHeightfield === true, "heightfield marker missing");
+  assert(heightfield.runner?.heightfield?.pointCount === 12, "heightfield point count mismatch");
+  assert(heightfield.runner?.heightfield?.missCount === 0, "heightfield should sample the whole rectangle");
+  assert(heightfield.points.some((point) => point.source === "stl-heightfield-preview"), "heightfield point source missing");
+  assert(new Set(heightfield.points.map((point) => point.depth)).size > 1, "heightfield should contain varying depths from STL Z interpolation");
+
   const noFixtureOutput = join(workDir, "neutral-no-fixture.json");
   const noFixtureRun = spawnSync(python, [runnerPath, jobPath, planPath, noFixtureOutput], {
     cwd: process.cwd(),
@@ -58,6 +82,7 @@ try {
     ok: true,
     runner: runnerPath,
     fixturePoints: neutral.points.length,
+    heightfieldPoints: heightfield.points.length,
     fixtureMode: neutral.runner?.mode,
     failClosedExit: noFixtureRun.status
   }, null, 2));
@@ -135,14 +160,14 @@ function createAsciiStl() {
   facet normal 0 0 1
     outer loop
       vertex 0 0 0
-      vertex 10 0 0
+      vertex 10 0 1
       vertex 0 5 0
     endloop
   endfacet
   facet normal 0 0 1
     outer loop
-      vertex 10 0 0
-      vertex 10 5 0
+      vertex 10 0 1
+      vertex 10 5 1
       vertex 0 5 0
     endloop
   endfacet

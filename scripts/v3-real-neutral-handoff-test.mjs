@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const port = Number(process.env.V3_REAL_NEUTRAL_HANDOFF_PORT ?? 8792);
 const baseUrl = `http://127.0.0.1:${port}`;
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
+const importedModelName = `v3-real-neutral-heightfield-${Date.now()}.stl`;
+const importedModelPath = resolve("public", "imported-models", importedModelName);
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? `/imported-models/${importedModelName}`;
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 const fixtureDir = mkdtempSync(join(tmpdir(), "hediao3d-real-neutral-handoff-"));
 const camoticsFixturePath = join(fixtureDir, "camotics-real-result-fixture.json");
@@ -54,6 +56,7 @@ const settings = {
 let server;
 
 async function main() {
+  writeImportedHeightfieldModel(importedModelPath);
   writeCamoticsFixture(camoticsFixturePath);
 
   server = spawn(process.execPath, ["server.mjs"], {
@@ -66,7 +69,9 @@ async function main() {
       HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
       HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "false",
       HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", runnerPath]),
-      HEDIAO3D_OPENCAMLIB_RUNNER_FIXTURE_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS: "6",
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS: "8",
       HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
       HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "false",
       HEDIAO3D_CAMOTICS_RESULT_JSON: camoticsFixturePath
@@ -102,8 +107,9 @@ async function main() {
   assert(neutralToolpath.schema === "hediao3d.neutral-toolpath.v1", "neutral schema mismatch");
   assert(neutralToolpath.synthetic === false, "neutral fixture should remain non-synthetic after import");
   assert(neutralToolpath.generatedByExternalCommand === true, "neutral output should record external command generation");
-  assert(neutralToolpath.fixture === true, "neutral output should mark runner fixture mode");
+  assert(neutralToolpath.experimentalHeightfield === true, "neutral output should mark heightfield mode");
   assert(Array.isArray(neutralToolpath.points) && neutralToolpath.points.length === 48, "neutral point count mismatch");
+  assert(neutralToolpath.runner?.heightfield?.missCount === 0, "heightfield runner should sample the full test STL");
 
   const toolpathSummary = await getArtifactJson(job.id, "toolpath-summary.json");
   assert(toolpathSummary.source === "external-adapter", "toolpath should come from external adapter");
@@ -131,8 +137,9 @@ async function main() {
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.simulationEvidence?.level === "material-removal-verified", `expected material-removal-verified evidence, got ${productionGate.simulationEvidence?.level}`);
   assert(productionGate.simulationEvidence?.productionUnlockEligible === true, "non-synthetic CAMotics evidence should be production unlock eligible");
-  assert(productionGate.allowTrialNc === true, "real neutral handoff should allow trial NC when static gates pass");
-  assert(productionGate.allowProductionNc === false, "fixture handoff must not unlock production while Native CAM readiness/model review warnings remain");
+  assert(productionGate.allowAirRun === true, "real neutral handoff should allow air-run when NC static gates pass");
+  assert(productionGate.allowTrialNc === false, "open two-triangle test STL must not unlock trial NC");
+  assert(productionGate.allowProductionNc === false, "heightfield handoff must not unlock production while Native CAM/model gates remain");
 
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.simulationEvidence?.level === "material-removal-verified", "package index should expose material-removal evidence");
@@ -150,6 +157,7 @@ async function main() {
     simulationEvidence: productionGate.simulationEvidence.level,
     production: productionGate.allowProductionNc,
     trial: productionGate.allowTrialNc,
+    airRun: productionGate.allowAirRun,
     packageLevel: productionGate.level
   }, null, 2));
 }
@@ -180,6 +188,27 @@ function writeCamoticsFixture(filePath) {
       note: "Fixture represents an externally produced CAMotics result; it validates import classification, not visual simulation fidelity."
     }
   }, null, 2));
+}
+
+function writeImportedHeightfieldModel(filePath) {
+  mkdirSync(resolve("public", "imported-models"), { recursive: true });
+  writeFileSync(filePath, `solid heightfield
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 38 0 1
+      vertex 0 15 0
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex 38 0 1
+      vertex 38 15 1
+      vertex 0 15 0
+    endloop
+  endfacet
+endsolid heightfield
+`);
 }
 
 async function waitForHealth() {
@@ -252,4 +281,5 @@ main()
   .finally(() => {
     if (server && !server.killed) server.kill();
     rmSync(fixtureDir, { recursive: true, force: true });
+    rmSync(importedModelPath, { force: true });
   });
