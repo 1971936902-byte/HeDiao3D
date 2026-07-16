@@ -131,6 +131,8 @@ type V3OrchestratorJob = {
   modelUrl: string;
   createdAt: string;
   updatedAt: string;
+  workDir: string | null;
+  artifacts: string[];
   logs: Array<{ time: string; message: string }>;
   result: null | {
     engine: string;
@@ -3185,6 +3187,15 @@ export function App() {
               <div className="v3-log-list">
                 {v3Job.logs.slice(-4).map((log) => (
                   <span key={`${log.time}-${log.message}`}>{log.message}</span>
+                ))}
+              </div>
+            )}
+            {v3Job?.artifacts && v3Job.artifacts.length > 0 && (
+              <div className="v3-artifact-list">
+                {v3Job.artifacts.map((artifact) => (
+                  <a href={artifact} target="_blank" rel="noreferrer" key={artifact}>
+                    {extractDownloadFilename(artifact, artifact)}
+                  </a>
                 ))}
               </div>
             )}

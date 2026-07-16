@@ -1938,6 +1938,22 @@ button:disabled {
   background: rgba(25, 199, 180, 0.055);
 }
 
+.v3-artifact-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.v3-artifact-list a {
+  padding: 7px 9px;
+  color: #dff9f5;
+  border: 1px solid rgba(25, 199, 180, 0.28);
+  border-radius: 7px;
+  background: rgba(25, 199, 180, 0.08);
+  font-size: 12px;
+}
+
 .calibration-card {
   display: grid;
   gap: 7px;

@@ -341,6 +341,8 @@ async function createOrchestratorJob(req, res) {
     modelUrl,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    workDir: null,
+    artifacts: [],
     logs: [],
     result: null,
     error: null
@@ -348,6 +350,14 @@ async function createOrchestratorJob(req, res) {
   orchestratorJobs.set(job.id, job);
 
   try {
+    const workDir = join(process.cwd(), "public", "orchestrator-jobs", job.id);
+    await mkdir(workDir, { recursive: true });
+    job.workDir = workDir;
+    const jobSpec = createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine);
+    await writeFile(join(workDir, "job.json"), JSON.stringify(jobSpec, null, 2), "utf8");
+    job.artifacts.push(publicArtifactUrl(job.id, "job.json"));
+    appendOrchestratorLog(job, "已创建 Orchestrator job 工作目录和参数快照。");
+
     appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
     const engines = detectCamEngines();
     const selected = selectCamEngine(engines, requestedEngine);
@@ -360,6 +370,17 @@ async function createOrchestratorJob(req, res) {
 
     appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
     const toolpath = await generateToolpathFromLocalModel(modelUrl, settings);
+    await writeFile(join(workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+    await writeFile(join(workDir, "toolpath-summary.json"), JSON.stringify({
+      engine: "internal-mesh-cam",
+      fallbackFrom: selected.id,
+      points: toolpath.points.length,
+      previewPoints: toolpath.previewPoints?.length ?? 0,
+      estimatedMinutes: toolpath.estimatedMinutes,
+      postProcessorName: toolpath.postProcessorName,
+      warnings: toolpath.summary?.warnings ?? []
+    }, null, 2), "utf8");
+    job.artifacts.push(publicArtifactUrl(job.id, "toolpath.nc"), publicArtifactUrl(job.id, "toolpath-summary.json"));
     job.status = "completed";
     job.result = {
       engine: "internal-mesh-cam",
@@ -389,6 +410,26 @@ async function createOrchestratorJob(req, res) {
   }
 
   return json(res, job.status === "failed" ? 500 : 200, job);
+}
+
+function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine) {
+  return {
+    jobId: job.id,
+    engine: requestedEngine,
+    modelUrl,
+    modelPath: localModelUrlToPath(modelUrl),
+    workDir,
+    settings,
+    outputs: {
+      gcode: join(workDir, "toolpath.nc"),
+      report: join(workDir, "adapter-report.json"),
+      preview: join(workDir, "preview.json")
+    }
+  };
+}
+
+function publicArtifactUrl(jobId, filename) {
+  return `/orchestrator-jobs/${jobId}/${filename}`;
 }
 
 async function getOrchestratorJob(jobId, res) {
