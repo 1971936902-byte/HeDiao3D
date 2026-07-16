@@ -110,6 +110,12 @@ try {
       assert(existsSync(report.metrics.camoticsPlan.projectTemplatePath), "camotics project template file missing");
       assert(report.metrics.camoticsPlan.preferredGcode === "camotics-preview.nc", "camotics preferred gcode mismatch");
     }
+    if (adapter.id === "opencamlib") {
+      assert(report.metrics.opencamlibPlan?.status === "generated", "opencamlib adapter did not generate a kernel plan");
+      assert(existsSync(report.metrics.opencamlibPlan.planPath), "opencamlib kernel plan file missing");
+      assert(existsSync(report.metrics.opencamlibPlan.runTemplatePath), "opencamlib run template file missing");
+      assert(typeof report.metrics.opencamlibPlan.recommendedPrimary === "string", "opencamlib recommended strategy missing");
+    }
     results.push({
       id: adapter.id,
       status: report.status,
@@ -118,7 +124,8 @@ try {
       recipeOperations: report.metrics.recipe.operationCount,
       freecadPlan: report.metrics.freecadPlan?.status ?? null,
       blendercamPlan: report.metrics.blendercamPlan?.status ?? null,
-      camoticsPlan: report.metrics.camoticsPlan?.status ?? null
+      camoticsPlan: report.metrics.camoticsPlan?.status ?? null,
+      opencamlibPlan: report.metrics.opencamlibPlan?.status ?? null
     });
   }
 

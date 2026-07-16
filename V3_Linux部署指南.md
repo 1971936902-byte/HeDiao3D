@@ -45,6 +45,7 @@ ORCHESTRATOR_CONCURRENCY=1
 ENABLE_EXTERNAL_CAM_ADAPTERS=false
 HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=false
 HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=false
+HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=false
 HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 ORCHESTRATOR_AUTO_MESH_REPAIR=false
 ```
@@ -142,6 +143,7 @@ python -c "import ocl"
 ENABLE_EXTERNAL_CAM_ADAPTERS=true
 HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=false
 HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=false
+HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=false
 HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 ```
 
@@ -154,6 +156,8 @@ HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 - `freecad-run-template.py`（FreeCAD adapter 执行时生成）
 - `blendercam-cam-plan.json`（BlenderCAM adapter 执行时生成）
 - `blendercam-run-template.py`（BlenderCAM adapter 执行时生成）
+- `opencamlib-kernel-plan.json`（OpenCAMLib adapter 执行时生成）
+- `opencamlib-run-template.py`（OpenCAMLib adapter 执行时生成）
 - `camotics-simulation-plan.json`
 - `camotics-project-template.json`
 - `production-gate.json`
@@ -161,6 +165,8 @@ HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 `HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT` 必须继续保持 `false`，直到 `freecad-cam-plan.json`、`freecad-run-template.py` 和小模型试算在目标服务器上人工验收通过。该开关打开后也只代表允许进入实验输出阶段，不代表生产门禁自动放行。
 
 `HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT` 必须继续保持 `false`，直到 `blendercam-cam-plan.json`、`blendercam-run-template.py`、BlenderCAM/FabexCNC add-on API 和小模型试算在目标服务器上人工验收通过。
+
+`HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT` 必须继续保持 `false`，直到 `opencamlib-kernel-plan.json`、`opencamlib-run-template.py`、中性 cutter-contact 输出和 HeDiao3D 后处理交接在目标服务器上人工验收通过。
 
 `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN` 也必须继续保持 `false`，直到 `camotics-simulation-plan.json`、`camotics-project-template.json`、截图/材料去除结果导出在目标服务器上人工验收通过。
 
@@ -236,4 +242,4 @@ server {
 
 ## 9. 当前边界
 
-当前 V3 已具备 Orchestrator 架构、小闭环、产物链、门禁和部署自检；FreeCAD adapter 已能生成可审计 CAM 计划和 FreeCADCmd 运行模板，但真实 Path Job/ToolController/operation/G-code 输出仍需在服务器上继续验证。BlenderCAM adapter 已能生成可审计艺术曲面加工计划和 Blender 运行模板，但真实 BlenderCAM/FabexCNC operation/G-code 输出仍需继续验证。CAMotics adapter 已能生成可审计仿真计划和项目模板，但真实材料去除结果、截图和网格导出仍需继续验证。OpenCAMLib adapter 仍是占位或预检阶段。正式达到商业 CAM 精度前，需要继续实现外部 adapter 的真实刀路与材料去除仿真。
+当前 V3 已具备 Orchestrator 架构、小闭环、产物链、门禁和部署自检；FreeCAD adapter 已能生成可审计 CAM 计划和 FreeCADCmd 运行模板，但真实 Path Job/ToolController/operation/G-code 输出仍需在服务器上继续验证。BlenderCAM adapter 已能生成可审计艺术曲面加工计划和 Blender 运行模板，但真实 BlenderCAM/FabexCNC operation/G-code 输出仍需继续验证。OpenCAMLib adapter 已能生成可审计几何内核计划和中性 cutter-contact 运行模板，但真实 drop-cutter/waterline 输出仍需继续验证。CAMotics adapter 已能生成可审计仿真计划和项目模板，但真实材料去除结果、截图和网格导出仍需继续验证。正式达到商业 CAM 精度前，需要继续实现外部 adapter 的真实刀路与材料去除仿真。

@@ -64,7 +64,7 @@ V3 Orchestrator calls external CAM/simulation engines through small adapter scri
 - `freecad/freecad_cam_job.py`: scriptable FreeCAD Path Workbench adapter skeleton. It validates the protocol, detects FreeCAD/Path Python modules, writes `freecad-cam-plan.json`, and writes a reviewable `freecad-run-template.py`. Production G-code remains locked unless the deployment server sets `HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=true` and the Path operation recipe has been validated.
 - `blendercam/blendercam_job.py`: BlenderCAM/FabexCNC artistic-surface adapter skeleton. It validates the protocol, detects Blender Python and possible CAM add-on modules, writes `blendercam-cam-plan.json`, and writes `blendercam-run-template.py`. Production G-code remains locked unless the deployment server sets `HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=true` and the operation recipe has been validated.
 - `camotics/camotics_job.js`: CAMotics simulation adapter skeleton. It validates the protocol, detects `camotics-cli`/`camotics`, writes `camotics-simulation-plan.json`, and writes `camotics-project-template.json`. Material-removal execution remains locked unless the deployment server sets `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true` and result extraction has been validated.
-- `opencamlib/opencamlib_job.py`: OpenCAMLib placeholder for drop-cutter, waterline and cutter-contact geometry calculations. OpenCAMLib is a geometry kernel rather than a full CAM application, so final NC output should still pass through HeDiao3D postprocessing.
+- `opencamlib/opencamlib_job.py`: OpenCAMLib geometry-kernel adapter skeleton. It validates the protocol, detects `opencamlib`/`ocl`, writes `opencamlib-kernel-plan.json`, and writes `opencamlib-run-template.py`. Cutter-contact output remains locked unless the deployment server sets `HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true` and the kernel recipe has been validated.
 
 The internal Mesh CAM fallback remains the verified V3 small-loop implementation until the external engines are installed and the adapter recipes are completed.
 
@@ -87,5 +87,6 @@ The test runs each adapter script with a synthetic job and verifies:
 - The FreeCAD adapter writes a CAM plan and run template, even when it safely returns `adapter_not_ready`.
 - The BlenderCAM adapter writes an artistic-surface CAM plan and run template, even when it safely returns `adapter_not_ready`.
 - The CAMotics adapter writes a simulation plan and project template, even when it safely returns `adapter_not_ready`.
+- The OpenCAMLib adapter writes a cutter-contact kernel plan and run template, even when it safely returns `adapter_not_ready`.
 - Non-completed adapters return a clear `error`.
 - A completed adapter must declare a G-code path; the Orchestrator additionally checks that the file exists and is non-empty before accepting it.

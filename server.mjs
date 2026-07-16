@@ -662,6 +662,8 @@ async function processOrchestratorJob(job, settings) {
     pushIfArtifactExists(job, "freecad-run-template.py");
     pushIfArtifactExists(job, "blendercam-cam-plan.json");
     pushIfArtifactExists(job, "blendercam-run-template.py");
+    pushIfArtifactExists(job, "opencamlib-kernel-plan.json");
+    pushIfArtifactExists(job, "opencamlib-run-template.py");
     pushIfArtifactExists(job, "camotics-simulation-plan.json");
     pushIfArtifactExists(job, "camotics-project-template.json");
     const adapterStatus = adapterReport.status === "completed" ? "completed" : "review";
@@ -2476,6 +2478,12 @@ function createDeliveryManifest(job, toolpath, productionGate) {
   if (existsSync(join(job.workDir, "blendercam-run-template.py"))) {
     files.push(createDeliveryFile(job.id, "blendercam-run-template.py", "BlenderCAM 运行模板", "report", true, "外部 BlenderCAM/FabexCNC adapter 生成的 Blender 后台脚本模板，用于服务器端二次验证。"));
   }
+  if (existsSync(join(job.workDir, "opencamlib-kernel-plan.json"))) {
+    files.push(createDeliveryFile(job.id, "opencamlib-kernel-plan.json", "OpenCAMLib 几何内核计划", "report", true, "外部 OpenCAMLib adapter 生成的 drop-cutter/刀具接触几何计算计划。"));
+  }
+  if (existsSync(join(job.workDir, "opencamlib-run-template.py"))) {
+    files.push(createDeliveryFile(job.id, "opencamlib-run-template.py", "OpenCAMLib 运行模板", "report", true, "外部 OpenCAMLib adapter 生成的中性 cutter-contact 输出模板，用于服务器端二次验证。"));
+  }
 
   return {
     jobId: job.id,
@@ -2883,10 +2891,10 @@ function detectOpenCamLibEngine() {
         name: "OpenCAMLib",
         role: "底层刀具接触/drop-cutter 算法库 adapter",
         available: true,
-        adapterReady: false,
+        adapterReady: true,
         command,
         version: String(probe.stdout ?? "").trim() || "python module detected",
-        notes: "已检测到 Python OpenCAMLib 模块；adapter 仍需补齐 drop-cutter/水线配方后才能替换内置采样。"
+        notes: "已检测到 Python OpenCAMLib 模块；adapter 可生成几何内核计划，真实 cutter-contact 输出仍需实验开关和服务器验证。"
       };
     }
   }
