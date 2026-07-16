@@ -634,7 +634,18 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "engine-diagnostics.json"), JSON.stringify(engineReadiness, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "engine-diagnostics.json"));
   updatePipelineStage(job, "engine", engineReadiness.externalReady ? "completed" : "review", `选择 ${selected.name}；${engineReadiness.summary}`);
-  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution, engineReadiness });
+  const externalCamRecipe = createExternalCamRecipe({
+    job,
+    settings,
+    camInputPlan,
+    meshQuality,
+    repairPlan,
+    selectedEngine: selected,
+    engineReadiness
+  });
+  await writeFile(join(job.workDir, "external-cam-recipe.json"), JSON.stringify(externalCamRecipe, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "external-cam-recipe.json"));
+  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution, engineReadiness, externalCamRecipe });
   const adapterPreflight = createAdapterPreflightReport(selected, job, settings, camInputPlan, engineReadiness);
   await writeFile(join(job.workDir, "adapter-preflight.json"), JSON.stringify(adapterPreflight, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-preflight.json"));
@@ -751,6 +762,7 @@ async function processOrchestratorJob(job, settings) {
       repairExecution,
       camInputPlan,
       engineReadiness,
+      externalCamRecipe,
       adapterPreflight,
       productionGate,
       postprocessProfile,
@@ -1135,6 +1147,181 @@ function createCamInputPlan(job, meshQuality, repairPlan, settings) {
       reason: summary
     }
   };
+}
+
+function createExternalCamRecipe({ job, settings, camInputPlan, meshQuality, repairPlan, selectedEngine, engineReadiness }) {
+  const tool = describeTool(settings);
+  const rotaryMode = settings.camMode === "rotaryWrap";
+  const engineFamily = selectedEngine.id === "freecad"
+    ? "freecad-path"
+    : selectedEngine.id === "blendercam"
+      ? "blendercam-fabex"
+      : selectedEngine.id === "opencamlib"
+        ? "opencamlib-kernel"
+        : "internal-or-unsupported";
+  const recipeStatus = camInputPlan.status === "blocked"
+    ? "blocked"
+    : selectedEngine.id === "internal-mesh-cam"
+      ? "fallback-only"
+      : engineReadiness.externalReady
+        ? "ready-for-adapter"
+        : "adapter-environment-missing";
+
+  return {
+    schema: "hediao3d.external-cam-recipe.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status: recipeStatus,
+    engine: {
+      selectedEngine: selectedEngine.id,
+      selectedEngineName: selectedEngine.name,
+      engineFamily,
+      command: selectedEngine.command ?? null,
+      available: selectedEngine.available,
+      adapterReady: selectedEngine.adapterReady,
+      externalReady: engineReadiness.externalReady
+    },
+    model: {
+      sourceModelUrl: camInputPlan.sourceModelUrl,
+      sourceModelPath: camInputPlan.sourceModelPath,
+      selectedModelUrl: camInputPlan.selectedModelUrl,
+      selectedModelPath: camInputPlan.selectedModelPath,
+      selectedModelKind: camInputPlan.selectedModelKind,
+      adapterModelPolicy: camInputPlan.adapterModelPolicy,
+      meshQuality: {
+        score: meshQuality.score,
+        verdict: meshQuality.verdict,
+        triangleCount: meshQuality.triangleCount,
+        boundaryEdges: meshQuality.boundaryEdges,
+        nonManifoldEdges: meshQuality.nonManifoldEdges,
+        degenerateFaces: meshQuality.degenerateFaces
+      },
+      repairStatus: repairPlan.status
+    },
+    stock: {
+      type: rotaryMode ? "rotary-olive-core-unwrapped-stock" : "rectangular-relief-stock",
+      lengthMm: Number(settings.lengthMm),
+      diameterMm: Number(settings.diameterMm),
+      leftHoldMm: Number(settings.leftHoldMm ?? 0),
+      rightHoldMm: Number(settings.rightHoldMm ?? 0),
+      endTransitionMm: Number(settings.endTransitionMm ?? 0),
+      rotaryWrapPerRevolutionMm: rotaryMode ? Number(settings.rotaryWrapPerRevolutionMm ?? 100) : null,
+      note: rotaryMode
+        ? "外部 CAM 应优先生成展开高度场/表面扫描刀路，再交给 HeDiao3D wrapY/wrapA 后处理。"
+        : "外部 CAM 可按三轴浮雕/顶面投影方式处理。"
+    },
+    tool: {
+      toolProfileId: settings.toolProfileId ?? null,
+      description: tool.name,
+      diameterMm: Number(settings.toolDiameter),
+      flatTipMm: settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg" ? 0.4 : null,
+      angleDeg: settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg" ? 25 : null,
+      maxCutDepthMm: Number(settings.maxCutDepth ?? settings.depthMm ?? 0),
+      stockAllowanceMm: Number(settings.stockAllowance ?? 0)
+    },
+    operations: createExternalCamOperations(settings, rotaryMode),
+    postprocess: {
+      desiredOutput: "toolpath.nc",
+      airRunOutput: "air-run.nc",
+      camoticsPreviewOutput: "camotics-preview.nc",
+      camMode: settings.camMode,
+      postProcessor: settings.postProcessor,
+      rotaryOutputAxis: rotaryMode ? settings.rotaryOutputAxis ?? "Y" : null,
+      lengthAxis: rotaryMode && settings.rotaryOutputAxis === "X" ? "Y" : "X",
+      depthAxis: "Z",
+      policy: rotaryMode
+        ? "External CAM returns neutral/unwrapped path; HeDiao3D owns final rotary-wrap Y/A postprocess."
+        : "External CAM may return ordinary X/Y/Z G-code; HeDiao3D still validates and packages it."
+    },
+    simulation: {
+      requiredBeforeProduction: true,
+      camoticsInput: "camotics-input.json",
+      camoticsPreview: "camotics-preview.nc",
+      limitation: rotaryMode
+        ? "CAMotics preview checks unwrapped 3-axis motion only; real rotary fixture material removal still needs machine-side or rotary-capable simulation."
+        : "CAMotics can be used as the primary 3-axis material-removal check once adapter execution is implemented."
+    },
+    adapterContract: {
+      input: "job.json",
+      outputReport: "adapter-report.json",
+      completedGcode: "toolpath.nc",
+      completedStatusRequiresNonEmptyGcode: true,
+      protocolVersion: "hediao3d.adapter.v1"
+    },
+    blockingIssues: [
+      ...(camInputPlan.status === "blocked" ? [camInputPlan.summary] : []),
+      ...(!engineReadiness.externalReady ? ["外部 CAM adapter 环境未就绪，当前只能使用内置 fallback。"] : [])
+    ],
+    nextAdapterSteps: createExternalCamNextSteps(selectedEngine.id, rotaryMode)
+  };
+}
+
+function createExternalCamOperations(settings, rotaryMode) {
+  const common = {
+    stepoverMm: Number(settings.stepoverMm),
+    stepoverDeg: Number(settings.stepoverDeg),
+    feedRateMmMin: Number(settings.feedRate),
+    spindleRpm: Number(settings.spindleRpm),
+    safeZMm: Number(settings.safeZ)
+  };
+  return [
+    {
+      id: "roughing",
+      enabled: Number(settings.stockAllowance ?? 0) > 0,
+      strategy: rotaryMode ? "unwrapped-x-scan-roughing" : "top-surface-zigzag-roughing",
+      target: "remove bulk stock while preserving stock allowance",
+      maxCutDepthMm: Number(settings.maxCutDepth ?? settings.depthMm ?? 0),
+      stockToLeaveMm: Number(settings.stockAllowance ?? 0),
+      ...common
+    },
+    {
+      id: "finishing",
+      enabled: true,
+      strategy: rotaryMode ? String(settings.finishingStrategy ?? "x-scan") : "parallel-finish",
+      target: "final visible surface",
+      maxCutDepthMm: Number(settings.depthMm ?? 0),
+      stockToLeaveMm: 0,
+      ...common
+    },
+    {
+      id: "rest-detail",
+      enabled: Number(settings.toolDiameter) <= 1 || settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg",
+      strategy: rotaryMode ? "local-detail-pass-on-steep-features" : "rest-machining-on-steep-features",
+      target: "recover small facial details and steep local features",
+      maxCutDepthMm: Math.min(Number(settings.maxCutDepth ?? settings.depthMm ?? 0), Number(settings.depthMm ?? 0)),
+      stockToLeaveMm: 0,
+      ...common
+    }
+  ];
+}
+
+function createExternalCamNextSteps(engineId, rotaryMode) {
+  if (engineId === "freecad") {
+    return [
+      "实现 FreeCAD 模型导入、Stock、ToolController 和 Path operation 配方。",
+      "三轴场景先输出普通 X/Y/Z G-code，再由 Orchestrator 摄取并仿真。",
+      rotaryMode ? "旋转夹具场景不建议直接依赖 FreeCAD 四轴；优先让 FreeCAD 处理展开高度场。" : "接入 CAMotics 后再打开生产门禁。"
+    ];
+  }
+  if (engineId === "blendercam") {
+    return [
+      "实现 Blender/FabexCNC 后台导入 GLB/STL，并创建艺术曲面加工 operation。",
+      "输出中性 G-code 或点位表给 HeDiao3D 后处理。",
+      rotaryMode ? "旋转夹具模式优先生成展开 X/角度 扫描轨迹，再交由 wrapY 后处理。" : "三轴模式可直接输出 X/Y/Z 试雕 NC。"
+    ];
+  }
+  if (engineId === "opencamlib") {
+    return [
+      "实现 OpenCAMLib drop-cutter 或 waterline 采样，输出 cutter-contact 点位。",
+      "保留 HeDiao3D 的 wrapY/wrapA 后处理，不让 OpenCAMLib 直接负责机床 NC。",
+      "用相同 adapter contract 返回 G-code 或中性点位产物。"
+    ];
+  }
+  return [
+    "当前使用 internal-mesh-cam 小闭环。",
+    "先安装并启用 FreeCAD/BlenderCAM/OpenCAMLib adapter。",
+    "保持 ENABLE_EXTERNAL_CAM_ADAPTERS=false，直到 adapter recipe 在小模型上通过。"
+  ];
 }
 
 function createEngineReadinessReport(engines, selected, settings) {
@@ -1707,6 +1894,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       readFirst: [
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
+        getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json")
       ],
@@ -1766,6 +1954,7 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "repair-plan.json", "Mesh 修复计划", "report", true, "说明是否需要封孔、降面、重网格。"),
     createDeliveryFile(job.id, "repair-execution.json", "Mesh 修复执行记录", "report", true, "说明是否自动修复、为何跳过以及下一步修复动作。"),
     createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
+    createDeliveryFile(job.id, "external-cam-recipe.json", "外部CAM作业配方", "report", true, "统一描述 FreeCAD/BlenderCAM/OpenCAMLib 所需模型、毛坯、刀具、工序、后处理和仿真要求。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),

@@ -211,6 +211,38 @@ type V3OrchestratorJob = {
           status: string;
         }>;
       };
+      externalCamRecipe?: {
+        status: string;
+        engine: {
+          selectedEngine: string;
+          selectedEngineName: string;
+          engineFamily: string;
+          available: boolean;
+          adapterReady: boolean;
+          externalReady: boolean;
+        };
+        model?: {
+          selectedModelKind: string;
+          adapterModelPolicy: string;
+          repairStatus: string;
+        };
+        operations?: Array<{
+          id: string;
+          enabled: boolean;
+          strategy: string;
+          target: string;
+        }>;
+        postprocess?: {
+          camMode: string;
+          postProcessor: string;
+          rotaryOutputAxis: string | null;
+          lengthAxis: string;
+          depthAxis: string;
+          policy: string;
+        };
+        blockingIssues?: string[];
+        nextAdapterSteps?: string[];
+      };
       adapterPreflight?: {
         status: string;
         summary: string;
@@ -3634,6 +3666,15 @@ export function App() {
                   开关 {v3Job.result.summary.engineReadiness.enableExternalCamAdapters ? "已启用" : "未启用"}
                 </small>
               )}
+              {v3Job?.result?.summary.externalCamRecipe && (
+                <small>
+                  外部CAM配方：{v3Job.result.summary.externalCamRecipe.status}
+                  {" · "}
+                  {v3Job.result.summary.externalCamRecipe.engine.selectedEngineName}
+                  {" · "}
+                  工序 {v3Job.result.summary.externalCamRecipe.operations?.filter((operation) => operation.enabled).length ?? 0}/{v3Job.result.summary.externalCamRecipe.operations?.length ?? 0}
+                </small>
+              )}
               {v3Job?.result?.summary.adapterPreflight && (
                 <small>
                   Adapter预检：{v3Job.result.summary.adapterPreflight.status}
@@ -5836,6 +5877,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const postprocessProfile = summary?.postprocessProfile;
   const camoticsInput = summary?.camoticsInput;
   const packageIndex = summary?.machiningPackageIndex;
+  const externalCamRecipe = summary?.externalCamRecipe;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -5856,6 +5898,13 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `Mesh修复执行: ${repairExecution?.summary ?? "未生成"}`,
     `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
     `Adapter预检: ${preflight?.summary ?? "未生成"}`,
+    "",
+    "## 外部CAM配方",
+    "",
+    `状态: ${externalCamRecipe?.status ?? "未生成"}`,
+    `引擎: ${externalCamRecipe?.engine?.selectedEngineName ?? "-"}`,
+    `工序: ${externalCamRecipe?.operations?.filter((operation) => operation.enabled).length ?? 0}/${externalCamRecipe?.operations?.length ?? 0}`,
+    `后处理策略: ${externalCamRecipe?.postprocess?.policy ?? "-"}`,
     "",
     "## 后处理配置",
     "",

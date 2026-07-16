@@ -74,6 +74,7 @@ async function main() {
     "repair-plan.json",
     "repair-execution.json",
     "cam-input-plan.json",
+    "external-cam-recipe.json",
     "engine-diagnostics.json",
     "adapter-preflight.json",
     "toolpath.nc",
