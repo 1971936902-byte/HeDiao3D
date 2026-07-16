@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
 const root = process.cwd();
 const workDir = join(tmpdir(), `hediao3d-opencamlib-neutral-import-${Date.now()}`);
+const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+const outputRoot = resolve(process.env.V3_NEUTRAL_IMPORT_DIR ?? join(root, "public", "orchestrator-neutral-import", stamp));
 mkdirSync(workDir, { recursive: true });
+mkdirSync(outputRoot, { recursive: true });
 
 const jobPath = join(workDir, "opencamlib-job.json");
 const resultPath = join(workDir, "adapter-report.json");
@@ -101,14 +104,25 @@ assert(neutral.synthetic === false, "imported neutral output must remain non-syn
 assert(neutral.importedFrom === importedPath, "neutral output should record source path");
 assert(neutral.points.length === 3, "neutral point count mismatch");
 
-console.log(JSON.stringify({
+const contract = {
+  schema: "hediao3d.neutral-import-contract.v1",
+  createdAt: new Date().toISOString(),
   ok: true,
   workDir,
+  outputRoot,
   status: report.status,
+  adapterReport: join(outputRoot, "adapter-report.json"),
+  neutralToolpath: join(outputRoot, "neutral-toolpath.json"),
   imported: report.metrics.neutralToolpath.imported,
   synthetic: neutral.synthetic,
-  pointCount: neutral.points.length
-}, null, 2));
+  pointCount: neutral.points.length,
+  postprocessEligible: neutral.synthetic === false && report.status === "completed" && neutral.points.length > 0
+};
+copyFileSync(resultPath, contract.adapterReport);
+copyFileSync(outputNeutralPath, contract.neutralToolpath);
+writeFileSync(join(outputRoot, "neutral-import-contract.json"), JSON.stringify(contract, null, 2));
+
+console.log(JSON.stringify(contract, null, 2));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

@@ -823,6 +823,20 @@ type V3ReadinessSummary = {
       toolpath?: string;
     };
   } | null;
+  neutralImport: {
+    id: string;
+    schema: string;
+    createdAt: string | null;
+    ok: boolean;
+    status: string | null;
+    imported: boolean;
+    synthetic: boolean;
+    pointCount: number | null;
+    postprocessEligible: boolean;
+    adapterReport: string | null;
+    neutralToolpath: string | null;
+    outputRoot: string | null;
+  } | null;
   camoticsImport: {
     id: string;
     schema: string;
@@ -4134,6 +4148,10 @@ export function App() {
                     Handoff：{v3Readiness.externalHandoff ? `${v3Readiness.externalHandoff.resultEngine ?? "-"} → ${v3Readiness.externalHandoff.simulationEngine ?? "-"}` : "未验证"}
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
                     {v3Readiness.externalHandoff?.points ? ` · ${v3Readiness.externalHandoff.points}点` : ""}
+                  </small>
+                  <small className={v3Readiness.neutralImport ? v3Readiness.neutralImport.postprocessEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                    Neutral导入：{v3Readiness.neutralImport ? `${v3Readiness.neutralImport.status ?? "-"} · ${v3Readiness.neutralImport.imported ? "真实导入" : "未导入"}` : "未验证"}
+                    {v3Readiness.neutralImport?.pointCount ? ` · ${v3Readiness.neutralImport.pointCount}点` : ""}
                   </small>
                   <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     CAMotics导入：{v3Readiness.camoticsImport ? `${v3Readiness.camoticsImport.status ?? "-"} · ${v3Readiness.camoticsImport.synthetic ? "synthetic" : "真实结果"}` : "未验证"}
