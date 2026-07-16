@@ -422,6 +422,31 @@ button:disabled {
   background: #e5eee9;
 }
 
+.template-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.template-toolbar .demo-action {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.template-toolbar span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
 .panel-title {
   display: flex;
   align-items: center;

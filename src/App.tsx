@@ -501,6 +501,7 @@ export function App() {
     fixtureConfirmed: false
   });
   const canceledTaskJobIdsRef = useRef<Set<string>>(new Set());
+  const processTemplateImportRef = useRef<HTMLInputElement | null>(null);
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -1020,6 +1021,65 @@ export function App() {
       status: "ok",
       title: `保存自定义工艺模板：${template.name}`,
       detail: template.notes
+    });
+  };
+
+  const handleExportCustomProcessTemplates = () => {
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      templates: customProcessTemplates
+    };
+    downloadText("hediao3d-process-templates.json", JSON.stringify(payload, null, 2), "application/json");
+    recordTask({
+      category: "process",
+      status: customProcessTemplates.length > 0 ? "ok" : "warning",
+      title: "导出自定义工艺模板",
+      detail: `已导出 ${customProcessTemplates.length} 个自定义模板。`
+    });
+  };
+
+  const handleImportCustomProcessTemplates = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as { templates?: unknown[] };
+      const imported = (data.templates ?? []).filter(isProcessTemplate).map((template) => ({
+        ...template,
+        id: template.id.startsWith("custom-") ? template.id : `custom-import-${Date.now()}-${template.id}`
+      }));
+      if (imported.length === 0) throw new Error("文件中没有有效模板");
+      setCustomProcessTemplates((current) => {
+        const existingIds = new Set(current.map((template) => template.id));
+        const merged = [...imported.filter((template) => !existingIds.has(template.id)), ...current];
+        return merged.slice(0, 16);
+      });
+      recordTask({
+        category: "process",
+        status: "ok",
+        title: "导入自定义工艺模板",
+        detail: `已导入 ${imported.length} 个模板，最多保留 16 个。`
+      });
+    } catch (error) {
+      recordTask({
+        category: "process",
+        status: "error",
+        title: "导入自定义工艺模板失败",
+        detail: error instanceof Error ? error.message : "模板 JSON 无法解析"
+      });
+    }
+  };
+
+  const handleClearTaskSnapshots = () => {
+    const count = taskSnapshots.length;
+    setTaskSnapshots([]);
+    recordTask({
+      category: "tasks",
+      status: count > 0 ? "warning" : "ok",
+      title: "清空参数版本",
+      detail: count > 0 ? `已清空 ${count} 条参数快照。` : "当前没有可清空的参数快照。"
     });
   };
 
@@ -2214,6 +2274,15 @@ export function App() {
                 <Save size={16} />
                 保存当前为模板
               </button>
+              <button className="demo-action" type="button" onClick={handleExportCustomProcessTemplates}>
+                <Download size={16} />
+                导出模板
+              </button>
+              <button className="demo-action" type="button" onClick={() => processTemplateImportRef.current?.click()}>
+                <UploadCloud size={16} />
+                导入模板
+              </button>
+              <input ref={processTemplateImportRef} className="hidden-file-input" type="file" accept="application/json,.json" onChange={handleImportCustomProcessTemplates} />
               <span>{customProcessTemplates.length}/16 个自定义模板</span>
             </div>
             <div className="template-section-title">
@@ -2744,9 +2813,20 @@ export function App() {
               )}
             </section>
             <section className="panel">
-              <div className="panel-title">
-                <Library size={18} />
-                <h2>参数版本</h2>
+            <div className="panel-title">
+              <Library size={18} />
+              <h2>参数版本</h2>
+            </div>
+              <div className="template-toolbar">
+                <button className="demo-action" type="button" onClick={handleSaveCurrentSnapshot}>
+                  <Save size={16} />
+                  保存当前版本
+                </button>
+                <button className="demo-action" type="button" onClick={handleClearTaskSnapshots} disabled={taskSnapshots.length === 0}>
+                  <Trash2 size={16} />
+                  清空版本
+                </button>
+                <span>{taskSnapshots.length}/24 个参数快照</span>
               </div>
               {taskSnapshots.length === 0 ? (
                 <p className="panel-note">应用工艺模板或生成刀路后，会自动保存参数快照，可在这里回退并重新生成。</p>
