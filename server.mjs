@@ -671,6 +671,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "simulation", "running", "正在生成自研旋转包裹预览和离料空跑。");
   const simulationSummary = createSimulationSummary(toolpath, settings, selected);
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
+  const camoticsPreviewGcode = createCamoticsPreviewGcode(toolpath.points, settings, toolpath.estimatedMinutes);
   await writeFile(join(job.workDir, "toolpath-summary.json"), JSON.stringify({
     engine: externalToolpath ? selected.id : "internal-mesh-cam",
     fallbackFrom: selected.id,
@@ -681,7 +682,11 @@ async function processOrchestratorJob(job, settings) {
     postProcessorName: toolpath.postProcessorName,
     warnings: toolpath.summary?.warnings ?? []
   }, null, 2), "utf8");
+  const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+  await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
+  await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
+  await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
   updatePipelineStage(job, "simulation", "completed", `仿真贴合 ${simulationSummary.metrics.fitRate.toFixed(1)}%，未命中 ${simulationSummary.metrics.missCount} 点。`);
   updatePipelineStage(job, "postprocess", "running", "正在生成 V3 加工包门禁和交付清单。");
@@ -694,7 +699,8 @@ async function processOrchestratorJob(job, settings) {
     repairPlan,
     camInputPlan,
     engineReadiness,
-    simulationSummary
+    simulationSummary,
+    camoticsInput
   });
   const postprocessProfile = createPostprocessProfile({
     job,
@@ -712,6 +718,9 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-gate.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-profile.json"));
@@ -735,6 +744,7 @@ async function processOrchestratorJob(job, settings) {
       adapterPreflight,
       productionGate,
       postprocessProfile,
+      camoticsInput,
       deliveryManifest,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
@@ -1277,7 +1287,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary, camoticsInput }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -1302,6 +1312,11 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   if (simulationSummary.engine !== "camotics") {
     warnings.push("当前不是 CAMotics 真实材料去除仿真，仅为内置旋转包裹预览。");
     requiredActions.push("正式上机前用 CAMotics 或机床控制软件完成 NC 仿真。");
+  }
+
+  if (camoticsInput && !camoticsInput.compatibility.canRunInCamotics) {
+    warnings.push(camoticsInput.compatibility.reason);
+    requiredActions.push("若使用真实旋转轴 A 或四轴联动，需要用支持旋转轴的机床仿真软件复核。");
   }
 
   if (simulationSummary.riskLevel !== "ready") {
@@ -1470,6 +1485,192 @@ function createPostprocessProfile({ job, settings, toolpath, selectedEngine, res
   };
 }
 
+function createCamoticsInputPlan(job, toolpath, settings, selectedEngine) {
+  const points = toolpath.points ?? [];
+  const postProcessor = settings.postProcessor ?? "generic";
+  const rotaryAxis = settings.camMode === "rotaryWrap"
+    ? settings.rotaryOutputAxis || (postProcessor === "wrapX" ? "X" : postProcessor === "wrapY" ? "Y" : "A")
+    : null;
+  const linearizedRotary = settings.camMode === "rotaryWrap" && rotaryAxis && rotaryAxis !== "A";
+  const compatibleThreeAxis = settings.camMode === "3axis" || linearizedRotary;
+  const bounds = createCamoticsBounds(points, settings, rotaryAxis);
+  const tool = describeTool(settings);
+
+  return {
+    schema: "hediao3d.camotics-input.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status: compatibleThreeAxis ? "prepared" : "review-required",
+    source: {
+      gcode: "toolpath.nc",
+      camoticsPreviewGcode: "camotics-preview.nc",
+      airRun: "air-run.nc",
+      simulationSummary: "simulation-summary.json"
+    },
+    compatibility: {
+      canRunInCamotics: compatibleThreeAxis,
+      mode: settings.camMode,
+      rotaryAxis,
+      interpretation: linearizedRotary
+        ? "linearized-rotary-wrap-as-3axis"
+        : settings.camMode === "3axis"
+          ? "plain-3axis"
+          : "unsupported-rotary-or-4axis",
+      reason: compatibleThreeAxis
+        ? "CAMotics 可用于检查当前 X/Y/Z 形式的刀路、Z 安全高度和大致切削包络。"
+        : "CAMotics 主要面向 3 轴仿真；真实 A 轴/四轴联动不能作为生产级材料去除结论。"
+    },
+    machine: {
+      selectedEngine: selectedEngine.id,
+      postProcessorName: toolpath.postProcessorName,
+      lengthAxis: settings.camMode === "rotaryWrap" && rotaryAxis === "X" ? "Y" : "X",
+      rotaryOutputAxis: rotaryAxis,
+      rotaryWrapPerRevolutionMm: settings.camMode === "rotaryWrap" ? Number(settings.rotaryWrapPerRevolutionMm ?? 100) : null,
+      safeZMm: Number(settings.safeZ)
+    },
+    stock: {
+      shape: linearizedRotary ? "unwrapped-rectangular-stock" : "rectangular-stock",
+      boundsMm: bounds,
+      lengthMm: Number(settings.lengthMm),
+      diameterMm: Number(settings.diameterMm),
+      note: linearizedRotary
+        ? "这里的 Y 宽度是旋转夹具一圈的线性展开距离，不是真实圆柱实体。"
+        : "按三轴平面毛坯包络准备。"
+    },
+    tool: {
+      toolProfileId: settings.toolProfileId ?? null,
+      description: tool.name,
+      diameterMm: Number(settings.toolDiameter),
+      flatTipMm: settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg" ? 0.4 : null,
+      angleDeg: settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg" ? 25 : null
+    },
+    commands: {
+      openGcode: "camotics camotics-preview.nc",
+      openMachineGcode: "camotics toolpath.nc",
+      openAirRun: "camotics air-run.nc"
+    },
+    limitations: [
+      "该输入包不等同于真实 CAMotics 材料去除结果；它用于准备和人工复核。",
+      "camotics-preview.nc 是展开三轴预览文件，Z 已转换为普通负向切深；toolpath.nc 仍是机床实际后处理输出。",
+      "Y轴旋转夹具模式会被当作展开平面 X/Y/Z 刀路检查，不能反映圆柱/橄榄核两端夹持实体。",
+      "生产门禁仍要求真实 CAMotics adapter 或机床控制软件完成复核。"
+    ]
+  };
+}
+
+function createCamoticsBounds(points, settings, rotaryAxis) {
+  const xs = points.map((point) => Number(point.x)).filter(Number.isFinite);
+  const ys = points.map((point) => Number(point.y)).filter(Number.isFinite);
+  const zs = points.map((point) => Number(point.z)).filter(Number.isFinite);
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const isLinearizedWrap = settings.camMode === "rotaryWrap" && rotaryAxis && rotaryAxis !== "A";
+  const yMin = isLinearizedWrap ? 0 : ys.length ? Math.min(...ys) : -Number(settings.diameterMm) / 2;
+  const yMax = isLinearizedWrap ? wrapPerRev : ys.length ? Math.max(...ys) : Number(settings.diameterMm) / 2;
+
+  return {
+    xMin: xs.length ? Math.min(...xs) : -Number(settings.lengthMm) / 2,
+    xMax: xs.length ? Math.max(...xs) : Number(settings.lengthMm) / 2,
+    yMin,
+    yMax,
+    zMin: zs.length ? Math.min(...zs) : -Number(settings.depthMm ?? 0),
+    zMax: Math.max(Number(settings.safeZ ?? 0), zs.length ? Math.max(...zs) : 0)
+  };
+}
+
+function createCamoticsRunbook(camoticsInput) {
+  const lines = [
+    "# HeDiao3D CAMotics 输入说明",
+    "",
+    `Job ID: ${camoticsInput.jobId}`,
+    `状态: ${camoticsInput.status}`,
+    `兼容性: ${camoticsInput.compatibility.canRunInCamotics ? "可用作三轴检查" : "需要其他仿真软件复核"}`,
+    `解释方式: ${camoticsInput.compatibility.interpretation}`,
+    "",
+    "## 文件",
+    "",
+    "- toolpath.nc: 当前试雕/生产刀路",
+    "- camotics-preview.nc: 展开平面三轴仿真预览刀路，不用于上机",
+    "- air-run.nc: 离料空跑刀路",
+    "- camotics-input.json: CAMotics 输入参数和限制说明",
+    "",
+    "## 建议命令",
+    "",
+    "```bash",
+    camoticsInput.commands.openGcode,
+    `# 机床原始NC仅用于对照：${camoticsInput.commands.openMachineGcode}`,
+    camoticsInput.commands.openAirRun,
+    "```",
+    "",
+    "## 注意",
+    "",
+    ...camoticsInput.limitations.map((item) => `- ${item}`)
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function createCamoticsPreviewGcode(points, settings, estimatedMinutes) {
+  const postProcessor = settings.postProcessor ?? "generic";
+  const rotaryAxis = settings.camMode === "rotaryWrap"
+    ? settings.rotaryOutputAxis || (postProcessor === "wrapX" ? "X" : postProcessor === "wrapY" ? "Y" : "A")
+    : null;
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const observedMaxDepth = points.reduce((max, point) => Math.max(max, Number(point.depth ?? 0)), 0);
+  const targetMaxDepth = Math.max(0.001, Number(settings.depthMm ?? settings.maxCutDepth ?? observedMaxDepth ?? 1));
+  const depthScale = observedMaxDepth > 0 ? targetMaxDepth / observedMaxDepth : 1;
+  const previewSafeZ = Math.max(2, Number(settings.depthMm ?? 0) + 1);
+  const lines = [
+    "%",
+    "(CAMOTICS PREVIEW ONLY - not for machine)",
+    "(Coordinate: X/Y unwrapped stock, Z negative cutting depth)",
+    `(SourcePost=${postProcessorName(settings.postProcessor)} Estimated=${fmt(estimatedMinutes, 2)}min)`,
+    "G21",
+    "G90",
+    "G94",
+    `F${fmt(settings.feedRate, 1)}`,
+    `G0 Z${fmt(previewSafeZ)}`
+  ];
+
+  if (points.length > 0) {
+    const first = toCamoticsPreviewPoint(points[0], settings, rotaryAxis, wrapPerRev, depthScale);
+    lines.push(`G0 X${fmt(first.x)} Y${fmt(first.y)} Z${fmt(previewSafeZ)}`);
+    lines.push(`G1 Z${fmt(first.z)} F${fmt(Number(settings.feedRate) * 0.45, 1)}`);
+  }
+
+  for (const point of points) {
+    const preview = toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthScale);
+    lines.push(`G1 X${fmt(preview.x)} Y${fmt(preview.y)} Z${fmt(preview.z)} F${fmt(settings.feedRate, 1)}`);
+  }
+
+  lines.push(`G0 Z${fmt(previewSafeZ)}`);
+  lines.push("M5", "M30", "%");
+  return `${lines.join("\n")}\n`;
+}
+
+function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthScale) {
+  const normalizedDepth = Math.max(0, Number(point.depth ?? 0)) * depthScale;
+  if (settings.camMode === "rotaryWrap") {
+    const rotaryLinear = ((Number(point.a ?? 0) % 360 + 360) % 360) / 360 * wrapPerRev;
+    if (rotaryAxis === "X") {
+      return {
+        x: rotaryLinear,
+        y: Number(point.x ?? 0),
+        z: -normalizedDepth
+      };
+    }
+    return {
+      x: Number(point.x ?? 0),
+      y: rotaryLinear,
+      z: -normalizedDepth
+    };
+  }
+
+  return {
+    x: Number(point.x ?? 0),
+    y: Number(point.y ?? 0),
+    z: -normalizedDepth
+  };
+}
+
 function createDeliveryManifest(job, toolpath, productionGate) {
   const files = [
     createDeliveryFile(job.id, "job.json", "任务参数快照", "report", true, "用于复现本次 Orchestrator 输入。"),
@@ -1481,6 +1682,9 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
+    createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
+    createDeliveryFile(job.id, "camotics-run.md", "CAMotics 操作说明", "report", true, "说明如何用 CAMotics 打开 toolpath.nc 和 air-run.nc，以及旋转夹具模式限制。"),
+    createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),

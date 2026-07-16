@@ -277,6 +277,43 @@ type V3OrchestratorJob = {
           pointCount: number;
         };
       };
+      camoticsInput?: {
+        status: string;
+        compatibility: {
+          canRunInCamotics: boolean;
+          mode: string;
+          rotaryAxis: string | null;
+          interpretation: string;
+          reason: string;
+        };
+        machine?: {
+          postProcessorName: string;
+          lengthAxis: string;
+          rotaryOutputAxis: string | null;
+          rotaryWrapPerRevolutionMm: number | null;
+          safeZMm: number;
+        };
+        stock?: {
+          shape: string;
+          note: string;
+          boundsMm: {
+            xMin: number;
+            xMax: number;
+            yMin: number;
+            yMax: number;
+            zMin: number;
+            zMax: number;
+          };
+        };
+        tool?: {
+          toolProfileId?: string | null;
+          description: string;
+          diameterMm: number;
+          flatTipMm?: number | null;
+          angleDeg?: number | null;
+        };
+        limitations?: string[];
+      };
       deliveryManifest?: {
         packageLevel: string;
         allowProductionNc: boolean;
@@ -3624,6 +3661,15 @@ export function App() {
                   仿真 {v3Job.result.summary.simulation.engine} / 贴合 {v3Job.result.summary.simulation.metrics.fitRate.toFixed(1)}% / 未命中 {v3Job.result.summary.simulation.metrics.missCount}
                 </small>
               )}
+              {v3Job?.result?.summary.camoticsInput && (
+                <small>
+                  CAMotics输入：{v3Job.result.summary.camoticsInput.status}
+                  {" · "}
+                  {v3Job.result.summary.camoticsInput.compatibility.canRunInCamotics ? "可做三轴展开检查" : "需旋转轴仿真复核"}
+                  {" · "}
+                  {v3Job.result.summary.camoticsInput.compatibility.interpretation}
+                </small>
+              )}
             </div>
             {v3Job && (
               <div className="v3-log-list">
@@ -5753,6 +5799,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const engineReadiness = summary?.engineReadiness;
   const repairExecution = summary?.repairExecution;
   const postprocessProfile = summary?.postprocessProfile;
+  const camoticsInput = summary?.camoticsInput;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -5782,6 +5829,14 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `旋转轴: ${postprocessProfile?.coordinateMapping?.rotaryAxis ?? "-"}`,
     `旋转等效: ${postprocessProfile?.machine?.rotaryWrapPerRevolutionMm ? `${postprocessProfile.machine.rotaryWrapPerRevolutionMm} mm/圈` : "-"}`,
     `刀具: ${postprocessProfile?.tool?.description ?? "-"} / ${postprocessProfile?.tool?.toolDiameterMm ?? "-"} mm`,
+    "",
+    "## CAMotics 输入",
+    "",
+    `状态: ${camoticsInput?.status ?? "未生成"}`,
+    `解释方式: ${camoticsInput?.compatibility?.interpretation ?? "-"}`,
+    `可在CAMotics检查: ${camoticsInput?.compatibility?.canRunInCamotics ? "是，按三轴/展开刀路检查" : "否，需要旋转轴仿真软件复核"}`,
+    "推荐文件: camotics-preview.nc（仅仿真，不可上机）",
+    `说明: ${camoticsInput?.compatibility?.reason ?? "-"}`,
     "",
     "## 刀路摘要",
     "",
