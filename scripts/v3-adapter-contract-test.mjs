@@ -171,6 +171,53 @@ try {
     pointCount: neutralToolpath.points.length
   });
 
+  const freecadRunnerPath = resolve("adapters", "freecad", "freecad_runner.py");
+  const freecadExternalJobPath = join(workDir, "freecad-external-job.json");
+  const freecadExternalResultPath = join(workDir, "freecad-external-report.json");
+  const freecadExternalGcodePath = join(workDir, "outputs", "freecad-external-toolpath.nc");
+  const freecadExternalModelPath = join(workDir, "freecad-sample.stl");
+  writeFileSync(freecadExternalModelPath, createTinyAsciiStl());
+  writeFileSync(freecadExternalJobPath, JSON.stringify({
+    ...job,
+    engine: "freecad",
+    modelPath: freecadExternalModelPath,
+    outputs: {
+      ...job.outputs,
+      report: freecadExternalResultPath,
+      gcode: freecadExternalGcodePath
+    }
+  }, null, 2));
+  const freecadExternalRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/freecad/freecad_cam_job.py", freecadExternalJobPath, freecadExternalResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", freecadRunnerPath]),
+      HEDIAO3D_FREECAD_RUNNER_FIXTURE_OUTPUT: "true"
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(freecadExternalRun.status === 0, `freecad external handoff exited ${freecadExternalRun.status}: ${freecadExternalRun.stderr || freecadExternalRun.stdout}`);
+  const freecadExternalReport = JSON.parse(readFileSync(freecadExternalResultPath, "utf8"));
+  validateReport("freecad", freecadExternalReport);
+  assert(freecadExternalReport.status === "completed", "freecad external handoff should complete in fixture mode");
+  assert(freecadExternalReport.gcodePath === freecadExternalGcodePath, "freecad report should expose gcodePath");
+  assert(freecadExternalReport.metrics?.gcode?.status === "generated", "freecad metrics should mark G-code generated");
+  assert(existsSync(freecadExternalGcodePath), "freecad external G-code file missing");
+  const freecadExternalGcode = readFileSync(freecadExternalGcodePath, "utf8");
+  assert(freecadExternalGcode.includes("HeDiao3D FreeCAD external runner fixture"), "freecad external G-code marker missing");
+  assert(/\bG1\b/.test(freecadExternalGcode), "freecad external G-code should contain G1 motion");
+  results.push({
+    id: "freecad-external-handoff",
+    status: freecadExternalReport.status,
+    protocolVersion: freecadExternalReport.protocolVersion,
+    warningCount: freecadExternalReport.warnings?.length ?? 0,
+    recipeOperations: freecadExternalReport.metrics.recipe.operationCount,
+    gcode: freecadExternalReport.metrics.gcode?.status ?? null
+  });
+
   console.log(JSON.stringify({ ok: true, adapters: results }, null, 2));
 } finally {
   rmSync(workDir, { recursive: true, force: true });
@@ -199,4 +246,17 @@ function validateReport(engineId, report) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function createTinyAsciiStl() {
+  return `solid freecad_contract
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 10 0 0
+      vertex 0 5 0
+    endloop
+  endfacet
+endsolid freecad_contract
+`;
 }

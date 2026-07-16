@@ -21,6 +21,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -190,12 +192,15 @@ print("HeDiao3D FreeCAD CAM template prepared:", PLAN["jobId"])
 '''
 
 
-def attempt_experimental_freecad_output(job: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+def attempt_experimental_freecad_output(job: Dict[str, Any], plan: Dict[str, Any], job_path: Path, plan_path: Path) -> Dict[str, Any]:
     if not is_true(os.environ.get("HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT")):
         return {
             "status": "adapter_not_ready",
             "error": "FreeCAD adapter plan generated, but experimental output is disabled. Set HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=true after validating the server recipe.",
         }
+    external_command = resolve_external_command()
+    if external_command is not None:
+        return run_external_freecad_command(job, plan, job_path, plan_path, external_command)
     if not plan["freecad"]["freecadPythonAvailable"]:
         return {
             "status": "adapter_not_ready",
@@ -212,6 +217,82 @@ def attempt_experimental_freecad_output(job: Dict[str, Any], plan: Dict[str, Any
     return {
         "status": "adapter_not_ready",
         "error": "FreeCAD environment detected, but production Path operation creation is still locked pending server validation.",
+    }
+
+
+def resolve_external_command() -> Optional[List[str]]:
+    command_json = os.environ.get("HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON")
+    if command_json:
+        try:
+            parsed = json.loads(command_json)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, list) and all(isinstance(part, str) and part for part in parsed):
+            return parsed
+        return []
+    command = os.environ.get("HEDIAO3D_FREECAD_EXTERNAL_COMMAND")
+    if not command:
+        return None
+    return shlex.split(command, posix=os.name != "nt")
+
+
+def run_external_freecad_command(job: Dict[str, Any], plan: Dict[str, Any], job_path: Path, plan_path: Path, command_parts: List[str]) -> Dict[str, Any]:
+    outputs = job.get("outputs") or {}
+    work_dir = Path(str(job.get("workDir") or Path(outputs.get("report", ".")).parent))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    gcode_path = Path(str(outputs.get("gcode") or work_dir / "toolpath.nc"))
+    gcode_path.parent.mkdir(parents=True, exist_ok=True)
+    if not command_parts:
+        return {
+            "status": "adapter_not_ready",
+            "error": "FreeCAD external command is empty or invalid.",
+        }
+    timeout_s = float(os.environ.get("HEDIAO3D_FREECAD_EXTERNAL_TIMEOUT_SEC") or 180)
+    try:
+        run = subprocess.run(
+            [*command_parts, str(job_path), str(plan_path), str(gcode_path)],
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "status": "adapter_not_ready",
+            "error": f"FreeCAD external command failed to start: {exc}",
+        }
+    command_report = {
+        "command": " ".join(command_parts),
+        "commandParts": command_parts,
+        "exitCode": run.returncode,
+        "stdoutTail": run.stdout[-1200:],
+        "stderrTail": run.stderr[-1200:],
+    }
+    if run.returncode != 0:
+        return {
+            "status": "adapter_not_ready",
+            "error": f"FreeCAD external command exited {run.returncode}: {(run.stderr or run.stdout or '').strip()[:1200]}",
+            "externalCommand": command_report,
+        }
+    if not gcode_path.exists() or gcode_path.stat().st_size <= 0:
+        return {
+            "status": "adapter_not_ready",
+            "error": f"FreeCAD external command completed but did not write G-code output: {gcode_path}",
+            "externalCommand": command_report,
+        }
+    gcode = gcode_path.read_text(encoding="utf-8", errors="ignore")
+    if "G0" not in gcode.upper() and "G1" not in gcode.upper():
+        return {
+            "status": "adapter_not_ready",
+            "error": f"FreeCAD external command output does not contain G0/G1 motion: {gcode_path}",
+            "externalCommand": command_report,
+        }
+    return {
+        "status": "completed",
+        "error": None,
+        "gcodePath": str(gcode_path),
+        "synthetic": False,
+        "externalCommand": command_report,
     }
 
 
@@ -256,7 +337,7 @@ def main() -> int:
     else:
         plan = build_freecad_plan(job, detection)
         artifact_paths = write_plan_artifacts(job, plan)
-        attempt = attempt_experimental_freecad_output(job, plan)
+        attempt = attempt_experimental_freecad_output(job, plan, job_path, Path(artifact_paths["freecadCamPlan"]))
         warnings = [
             "FreeCAD adapter now emits an auditable CAM plan and run template.",
             "Production G-code output remains locked until the FreeCAD Path operation recipe is validated on the deployment server.",
@@ -282,8 +363,20 @@ def main() -> int:
                     "operationCount": plan["operationCounts"]["total"],
                     "enabledOperationCount": plan["operationCounts"]["enabled"],
                 },
+                "externalCommand": attempt.get("externalCommand"),
+                "gcode": {
+                    "status": "generated" if attempt.get("gcodePath") else "not_generated",
+                    "path": attempt.get("gcodePath"),
+                    "synthetic": attempt.get("synthetic"),
+                },
             },
         )
+        if attempt.get("gcodePath"):
+            result["gcodePath"] = attempt["gcodePath"]
+            result["outputs"] = {
+                "gcode": attempt["gcodePath"],
+                "report": str(result_path),
+            }
 
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

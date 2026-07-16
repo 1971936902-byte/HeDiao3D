@@ -4571,13 +4571,7 @@ function pushIfArtifactExists(job, filename) {
 
 function detectCamEngines() {
   return [
-    detectCommandEngine({
-      id: "freecad",
-      name: "FreeCAD CAM",
-      commands: ["FreeCADCmd", "freecadcmd", "FreeCAD", "freecad"],
-      role: "专业 CAM job / Path Workbench adapter",
-      adapterReady: true
-    }),
+    detectFreeCadEngine(),
     detectCommandEngine({
       id: "blendercam",
       name: "BlenderCAM / FabexCNC",
@@ -4604,6 +4598,29 @@ function detectCamEngines() {
       notes: "用于外部 CAM 未安装时的小闭环验证；正式 V3 将优先调用 FreeCAD/BlenderCAM/CAMotics。"
     }
   ];
+}
+
+function detectFreeCadEngine() {
+  if (String(process.env.HEDIAO3D_FORCE_FREECAD_ADAPTER ?? "").toLowerCase() === "true") {
+    const command = process.env.PYTHON ?? "python";
+    return {
+      id: "freecad",
+      name: "FreeCAD CAM",
+      role: "专业 CAM job / Path Workbench adapter",
+      available: true,
+      adapterReady: true,
+      command,
+      version: "forced adapter contract mode",
+      notes: "HEDIAO3D_FORCE_FREECAD_ADAPTER=true，仅用于 adapter/Orchestrator 合约测试；生产环境必须安装真实 FreeCADCmd/freecadcmd。"
+    };
+  }
+  return detectCommandEngine({
+    id: "freecad",
+    name: "FreeCAD CAM",
+    commands: ["FreeCADCmd", "freecadcmd", "FreeCAD", "freecad"],
+    role: "专业 CAM job / Path Workbench adapter",
+    adapterReady: true
+  });
 }
 
 function detectOpenCamLibEngine() {
