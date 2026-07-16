@@ -195,6 +195,14 @@ type V3OrchestratorJob = {
         autoRepairEnabled: boolean;
         repairRequired: boolean;
         repairSuggested: boolean;
+        importedRepair?: {
+          imported: boolean;
+          sourcePath: string | null;
+          targetPath: string;
+          filename?: string;
+          url?: string;
+          reason?: string;
+        };
         outputs?: Array<{
           id: string;
           role: string;
@@ -4407,6 +4415,12 @@ export function App() {
                   {v3Job.result.summary.repairExecution.summary}
                 </small>
               )}
+              {v3Job?.result?.summary.repairExecution?.importedRepair?.imported && (
+                <small className="v3-inline-ok">
+                  修复产物：已导入 {v3Job.result.summary.repairExecution.importedRepair.filename ?? "repaired-model.stl"}
+                  {v3Job.result.summary.camInputPlan?.modelSelection?.selectedModelId === "repairedStl" ? " · 已作为CAM输入" : " · 未选中"}
+                </small>
+              )}
               {v3Job?.result?.summary.camInputPlan && (
                 <small>
                   CAM输入：{v3Job.result.summary.camInputPlan.summary}
@@ -4422,6 +4436,7 @@ export function App() {
                   CAM模型选择：{v3Job.result.summary.camInputPlan.modelSelection.selectionReason}
                   {" · "}
                   候选 {v3Job.result.summary.camInputPlan.modelSelection.candidates.filter((candidate) => candidate.exists).length}/{v3Job.result.summary.camInputPlan.modelSelection.candidates.length}
+                  {v3Job.result.summary.camInputPlan.modelSelection.selectedModelRole && v3Job.result.summary.camInputPlan.modelSelection.selectedModelRole !== "source" ? ` · 使用${v3Job.result.summary.camInputPlan.modelSelection.selectedModelRole}模型` : ""}
                   {v3Job.result.summary.camInputPlan.modelSelection.blockingReason ? ` · ${v3Job.result.summary.camInputPlan.modelSelection.blockingReason}` : ""}
                 </small>
               )}
@@ -6765,8 +6780,10 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "## 外部CAM状态",
     "",
     `Mesh修复执行: ${repairExecution?.summary ?? "未生成"}`,
+    `修复产物导入: ${repairExecution?.importedRepair?.imported ? `是 / ${repairExecution.importedRepair.filename ?? "repaired-model.stl"}` : "否"}`,
     `CAM输入模型: ${camModelSelection?.selectedModelId ?? camInputPlan?.selectedModelKind ?? "-"}`,
     `CAM模型角色: ${camModelSelection?.selectedModelRole ?? "-"}`,
+    `CAM输入路径: ${camModelSelection?.selectedModelPath ?? camInputPlan?.selectedModelPath ?? "-"}`,
     `CAM模型选择: ${camModelSelection?.selectionReason ?? camInputPlan?.summary ?? "-"}`,
     `CAM模型阻断: ${camModelSelection?.blockingReason ?? "无"}`,
     `CAM候选模型: ${camModelSelection?.candidates?.filter((candidate) => candidate.exists).length ?? 0}/${camModelSelection?.candidates?.length ?? repairExecution?.outputs?.length ?? 0}`,
