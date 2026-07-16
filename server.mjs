@@ -771,32 +771,19 @@ function createEngineReadinessReport(engines, selected, settings) {
   const optional = settings.camMode === "3axis"
     ? ["blendercam", "opencamlib"]
     : ["freecad", "opencamlib"];
-  const engineChecks = [
-    ...engines.map((engine) => ({
+  const engineChecks = engines.map((engine) => ({
       id: engine.id,
       name: engine.name,
       role: engine.role,
       required: required.includes(engine.id),
+      optional: optional.includes(engine.id),
       available: engine.available,
       adapterReady: engine.adapterReady,
       command: engine.command,
       version: engine.version,
       status: engine.available && engine.adapterReady ? "ready" : engine.available ? "adapter-pending" : "missing",
       notes: engine.notes
-    })),
-    {
-      id: "opencamlib",
-      name: "OpenCAMLib",
-      role: "底层刀具接触/drop-cutter 算法库",
-      required: false,
-      available: false,
-      adapterReady: false,
-      command: null,
-      version: null,
-      status: "planned",
-      notes: "当前还未接入 Python/OpenCAMLib wrapper；适合后续替换自研采样核心。"
-    }
-  ];
+    }));
   const missingRequired = engineChecks.filter((engine) => engine.required && !engine.available);
   const adapterPending = engineChecks.filter((engine) => engine.required && engine.available && !engine.adapterReady);
   const externalReady = required.some((id) => {
@@ -1131,7 +1118,8 @@ function getAdapterScriptPath(engineId) {
   const adapterScriptMap = {
     freecad: join(process.cwd(), "adapters", "freecad", "freecad_cam_job.py"),
     blendercam: join(process.cwd(), "adapters", "blendercam", "blendercam_job.py"),
-    camotics: join(process.cwd(), "adapters", "camotics", "camotics_job.js")
+    camotics: join(process.cwd(), "adapters", "camotics", "camotics_job.js"),
+    opencamlib: join(process.cwd(), "adapters", "opencamlib", "opencamlib_job.py")
   };
   return adapterScriptMap[engineId] ?? null;
 }
@@ -1147,6 +1135,12 @@ function createAdapterCommandArgs(selectedEngine, scriptPath, jobPath, resultPat
     return {
       command: selectedEngine.command,
       args: ["--background", "--python", scriptPath, "--", jobPath, resultPath]
+    };
+  }
+  if (selectedEngine.id === "opencamlib") {
+    return {
+      command: selectedEngine.command ?? "python",
+      args: [scriptPath, jobPath, resultPath]
     };
   }
   return {
@@ -1270,6 +1264,7 @@ function detectCamEngines() {
       role: "材料去除仿真 adapter",
       adapterReady: false
     }),
+    detectOpenCamLibEngine(),
     {
       id: "internal-mesh-cam",
       name: "HeDiao3D internal Mesh CAM",
@@ -1281,6 +1276,40 @@ function detectCamEngines() {
       notes: "用于外部 CAM 未安装时的小闭环验证；正式 V3 将优先调用 FreeCAD/BlenderCAM/CAMotics。"
     }
   ];
+}
+
+function detectOpenCamLibEngine() {
+  const pythonCommands = ["python", "python3", "py"];
+  for (const command of pythonCommands) {
+    const probe = spawnSync(command, ["-c", "import importlib.util; import sys; mod = importlib.util.find_spec('opencamlib') or importlib.util.find_spec('ocl'); print('opencamlib' if mod else 'missing'); sys.exit(0 if mod else 3)"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 2500
+    });
+    if (!probe.error && probe.status === 0) {
+      return {
+        id: "opencamlib",
+        name: "OpenCAMLib",
+        role: "底层刀具接触/drop-cutter 算法库 adapter",
+        available: true,
+        adapterReady: false,
+        command,
+        version: String(probe.stdout ?? "").trim() || "python module detected",
+        notes: "已检测到 Python OpenCAMLib 模块；adapter 仍需补齐 drop-cutter/水线配方后才能替换内置采样。"
+      };
+    }
+  }
+
+  return {
+    id: "opencamlib",
+    name: "OpenCAMLib",
+    role: "底层刀具接触/drop-cutter 算法库 adapter",
+    available: false,
+    adapterReady: false,
+    command: null,
+    version: null,
+    notes: "未检测到 Python OpenCAMLib/ocl 模块；后续可在 Linux 服务端安装后启用几何内核 adapter。"
+  };
 }
 
 function detectCommandEngine({ id, name, commands, role, adapterReady }) {
