@@ -33,6 +33,8 @@ async function main() {
   const runbook = await runbookArtifact.text();
   assert(runbook.includes("HeDiao3D V3 deployment acceptance runbook"), "readiness runbook missing heading");
   assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
+  assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
+  assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
 
   console.log(JSON.stringify({
     ok: true,
