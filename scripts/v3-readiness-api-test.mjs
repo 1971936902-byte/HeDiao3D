@@ -14,6 +14,12 @@ async function main() {
   assert(Array.isArray(latest.reports), "readiness report history missing");
   assert(JSON.stringify(latest.latest).length < 50000, "latest readiness summary is too large");
 
+  const runbookResult = await getJson("/api/orchestrator/readiness/runbook-result/latest");
+  assert(Object.hasOwn(runbookResult, "latest"), "runbook result latest field missing");
+  if (runbookResult.latest) {
+    validateRunbookResult(runbookResult.latest, "GET /api/orchestrator/readiness/runbook-result/latest");
+  }
+
   const jsonArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.json}`);
   assert(jsonArtifact.ok, `readiness JSON artifact failed: ${jsonArtifact.status}`);
   const full = await jsonArtifact.json();
@@ -66,6 +72,16 @@ function validateReadiness(report, label) {
   assert(report.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(report.apiArtifacts?.markdown, `${label} missing Markdown artifact`);
   assert(report.apiArtifacts?.runbook, `${label} missing runbook artifact`);
+  assert(Object.hasOwn(report, "runbookResult"), `${label} missing runbookResult field`);
+  if (report.runbookResult) validateRunbookResult(report.runbookResult, `${label} runbookResult`);
+}
+
+function validateRunbookResult(result, label) {
+  assert(result.schema === "hediao3d.v3-acceptance-runbook-result.v1", `${label} schema mismatch`);
+  assert(typeof result.ok === "boolean", `${label} ok missing`);
+  assert(typeof result.failedCount === "number", `${label} failedCount missing`);
+  assert(Array.isArray(result.failedSteps), `${label} failedSteps missing`);
+  assert(typeof result.stepCount === "number", `${label} stepCount missing`);
 }
 
 async function getJson(path) {

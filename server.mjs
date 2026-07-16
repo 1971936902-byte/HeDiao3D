@@ -59,6 +59,10 @@ const server = createServer(async (req, res) => {
       return getLatestV3Readiness(res);
     }
 
+    if (req.method === "GET" && req.url === "/api/orchestrator/readiness/runbook-result/latest") {
+      return getLatestV3RunbookResult(res);
+    }
+
     if (req.method === "POST" && req.url === "/api/orchestrator/readiness") {
       return createV3ReadinessReport(req, res);
     }
@@ -501,8 +505,9 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const diagnostics = await createOrchestratorDiagnosticsReport();
   const nativeCam = readLatestFromDirectory("public/native-cam-readiness", "native-cam-readiness.json", createNativeCamReadinessPublicSummary);
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
+  const runbookResult = readLatestV3RunbookResultSummary();
   const latestJob = getLatestOrchestratorJobSummary();
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, latestJob });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, latestJob });
   const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, latestJob });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
@@ -516,12 +521,13 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     diagnostics,
     nativeCam,
     adapterValidation,
+    runbookResult,
     latestJob,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, latestJob }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, latestJob }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -552,6 +558,17 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, lat
     if (!adapterValidation.overall.readyForProduction) {
       nextActions.push(adapterValidation.overall.note ?? "继续完成外部 CAM adapter 的真实输出验收。");
     }
+  }
+
+  if (!runbookResult) {
+    warnings.push("尚未执行 V3 部署验收脚本，当前总门禁缺少服务器侧执行证据。");
+    nextActions.push("在 Linux CAM 服务器运行下载的 v3-acceptance-runbook.sh，再重新生成总门禁。");
+  } else if (!runbookResult.ok) {
+    const firstFailed = runbookResult.failedSteps[0];
+    const message = `V3 验收脚本失败 ${runbookResult.failedCount} 项${firstFailed ? `：${firstFailed.title}` : ""}。`;
+    if (runbookResult.failedSteps.some((step) => step.blocksProduction)) blockers.push(message);
+    else warnings.push(message);
+    nextActions.push("查看 runbook result JSON，优先修复失败步骤后重新运行验收脚本。");
   }
 
   if (!latestJob) {
@@ -715,6 +732,50 @@ function readLatestFromDirectory(relativeRoot, filename, mapper) {
   }
 }
 
+function getLatestV3RunbookResult(res) {
+  return json(res, 200, { latest: readLatestV3RunbookResultSummary() });
+}
+
+function readLatestV3RunbookResultSummary() {
+  const resultPath = join(process.cwd(), "public", "orchestrator-readiness", "runbook-results", "v3-acceptance-runbook-result.json");
+  if (!existsSync(resultPath)) return null;
+  try {
+    const result = JSON.parse(readFileSync(resultPath, "utf8"));
+    return createV3RunbookResultPublicSummary(result, resultPath);
+  } catch {
+    return null;
+  }
+}
+
+function createV3RunbookResultPublicSummary(result, resultPath) {
+  const steps = Array.isArray(result.steps) ? result.steps : [];
+  const failedSteps = Array.isArray(result.failedSteps) ? result.failedSteps : steps
+    .filter((step) => !step.ok)
+    .map((step) => ({
+      id: step.id,
+      title: step.title,
+      exitCode: step.exitCode,
+      blocksProduction: Boolean(step.blocksProduction)
+    }));
+  return {
+    schema: result.schema ?? "unknown",
+    createdAt: result.createdAt ?? null,
+    ok: Boolean(result.ok),
+    exitCode: Number.isFinite(Number(result.exitCode)) ? Number(result.exitCode) : null,
+    failedCount: Number.isFinite(Number(result.failedCount)) ? Number(result.failedCount) : failedSteps.length,
+    failedSteps: failedSteps.slice(0, 8).map((step) => ({
+      id: step.id ?? "unknown",
+      title: step.title ?? step.id ?? "unknown",
+      exitCode: Number.isFinite(Number(step.exitCode)) ? Number(step.exitCode) : null,
+      blocksProduction: Boolean(step.blocksProduction)
+    })),
+    stepCount: steps.length,
+    levelAtReport: result.levelAtReport ?? null,
+    acceptanceAtReport: result.acceptanceAtReport ?? null,
+    artifactPath: resultPath
+  };
+}
+
 function readV3ReadinessSummary(reportId) {
   if (!/^[a-zA-Z0-9_.:-]+$/.test(reportId)) return null;
   const reportPath = join(process.cwd(), "public", "orchestrator-readiness", reportId, "v3-readiness-report.json");
@@ -750,6 +811,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
       completedAdapters: report.adapterValidation.overall.completedAdapters,
       readyForProduction: report.adapterValidation.overall.readyForProduction
     } : null,
+    runbookResult: report.runbookResult ?? null,
     latestJob: report.latestJob,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
@@ -830,6 +892,7 @@ function createV3ReadinessMarkdown(report) {
     `- Diagnostics: ${report.diagnostics?.level ?? "unknown"} / ${report.diagnostics?.summary ?? ""}`,
     `- Native CAM: ${report.nativeCam ? `${report.nativeCam.summary.readyCount}/${report.nativeCam.summary.requiredCount} ${report.nativeCam.summary.level}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
+    `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / ${report.runbookResult.stepCount} steps` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
     ""
   ];

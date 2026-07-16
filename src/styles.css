@@ -1929,6 +1929,18 @@ button:disabled {
   line-height: 1.35;
 }
 
+.v3-diagnostics .v3-inline-ok {
+  color: var(--green);
+}
+
+.v3-diagnostics .v3-inline-warning {
+  color: var(--amber);
+}
+
+.v3-diagnostics .v3-inline-critical {
+  color: var(--rose);
+}
+
 .v3-engine div {
   display: flex;
   justify-content: space-between;

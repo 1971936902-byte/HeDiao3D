@@ -699,10 +699,28 @@ type V3ReadinessSummary = {
     completedAdapters: number;
     readyForProduction: boolean;
   } | null;
+  runbookResult: {
+    schema: string;
+    createdAt: string | null;
+    ok: boolean;
+    exitCode: number | null;
+    failedCount: number;
+    failedSteps: Array<{
+      id: string;
+      title: string;
+      exitCode: number | null;
+      blocksProduction: boolean;
+    }>;
+    stepCount: number;
+    levelAtReport: string | null;
+    acceptanceAtReport: string | null;
+    artifactPath: string;
+  } | null;
   latestJob: V3JobSummary | null;
   apiArtifacts?: {
     json?: string;
     markdown?: string;
+    runbook?: string;
   };
 };
 
@@ -3991,6 +4009,10 @@ export function App() {
                   {v3Readiness.adapterValidation && (
                     <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
                   )}
+                  <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                    验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
+                    {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
+                  </small>
                   {v3Readiness.acceptancePlan && (
                     <>
                       <small>
