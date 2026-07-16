@@ -361,6 +361,8 @@ async function createOrchestratorJob(req, res) {
     updatedAt: new Date().toISOString(),
     workDir: null,
     pipeline: [],
+    currentStage: "queued",
+    progress: 0,
     artifacts: [],
     logs: [],
     cancelRequested: false,
@@ -407,6 +409,8 @@ async function cancelOrchestratorJob(jobId, res) {
     orchestratorQueue.splice(queuedIndex, 1);
     job.status = "canceled";
     job.cancelRequested = true;
+    job.currentStage = "canceled";
+    job.progress = 100;
     appendOrchestratorLog(job, "任务已在队列中取消，未进入 CAM 计算。");
     await writeJobManifest(job);
     return json(res, 200, job);
@@ -428,6 +432,8 @@ function runNextOrchestratorJob() {
         if (error?.code === "ORCHESTRATOR_CANCELED") {
           item.job.status = "canceled";
           item.job.error = null;
+          item.job.currentStage = "canceled";
+          item.job.progress = 100;
           appendOrchestratorLog(item.job, "任务已取消。");
         } else {
           item.job.status = "failed";
@@ -552,6 +558,8 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-gate.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   job.status = "completed";
+  job.currentStage = "completed";
+  job.progress = 100;
   job.result = {
     engine: "internal-mesh-cam",
     fallbackFrom: selected.id,
@@ -620,6 +628,28 @@ function updatePipelineStage(job, id, status, message) {
   stage.status = status;
   stage.message = message;
   stage.updatedAt = new Date().toISOString();
+  job.currentStage = id;
+  job.progress = estimateOrchestratorProgress(job.pipeline, id, status);
+}
+
+function estimateOrchestratorProgress(pipeline, activeId, activeStatus) {
+  const weights = {
+    queue: 6,
+    "mesh-quality": 16,
+    "cam-input": 26,
+    engine: 36,
+    "external-cam": 46,
+    toolpath: 68,
+    simulation: 84,
+    postprocess: 96
+  };
+  const base = weights[activeId] ?? 0;
+  const bump = activeStatus === "completed" || activeStatus === "review" || activeStatus === "skipped" ? 6 : activeStatus === "running" ? 2 : 0;
+  const completedCount = Array.isArray(pipeline)
+    ? pipeline.filter((stage) => ["completed", "review", "skipped"].includes(stage.status)).length
+    : 0;
+  const completedBonus = Math.min(12, completedCount * 1.2);
+  return Math.max(0, Math.min(98, Math.round(base + bump + completedBonus)));
 }
 
 function checkOrchestratorCancellation(job) {
@@ -1418,6 +1448,8 @@ function createOrchestratorJobSummary(job) {
     modelUrl: job.modelUrl,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt ?? diskUpdatedAt ?? job.createdAt,
+    currentStage: job.currentStage ?? inferCurrentStage(job),
+    progress: Number.isFinite(Number(job.progress)) ? Number(job.progress) : inferJobProgress(job),
     artifactCount: job.artifacts?.length ?? 0,
     latestLog: job.logs?.[job.logs.length - 1]?.message ?? "",
     resultEngine: job.result?.engine ?? null,
@@ -1431,6 +1463,23 @@ function createOrchestratorJobSummary(job) {
     allowTrialNc: summary.productionGate?.allowTrialNc ?? false,
     allowAirRun: summary.productionGate?.allowAirRun ?? false
   };
+}
+
+function inferCurrentStage(job) {
+  if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return job.status;
+  const running = job.pipeline?.find((stage) => stage.status === "running");
+  if (running) return running.id;
+  const lastTouched = [...(job.pipeline ?? [])].reverse().find((stage) => stage.updatedAt);
+  return lastTouched?.id ?? job.status ?? "queued";
+}
+
+function inferJobProgress(job) {
+  if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return 100;
+  if (!Array.isArray(job.pipeline) || job.pipeline.length === 0) return job.status === "queued" ? 0 : 8;
+  const running = job.pipeline.find((stage) => stage.status === "running");
+  if (running) return estimateOrchestratorProgress(job.pipeline, running.id, running.status);
+  const lastTouched = [...job.pipeline].reverse().find((stage) => stage.updatedAt);
+  return lastTouched ? estimateOrchestratorProgress(job.pipeline, lastTouched.id, lastTouched.status) : 0;
 }
 
 function getOrchestratorArtifact(jobId, filename, res) {

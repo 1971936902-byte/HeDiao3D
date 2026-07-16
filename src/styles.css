@@ -1931,6 +1931,34 @@ button:disabled {
   margin: 6px 0;
 }
 
+.v3-progress {
+  display: grid;
+  gap: 4px;
+}
+
+.v3-progress {
+  position: relative;
+  height: 24px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v3-progress i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(25, 199, 180, 0.38), rgba(71, 209, 140, 0.42));
+}
+
+.v3-progress small {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+}
+
 .v3-pipeline-stage {
   display: grid;
   grid-template-columns: 1fr auto;

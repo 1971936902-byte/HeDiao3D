@@ -132,6 +132,8 @@ type V3OrchestratorJob = {
   createdAt: string;
   updatedAt: string;
   workDir: string | null;
+  currentStage?: string;
+  progress?: number;
   pipeline?: Array<{
     id: string;
     label: string;
@@ -282,6 +284,8 @@ type V3JobSummary = {
   modelUrl: string;
   createdAt: string;
   updatedAt: string;
+  currentStage: string;
+  progress: number;
   artifactCount: number;
   latestLog: string;
   resultEngine: string | null;
@@ -3433,6 +3437,12 @@ export function App() {
             <div className="v3-status-card">
               <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
               <span>{v3Status}</span>
+              {v3Job && (
+                <div className="v3-progress" aria-label={`V3进度${Math.round(v3Job.progress ?? 0)}%`}>
+                  <i style={{ width: `${Math.max(0, Math.min(100, v3Job.progress ?? 0))}%` }} />
+                  <small>阶段 {v3Job.currentStage ?? "queued"} · {Math.round(v3Job.progress ?? 0)}%</small>
+                </div>
+              )}
               {v3Job?.pipeline && v3Job.pipeline.length > 0 && (
                 <div className="v3-pipeline">
                   {v3Job.pipeline.map((stage) => (
@@ -3544,8 +3554,8 @@ export function App() {
                 </div>
                 {v3JobHistory.slice(0, 5).map((job) => (
                   <button className="v3-history-item" type="button" onClick={() => handleLoadV3Job(job.id)} key={job.id}>
-                    <span>{job.id.slice(0, 8)} · {job.status} · {job.packageLevel ?? "no-package"}</span>
-                    <small>{job.points ? `${job.points} 点` : "无刀路"} · {job.updatedAt.slice(0, 19).replace("T", " ")}</small>
+                    <span>{job.id.slice(0, 8)} · {job.status} · {job.packageLevel ?? "no-package"} · {Math.round(job.progress ?? 0)}%</span>
+                    <small>{job.currentStage ?? "queued"} · {job.points ? `${job.points} 点` : "无刀路"} · {job.updatedAt.slice(0, 19).replace("T", " ")}</small>
                   </button>
                 ))}
               </div>
