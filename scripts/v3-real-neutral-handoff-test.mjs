@@ -9,7 +9,7 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 const fixtureDir = mkdtempSync(join(tmpdir(), "hediao3d-real-neutral-handoff-"));
-const neutralFixturePath = join(fixtureDir, "opencamlib-neutral-real-fixture.json");
+const neutralCommandPath = join(fixtureDir, "write-opencamlib-neutral-fixture.mjs");
 const camoticsFixturePath = join(fixtureDir, "camotics-real-result-fixture.json");
 
 const settings = {
@@ -54,7 +54,7 @@ const settings = {
 let server;
 
 async function main() {
-  writeNeutralFixture(neutralFixturePath);
+  writeNeutralCommand(neutralCommandPath);
   writeCamoticsFixture(camoticsFixturePath);
 
   server = spawn(process.execPath, ["server.mjs"], {
@@ -66,7 +66,7 @@ async function main() {
       HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER: "true",
       HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
       HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "false",
-      HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON: neutralFixturePath,
+      HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON: JSON.stringify([process.execPath, neutralCommandPath]),
       HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
       HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "false",
       HEDIAO3D_CAMOTICS_RESULT_JSON: camoticsFixturePath
@@ -94,12 +94,14 @@ async function main() {
 
   const adapterReport = await getArtifactJson(job.id, "adapter-report.json");
   assert(adapterReport.status === "completed", `adapter report expected completed, got ${adapterReport.status}`);
-  assert(adapterReport.metrics?.neutralToolpath?.imported === true, "adapter should import non-synthetic neutral toolpath");
+  assert(adapterReport.metrics?.neutralToolpath?.generatedByExternalCommand === true, "adapter should run external neutral command");
+  assert(adapterReport.metrics?.neutralToolpath?.imported === false, "external command output should not be classified as imported fixture");
   assert(adapterReport.metrics?.neutralToolpath?.synthetic === false, "adapter neutral output must not be synthetic");
 
   const neutralToolpath = await getArtifactJson(job.id, "neutral-toolpath.json");
   assert(neutralToolpath.schema === "hediao3d.neutral-toolpath.v1", "neutral schema mismatch");
   assert(neutralToolpath.synthetic === false, "neutral fixture should remain non-synthetic after import");
+  assert(neutralToolpath.generatedByExternalCommand === true, "neutral output should record external command generation");
   assert(Array.isArray(neutralToolpath.points) && neutralToolpath.points.length === 36, "neutral point count mismatch");
 
   const toolpathSummary = await getArtifactJson(job.id, "toolpath-summary.json");
@@ -142,7 +144,7 @@ async function main() {
     resultEngine: job.result.engine,
     source: toolpathSummary.source,
     neutralPoints: neutralToolpath.points.length,
-    neutralImported: adapterReport.metrics.neutralToolpath.imported,
+    generatedByExternalCommand: adapterReport.metrics.neutralToolpath.generatedByExternalCommand,
     simulationEngine: simulationSummary.engine,
     simulationEvidence: productionGate.simulationEvidence.level,
     production: productionGate.allowProductionNc,
@@ -151,37 +153,54 @@ async function main() {
   }, null, 2));
 }
 
-function writeNeutralFixture(filePath) {
-  const points = [];
-  for (const angle of [0, 60, 120, 180, 240, 300]) {
-    for (let col = 0; col < 6; col += 1) {
-      const t = col / 5;
-      const x = -19 + 38 * t;
-      const ridge = 1 - Math.abs(0.5 - t) * 1.6;
-      const depth = 0.35 + Math.max(0, ridge) * 0.75 + (angle === 180 ? 0.08 : 0);
-      points.push({
-        x: round(x, 4),
-        a: angle,
-        z: round(settings.safeZ - depth, 4),
-        depth: round(depth, 4),
-        source: "non-synthetic-neutral-fixture"
-      });
-    }
+function writeNeutralCommand(filePath) {
+  writeFileSync(filePath, `import { readFileSync, writeFileSync } from "node:fs";
+
+const [, , jobPath, planPath, outputPath] = process.argv;
+const job = JSON.parse(readFileSync(jobPath, "utf8"));
+const plan = JSON.parse(readFileSync(planPath, "utf8"));
+const settings = job.settings ?? {};
+const safeZ = Number(settings.safeZ ?? 22);
+const points = [];
+for (const angle of [0, 60, 120, 180, 240, 300]) {
+  for (let col = 0; col < 6; col += 1) {
+    const t = col / 5;
+    const x = -19 + 38 * t;
+    const ridge = 1 - Math.abs(0.5 - t) * 1.6;
+    const depth = 0.35 + Math.max(0, ridge) * 0.75 + (angle === 180 ? 0.08 : 0);
+    points.push({
+      x: round(x, 4),
+      a: angle,
+      z: round(safeZ - depth, 4),
+      depth: round(depth, 4),
+      source: "external-command-neutral-fixture"
+    });
   }
-  writeFileSync(filePath, JSON.stringify({
-    schema: "hediao3d.neutral-toolpath.v1",
-    engine: "opencamlib",
-    synthetic: false,
-    createdBy: "v3-real-neutral-handoff-test fixture",
-    coordinate: {
-      lengthAxis: "X",
-      rotaryAxis: "Y",
-      depthAxis: "Z",
-      rotaryUnit: "degree"
-    },
-    estimatedMinutes: 1.2,
-    points
-  }, null, 2));
+}
+writeFileSync(outputPath, JSON.stringify({
+  schema: "hediao3d.neutral-toolpath.v1",
+  engine: "opencamlib",
+  synthetic: false,
+  createdBy: "v3-real-neutral-handoff-test external command",
+  coordinate: {
+    lengthAxis: "X",
+    rotaryAxis: settings.rotaryOutputAxis ?? "Y",
+    depthAxis: "Z",
+    rotaryUnit: "degree"
+  },
+  estimatedMinutes: 1.2,
+  points,
+  planEcho: {
+    schema: plan.schema,
+    recommendedPrimary: plan.sampling?.recommendedPrimary
+  }
+}, null, 2));
+
+function round(value, digits) {
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
+}
+`);
 }
 
 function writeCamoticsFixture(filePath) {

@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,6 +44,8 @@ def detect_opencamlib() -> Dict[str, Any]:
         "origin": selected["origin"] if selected else None,
         "modules": modules,
         "experimentalOutputEnabled": is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT")),
+        "externalCommand": os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND"),
+        "externalCommandJson": os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON"),
     }
 
 
@@ -196,12 +200,17 @@ print("HeDiao3D OpenCAMLib template prepared:", PLAN["jobId"], ocl_module)
 '''
 
 
-def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any], job_path: Path, plan_path: str) -> Dict[str, Any]:
     if not is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT")):
         return {
             "status": "adapter_not_ready",
             "error": "OpenCAMLib kernel plan generated, but experimental output is disabled. Set HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true after validating the server recipe.",
         }
+    external_command = resolve_external_command()
+    if external_command is not None:
+        commanded = run_external_neutral_command(job, plan, job_path, Path(plan_path), external_command)
+        if commanded is not None:
+            return commanded
     imported = try_import_neutral_toolpath(job)
     if imported is not None:
         return imported
@@ -221,6 +230,108 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
     return {
         "status": "adapter_not_ready",
         "error": "OpenCAMLib module detected, but cutter-contact output is still locked pending server validation.",
+    }
+
+
+def resolve_external_command() -> Optional[List[str]]:
+    command_json = os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON")
+    if command_json:
+        try:
+            parsed = json.loads(command_json)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, list) and all(isinstance(part, str) and part for part in parsed):
+            return parsed
+        return []
+    command = os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND")
+    if not command:
+        return None
+    return shlex.split(command, posix=os.name != "nt")
+
+
+def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_path: Path, plan_path: Path, command_parts: List[str]) -> Optional[Dict[str, Any]]:
+    outputs = job.get("outputs") or {}
+    work_dir = Path(str(job.get("workDir") or Path(outputs.get("report", ".")).parent))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    neutral_path = Path(str(outputs.get("neutralToolpath") or work_dir / "neutral-toolpath.json"))
+    neutral_path.parent.mkdir(parents=True, exist_ok=True)
+    if not command_parts:
+        return {
+            "status": "adapter_not_ready",
+            "error": "OpenCAMLib external command is empty or invalid.",
+        }
+    timeout_s = float(os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_TIMEOUT_SEC") or 120)
+    try:
+        run = subprocess.run(
+            [*command_parts, str(job_path), str(plan_path), str(neutral_path)],
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "status": "adapter_not_ready",
+            "error": f"OpenCAMLib external command failed to start: {exc}",
+        }
+    if run.returncode != 0:
+        return {
+            "status": "adapter_not_ready",
+            "error": f"OpenCAMLib external command exited {run.returncode}: {(run.stderr or run.stdout or '').strip()[:1200]}",
+            "externalCommand": {
+                "command": " ".join(command_parts),
+                "commandParts": command_parts,
+                "exitCode": run.returncode,
+                "stdoutTail": run.stdout[-1200:],
+                "stderrTail": run.stderr[-1200:],
+            },
+        }
+    if not neutral_path.exists():
+        return {
+            "status": "adapter_not_ready",
+            "error": f"OpenCAMLib external command completed but did not write neutral output: {neutral_path}",
+            "externalCommand": {
+                "command": " ".join(command_parts),
+                "commandParts": command_parts,
+                "exitCode": run.returncode,
+                "stdoutTail": run.stdout[-1200:],
+                "stderrTail": run.stderr[-1200:],
+            },
+        }
+    try:
+        neutral = json.loads(neutral_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "status": "adapter_not_ready",
+            "error": f"OpenCAMLib external command output is not valid neutral JSON: {neutral_path}",
+        }
+    validation_errors = validate_imported_neutral_toolpath(neutral)
+    if validation_errors:
+        return {
+            "status": "adapter_not_ready",
+            "error": "OpenCAMLib external command neutral output failed validation: " + "; ".join(validation_errors),
+        }
+    neutral = {
+        **neutral,
+        "jobId": neutral.get("jobId") or job.get("jobId"),
+        "engine": ENGINE,
+        "synthetic": False,
+        "generatedByExternalCommand": True,
+    }
+    neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "status": "completed",
+        "error": None,
+        "neutralToolpathPath": str(neutral_path),
+        "synthetic": False,
+        "imported": False,
+        "externalCommand": {
+            "command": " ".join(command_parts),
+            "commandParts": command_parts,
+            "exitCode": run.returncode,
+            "stdoutTail": run.stdout[-1200:],
+            "stderrTail": run.stderr[-1200:],
+        },
     }
 
 
@@ -392,7 +503,7 @@ def main() -> int:
     else:
         plan = build_kernel_plan(job, detection)
         artifact_paths = write_plan_artifacts(job, plan)
-        attempt = attempt_experimental_kernel_output(job, plan)
+        attempt = attempt_experimental_kernel_output(job, plan, job_path, artifact_paths["opencamlibKernelPlan"])
         result = base_report(
             job,
             attempt["status"],
@@ -421,8 +532,10 @@ def main() -> int:
                     "path": attempt.get("neutralToolpathPath"),
                     "synthetic": bool(attempt.get("synthetic")),
                     "imported": bool(attempt.get("imported")),
+                    "generatedByExternalCommand": bool(attempt.get("externalCommand")),
                     "schema": "hediao3d.neutral-toolpath.v1" if attempt.get("neutralToolpathPath") else None,
                 },
+                "externalCommand": attempt.get("externalCommand"),
             },
         )
         if attempt.get("neutralToolpathPath"):
