@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { copyFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -2119,6 +2119,8 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "postprocess-profile.json"), JSON.stringify(postprocessProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
   await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
+  const packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
   updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
@@ -2137,6 +2139,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machining-package-index.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
   job.status = "completed";
   job.currentStage = "completed";
   job.progress = 100;
@@ -2168,6 +2171,7 @@ async function processOrchestratorJob(job, settings) {
       controllerDialectReport,
       machiningPackageIndex,
       deliveryManifest,
+      packageIntegrity,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
       estimatedMinutes: toolpath.estimatedMinutes,
@@ -4251,9 +4255,10 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-engine-selection.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
-        getFile("delivery-manifest.json")
+        getFile("delivery-manifest.json"),
+        getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -4376,6 +4381,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
+    createDeliveryFile(job.id, "package-integrity.json", "加工包完整性清单", "report", true, "记录交付文件大小和 SHA-256，用于下载后核验。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
     createDeliveryFile(job.id, "toolpath.nc", "试雕/生产 NC", "nc", productionGate.allowTrialNc, productionGate.allowProductionNc ? "已允许生产下载。" : "当前仅建议小料试雕，不建议直接生产上机。"),
     createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。"),
@@ -4427,6 +4433,66 @@ function createDeliveryFile(jobId, filename, label, kind, downloadable, note) {
     url: publicArtifactUrl(jobId, filename),
     downloadable,
     note
+  };
+}
+
+function createPackageIntegrityReport(job, deliveryManifest) {
+  const files = deliveryManifest.files.map((file) => {
+    const filePath = join(job.workDir, file.filename);
+    if (file.filename === "package-integrity.json") {
+      return {
+        filename: file.filename,
+        label: file.label,
+        kind: file.kind,
+        downloadable: file.downloadable,
+        exists: true,
+        bytes: null,
+        sha256: null,
+        selfReference: true,
+        note: "完整性清单自身不参与哈希，避免自引用。"
+      };
+    }
+    if (!existsSync(filePath)) {
+      return {
+        filename: file.filename,
+        label: file.label,
+        kind: file.kind,
+        downloadable: file.downloadable,
+        exists: false,
+        bytes: 0,
+        sha256: null,
+        note: "文件不存在或本次任务未生成。"
+      };
+    }
+    const bytes = readFileSync(filePath);
+    return {
+      filename: file.filename,
+      label: file.label,
+      kind: file.kind,
+      downloadable: file.downloadable,
+      exists: true,
+      bytes: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      note: file.note
+    };
+  });
+  const downloadable = files.filter((file) => file.downloadable);
+  const missingDownloadable = downloadable.filter((file) => !file.exists);
+
+  return {
+    schema: "hediao3d.package-integrity.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: deliveryManifest.packageLevel,
+    fileCount: files.length,
+    downloadableCount: downloadable.length,
+    missingDownloadableCount: missingDownloadable.length,
+    totalBytes: files.reduce((sum, file) => sum + Number(file.bytes ?? 0), 0),
+    status: missingDownloadable.length === 0 ? "complete" : "incomplete",
+    summary: missingDownloadable.length === 0
+      ? "所有可下载交付文件均已生成并记录 SHA-256。"
+      : `存在 ${missingDownloadable.length} 个可下载文件缺失，请重新生成加工包。`,
+    files
   };
 }
 

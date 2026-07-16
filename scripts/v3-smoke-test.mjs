@@ -69,6 +69,8 @@ async function main() {
   assert(job.result?.summary?.machineControllerProfile?.rotary?.outputAxis === "Y", "machine controller profile should use Y rotary output");
   assert(job.result?.summary?.machineAcceptanceChecklist?.schema === "hediao3d.machine-acceptance-checklist.v1", "machine acceptance checklist missing");
   assert(job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.id === "air-run"), "machine acceptance checklist missing air-run step");
+  assert(job.result?.summary?.packageIntegrity?.schema === "hediao3d.package-integrity.v1", "package integrity report missing");
+  assert(job.result.summary.packageIntegrity.missingDownloadableCount === 0, "package integrity should not have missing downloadable files");
   assert(job.result?.summary?.nativeCamReadiness?.schema === "hediao3d.native-cam-readiness.v1", "native CAM readiness report missing");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
   assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
@@ -106,7 +108,8 @@ async function main() {
     "production-gate.json",
     "postprocess-profile.json",
     "machining-package-index.json",
-    "delivery-manifest.json"
+    "delivery-manifest.json",
+    "package-integrity.json"
   ];
   for (const filename of requiredArtifacts) {
     const response = await fetch(`${baseUrl}/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(filename)}`);
@@ -125,6 +128,10 @@ async function main() {
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "package-integrity.json"), "readFirst missing package integrity report");
+  const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");
   assert(createV3SmokeReadmeProbe(job).includes("CAM选择"), "V3 package readme should include CAM engine selection");
 
   const list = await getJson("/api/orchestrator/jobs");

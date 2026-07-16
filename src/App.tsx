@@ -617,6 +617,15 @@ type V3OrchestratorJob = {
           note: string;
         }>;
       };
+      packageIntegrity?: {
+        schema: string;
+        status: string;
+        summary: string;
+        fileCount: number;
+        downloadableCount: number;
+        missingDownloadableCount: number;
+        totalBytes: number;
+      };
       machineAcceptanceChecklist?: {
         schema: string;
         packageLevel: string;
@@ -4624,6 +4633,15 @@ export function App() {
                   交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
                 </small>
               )}
+              {v3Job?.result?.summary.packageIntegrity && (
+                <small className={v3Job.result.summary.packageIntegrity.status === "complete" ? "v3-inline-ok" : "v3-inline-critical"}>
+                  完整性：{v3Job.result.summary.packageIntegrity.status}
+                  {" · "}
+                  文件 {v3Job.result.summary.packageIntegrity.downloadableCount}/{v3Job.result.summary.packageIntegrity.fileCount}
+                  {" · "}
+                  缺失 {v3Job.result.summary.packageIntegrity.missingDownloadableCount}
+                </small>
+              )}
               {v3Job?.result?.summary.machineAcceptanceChecklist && (
                 <small className={v3Job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.blocksProduction) ? "v3-inline-warning" : "v3-inline-ok"}>
                   机床验收：{v3Job.result.summary.machineAcceptanceChecklist.summary}
@@ -6843,6 +6861,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsAdapter = simulation?.camoticsAdapter;
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
   const packageIndex = summary?.machiningPackageIndex;
+  const packageIntegrity = summary?.packageIntegrity;
   const machineAcceptanceChecklist = summary?.machineAcceptanceChecklist;
   const machineAcceptanceSummary = packageIndex?.machineAcceptance;
   const externalCamRecipe = summary?.externalCamRecipe;
@@ -6869,6 +6888,14 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `必需步骤: ${machineAcceptanceSummary?.requiredStepCount ?? machineAcceptanceChecklist?.steps?.filter((step) => step.required).length ?? 0}`,
     `阻断步骤: ${machineAcceptanceSummary?.blockedStepCount ?? machineAcceptanceChecklist?.steps?.filter((step) => step.blocksProduction).length ?? 0}`,
     ...(machineAcceptanceChecklist?.unresolvedRisks?.length ? machineAcceptanceChecklist.unresolvedRisks.slice(0, 5).map((risk) => `未解决风险: ${risk}`) : ["未解决风险: 无"]),
+    "",
+    "## 加工包完整性",
+    "",
+    `状态: ${packageIntegrity?.status ?? "未生成"}`,
+    `说明: ${packageIntegrity?.summary ?? "-"}`,
+    `文件数: ${packageIntegrity?.downloadableCount ?? "-"}/${packageIntegrity?.fileCount ?? "-"}`,
+    `缺失可下载文件: ${packageIntegrity?.missingDownloadableCount ?? "-"}`,
+    "完整性报告: package-integrity.json",
     "",
     "## 外部CAM状态",
     "",
