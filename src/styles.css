@@ -2049,6 +2049,43 @@ button:disabled {
   font-size: 12px;
 }
 
+.v3-artifact-list.compact {
+  margin-bottom: 0;
+}
+
+.v3-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.v3-action-row .package-action {
+  margin-top: 0;
+}
+
+.v3-adapter-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.v3-adapter-list span {
+  overflow: hidden;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.v3-adapter-list span.ok {
+  border-left-color: var(--green);
+}
+
 .v3-history-list {
   display: grid;
   gap: 6px;

@@ -546,6 +546,42 @@ type V3Diagnostics = {
   recommendedActions: string[];
 };
 
+type V3AdapterValidationSummary = {
+  id?: string;
+  createdAt: string;
+  outputRoot: string;
+  useNativeCommands: boolean;
+  overall: {
+    adapterCount: number;
+    failed: number;
+    generatedPlans: number;
+    completedAdapters: number;
+    readyForProduction: boolean;
+    note?: string;
+  };
+  adapters: Array<{
+    id: string;
+    name: string;
+    command: string;
+    plan: {
+      generated: boolean;
+      path?: string | null;
+    };
+    report?: {
+      status?: string;
+      error?: string | null;
+    };
+    run?: {
+      status?: number | null;
+      error?: string | null;
+    };
+  }>;
+  apiArtifacts?: {
+    json?: string;
+    markdown?: string;
+  };
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -927,8 +963,10 @@ export function App() {
   const [v3Job, setV3Job] = useState<V3OrchestratorJob | null>(null);
   const [v3JobHistory, setV3JobHistory] = useState<V3JobSummary[]>([]);
   const [v3Diagnostics, setV3Diagnostics] = useState<V3Diagnostics | null>(null);
+  const [v3AdapterValidation, setV3AdapterValidation] = useState<V3AdapterValidationSummary | null>(null);
   const [isV3JobRunning, setIsV3JobRunning] = useState(false);
   const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
+  const [isV3AdapterValidating, setIsV3AdapterValidating] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -1145,9 +1183,10 @@ export function App() {
       .catch((error) => {
         if (cancelled) return;
         setV3Status(error instanceof Error ? error.message : "V3 Orchestrator 引擎探测失败");
-      });
+    });
     refreshV3JobHistory();
     refreshV3Diagnostics();
+    refreshV3AdapterValidation();
     return () => {
       cancelled = true;
     };
@@ -1172,6 +1211,37 @@ export function App() {
       setV3JobHistory(Array.isArray(data.jobs) ? data.jobs : []);
     } catch (error) {
       setV3Status(error instanceof Error ? error.message : "V3 历史任务加载失败");
+    }
+  };
+
+  const refreshV3AdapterValidation = async () => {
+    try {
+      const response = await fetch("/api/orchestrator/adapter-validation/latest");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Adapter 验证记录加载失败");
+      setV3AdapterValidation(data.latest ?? null);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "Adapter 验证记录加载失败");
+    }
+  };
+
+  const handleRunV3AdapterValidation = async (native = false) => {
+    try {
+      setIsV3AdapterValidating(true);
+      setV3Status(native ? "正在调用本机外部 CAM Adapter 验证" : "正在生成外部 CAM Adapter 安全验证报告");
+      const response = await fetch("/api/orchestrator/adapter-validation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ native })
+      });
+      const data = await response.json() as V3AdapterValidationSummary & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Adapter 验证失败");
+      setV3AdapterValidation(data);
+      setV3Status(`Adapter 验证完成：${data.overall.generatedPlans} 个计划，${data.overall.failed} 个失败`);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "Adapter 验证失败");
+    } finally {
+      setIsV3AdapterValidating(false);
     }
   };
 
@@ -3706,6 +3776,61 @@ export function App() {
                 ))}
               </div>
             )}
+            <div className={`v3-diagnostics ${v3AdapterValidation?.overall.failed ? "warning" : "ok"}`}>
+              <div className="v3-history-heading">
+                <strong>外部 Adapter 验证</strong>
+                <button type="button" onClick={refreshV3AdapterValidation}>刷新</button>
+              </div>
+              {v3AdapterValidation ? (
+                <>
+                  <span>
+                    {v3AdapterValidation.useNativeCommands ? "Native 外部引擎" : "安全模板"}
+                    {" · "}
+                    计划 {v3AdapterValidation.overall.generatedPlans}/{v3AdapterValidation.overall.adapterCount}
+                    {" · "}
+                    完成 {v3AdapterValidation.overall.completedAdapters}
+                    {" · "}
+                    失败 {v3AdapterValidation.overall.failed}
+                  </span>
+                  <small>
+                    {v3AdapterValidation.overall.readyForProduction
+                      ? "Adapter 验证已达到生产门禁要求"
+                      : v3AdapterValidation.overall.note ?? "当前仍为 Adapter 接入验证，正式上机前还需要真实 CAM 与仿真通过"}
+                  </small>
+                  <div className="v3-adapter-list">
+                    {v3AdapterValidation.adapters.map((adapter) => (
+                      <span className={adapter.report?.status === "completed" || adapter.plan.generated ? "ok" : "warning"} key={adapter.id}>
+                        {adapter.name} · {adapter.report?.status ?? adapter.run?.status ?? "待验证"}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="v3-artifact-list compact">
+                    {v3AdapterValidation.apiArtifacts?.json && (
+                      <a href={v3AdapterValidation.apiArtifacts.json} download>
+                        下载验证JSON
+                      </a>
+                    )}
+                    {v3AdapterValidation.apiArtifacts?.markdown && (
+                      <a href={v3AdapterValidation.apiArtifacts.markdown} download>
+                        下载验证报告
+                      </a>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <small>还没有 Adapter 验证记录；可先跑安全模板验证，再按需跑 Native 外部引擎验证。</small>
+              )}
+              <div className="v3-action-row">
+                <button className="demo-action package-action" onClick={() => handleRunV3AdapterValidation(false)} disabled={isV3AdapterValidating} type="button">
+                  <ClipboardCheck size={17} />
+                  {isV3AdapterValidating ? "验证中..." : "验证外部Adapter"}
+                </button>
+                <button className="demo-action package-action" onClick={() => handleRunV3AdapterValidation(true)} disabled={isV3AdapterValidating} type="button">
+                  <HardDrive size={17} />
+                  Native验证
+                </button>
+              </div>
+            </div>
             <div className="v3-status-card">
               <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
               <span>{v3Status}</span>

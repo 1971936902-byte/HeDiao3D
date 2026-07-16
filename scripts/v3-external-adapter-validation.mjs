@@ -9,6 +9,7 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outputRoot = resolve(process.env.V3_ADAPTER_VALIDATION_DIR ?? join(root, "public", "orchestrator-adapter-validation", stamp));
 const useNativeCommands = isTrue(process.env.V3_ADAPTER_USE_NATIVE_COMMANDS);
 const timeoutMs = Number(process.env.V3_ADAPTER_VALIDATION_TIMEOUT_MS ?? 120000);
+const jsonOnly = process.argv.includes("--json-only");
 
 const adapters = [
   {
@@ -82,7 +83,7 @@ const summary = {
 
 writeFileSync(join(outputRoot, "v3-external-adapter-validation.json"), JSON.stringify(summary, null, 2));
 writeFileSync(join(outputRoot, "v3-external-adapter-validation.md"), createMarkdown(summary));
-console.log(JSON.stringify({
+const consoleSummary = {
   ok: summary.overall.failed === 0,
   outputRoot,
   mode: useNativeCommands ? "native" : "safe-default",
@@ -93,9 +94,10 @@ console.log(JSON.stringify({
     status: item.report?.status ?? item.run.status,
     command: item.command,
     planGenerated: item.plan.generated,
-    nativeSignals: item.nativeSignals
-  }))
-}, null, 2));
+      nativeSignals: item.nativeSignals
+    }))
+};
+console.log(JSON.stringify(jsonOnly ? summary : consoleSummary, null, 2));
 
 if (summary.overall.failed > 0 && isTrue(process.env.V3_ADAPTER_VALIDATION_STRICT)) {
   process.exitCode = 1;

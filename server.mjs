@@ -55,6 +55,14 @@ const server = createServer(async (req, res) => {
       return getOrchestratorDiagnostics(res);
     }
 
+    if (req.method === "GET" && req.url === "/api/orchestrator/adapter-validation/latest") {
+      return getLatestAdapterValidation(res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/orchestrator/adapter-validation") {
+      return runAdapterValidation(req, res);
+    }
+
     if (req.method === "GET" && req.url === "/api/orchestrator/jobs") {
       return listOrchestratorJobs(res);
     }
@@ -84,6 +92,11 @@ const server = createServer(async (req, res) => {
     const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/artifacts\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorArtifactMatch) {
       return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
+    }
+
+    const adapterValidationArtifactMatch = req.url?.match(/^\/api\/orchestrator\/adapter-validation\/([^/?#/]+)\/([^/?#/]+)$/);
+    if (req.method === "GET" && adapterValidationArtifactMatch) {
+      return getAdapterValidationArtifact(adapterValidationArtifactMatch[1], adapterValidationArtifactMatch[2], res);
     }
 
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
@@ -425,6 +438,115 @@ function createDiagnosticsRecommendedActions(checks, engines) {
   if (!engines.some((engine) => engine.id === "opencamlib" && engine.available)) actions.push("在 Linux CAM 服务端安装 OpenCAMLib/ocl，用于后续 drop-cutter 和水线算法。");
   if (actions.length === 0) actions.push("环境自检通过，可继续运行 V3 小闭环和外部 CAM adapter 试算。");
   return actions;
+}
+
+async function runAdapterValidation(req, res) {
+  const input = await readJson(req, 1_000_000).catch(() => ({}));
+  const validationId = `validation-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+  const outputRoot = join(process.cwd(), "public", "orchestrator-adapter-validation", validationId);
+  await mkdir(outputRoot, { recursive: true });
+  const native = Boolean(input.native);
+  const timeoutMs = Number(input.timeoutMs ?? process.env.V3_ADAPTER_VALIDATION_TIMEOUT_MS ?? 120000);
+  const run = spawnSync(process.execPath, ["scripts/v3-external-adapter-validation.mjs", "--json-only"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: timeoutMs + 5000,
+    env: {
+      ...process.env,
+      V3_ADAPTER_VALIDATION_DIR: outputRoot,
+      V3_ADAPTER_VALIDATION_TIMEOUT_MS: String(timeoutMs),
+      V3_ADAPTER_USE_NATIVE_COMMANDS: native ? "true" : "false"
+    }
+  });
+  const summaryPath = join(outputRoot, "v3-external-adapter-validation.json");
+  let summary = null;
+  if (existsSync(summaryPath)) {
+    summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+  } else {
+    summary = {
+      schema: "hediao3d.external-adapter-validation.v1",
+      createdAt: new Date().toISOString(),
+      outputRoot,
+      useNativeCommands: native,
+      overall: {
+        adapterCount: 0,
+        failed: 1,
+        generatedPlans: 0,
+        completedAdapters: 0,
+        readyForProduction: false,
+        note: "Adapter validation script did not write a summary."
+      },
+      adapters: []
+    };
+  }
+
+  summary.id = validationId;
+  summary.apiArtifacts = createAdapterValidationArtifactLinks(validationId);
+  summary.run = {
+    exitCode: run.status,
+    error: run.error?.message ?? null,
+    stdout: String(run.stdout ?? "").slice(-6000),
+    stderr: String(run.stderr ?? "").slice(-6000)
+  };
+  await writeFile(summaryPath, JSON.stringify(summary, null, 2), "utf8");
+  return json(res, run.status === 0 || summary.overall?.generatedPlans > 0 ? 200 : 500, summary);
+}
+
+function getLatestAdapterValidation(res) {
+  const root = join(process.cwd(), "public", "orchestrator-adapter-validation");
+  if (!existsSync(root)) return json(res, 200, { latest: null, validations: [] });
+  const validations = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readAdapterValidationSummary(entry.name))
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())
+    .slice(0, 12);
+  return json(res, 200, {
+    latest: validations[0] ?? null,
+    validations
+  });
+}
+
+function readAdapterValidationSummary(validationId) {
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(validationId)) return null;
+  const summaryPath = join(process.cwd(), "public", "orchestrator-adapter-validation", validationId, "v3-external-adapter-validation.json");
+  if (!existsSync(summaryPath)) return null;
+  try {
+    const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+    return {
+      ...summary,
+      id: validationId,
+      apiArtifacts: createAdapterValidationArtifactLinks(validationId)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function createAdapterValidationArtifactLinks(validationId) {
+  return {
+    json: `/api/orchestrator/adapter-validation/${encodeURIComponent(validationId)}/v3-external-adapter-validation.json`,
+    markdown: `/api/orchestrator/adapter-validation/${encodeURIComponent(validationId)}/v3-external-adapter-validation.md`
+  };
+}
+
+function getAdapterValidationArtifact(validationId, filename, res) {
+  const safeId = decodeURIComponent(validationId);
+  const safeFilename = decodeURIComponent(filename);
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(safeId) || !/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return json(res, 400, { error: "非法 adapter validation 路径" });
+  }
+  const filePath = join(process.cwd(), "public", "orchestrator-adapter-validation", safeId, safeFilename);
+  if (!existsSync(filePath)) return json(res, 404, { error: "找不到 adapter validation 产物" });
+  const content = readFileSync(filePath);
+  res.writeHead(200, {
+    "Content-Type": artifactContentType(safeFilename),
+    "Content-Length": content.length,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(content);
 }
 
 function createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine) {

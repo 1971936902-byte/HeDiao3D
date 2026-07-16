@@ -8,5 +8,6 @@ meshy-test-result.json
 public/imported-models/
 public/import-previews/
 public/orchestrator-jobs/
+public/orchestrator-adapter-validation/
 public/meshy-results/019f*.glb
 public/meshy-results/019f*.stl
