@@ -2002,6 +2002,27 @@ export function App() {
                 <span>{selectedAiProvider.note}</span>
                 <small>{selectedAiProvider.capabilities.join(" / ")}</small>
               </div>
+              <div className="provider-compare-grid">
+                {ai3dProviders.map((provider) => {
+                  const score = scoreAiProvider(provider, images.length, captureGuide.score);
+                  return (
+                    <button
+                      className={`provider-compare-card ${provider.status} ${provider.id === aiProviderId ? "active" : ""}`}
+                      key={provider.id}
+                      type="button"
+                      onClick={() => setAiProviderId(provider.id)}
+                    >
+                      <span>
+                        <strong>{provider.name}</strong>
+                        <b>{formatProviderStatus(provider.status)}</b>
+                      </span>
+                      <small>{provider.bestFor}</small>
+                      <em>{formatProviderScore(score)} / {provider.maxImages}图 / {provider.targetFormats.join("+")}</em>
+                      <i>{formatProviderTraits(provider)}</i>
+                    </button>
+                  );
+                })}
+              </div>
               <button className="primary-action ai-action" onClick={handleGenerateAiMesh} disabled={isAiGenerating || images.length === 0}>
                 <Sparkles size={18} />
                 {isAiGenerating ? "AI生成中..." : `${selectedAiProvider.name}生成3D Mesh`}
@@ -4256,6 +4277,37 @@ function createCaptureSlotAdvice(image: CarvingImage, label: string, angleDeg: n
     issue: `${metric.label}需复核`,
     action: `${prefix} 建议重拍一张同角度照片，并保持纯色背景、稳定对焦和均匀补光。`
   };
+}
+
+function scoreAiProvider(provider: (typeof ai3dProviders)[number], imageCount: number, captureScore: number) {
+  let score = provider.status === "available" ? 46 : provider.status === "local" ? 28 : 18;
+  score += Math.min(imageCount, provider.maxImages) * 8;
+  score += Math.min(18, captureScore * 0.16);
+  if (provider.productionFit === "ready") score += 16;
+  if (provider.productionFit === "pilot") score += 8;
+  if (provider.privacy === "local") score += 6;
+  return THREEClamp(score, 0, 100);
+}
+
+function formatProviderScore(score: number) {
+  if (score >= 78) return "推荐";
+  if (score >= 58) return "可试";
+  if (score >= 38) return "需配置";
+  return "待接入";
+}
+
+function formatProviderStatus(status: (typeof ai3dProviders)[number]["status"]) {
+  if (status === "available") return "已接入";
+  if (status === "local") return "本地预留";
+  return "预留";
+}
+
+function formatProviderTraits(provider: (typeof ai3dProviders)[number]) {
+  const speed = provider.speed === "fast" ? "快" : provider.speed === "medium" ? "中" : "慢";
+  const privacy = provider.privacy === "local" ? "本地" : provider.privacy === "private" ? "私有" : "云端";
+  const fit = provider.productionFit === "ready" ? "生产" : provider.productionFit === "pilot" ? "试点" : "研究";
+  const cost = provider.costLevel === "low" ? "低成本" : provider.costLevel === "medium" ? "中成本" : provider.costLevel === "high" ? "高成本" : "成本浮动";
+  return `${speed} / ${privacy} / ${fit} / ${cost}`;
 }
 
 async function imageToDataUri(url: string): Promise<string> {
