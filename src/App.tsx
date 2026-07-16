@@ -73,6 +73,7 @@ const defaultSettings: ModelSettings = {
 
 type ToolpathKind = "rough" | "finish" | "rest";
 type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks" | "deployment" | "feedback";
+type ModelSubStage = "local" | "ai" | "inspection";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
 type UserRole = "designer" | "process" | "operator" | "admin";
 type TaskEvent = {
@@ -465,6 +466,7 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
   const [activeStage, setActiveStage] = useState<WorkflowStage>("project");
+  const [modelSubStage, setModelSubStage] = useState<ModelSubStage>("local");
   const [wireframe, setWireframe] = useState(false);
   const [toolpath, setToolpath] = useState<GeneratedToolpath | null>(null);
   const [isReading, setIsReading] = useState(false);
@@ -1607,6 +1609,7 @@ export function App() {
 
       setAiMeshUrl(glb);
       setAiMeshStlUrl(stl ?? null);
+      setModelSubStage(stl ? "inspection" : "ai");
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
       setGenerationLabel(`${selectedAiProvider.name} AI 3D Mesh：${selected.length}张图片`);
       setAiMeshStatus(task.local_model_urls?.glb ? `${selectedAiProvider.name} 3D Mesh 生成完成，已缓存到本地` : `${selectedAiProvider.name} 3D Mesh 生成完成`);
@@ -1635,6 +1638,7 @@ export function App() {
   const handleLoadLocalMeshyResult = () => {
     setAiMeshUrl("/meshy-results/material01-meshy.glb");
     setAiMeshStlUrl("/meshy-results/material01-meshy.stl");
+    setModelSubStage("inspection");
     setMeshQuality(null);
     setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
     setGenerationLabel("AI 3D Mesh：素材01测试结果");
@@ -1996,7 +2000,13 @@ export function App() {
 
         {activeStage === "model" && (
           <>
-            <section className="panel">
+            <div className="stage-subtabs" role="tablist" aria-label="model stage sections">
+              <button className={modelSubStage === "local" ? "active" : ""} type="button" onClick={() => setModelSubStage("local")}>本地建模</button>
+              <button className={modelSubStage === "ai" ? "active" : ""} type="button" onClick={() => setModelSubStage("ai")}>AI Mesh</button>
+              <button className={modelSubStage === "inspection" ? "active" : ""} type="button" onClick={() => setModelSubStage("inspection")}>Mesh体检</button>
+            </div>
+
+            {modelSubStage === "local" && <section className="panel">
               <div className="panel-title">
                 <Layers3 size={18} />
                 <h2>生成控制</h2>
@@ -2013,9 +2023,9 @@ export function App() {
                 <Layers3 size={18} />
                 3D生成
               </button>
-            </section>
+            </section>}
 
-            <section className="panel">
+            {modelSubStage === "ai" && <section className="panel">
               <div className="panel-title">
                 <Sparkles size={18} />
                 <h2>推荐：真实3D网格</h2>
@@ -2082,9 +2092,9 @@ export function App() {
                   {aiMeshStlUrl && <a href={aiMeshStlUrl} target="_blank" rel="noreferrer">下载 AI STL</a>}
                 </div>
               )}
-            </section>
+            </section>}
 
-            <section className="panel">
+            {modelSubStage === "inspection" && <section className="panel">
               <div className="panel-title">
                 <ShieldCheck size={18} />
                 <h2>Mesh质量体检</h2>
@@ -2188,7 +2198,7 @@ export function App() {
               ) : (
                 <div className="ai-status">{meshQualityStatus}</div>
               )}
-            </section>
+            </section>}
           </>
         )}
 
