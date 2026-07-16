@@ -134,5 +134,17 @@ export type ToolpathSummary = {
   zMin: number;
   zMax: number;
   maxDepth: number;
+  process?: {
+    roughPasses: number;
+    roughPoints: number;
+    finishPoints: number;
+    restPoints: number;
+    roughMinutes: number;
+    finishMinutes: number;
+    restMinutes: number;
+    restPointRate: number;
+    restStrategy: string;
+    restTrigger: string;
+  };
   warnings: string[];
 };

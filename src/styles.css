@@ -2767,8 +2767,46 @@ button:disabled {
   background: #8b5cf6;
 }
 
+.legend-dot.rest {
+  background: #f59e0b;
+}
+
 .legend-dot.simulation {
   background: #00a676;
+}
+
+.toolpath-program-switch {
+  display: inline-flex;
+  overflow: hidden;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(7, 8, 7, 0.42);
+}
+
+.toolpath-program-switch button {
+  min-width: 70px;
+  padding: 0 11px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.toolpath-program-switch button:last-child {
+  border-right: 0;
+}
+
+.toolpath-program-switch button.active {
+  color: #0d1411;
+  background: #e5eee9;
+}
+
+.toolpath-program-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .hint {

@@ -120,6 +120,7 @@ export function createQualityReport(input: ManufacturingReportInput) {
       roughMinutes: input.toolpath.programs?.rough?.estimatedMinutes ?? null,
       finishMinutes: input.toolpath.programs?.finish?.estimatedMinutes ?? null,
       restMinutes: input.toolpath.programs?.rest?.estimatedMinutes ?? null,
+      process: input.toolpath.summary.process ?? null,
       warnings: input.toolpath.summary.warnings
     }
   };

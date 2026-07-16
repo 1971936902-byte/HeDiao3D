@@ -97,6 +97,14 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     input.toolpath.programs?.rough ? `- 粗加工时间：${input.toolpath.programs.rough.estimatedMinutes.toFixed(1)} min` : "- 粗加工时间：无独立程序",
     input.toolpath.programs?.finish ? `- 精加工时间：${input.toolpath.programs.finish.estimatedMinutes.toFixed(1)} min` : "- 精加工时间：无独立程序",
     input.toolpath.programs?.rest ? `- 清残时间：${input.toolpath.programs.rest.estimatedMinutes.toFixed(1)} min` : "- 清残时间：无独立程序",
+    ...(input.toolpath.summary.process
+      ? [
+          `- 粗加工层数：${input.toolpath.summary.process.roughPasses}`,
+          `- 清残策略：${input.toolpath.summary.process.restStrategy}`,
+          `- 清残触发：${input.toolpath.summary.process.restTrigger}`,
+          `- 清残点占比：${input.toolpath.summary.process.restPointRate.toFixed(1)}%`
+        ]
+      : []),
     `- X 范围：${input.toolpath.summary.xMin.toFixed(2)} ~ ${input.toolpath.summary.xMax.toFixed(2)} mm`,
     `- A 范围：${input.toolpath.summary.aMin.toFixed(2)} ~ ${input.toolpath.summary.aMax.toFixed(2)}°`,
     `- Z 范围：${input.toolpath.summary.zMin.toFixed(2)} ~ ${input.toolpath.summary.zMax.toFixed(2)} mm`,

@@ -49,7 +49,10 @@ export function generateToolpath(depthMap: DepthMap, settings: ModelSettings): G
       roughPasses: countRoughLayers(settings),
       roughPoints: roughPoints.length,
       finishPoints: finishPoints.length,
-      restPoints: restPoints.length
+      restPoints: restPoints.length,
+      roughMinutes,
+      finishMinutes,
+      restMinutes
     })
   };
 }
@@ -217,7 +220,15 @@ export function createAirRunProgram(
 function summarizeToolpath(
   points: ToolpathPoint[],
   settings: ModelSettings,
-  process?: { roughPasses: number; roughPoints: number; finishPoints: number; restPoints: number }
+  process?: {
+    roughPasses: number;
+    roughPoints: number;
+    finishPoints: number;
+    restPoints: number;
+    roughMinutes: number;
+    finishMinutes: number;
+    restMinutes: number;
+  }
 ) {
   const values = points.reduce(
     (acc, point) => ({
@@ -257,11 +268,25 @@ function summarizeToolpath(
     warnings.push(`已避开端部夹持区：左 ${fmt(settings.leftHoldMm, 1)}mm / 右 ${fmt(settings.rightHoldMm, 1)}mm。`);
   }
 
-  if (process) {
-    warnings.push(`粗加工 ${process.roughPasses} 层，余量 ${fmt(settings.stockAllowance, 2)}mm；粗加工点 ${process.roughPoints}，精加工点 ${process.finishPoints}，清残点 ${process.restPoints}。`);
+  const processSummary = process
+    ? {
+        ...process,
+        restPointRate: process.finishPoints > 0 ? (process.restPoints / process.finishPoints) * 100 : 0,
+        restStrategy: "高梯度/深纹理区域二次清残",
+        restTrigger: `深度 >= ${fmt(settings.depthMm * 0.72, 2)}mm 或局部梯度 >= ${fmt(Math.max(0.04, settings.toolDiameter * 0.16), 3)}mm`
+      }
+    : undefined;
+
+  if (processSummary) {
+    warnings.push(`粗加工 ${processSummary.roughPasses} 层，余量 ${fmt(settings.stockAllowance, 2)}mm；粗加工点 ${processSummary.roughPoints}，精加工点 ${processSummary.finishPoints}，清残点 ${processSummary.restPoints}。`);
+    if (processSummary.restPoints === 0) {
+      warnings.push("清残程序没有有效切削点，请确认模型细节是否足够或减小步距/刀具直径。");
+    } else if (processSummary.restPointRate > 45) {
+      warnings.push("清残点占比偏高，建议检查模型噪声、刀具直径和精加工步距。");
+    }
   }
 
-  return { ...values, warnings };
+  return { ...values, process: processSummary, warnings };
 }
 
 function endTransitionFactor(x: number, xStart: number, xEnd: number, transitionMm: number) {

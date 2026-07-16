@@ -93,9 +93,18 @@ export function createManufacturingQualityReport(
       value: toolpath.programs?.rough && toolpath.programs.finish && toolpath.programs.rest ? "粗/精/清残" : toolpath.programs?.rough && toolpath.programs.finish ? "已分离" : "未分离",
       status: toolpath.programs?.rough && toolpath.programs.finish && toolpath.programs.rest ? "ok" : toolpath.programs?.rough && toolpath.programs.finish ? "ok" : "warning",
       detail: toolpath.programs?.rough
-        ? `粗加工 ${toolpath.programs.rough.points.length} 点，精加工 ${toolpath.programs.finish?.points.length ?? 0} 点，清残 ${toolpath.programs.rest?.points.length ?? 0} 点。`
+        ? `粗加工 ${toolpath.programs.rough.points.length} 点，精加工 ${toolpath.programs.finish?.points.length ?? 0} 点，清残 ${toolpath.programs.rest?.points.length ?? 0} 点；${toolpath.summary.process?.restStrategy ?? "清残策略待生成"}。`
         : "当前没有粗精加工独立程序。"
     });
+
+    if (toolpath.summary.process) {
+      items.push({
+        label: "清残策略",
+        value: `${toolpath.summary.process.restPointRate.toFixed(1)}%`,
+        status: toolpath.summary.process.restPoints > 0 && toolpath.summary.process.restPointRate <= 45 ? "ok" : toolpath.summary.process.restPoints > 0 ? "warning" : "critical",
+        detail: `${toolpath.summary.process.restStrategy}；触发条件：${toolpath.summary.process.restTrigger}。`
+      });
+    }
   } else {
     items.push({
       label: "刀路范围",

@@ -71,7 +71,7 @@ const defaultSettings: ModelSettings = {
   postProcessor: "generic"
 };
 
-type ToolpathKind = "rough" | "finish";
+type ToolpathKind = "rough" | "finish" | "rest";
 type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks" | "deployment" | "feedback";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
 type UserRole = "designer" | "process" | "operator" | "admin";
@@ -228,6 +228,7 @@ type MachineAcceptanceRecord = {
 const toolpathColors = {
   rough: 0xd2451e,
   finish: 0x8b5cf6,
+  rest: 0xf59e0b,
   simulation: 0x00a676
 };
 
@@ -537,6 +538,11 @@ export function App() {
     () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
     [settings, toolpath]
   );
+  const selectedToolpathProgram = useMemo(() => {
+    if (!toolpath) return null;
+    return getToolpathProgram(toolpath, toolpathKind);
+  }, [toolpath, toolpathKind]);
+  const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
   const workbenchTitle =
     workbenchView === "simulation" && toolpath
@@ -2912,23 +2918,23 @@ export function App() {
           />
         ) : viewingSimulation ? (
           <SimulationViewer
-            points={toolpath.points}
+            points={selectedToolpathPoints}
             previewPoints={toolpath.previewPoints ?? []}
             settings={settings}
             envelopeColor={toolpathColors.simulation}
-            surfaceColor={toolpathKind === "finish" ? 0x9a6ff0 : 0xb95a1b}
+            surfaceColor={getToolpathSurfaceColor(toolpathKind)}
           />
         ) : aiMeshUrl ? (
           <AiMeshViewer
             modelUrl={aiMeshUrl}
-            toolpathPoints={toolpath?.points ?? []}
+            toolpathPoints={selectedToolpathPoints}
             previewPoints={toolpath?.previewPoints ?? []}
-            toolpathColor={toolpathKind === "finish" ? toolpathColors.finish : toolpathColors.rough}
+            toolpathColor={toolpathColors[toolpathKind]}
             meshLengthAxis={settings.meshLengthAxis}
             meshAxisReverse={settings.meshAxisReverse}
           />
         ) : (
-          <ReliefViewer geometry={geometry} wireframe={wireframe} toolpathPoints={toolpath?.points ?? []} settings={settings} />
+          <ReliefViewer geometry={geometry} wireframe={wireframe} toolpathPoints={selectedToolpathPoints} settings={settings} />
         )}
 
         <footer className="output-bar">
@@ -2945,7 +2951,7 @@ export function App() {
               {toolpath && (
                 <div className="metric wide">
                   <span>刀路显示</span>
-                  <strong>{toolpathKind === "finish" ? "精加工刀路" : "普通刀路"}</strong>
+                  <strong>{getToolpathKindLabel(toolpathKind)}</strong>
                 </div>
               )}
               <a className={`download ${canDownloadProduction ? "" : "disabled-link"}`} href={aiMeshUrl} target="_blank" rel="noreferrer" aria-disabled={!canDownloadProduction} title={productionDownloadTitle} onClick={(event) => { if (!canDownloadProduction) event.preventDefault(); }}>
@@ -2991,11 +2997,15 @@ export function App() {
             <>
               <div className="metric">
                 <span>刀路点</span>
-                <strong>{toolpath.points.length}</strong>
+                <strong>{selectedToolpathPoints.length}</strong>
+              </div>
+              <div className="metric">
+                <span>当前程序</span>
+                <strong>{getToolpathKindLabel(toolpathKind)}</strong>
               </div>
               <div className="metric">
                 <span>估算时间</span>
-                <strong>{toolpath.estimatedMinutes.toFixed(1)} min</strong>
+                <strong>{(selectedToolpathProgram?.estimatedMinutes ?? toolpath.estimatedMinutes).toFixed(1)} min</strong>
               </div>
               {costEstimate && (
                 <div className="metric">
@@ -3020,6 +3030,18 @@ export function App() {
                   <span>清残</span>
                   <strong>{toolpath.programs.rest.estimatedMinutes.toFixed(1)} min</strong>
                 </div>
+              )}
+              {toolpath.summary.process && (
+                <>
+                  <div className="metric">
+                    <span>清残占比</span>
+                    <strong>{toolpath.summary.process.restPointRate.toFixed(1)}%</strong>
+                  </div>
+                  <div className="metric wide">
+                    <span>清残触发</span>
+                    <strong>{toolpath.summary.process.restTrigger}</strong>
+                  </div>
+                </>
               )}
               <div className="metric">
                 <span>后处理</span>
@@ -3066,9 +3088,20 @@ export function App() {
                   {viewingSimulation
                     ? "青绿=模拟包络，粉色=未贴合"
                     : aiMeshUrl
-                      ? `${toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=未贴合`
-                      : `${toolpathKind === "finish" ? "紫色=精加工" : "橙红=普通刀路"}，粉色=夹持区，琥珀=过渡区`}
+                      ? `${getToolpathKindColorLabel(toolpathKind)}，粉色=未贴合`
+                      : `${getToolpathKindColorLabel(toolpathKind)}，粉色=夹持区，浅琥珀=过渡区`}
                 </strong>
+              </div>
+              <div className="toolpath-program-switch" role="group" aria-label="toolpath program view">
+                <button type="button" className={toolpathKind === "rough" ? "active" : ""} onClick={() => setToolpathKind("rough")} disabled={!toolpath.programs?.rough}>
+                  粗加工
+                </button>
+                <button type="button" className={toolpathKind === "finish" ? "active" : ""} onClick={() => setToolpathKind("finish")} disabled={!toolpath.programs?.finish}>
+                  精加工
+                </button>
+                <button type="button" className={toolpathKind === "rest" ? "active" : ""} onClick={() => setToolpathKind("rest")} disabled={!toolpath.programs?.rest || toolpath.programs.rest.points.length === 0}>
+                  清残
+                </button>
               </div>
               <button className="download secondary" onClick={() => {
                 const nextView: WorkbenchView = viewingSimulation ? "model" : "simulation";
@@ -3813,6 +3846,30 @@ function Control({ label, value, min, max, step, suffix, onChange }: ControlProp
       <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
+}
+
+function getToolpathProgram(toolpath: GeneratedToolpath, kind: ToolpathKind) {
+  if (kind === "rough") return toolpath.programs?.rough ?? null;
+  if (kind === "finish") return toolpath.programs?.finish ?? null;
+  return toolpath.programs?.rest ?? null;
+}
+
+function getToolpathKindLabel(kind: ToolpathKind) {
+  if (kind === "rough") return "粗加工刀路";
+  if (kind === "finish") return "精加工刀路";
+  return "清残刀路";
+}
+
+function getToolpathKindColorLabel(kind: ToolpathKind) {
+  if (kind === "rough") return "橙红=粗加工";
+  if (kind === "finish") return "紫色=精加工";
+  return "琥珀=清残";
+}
+
+function getToolpathSurfaceColor(kind: ToolpathKind) {
+  if (kind === "rough") return 0xb95a1b;
+  if (kind === "finish") return 0x9a6ff0;
+  return 0xc78313;
 }
 
 function createFinishingSettings(settings: ModelSettings): ModelSettings {
