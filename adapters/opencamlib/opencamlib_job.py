@@ -138,7 +138,7 @@ def build_kernel_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[st
         },
         "outputs": {
             "neutralPointCloud": "opencamlib-cutter-contact-points.json",
-            "neutralPolyline": "opencamlib-neutral-toolpath.json",
+            "neutralPolyline": (job.get("outputs") or {}).get("neutralToolpath") or "neutral-toolpath.json",
             "handoff": "HeDiao3D converts neutral cutter-contact output into rotary-wrap machine NC.",
             "finalMachineNc": (job.get("outputs") or {}).get("gcode"),
         },
@@ -202,6 +202,14 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
             "status": "adapter_not_ready",
             "error": "OpenCAMLib kernel plan generated, but experimental output is disabled. Set HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true after validating the server recipe.",
         }
+    if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT")):
+        neutral_path = write_synthetic_neutral_toolpath(job, plan)
+        return {
+            "status": "completed",
+            "error": None,
+            "neutralToolpathPath": neutral_path,
+            "synthetic": True,
+        }
     if not plan["opencamlib"]["available"]:
         return {
             "status": "adapter_not_ready",
@@ -211,6 +219,62 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
         "status": "adapter_not_ready",
         "error": "OpenCAMLib module detected, but cutter-contact output is still locked pending server validation.",
     }
+
+
+def write_synthetic_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any]) -> str:
+    """Write a tiny neutral handoff fixture for adapter/orchestrator contract tests.
+
+    This is deliberately gated by HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT
+    and must not be treated as real OpenCAMLib cutter-contact output.
+    """
+
+    settings = job.get("settings") or {}
+    outputs = job.get("outputs") or {}
+    work_dir = Path(str(job.get("workDir") or Path(outputs.get("report", ".")).parent))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    neutral_path = Path(str(outputs.get("neutralToolpath") or work_dir / "neutral-toolpath.json"))
+    length = float(settings.get("lengthMm") or 38)
+    safe_z = float(settings.get("safeZ") or 2)
+    max_depth = float(settings.get("depthMm") or settings.get("maxCutDepth") or 1.2)
+    rows = []
+    for row_index, angle in enumerate((0, 90, 180, 270, 360)):
+        for col_index in range(6):
+            t = col_index / 5
+            x = -length / 2 + length * t
+            scallop = abs(0.5 - t) * 0.35
+            depth = max_depth * (0.35 + 0.55 * (1 - scallop)) + row_index * 0.02
+            rows.append({
+                "x": round(x, 4),
+                "a": angle,
+                "z": round(safe_z - depth, 4),
+                "depth": round(depth, 4),
+                "source": "synthetic-contract-fixture",
+            })
+
+    neutral = {
+        "schema": "hediao3d.neutral-toolpath.v1",
+        "jobId": job.get("jobId"),
+        "engine": ENGINE,
+        "createdBy": "opencamlib synthetic neutral contract fixture",
+        "synthetic": True,
+        "coordinate": {
+            "lengthAxis": "X",
+            "rotaryAxis": settings.get("rotaryOutputAxis") or "Y",
+            "depthAxis": "Z",
+            "rotaryUnit": "degree",
+        },
+        "estimatedMinutes": 0.8,
+        "points": rows,
+        "warnings": [
+            "Synthetic neutral output validates the HeDiao3D adapter handoff only; it is not real CAM cutter-contact output."
+        ],
+        "plan": {
+            "schema": plan.get("schema"),
+            "recommendedPrimary": (plan.get("sampling") or {}).get("recommendedPrimary"),
+        },
+    }
+    neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(neutral_path)
 
 
 def base_report(job: Dict[str, Any], status: str, error: Optional[str], warnings: List[str], metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -282,8 +346,19 @@ def main() -> int:
                     "enabledOperationCount": plan["operationCounts"]["enabled"],
                     "recommendedPrimary": plan["sampling"]["recommendedPrimary"],
                 },
+                "neutralToolpath": {
+                    "status": "generated" if attempt.get("neutralToolpathPath") else "not_generated",
+                    "path": attempt.get("neutralToolpathPath"),
+                    "synthetic": bool(attempt.get("synthetic")),
+                    "schema": "hediao3d.neutral-toolpath.v1" if attempt.get("neutralToolpathPath") else None,
+                },
             },
         )
+        if attempt.get("neutralToolpathPath"):
+            result["neutralToolpathPath"] = attempt["neutralToolpathPath"]
+            result["outputs"] = {
+                "neutralToolpath": attempt["neutralToolpathPath"],
+            }
 
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

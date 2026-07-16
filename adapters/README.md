@@ -20,7 +20,8 @@ V3 Orchestrator calls external CAM/simulation engines through small adapter scri
   "outputs": {
     "gcode": "C:/.../toolpath.nc",
     "report": "C:/.../adapter-report.json",
-    "preview": "C:/.../preview.json"
+    "preview": "C:/.../preview.json",
+    "neutralToolpath": "C:/.../neutral-toolpath.json"
   },
   "externalCamRecipe": {
     "schema": "hediao3d.external-cam-recipe.v1",
@@ -59,16 +60,60 @@ V3 Orchestrator calls external CAM/simulation engines through small adapter scri
 }
 ```
 
+Adapters may return either direct G-code or a neutral toolpath. For rotary-wrap
+nuclear carving, neutral toolpath output is preferred because HeDiao3D owns the
+final Y/A rotary fixture postprocessor:
+
+```json
+{
+  "status": "completed",
+  "protocolVersion": "hediao3d.adapter.v1",
+  "engine": "opencamlib",
+  "jobId": "uuid",
+  "neutralToolpathPath": "C:/.../neutral-toolpath.json",
+  "metrics": {
+    "neutralToolpath": {
+      "schema": "hediao3d.neutral-toolpath.v1",
+      "path": "C:/.../neutral-toolpath.json"
+    }
+  }
+}
+```
+
+The neutral file uses this minimal schema:
+
+```json
+{
+  "schema": "hediao3d.neutral-toolpath.v1",
+  "engine": "opencamlib",
+  "coordinate": {
+    "lengthAxis": "X",
+    "rotaryAxis": "Y",
+    "depthAxis": "Z",
+    "rotaryUnit": "degree"
+  },
+  "points": [
+    { "x": -12.5, "a": 0, "z": -0.8, "depth": 0.8 },
+    { "x": -12.0, "a": 0, "z": -0.9, "depth": 0.9 }
+  ]
+}
+```
+
+For 3-axis relief, points may use `{ "x": 0, "y": 0, "z": -0.5 }`. For
+rotary-wrap, `{ "x", "a", "z" }` is preferred; if an adapter emits linearized
+rotary `{ "x", "y", "z" }`, Orchestrator converts `y` to degrees with
+`rotaryWrapPerRevolutionMm` before final postprocessing.
+
 ## Current Adapter State
 
 - `freecad/freecad_cam_job.py`: scriptable FreeCAD Path Workbench adapter skeleton. It validates the protocol, detects FreeCAD/Path Python modules, writes `freecad-cam-plan.json`, and writes a reviewable `freecad-run-template.py`. Production G-code remains locked unless the deployment server sets `HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=true` and the Path operation recipe has been validated.
 - `blendercam/blendercam_job.py`: BlenderCAM/FabexCNC artistic-surface adapter skeleton. It validates the protocol, detects Blender Python and possible CAM add-on modules, writes `blendercam-cam-plan.json`, and writes `blendercam-run-template.py`. Production G-code remains locked unless the deployment server sets `HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=true` and the operation recipe has been validated.
 - `camotics/camotics_job.js`: CAMotics simulation adapter skeleton. It validates the protocol, detects `camotics-cli`/`camotics`, writes `camotics-simulation-plan.json`, and writes `camotics-project-template.json`. Material-removal execution remains locked unless the deployment server sets `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true` and result extraction has been validated.
-- `opencamlib/opencamlib_job.py`: OpenCAMLib geometry-kernel adapter skeleton. It validates the protocol, detects `opencamlib`/`ocl`, writes `opencamlib-kernel-plan.json`, and writes `opencamlib-run-template.py`. Cutter-contact output remains locked unless the deployment server sets `HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true` and the kernel recipe has been validated.
+- `opencamlib/opencamlib_job.py`: OpenCAMLib geometry-kernel adapter skeleton. It validates the protocol, detects `opencamlib`/`ocl`, writes `opencamlib-kernel-plan.json`, and writes `opencamlib-run-template.py`. It also supports a gated synthetic `hediao3d.neutral-toolpath.v1` handoff for contract tests via `HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true` plus `HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT=true`; this validates Orchestrator ingestion only and is not real CAM output.
 
 The internal Mesh CAM fallback remains the verified V3 small-loop implementation until the external engines are installed and the adapter recipes are completed.
 
-When an adapter returns `"status": "completed"` and writes a non-empty G-code file to `outputs.gcode` or `gcodePath`, the Orchestrator ingests that file as the job toolpath, parses G0/G1 motion points for preview/reporting, and then continues through the shared simulation summary, production gate and delivery manifest pipeline. If the adapter is missing, not ready, fails, or does not write G-code, the job falls back to the internal Mesh CAM baseline.
+When an adapter returns `"status": "completed"` and writes a non-empty G-code file to `outputs.gcode`/`gcodePath`, the Orchestrator ingests that file as the job toolpath, parses G0/G1 motion points for preview/reporting, and then continues through the shared simulation summary, production gate and delivery manifest pipeline. When it writes `neutralToolpathPath` instead, Orchestrator converts the neutral points through the HeDiao3D postprocessor to produce the final machine NC. If the adapter is missing, not ready, fails, or does not write G-code/neutral toolpath, the job falls back to the internal Mesh CAM baseline.
 
 ## Contract Test
 
@@ -101,4 +146,4 @@ The test runs each adapter script with a synthetic job and verifies:
 - The CAMotics adapter writes a simulation plan and project template, even when it safely returns `adapter_not_ready`.
 - The OpenCAMLib adapter writes a cutter-contact kernel plan and run template, even when it safely returns `adapter_not_ready`.
 - Non-completed adapters return a clear `error`.
-- A completed adapter must declare a G-code path; the Orchestrator additionally checks that the file exists and is non-empty before accepting it.
+- A completed adapter must declare either a non-empty G-code path or a non-empty neutral toolpath path.

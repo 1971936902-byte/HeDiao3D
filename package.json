@@ -11,6 +11,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "test:v3": "node scripts/v3-smoke-test.mjs",
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
+    "test:v3:neutral-adapter": "node scripts/v3-neutral-adapter-orchestrator-test.mjs",
     "test:v3:adapter-api": "node scripts/v3-adapter-validation-api-test.mjs",
     "test:v3:external-adapters": "node scripts/v3-external-adapter-validation.mjs",
     "test:v3:native-cam": "node scripts/v3-linux-native-cam-check.mjs",

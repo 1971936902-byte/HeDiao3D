@@ -50,7 +50,8 @@ try {
     outputs: {
       gcode: join(workDir, "outputs", "toolpath.nc"),
       report: join(workDir, "outputs", "adapter-report.json"),
-      preview: join(workDir, "outputs", "preview.json")
+      preview: join(workDir, "outputs", "preview.json"),
+      neutralToolpath: join(workDir, "outputs", "neutral-toolpath.json")
     },
     externalCamRecipe: {
       schema: "hediao3d.external-cam-recipe.v1",
@@ -129,6 +130,47 @@ try {
     });
   }
 
+  const neutralJobPath = join(workDir, "opencamlib-neutral-job.json");
+  const neutralResultPath = join(workDir, "opencamlib-neutral-report.json");
+  const neutralOutputPath = join(workDir, "outputs", "opencamlib-neutral-toolpath.json");
+  writeFileSync(neutralJobPath, JSON.stringify({
+    ...job,
+    engine: "opencamlib",
+    outputs: {
+      ...job.outputs,
+      report: neutralResultPath,
+      neutralToolpath: neutralOutputPath
+    }
+  }, null, 2));
+  const neutralRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/opencamlib/opencamlib_job.py", neutralJobPath, neutralResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "true"
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(neutralRun.status === 0, `opencamlib neutral handoff exited ${neutralRun.status}: ${neutralRun.stderr || neutralRun.stdout}`);
+  const neutralReport = JSON.parse(readFileSync(neutralResultPath, "utf8"));
+  validateReport("opencamlib", neutralReport);
+  assert(neutralReport.status === "completed", "opencamlib neutral handoff should complete in synthetic contract mode");
+  assert(existsSync(neutralOutputPath), "opencamlib neutral toolpath file missing");
+  const neutralToolpath = JSON.parse(readFileSync(neutralOutputPath, "utf8"));
+  assert(neutralToolpath.schema === "hediao3d.neutral-toolpath.v1", "neutral toolpath schema mismatch");
+  assert(Array.isArray(neutralToolpath.points) && neutralToolpath.points.length > 0, "neutral toolpath points missing");
+  results.push({
+    id: "opencamlib-neutral-handoff",
+    status: neutralReport.status,
+    protocolVersion: neutralReport.protocolVersion,
+    warningCount: neutralReport.warnings?.length ?? 0,
+    recipeOperations: neutralReport.metrics.recipe.operationCount,
+    neutralToolpath: neutralReport.metrics.neutralToolpath?.status ?? null,
+    pointCount: neutralToolpath.points.length
+  });
+
   console.log(JSON.stringify({ ok: true, adapters: results }, null, 2));
 } finally {
   rmSync(workDir, { recursive: true, force: true });
@@ -149,7 +191,7 @@ function validateReport(engineId, report) {
   assert(report.metrics.recipe.toolProfileId === "vflat-4mm-25deg", `${engineId} recipe tool mismatch`);
   assert(typeof report.metrics.recipe.postprocessPolicy === "string" && report.metrics.recipe.postprocessPolicy.includes("wrap"), `${engineId} recipe postprocess policy missing`);
   if (report.status === "completed") {
-    assert(report.gcodePath || report.outputs?.gcode, `${engineId} completed report must include gcode path`);
+    assert(report.gcodePath || report.outputs?.gcode || report.neutralToolpathPath || report.outputs?.neutralToolpath || report.metrics?.neutralToolpath?.path, `${engineId} completed report must include G-code or neutral toolpath path`);
   } else {
     assert(typeof report.error === "string" && report.error.length > 0, `${engineId} non-completed report must include an error`);
   }

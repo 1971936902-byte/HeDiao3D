@@ -1356,6 +1356,9 @@ function getNativeCamReadinessArtifact(checkId, filename, res) {
 
 function createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine) {
   if (!adapterReport || adapterReport.status !== "completed") return null;
+  const neutralToolpath = createToolpathFromNeutralAdapterOutput(adapterReport, job, settings, selectedEngine);
+  if (neutralToolpath) return neutralToolpath;
+
   const candidatePath = adapterReport.gcodePath
     ?? adapterReport.outputs?.gcode
     ?? join(job.workDir, "toolpath.nc");
@@ -1373,7 +1376,7 @@ function createToolpathFromAdapterReport(adapterReport, job, settings, selectedE
 
   return {
     points,
-    previewPoints: limitToolpathPreviewPoints(points.map((point) => ({ ...point, hit: true }))),
+    previewPoints: limitPreviewPoints(points.map((point) => ({ ...point, hit: true }))),
     gcode,
     tap: gcode,
     txt: gcode,
@@ -1382,6 +1385,80 @@ function createToolpathFromAdapterReport(adapterReport, job, settings, selectedE
     postProcessorName: `${selectedEngine.name} adapter G-code`,
     summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
   };
+}
+
+function createToolpathFromNeutralAdapterOutput(adapterReport, job, settings, selectedEngine) {
+  const candidatePath = adapterReport.neutralToolpathPath
+    ?? adapterReport.outputs?.neutralToolpath
+    ?? adapterReport.metrics?.neutralToolpath?.path
+    ?? join(job.workDir, "neutral-toolpath.json");
+  if (!candidatePath || !existsSync(candidatePath)) return null;
+
+  let neutral;
+  try {
+    neutral = JSON.parse(readFileSync(candidatePath, "utf8"));
+  } catch {
+    return null;
+  }
+
+  const points = normalizeNeutralToolpathPoints(neutral, settings);
+  if (points.length === 0) return null;
+  const estimatedMinutes = Number(
+    adapterReport.metrics?.estimatedMinutes
+      ?? neutral.estimatedMinutes
+      ?? estimateTravel(points, Number(settings.diameterMm) / 2) / Math.max(1, Number(settings.feedRate))
+  );
+  const gcode = toGcode(points, settings, estimatedMinutes, `${selectedEngine.name} neutral adapter`);
+  const warnings = [
+    `${selectedEngine.name} adapter 输出中立刀位点，已由 HeDiao3D 后处理为机床 NC。`,
+    "中立刀路已进入统一仿真和安全门禁；生产解锁仍需真实 CAM 环境、CAMotics/机床仿真和试雕记录。"
+  ];
+  if (neutral.schema !== "hediao3d.neutral-toolpath.v1") {
+    warnings.push(`中立刀路 schema 为 ${neutral.schema ?? "unknown"}，建议升级到 hediao3d.neutral-toolpath.v1。`);
+  }
+
+  return {
+    points,
+    previewPoints: limitPreviewPoints(points.map((point) => ({ ...point, hit: true }))),
+    gcode,
+    tap: gcode,
+    txt: gcode,
+    csv: toCsv(points),
+    estimatedMinutes,
+    postProcessorName: `${selectedEngine.name} neutral + ${postProcessorName(settings.postProcessor)}`,
+    summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
+  };
+}
+
+function normalizeNeutralToolpathPoints(neutral, settings) {
+  const sourcePoints = Array.isArray(neutral?.points) ? neutral.points : [];
+  const safeZ = Number(settings.safeZ ?? 0);
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const rotaryAxis = String(settings.rotaryOutputAxis ?? "Y").toUpperCase();
+  const rotaryLinearToDeg = (value) => (Number(value) / wrapPerRev) * 360;
+
+  return sourcePoints
+    .map((point) => {
+      const x = Number(point.x ?? point.xMm ?? point.lengthMm);
+      const y = point.y ?? point.yMm;
+      const a = point.a ?? point.aDeg ?? point.angleDeg;
+      const z = Number(point.z ?? point.zMm);
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+      const normalized = {
+        x,
+        y: Number.isFinite(Number(y)) ? Number(y) : undefined,
+        a: Number.isFinite(Number(a))
+          ? Number(a)
+          : settings.camMode === "rotaryWrap" && rotaryAxis !== "A" && Number.isFinite(Number(y))
+            ? rotaryLinearToDeg(Number(y))
+            : 0,
+        z,
+        depth: Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, safeZ - z)
+      };
+      if (settings.camMode === "3axis" && normalized.y == null) normalized.y = 0;
+      return normalized;
+    })
+    .filter(Boolean);
 }
 
 function parseGcodeMotionPoints(gcode, settings) {
@@ -1595,6 +1672,7 @@ async function processOrchestratorJob(job, settings) {
     pushIfArtifactExists(job, "blendercam-run-template.py");
     pushIfArtifactExists(job, "opencamlib-kernel-plan.json");
     pushIfArtifactExists(job, "opencamlib-run-template.py");
+    pushIfArtifactExists(job, "neutral-toolpath.json");
     pushIfArtifactExists(job, "camotics-simulation-plan.json");
     pushIfArtifactExists(job, "camotics-project-template.json");
     const adapterStatus = adapterReport.status === "completed" ? "completed" : "review";
@@ -1773,7 +1851,8 @@ function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine)
     outputs: {
       gcode: join(workDir, "toolpath.nc"),
       report: join(workDir, "adapter-report.json"),
-      preview: join(workDir, "preview.json")
+      preview: join(workDir, "preview.json"),
+      neutralToolpath: join(workDir, "neutral-toolpath.json")
     }
   };
 }
@@ -3604,12 +3683,10 @@ function validateAdapterReport(report, selectedEngine, job) {
 
   if (report.status === "completed") {
     const gcodePath = report.gcodePath ?? report.outputs?.gcode ?? join(job.workDir, "toolpath.nc");
-    if (!gcodePath || !existsSync(gcodePath)) {
-      errors.push("completed adapter report did not write a G-code file");
-    } else {
-      const size = statSync(gcodePath).size;
-      if (size <= 0) errors.push("completed adapter G-code file is empty");
-    }
+    const neutralToolpathPath = report.neutralToolpathPath ?? report.outputs?.neutralToolpath ?? report.metrics?.neutralToolpath?.path ?? join(job.workDir, "neutral-toolpath.json");
+    const hasGcode = Boolean(gcodePath && existsSync(gcodePath) && statSync(gcodePath).size > 0);
+    const hasNeutralToolpath = Boolean(neutralToolpathPath && existsSync(neutralToolpathPath) && statSync(neutralToolpathPath).size > 0);
+    if (!hasGcode && !hasNeutralToolpath) errors.push("completed adapter report did not write G-code or neutral toolpath output");
   }
 
   return {
@@ -3894,6 +3971,20 @@ function detectCamEngines() {
 }
 
 function detectOpenCamLibEngine() {
+  if (String(process.env.HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER ?? "").toLowerCase() === "true") {
+    const command = process.env.PYTHON ?? "python";
+    return {
+      id: "opencamlib",
+      name: "OpenCAMLib",
+      role: "底层刀具接触/drop-cutter 算法库 adapter",
+      available: true,
+      adapterReady: true,
+      command,
+      version: "forced adapter contract mode",
+      notes: "HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER=true，仅用于 adapter/Orchestrator 合约测试；生产环境必须安装真实 OpenCAMLib/ocl。"
+    };
+  }
+
   const pythonCommands = ["python", "python3", "py"];
   for (const command of pythonCommands) {
     const probe = spawnSync(command, ["-c", "import importlib.util; import sys; mod = importlib.util.find_spec('opencamlib') or importlib.util.find_spec('ocl'); print('opencamlib' if mod else 'missing'); sys.exit(0 if mod else 3)"], {
