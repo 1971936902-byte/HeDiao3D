@@ -78,6 +78,7 @@ const summary = {
     HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: process.env.HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT ?? null,
     HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: process.env.HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN ?? null
   },
+  nativeReadiness: createNativeReadiness(results),
   adapters: results
 };
 
@@ -94,8 +95,8 @@ const consoleSummary = {
     status: item.report?.status ?? item.run.status,
     command: item.command,
     planGenerated: item.plan.generated,
-      nativeSignals: item.nativeSignals
-    }))
+    nativeSignals: item.nativeSignals
+  }))
 };
 console.log(JSON.stringify(jsonOnly ? summary : consoleSummary, null, 2));
 
@@ -346,6 +347,73 @@ function summarize(results) {
   };
 }
 
+function createNativeReadiness(results) {
+  const adapters = results.map((adapter) => {
+    const readiness = evaluateAdapterNativeReadiness(adapter.id, adapter.nativeSignals);
+    return {
+      id: adapter.id,
+      ready: readiness.ready,
+      level: readiness.ready ? "ready" : adapter.commandMode === "native" && adapter.command ? "partial" : "missing",
+      command: adapter.command,
+      commandMode: adapter.commandMode,
+      signals: adapter.nativeSignals,
+      missing: readiness.missing
+    };
+  });
+  const readyCount = adapters.filter((adapter) => adapter.ready).length;
+  const blockers = adapters
+    .filter((adapter) => !adapter.ready)
+    .flatMap((adapter) => adapter.missing.map((item) => `${adapter.id}: ${item}`));
+  return {
+    schema: "hediao3d.native-cam-readiness.v1",
+    mode: useNativeCommands ? "native" : "safe-default",
+    readyCount,
+    requiredCount: adapters.length,
+    level: readyCount === adapters.length ? "ready" : readyCount > 0 ? "partial" : "missing",
+    summary: readyCount === adapters.length
+      ? "外部 CAM Native 环境已具备完整执行信号。"
+      : `外部 CAM Native 环境未完整就绪：${readyCount}/${adapters.length} 个引擎具备执行信号。`,
+    blockers,
+    nextActions: createNativeReadinessActions(adapters),
+    adapters
+  };
+}
+
+function evaluateAdapterNativeReadiness(id, signals = {}) {
+  if (id === "freecad") {
+    const missing = [];
+    if (!signals.freecadPythonAvailable) missing.push("FreeCAD Python/Cmd 不可用");
+    if (!signals.pathWorkbenchAvailable) missing.push("FreeCAD Path/CAM Workbench 不可用");
+    return { ready: missing.length === 0, missing };
+  }
+  if (id === "blendercam") {
+    const missing = [];
+    if (!signals.blenderPythonAvailable) missing.push("Blender Python 不可用");
+    if (!signals.camAddonDetected) missing.push("BlenderCAM/FabexCNC 插件未检测到");
+    return { ready: missing.length === 0, missing };
+  }
+  if (id === "opencamlib") {
+    const missing = signals.available ? [] : ["OpenCAMLib/ocl Python 模块不可用"];
+    return { ready: missing.length === 0, missing };
+  }
+  if (id === "camotics") {
+    const missing = signals.available ? [] : ["CAMotics CLI 不可用"];
+    return { ready: missing.length === 0, missing };
+  }
+  return { ready: false, missing: ["未知 Adapter 类型"] };
+}
+
+function createNativeReadinessActions(adapters) {
+  const actions = [];
+  if (!useNativeCommands) actions.push("在 CAM 服务器上设置 V3_ADAPTER_USE_NATIVE_COMMANDS=true 重新执行 Native 预检。");
+  if (adapters.some((adapter) => adapter.id === "freecad" && !adapter.ready)) actions.push("安装 FreeCAD 并确认 FreeCADCmd/Path Workbench 可在服务账号下运行。");
+  if (adapters.some((adapter) => adapter.id === "blendercam" && !adapter.ready)) actions.push("安装 Blender 与 BlenderCAM/FabexCNC 插件，用于艺术 Mesh 曲面刀路。");
+  if (adapters.some((adapter) => adapter.id === "opencamlib" && !adapter.ready)) actions.push("在 Python 环境安装 OpenCAMLib/ocl，用于 drop-cutter 与曲面刀位计算。");
+  if (adapters.some((adapter) => adapter.id === "camotics" && !adapter.ready)) actions.push("安装 CAMotics CLI，用于 NC 材料去除仿真与空跑验证。");
+  if (actions.length === 0) actions.push("Native 预检通过后，再逐项打开实验开关验证真实 G-code/仿真输出。");
+  return [...new Set(actions)];
+}
+
 function createMarkdown(summary) {
   const lines = [
     "# HeDiao3D V3 External Adapter Validation",
@@ -361,10 +429,21 @@ function createMarkdown(summary) {
     `- Failed: ${summary.overall.failed}`,
     `- Completed external outputs: ${summary.overall.completedAdapters}`,
     `- Production ready: ${summary.overall.readyForProduction ? "yes" : "no"}`,
+    `- Native readiness: ${summary.nativeReadiness.readyCount}/${summary.nativeReadiness.requiredCount} (${summary.nativeReadiness.level})`,
     "",
     "## Environment switches",
     "",
     ...Object.entries(summary.environment).map(([key, value]) => `- ${key}: ${value ?? "(unset)"}`),
+    "",
+    "## Native readiness",
+    "",
+    summary.nativeReadiness.summary,
+    "",
+    "Blockers:",
+    ...(summary.nativeReadiness.blockers.length ? summary.nativeReadiness.blockers.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "Next actions:",
+    ...summary.nativeReadiness.nextActions.map((item) => `- ${item}`),
     "",
     "## Adapters",
     ""

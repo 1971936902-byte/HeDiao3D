@@ -536,6 +536,7 @@ function createAdapterValidationPublicSummary(summary, validationId) {
       readyForProduction: false,
       note: "Adapter validation summary is missing overall metrics."
     },
+    nativeReadiness: createPublicNativeReadiness(summary.nativeReadiness),
     adapters: Array.isArray(summary.adapters)
       ? summary.adapters.map((adapter) => ({
         id: adapter.id,
@@ -566,6 +567,42 @@ function createAdapterValidationPublicSummary(summary, validationId) {
       hasStdout: Boolean(summary.run?.stdoutTail),
       hasStderr: Boolean(summary.run?.stderrTail)
     }
+  };
+}
+
+function createPublicNativeReadiness(nativeReadiness) {
+  if (!nativeReadiness) {
+    return {
+      schema: "hediao3d.native-cam-readiness.v1",
+      mode: "unknown",
+      readyCount: 0,
+      requiredCount: 0,
+      level: "missing",
+      summary: "Native CAM readiness report is missing.",
+      blockers: [],
+      nextActions: ["重新运行外部 Adapter 验证。"],
+      adapters: []
+    };
+  }
+  return {
+    schema: nativeReadiness.schema,
+    mode: nativeReadiness.mode,
+    readyCount: nativeReadiness.readyCount,
+    requiredCount: nativeReadiness.requiredCount,
+    level: nativeReadiness.level,
+    summary: nativeReadiness.summary,
+    blockers: Array.isArray(nativeReadiness.blockers) ? nativeReadiness.blockers.slice(0, 8) : [],
+    nextActions: Array.isArray(nativeReadiness.nextActions) ? nativeReadiness.nextActions.slice(0, 6) : [],
+    adapters: Array.isArray(nativeReadiness.adapters)
+      ? nativeReadiness.adapters.map((adapter) => ({
+        id: adapter.id,
+        ready: Boolean(adapter.ready),
+        level: adapter.level,
+        command: adapter.command ?? null,
+        commandMode: adapter.commandMode ?? null,
+        missing: Array.isArray(adapter.missing) ? adapter.missing.slice(0, 4) : []
+      }))
+      : []
   };
 }
 

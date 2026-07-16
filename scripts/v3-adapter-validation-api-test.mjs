@@ -9,6 +9,8 @@ async function main() {
   validatePublicSummary(run, "POST /api/orchestrator/adapter-validation");
   assert(run.overall.generatedPlans === 4, `expected 4 generated plans, got ${run.overall.generatedPlans}`);
   assert(run.overall.failed === 0, `expected 0 failed adapters, got ${run.overall.failed}`);
+  assert(run.nativeReadiness?.schema === "hediao3d.native-cam-readiness.v1", "POST summary missing native readiness report");
+  assert(run.nativeReadiness.requiredCount === 4, `expected 4 native readiness adapters, got ${run.nativeReadiness.requiredCount}`);
 
   const latest = await getJson("/api/orchestrator/adapter-validation/latest");
   assert(latest.latest, "latest validation missing");
@@ -22,12 +24,14 @@ async function main() {
   const artifact = await artifactResponse.json();
   assert(Array.isArray(artifact.adapters), "full validation artifact missing adapters");
   assert(artifact.adapters.some((adapter) => adapter.workDir), "full artifact should keep detailed adapter data");
+  assert(artifact.nativeReadiness?.schema === "hediao3d.native-cam-readiness.v1", "full artifact missing native readiness report");
 
   console.log(JSON.stringify({
     ok: true,
     validationId: run.id,
     generatedPlans: run.overall.generatedPlans,
     failed: run.overall.failed,
+    nativeReady: `${run.nativeReadiness.readyCount}/${run.nativeReadiness.requiredCount}`,
     latestBytes: JSON.stringify(latest.latest).length
   }, null, 2));
 }
@@ -38,6 +42,8 @@ function validatePublicSummary(summary, label) {
   assert(Array.isArray(summary.adapters), `${label} missing adapters[]`);
   assert(summary.apiArtifacts?.json, `${label} missing JSON artifact link`);
   assert(summary.apiArtifacts?.markdown, `${label} missing Markdown artifact link`);
+  assert(summary.nativeReadiness?.schema === "hediao3d.native-cam-readiness.v1", `${label} missing nativeReadiness`);
+  assert(Array.isArray(summary.nativeReadiness.adapters), `${label} nativeReadiness missing adapters[]`);
   assert(!("workDir" in summary), `${label} leaked full validation workDir`);
   for (const adapter of summary.adapters) {
     assert(adapter.id, `${label} adapter missing id`);

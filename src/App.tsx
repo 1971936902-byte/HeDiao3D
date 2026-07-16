@@ -559,6 +559,23 @@ type V3AdapterValidationSummary = {
     readyForProduction: boolean;
     note?: string;
   };
+  nativeReadiness?: {
+    mode: string;
+    readyCount: number;
+    requiredCount: number;
+    level: "ready" | "partial" | "missing" | string;
+    summary: string;
+    blockers: string[];
+    nextActions: string[];
+    adapters: Array<{
+      id: string;
+      ready: boolean;
+      level: string;
+      command: string | null;
+      commandMode: string | null;
+      missing: string[];
+    }>;
+  };
   adapters: Array<{
     id: string;
     name: string;
@@ -3799,6 +3816,15 @@ export function App() {
                       ? "Adapter 验证已达到生产门禁要求"
                       : v3AdapterValidation.overall.note ?? "当前仍为 Adapter 接入验证，正式上机前还需要真实 CAM 与仿真通过"}
                   </small>
+                  {v3AdapterValidation.nativeReadiness && (
+                    <small>
+                      Native预检：{v3AdapterValidation.nativeReadiness.readyCount}/{v3AdapterValidation.nativeReadiness.requiredCount}
+                      {" · "}
+                      {v3AdapterValidation.nativeReadiness.level}
+                      {" · "}
+                      {v3AdapterValidation.nativeReadiness.summary}
+                    </small>
+                  )}
                   <div className="v3-adapter-list">
                     {v3AdapterValidation.adapters.map((adapter) => (
                       <span className={adapter.report?.status === "completed" || adapter.plan.generated ? "ok" : "warning"} key={adapter.id}>
