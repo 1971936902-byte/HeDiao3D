@@ -239,6 +239,44 @@ type V3OrchestratorJob = {
           estimatedMinutes: number;
         };
       };
+      postprocessProfile?: {
+        camMode: string;
+        postProcessor: string;
+        postProcessorName: string;
+        selectedEngine: string;
+        resultEngine: string;
+        fallbackUsed: boolean;
+        packageLevel: string;
+        coordinateMapping?: {
+          lengthAxis: string;
+          depthAxis: string;
+          rotaryAxis: string | null;
+          length: string;
+          depth: string;
+          rotary: string | null;
+          gcodeHeaderMarkers?: Record<string, string | number | null>;
+        };
+        machine?: {
+          machineProfileId?: string | null;
+          rotaryOutputAxis?: string | null;
+          rotaryWrapPerRevolutionMm?: number | null;
+          notes?: string;
+        };
+        tool?: {
+          toolProfileId?: string | null;
+          toolDiameterMm: number;
+          stepoverMm: number;
+          stepoverDeg: number;
+          description: string;
+        };
+        cutting?: {
+          feedRateMmMin: number;
+          spindleRpm: number;
+          safeZMm: number;
+          estimatedMinutes: number;
+          pointCount: number;
+        };
+      };
       deliveryManifest?: {
         packageLevel: string;
         allowProductionNc: boolean;
@@ -3551,6 +3589,20 @@ export function App() {
                   试雕 {v3Job.result.summary.productionGate.allowTrialNc ? "可用" : "不可用"}
                 </small>
               )}
+              {v3Job?.result?.summary.postprocessProfile && (
+                <small>
+                  后处理：{v3Job.result.summary.postprocessProfile.postProcessorName}
+                  {" · "}
+                  长度轴 {v3Job.result.summary.postprocessProfile.coordinateMapping?.lengthAxis ?? "X"}
+                  {" · "}
+                  旋转轴 {v3Job.result.summary.postprocessProfile.coordinateMapping?.rotaryAxis ?? "无"}
+                  {v3Job.result.summary.postprocessProfile.machine?.rotaryWrapPerRevolutionMm
+                    ? ` · ${v3Job.result.summary.postprocessProfile.machine.rotaryWrapPerRevolutionMm}mm/圈`
+                    : ""}
+                  {" · "}
+                  刀具 {v3Job.result.summary.postprocessProfile.tool?.description ?? "未记录"}
+                </small>
+              )}
               {v3Job?.result?.summary.deliveryManifest && (
                 <small>
                   交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
@@ -5700,6 +5752,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
   const repairExecution = summary?.repairExecution;
+  const postprocessProfile = summary?.postprocessProfile;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -5720,6 +5773,15 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `Mesh修复执行: ${repairExecution?.summary ?? "未生成"}`,
     `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
     `Adapter预检: ${preflight?.summary ?? "未生成"}`,
+    "",
+    "## 后处理配置",
+    "",
+    `后处理: ${postprocessProfile?.postProcessorName ?? summary?.postProcessorName ?? "未生成"}`,
+    `CAM模式: ${postprocessProfile?.camMode ?? "unknown"}`,
+    `长度轴: ${postprocessProfile?.coordinateMapping?.lengthAxis ?? "-"}`,
+    `旋转轴: ${postprocessProfile?.coordinateMapping?.rotaryAxis ?? "-"}`,
+    `旋转等效: ${postprocessProfile?.machine?.rotaryWrapPerRevolutionMm ? `${postprocessProfile.machine.rotaryWrapPerRevolutionMm} mm/圈` : "-"}`,
+    `刀具: ${postprocessProfile?.tool?.description ?? "-"} / ${postprocessProfile?.tool?.toolDiameterMm ?? "-"} mm`,
     "",
     "## 刀路摘要",
     "",

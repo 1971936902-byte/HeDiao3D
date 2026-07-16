@@ -25,10 +25,10 @@ const settings = {
   leftHoldMm: 2,
   rightHoldMm: 2,
   endTransitionMm: 1.2,
-  toolDiameter: 0.6,
+  toolDiameter: 4,
   stepoverDeg: 5,
-  stepoverMm: 0.45,
-  toolProfileId: "vbit-flat-4mm-25deg",
+  stepoverMm: 0.28,
+  toolProfileId: "vflat-4mm-25deg",
   materialProfileId: "olive-core",
   machineProfileId: "desktop-rotary-y-wrap",
   camMode: "rotaryWrap",
@@ -36,8 +36,8 @@ const settings = {
   rotaryWrapPerRevolutionMm: 100,
   meshLengthAxis: "auto",
   meshAxisReverse: false,
-  maxCutDepth: 0.16,
-  stockAllowance: 0.12,
+  maxCutDepth: 0.45,
+  stockAllowance: 0.08,
   finishingStrategy: "x-scan",
   generationMode: "active",
   postProcessor: "rotary-y-wrap"
@@ -81,6 +81,7 @@ async function main() {
     "simulation-summary.json",
     "air-run.nc",
     "production-gate.json",
+    "postprocess-profile.json",
     "delivery-manifest.json"
   ];
   for (const filename of requiredArtifacts) {

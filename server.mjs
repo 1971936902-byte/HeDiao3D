@@ -696,8 +696,17 @@ async function processOrchestratorJob(job, settings) {
     engineReadiness,
     simulationSummary
   });
+  const postprocessProfile = createPostprocessProfile({
+    job,
+    settings,
+    toolpath,
+    selectedEngine: selected,
+    resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
+    productionGate
+  });
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate);
   await writeFile(join(job.workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
+  await writeFile(join(job.workDir, "postprocess-profile.json"), JSON.stringify(postprocessProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
   updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
@@ -705,6 +714,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-gate.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   job.status = "completed";
   job.currentStage = "completed";
@@ -724,6 +734,7 @@ async function processOrchestratorJob(job, settings) {
       engineReadiness,
       adapterPreflight,
       productionGate,
+      postprocessProfile,
       deliveryManifest,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
@@ -1361,6 +1372,104 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   };
 }
 
+function createPostprocessProfile({ job, settings, toolpath, selectedEngine, resultEngine, productionGate }) {
+  const postProcessor = settings.postProcessor ?? "generic";
+  const rotaryAxis = settings.camMode === "rotaryWrap"
+    ? settings.rotaryOutputAxis || (postProcessor === "wrapX" ? "X" : postProcessor === "wrapY" ? "Y" : "A")
+    : null;
+  const wrapPerRev = settings.camMode === "rotaryWrap"
+    ? Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100))
+    : null;
+  const lengthAxis = settings.camMode === "rotaryWrap" && rotaryAxis === "X" ? "Y" : "X";
+  const rotaryMapping = rotaryAxis
+    ? rotaryAxis === "A"
+      ? `${rotaryAxis}=旋转角度，单位为度`
+      : `${rotaryAxis}=旋转夹具线性化坐标，${fmt(wrapPerRev, 3)}mm/360deg`
+    : null;
+
+  return {
+    schema: "hediao3d.postprocess-profile.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    camMode: settings.camMode,
+    postProcessor,
+    postProcessorName: toolpath.postProcessorName ?? postProcessorName(postProcessor),
+    selectedEngine: selectedEngine.id,
+    selectedEngineName: selectedEngine.name,
+    resultEngine,
+    fallbackUsed: selectedEngine.id !== resultEngine,
+    packageLevel: productionGate.level,
+    coordinateMapping: {
+      lengthAxis,
+      depthAxis: "Z",
+      rotaryAxis,
+      length: `${lengthAxis}=工件长度方向`,
+      depth: "Z=刀具高度/径向刀深，安全高度为正向",
+      rotary: rotaryMapping,
+      gcodeHeaderMarkers: settings.camMode === "rotaryWrap"
+        ? {
+            ROTARY_WRAP_AXIS: rotaryAxis,
+            ROTARY_WRAP_PER_REV_MM: wrapPerRev,
+            LENGTH_AXIS: lengthAxis
+          }
+        : {
+            LENGTH_AXIS: "X",
+            WIDTH_AXIS: "Y",
+            DEPTH_AXIS: "Z"
+          }
+    },
+    machine: {
+      machineProfileId: settings.machineProfileId ?? null,
+      rotaryOutputAxis: rotaryAxis,
+      rotaryWrapPerRevolutionMm: wrapPerRev,
+      notes: settings.camMode === "rotaryWrap"
+        ? "适用于三轴控制器加旋转夹具：X走长度，Z控刀深，Y/A驱动旋转。"
+        : "适用于常规三轴平面浮雕：X/Y平面运动，Z控刀深。"
+    },
+    stock: {
+      lengthMm: Number(settings.lengthMm),
+      diameterMm: Number(settings.diameterMm),
+      leftHoldMm: Number(settings.leftHoldMm ?? 0),
+      rightHoldMm: Number(settings.rightHoldMm ?? 0),
+      endTransitionMm: Number(settings.endTransitionMm ?? 0),
+      blankDiametersMm: {
+        left: Number(settings.blankLeftDiameterMm ?? settings.diameterMm),
+        leftMid: Number(settings.blankLeftMidDiameterMm ?? settings.diameterMm),
+        center: Number(settings.blankCenterDiameterMm ?? settings.diameterMm),
+        rightMid: Number(settings.blankRightMidDiameterMm ?? settings.diameterMm),
+        right: Number(settings.blankRightDiameterMm ?? settings.diameterMm)
+      }
+    },
+    tool: {
+      toolProfileId: settings.toolProfileId ?? null,
+      toolDiameterMm: Number(settings.toolDiameter),
+      stepoverMm: Number(settings.stepoverMm),
+      stepoverDeg: Number(settings.stepoverDeg),
+      maxCutDepthMm: Number(settings.maxCutDepth ?? settings.depthMm ?? 0),
+      stockAllowanceMm: Number(settings.stockAllowance ?? 0),
+      description: describeTool(settings).name
+    },
+    cutting: {
+      feedRateMmMin: Number(settings.feedRate),
+      spindleRpm: Number(settings.spindleRpm),
+      safeZMm: Number(settings.safeZ),
+      estimatedMinutes: Number(toolpath.estimatedMinutes ?? 0),
+      pointCount: toolpath.points?.length ?? 0
+    },
+    outputFiles: {
+      productionOrTrialNc: "toolpath.nc",
+      airRunNc: "air-run.nc",
+      productionGate: "production-gate.json",
+      simulationSummary: "simulation-summary.json"
+    },
+    safetyNotes: [
+      "先运行 air-run.nc 做离料空跑，确认长度轴、旋转轴和 Z 方向。",
+      "当前 packageLevel 不是 production 时，只建议小料试雕，不建议直接正式上机。",
+      "若机床把旋转夹具接到 Y 轴，请确认控制器每转一圈等效距离与 rotaryWrapPerRevolutionMm 一致。"
+    ]
+  };
+}
+
 function createDeliveryManifest(job, toolpath, productionGate) {
   const files = [
     createDeliveryFile(job.id, "job.json", "任务参数快照", "report", true, "用于复现本次 Orchestrator 输入。"),
@@ -1373,6 +1482,7 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
+    createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
     createDeliveryFile(job.id, "toolpath.nc", "试雕/生产 NC", "nc", productionGate.allowTrialNc, productionGate.allowProductionNc ? "已允许生产下载。" : "当前仅建议小料试雕，不建议直接生产上机。"),
     createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。")
@@ -2636,7 +2746,7 @@ function toThreeAxisGcode(points, settings, estimatedMinutes, sourceName) {
 }
 
 function describeTool(settings) {
-  if (settings.toolProfileId === "vflat-4mm-25deg") {
+  if (settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg") {
     return {
       name: "4mm 25deg flat-tip V-bit",
       geometry: " Type=VBIT Angle=25.0deg FlatTip=0.400mm"
