@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -52,8 +53,9 @@ def main() -> int:
         return 2
 
     detection = detect_opencamlib()
+    geometry = analyze_model_geometry(plan)
     if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_RUNNER_FIXTURE_OUTPUT")):
-        neutral = create_fixture_neutral_toolpath(job, plan, detection)
+        neutral = create_fixture_neutral_toolpath(job, plan, detection, geometry)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({
@@ -63,6 +65,7 @@ def main() -> int:
             "points": len(neutral["points"]),
             "output": str(output_path),
             "opencamlibAvailable": detection["available"],
+            "geometry": geometry,
         }, ensure_ascii=False))
         return 0
 
@@ -136,7 +139,66 @@ def safe_find_spec(name: str) -> Any:
         return None
 
 
-def create_fixture_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any], detection: Dict[str, Any]) -> Dict[str, Any]:
+def analyze_model_geometry(plan: Dict[str, Any]) -> Dict[str, Any]:
+    model = plan.get("model") or {}
+    model_path = Path(str(model.get("path") or ""))
+    fmt = str(model.get("format") or model_path.suffix.lower().lstrip(".")).lower()
+    summary: Dict[str, Any] = {
+        "schema": "hediao3d.opencamlib-runner-geometry.v1",
+        "path": str(model_path),
+        "format": fmt or None,
+        "exists": model_path.exists(),
+        "supportedParser": fmt == "stl",
+        "triangleCount": 0,
+        "vertexCount": 0,
+        "bounds": None,
+        "dimensions": None,
+        "warnings": [],
+    }
+    if not model_path.exists():
+        summary["warnings"].append("model file does not exist; runner can only emit fixture geometry until model conversion is wired.")
+        return summary
+    if fmt != "stl":
+        summary["warnings"].append(f"runner geometry parser currently supports ASCII STL only, got {fmt or 'unknown'}.")
+        return summary
+    try:
+        text = model_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        summary["warnings"].append(f"failed to read model: {exc}")
+        return summary
+    vertices = parse_ascii_stl_vertices(text)
+    if not vertices:
+        summary["warnings"].append("no ASCII STL vertices parsed; binary STL parsing is not implemented in this runner scaffold.")
+        return summary
+    xs = [v[0] for v in vertices]
+    ys = [v[1] for v in vertices]
+    zs = [v[2] for v in vertices]
+    min_bounds = {"x": min(xs), "y": min(ys), "z": min(zs)}
+    max_bounds = {"x": max(xs), "y": max(ys), "z": max(zs)}
+    summary.update({
+        "triangleCount": len(vertices) // 3,
+        "vertexCount": len(vertices),
+        "bounds": {
+            "min": min_bounds,
+            "max": max_bounds,
+        },
+        "dimensions": {
+            "x": round(max_bounds["x"] - min_bounds["x"], 6),
+            "y": round(max_bounds["y"] - min_bounds["y"], 6),
+            "z": round(max_bounds["z"] - min_bounds["z"], 6),
+        },
+    })
+    return summary
+
+
+def parse_ascii_stl_vertices(text: str) -> List[List[float]]:
+    vertices: List[List[float]] = []
+    for match in re.finditer(r"vertex\s+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", text):
+        vertices.append([float(match.group(1)), float(match.group(2)), float(match.group(3))])
+    return vertices
+
+
+def create_fixture_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any]) -> Dict[str, Any]:
     settings = job.get("settings") or {}
     stock = plan.get("stock") or {}
     sampling = plan.get("sampling") or {}
@@ -183,6 +245,7 @@ def create_fixture_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any], d
             "mode": "fixture-contract",
             "opencamlibAvailable": detection["available"],
             "opencamlibModule": detection["module"],
+            "geometry": geometry,
             "warning": "Fixture mode validates the external command contract only; it is not real OpenCAMLib cutter-contact output.",
         },
         "planEcho": {

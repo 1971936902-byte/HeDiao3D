@@ -14,6 +14,7 @@ try {
   const outputPath = join(workDir, "neutral-toolpath.json");
   const job = createJob();
   const plan = createPlan(job);
+  writeFileSync(job.modelPath, createAsciiStl());
   writeFileSync(jobPath, JSON.stringify(job, null, 2));
   writeFileSync(planPath, JSON.stringify(plan, null, 2));
 
@@ -36,6 +37,9 @@ try {
   assert(neutral.generatedByExternalCommand === true, "external command marker missing");
   assert(Array.isArray(neutral.points) && neutral.points.length === 48, "runner fixture point count mismatch");
   assert(neutral.coordinate?.rotaryAxis === "Y", "runner fixture rotary axis mismatch");
+  assert(neutral.runner?.geometry?.triangleCount === 2, "runner geometry triangle count mismatch");
+  assert(neutral.runner?.geometry?.dimensions?.x === 10, "runner geometry X dimension mismatch");
+  assert(neutral.runner?.geometry?.dimensions?.y === 5, "runner geometry Y dimension mismatch");
 
   const noFixtureOutput = join(workDir, "neutral-no-fixture.json");
   const noFixtureRun = spawnSync(python, [runnerPath, jobPath, planPath, noFixtureOutput], {
@@ -99,7 +103,7 @@ function createPlan(job) {
     model: {
       path: job.modelPath,
       format: "stl",
-      exists: false
+      exists: true
     },
     stock: {
       lengthMm: 38,
@@ -124,6 +128,26 @@ function createPlan(job) {
       { id: "finishing", enabled: true, strategy: "unwrapped-rotary-drop-cutter" }
     ]
   };
+}
+
+function createAsciiStl() {
+  return `solid sample
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 10 0 0
+      vertex 0 5 0
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex 10 0 0
+      vertex 10 5 0
+      vertex 0 5 0
+    endloop
+  endfacet
+endsolid sample
+`;
 }
 
 function assert(condition, message) {
