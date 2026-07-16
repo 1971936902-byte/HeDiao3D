@@ -71,7 +71,7 @@ export function createSafetyReportMarkdown(input: ManufacturingReportInput) {
     `- 控制系统：${input.machine.controller}`,
     `- 刀具：${input.tool.name}`,
     `- 材料：${input.material.name}`,
-    `- 毛坯左/中/右直径：${input.settings.blankLeftDiameterMm.toFixed(1)} / ${input.settings.blankCenterDiameterMm.toFixed(1)} / ${input.settings.blankRightDiameterMm.toFixed(1)} mm`,
+    `- 毛坯 5 截面直径：${formatBlankProfileDiameters(input.settings)} mm`,
     `- 左/右夹持：${input.settings.leftHoldMm.toFixed(1)} / ${input.settings.rightHoldMm.toFixed(1)} mm`,
     `- 安全高度：${input.settings.safeZ.toFixed(2)} mm`,
     "",
@@ -123,6 +123,16 @@ export function createQualityReport(input: ManufacturingReportInput) {
       warnings: input.toolpath.summary.warnings
     }
   };
+}
+
+function formatBlankProfileDiameters(settings: ModelSettings) {
+  return [
+    settings.blankLeftDiameterMm,
+    settings.blankLeftMidDiameterMm,
+    settings.blankCenterDiameterMm,
+    settings.blankRightMidDiameterMm,
+    settings.blankRightDiameterMm
+  ].map((value) => value.toFixed(1)).join(" / ");
 }
 
 export function createPackageManifest(input: ManufacturingReportInput) {

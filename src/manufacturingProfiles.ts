@@ -413,13 +413,14 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     });
   }
 
-  const minBlankDiameter = Math.min(settings.blankLeftDiameterMm, settings.blankCenterDiameterMm, settings.blankRightDiameterMm);
-  const blankTaper = Math.max(settings.blankLeftDiameterMm, settings.blankCenterDiameterMm, settings.blankRightDiameterMm) - minBlankDiameter;
+  const blankDiameters = getBlankProfileDiameters(settings);
+  const minBlankDiameter = Math.min(...blankDiameters);
+  const blankTaper = Math.max(...blankDiameters) - minBlankDiameter;
   if (minBlankDiameter < settings.diameterMm - 2.5) {
     issues.push({
       level: "warning",
       title: "毛坯截面小于目标最大直径",
-      detail: `三段毛坯最小直径 ${minBlankDiameter.toFixed(1)}mm，目标最大直径 ${settings.diameterMm.toFixed(1)}mm。请确认模型缩放和夹持区不会切空。`
+      detail: `毛坯 5 截面最小直径 ${minBlankDiameter.toFixed(1)}mm，目标最大直径 ${settings.diameterMm.toFixed(1)}mm。请确认模型缩放和夹持区不会切空。`
     });
   }
 
@@ -427,7 +428,7 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     issues.push({
       level: "warning",
       title: "毛坯左右直径差异较大",
-      detail: `左/中/右毛坯直径为 ${settings.blankLeftDiameterMm.toFixed(1)} / ${settings.blankCenterDiameterMm.toFixed(1)} / ${settings.blankRightDiameterMm.toFixed(1)}mm，建议先空跑并保守设置端部过渡。`
+      detail: `毛坯 5 截面直径为 ${formatBlankProfileDiameters(settings)}mm，建议先空跑并保守设置端部过渡。`
     });
   }
 
@@ -481,6 +482,20 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
   }
 
   return issues;
+}
+
+function getBlankProfileDiameters(settings: ModelSettings) {
+  return [
+    settings.blankLeftDiameterMm,
+    settings.blankLeftMidDiameterMm,
+    settings.blankCenterDiameterMm,
+    settings.blankRightMidDiameterMm,
+    settings.blankRightDiameterMm
+  ].filter((value) => Number.isFinite(value));
+}
+
+function formatBlankProfileDiameters(settings: ModelSettings) {
+  return getBlankProfileDiameters(settings).map((value) => value.toFixed(1)).join(" / ");
 }
 
 export function validateGcodeProgram(settings: ModelSettings, toolpath: GeneratedToolpath | null): SafetyIssue[] {

@@ -570,7 +570,7 @@ button:disabled {
 
 .blank-profile {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -593,6 +593,20 @@ button:disabled {
   color: #f3f9f6;
   border-color: rgba(25, 199, 180, 0.32);
   background: rgba(25, 199, 180, 0.075);
+}
+
+.blank-template-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.blank-template-actions .mini-action {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 6px;
+  white-space: nowrap;
 }
 
 .safety-verdict {

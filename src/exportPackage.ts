@@ -71,7 +71,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     `- 刀具直径：${input.settings.toolDiameter.toFixed(2)} mm`,
     `- 最大单层切深：${input.settings.maxCutDepth.toFixed(2)} mm`,
     `- 粗加工余量：${input.settings.stockAllowance.toFixed(2)} mm`,
-    `- 毛坯左/中/右直径：${input.settings.blankLeftDiameterMm.toFixed(1)} / ${input.settings.blankCenterDiameterMm.toFixed(1)} / ${input.settings.blankRightDiameterMm.toFixed(1)} mm`,
+    `- 毛坯 5 截面直径：${formatBlankProfileDiameters(input.settings)} mm`,
     `- X 步距：${input.settings.stepoverMm.toFixed(3)} mm`,
     `- A 步距：${input.settings.stepoverDeg.toFixed(2)}°`,
     `- 安全高度：${input.settings.safeZ.toFixed(2)} mm`,
@@ -167,4 +167,14 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
     "- 若安全校验存在 critical 阻断项，不建议直接上机。",
     "- 若 Mesh 采样未命中点集中在端部或顶部，建议先修复 Mesh 或调整 CAM 长轴。"
   ].join("\n");
+}
+
+function formatBlankProfileDiameters(settings: ModelSettings) {
+  return [
+    settings.blankLeftDiameterMm,
+    settings.blankLeftMidDiameterMm,
+    settings.blankCenterDiameterMm,
+    settings.blankRightMidDiameterMm,
+    settings.blankRightDiameterMm
+  ].map((value) => value.toFixed(1)).join(" / ");
 }

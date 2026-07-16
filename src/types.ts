@@ -31,7 +31,9 @@ export type ModelSettings = {
   lengthMm: number;
   diameterMm: number;
   blankLeftDiameterMm: number;
+  blankLeftMidDiameterMm: number;
   blankCenterDiameterMm: number;
+  blankRightMidDiameterMm: number;
   blankRightDiameterMm: number;
   depthMm: number;
   reliefAngleDeg: number;

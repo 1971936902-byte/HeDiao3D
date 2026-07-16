@@ -39,7 +39,9 @@ const defaultSettings: ModelSettings = {
   lengthMm: 38,
   diameterMm: 15,
   blankLeftDiameterMm: 13.8,
+  blankLeftMidDiameterMm: 14.6,
   blankCenterDiameterMm: 15,
+  blankRightMidDiameterMm: 14.6,
   blankRightDiameterMm: 13.8,
   depthMm: 1.25,
   reliefAngleDeg: 220,
@@ -628,7 +630,7 @@ export function App() {
   }, [aiMeshStlUrl]);
 
   const updateSetting = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => {
-    setSettings((current) => ({ ...current, [key]: value }));
+    setSettings((current) => normalizeSettings({ ...current, [key]: value }));
     setToolpath(null);
     setIsSimulationMode(false);
     setWorkbenchView("model");
@@ -758,7 +760,7 @@ export function App() {
   };
 
   const restoreSnapshot = (snapshot: TaskSnapshot) => {
-    setSettings(snapshot.settings);
+    setSettings(normalizeSettings(snapshot.settings));
     setToolpath(null);
     setIsSimulationMode(false);
     setWorkbenchView("model");
@@ -871,10 +873,48 @@ export function App() {
   };
 
   const applySettingsPreset = (nextSettings: ModelSettings) => {
-    setSettings(nextSettings);
+    setSettings(normalizeSettings(nextSettings));
     setToolpath(null);
     setIsSimulationMode(false);
     setWorkbenchView("model");
+  };
+
+  const applyBlankProfileTemplate = (template: "standard" | "tapered" | "offset") => {
+    const base = settings.diameterMm;
+    const nextSettings =
+      template === "standard"
+        ? {
+            ...settings,
+            blankLeftDiameterMm: base * 0.92,
+            blankLeftMidDiameterMm: base * 0.98,
+            blankCenterDiameterMm: base,
+            blankRightMidDiameterMm: base * 0.98,
+            blankRightDiameterMm: base * 0.92
+          }
+        : template === "tapered"
+          ? {
+              ...settings,
+              blankLeftDiameterMm: base * 0.82,
+              blankLeftMidDiameterMm: base * 0.95,
+              blankCenterDiameterMm: base,
+              blankRightMidDiameterMm: base * 0.95,
+              blankRightDiameterMm: base * 0.82
+            }
+          : {
+              ...settings,
+              blankLeftDiameterMm: base * 0.86,
+              blankLeftMidDiameterMm: base * 0.95,
+              blankCenterDiameterMm: base * 1.02,
+              blankRightMidDiameterMm: base * 0.9,
+              blankRightDiameterMm: base * 0.78
+            };
+    applySettingsPreset(roundBlankProfile(nextSettings));
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: "应用毛坯截面模板",
+      detail: `${formatBlankTemplate(template)}：${formatBlankProfile(nextSettings)} mm`
+    });
   };
 
   const handleToolProfileChange = (toolId: string) => {
@@ -2106,14 +2146,23 @@ export function App() {
               <SlidersHorizontal size={18} />
               <h2>毛坯截面标定</h2>
             </div>
-            <p className="panel-note">真实核胚通常不是标准圆柱。用左/中/右三段直径近似毛坯外形，用于风险提示、报告和后续刀路补偿。</p>
+            <p className="panel-note">真实核胚通常不是标准圆柱。用 5 个截面近似毛坯外形，用于风险提示、报告和后续刀路补偿。</p>
             <Control label="左端直径" value={settings.blankLeftDiameterMm} min={6} max={30} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankLeftDiameterMm", v)} />
+            <Control label="左肩直径" value={settings.blankLeftMidDiameterMm} min={6} max={32} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankLeftMidDiameterMm", v)} />
             <Control label="中部直径" value={settings.blankCenterDiameterMm} min={6} max={32} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankCenterDiameterMm", v)} />
+            <Control label="右肩直径" value={settings.blankRightMidDiameterMm} min={6} max={32} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankRightMidDiameterMm", v)} />
             <Control label="右端直径" value={settings.blankRightDiameterMm} min={6} max={30} step={0.1} suffix="mm" onChange={(v) => updateSetting("blankRightDiameterMm", v)} />
             <div className="blank-profile">
               <span>左 {settings.blankLeftDiameterMm.toFixed(1)}mm</span>
+              <span>左肩 {settings.blankLeftMidDiameterMm.toFixed(1)}mm</span>
               <strong>中 {settings.blankCenterDiameterMm.toFixed(1)}mm</strong>
+              <span>右肩 {settings.blankRightMidDiameterMm.toFixed(1)}mm</span>
               <span>右 {settings.blankRightDiameterMm.toFixed(1)}mm</span>
+            </div>
+            <div className="blank-template-actions">
+              <button className="mini-action" type="button" onClick={() => applyBlankProfileTemplate("standard")}>标准核胚</button>
+              <button className="mini-action" type="button" onClick={() => applyBlankProfileTemplate("tapered")}>两端收尖</button>
+              <button className="mini-action" type="button" onClick={() => applyBlankProfileTemplate("offset")}>偏心核胚</button>
             </div>
           </section>
         )}
@@ -2576,7 +2625,7 @@ export function App() {
                       </div>
                       <p>{snapshot.detail}</p>
                       <small>
-                        刀具 {snapshot.settings.toolDiameter.toFixed(2)}mm / 进给 {snapshot.settings.feedRate.toFixed(0)} / 毛坯 {snapshot.settings.blankLeftDiameterMm.toFixed(1)}-{snapshot.settings.blankCenterDiameterMm.toFixed(1)}-{snapshot.settings.blankRightDiameterMm.toFixed(1)} / X步距 {snapshot.settings.stepoverMm.toFixed(3)}
+                        刀具 {snapshot.settings.toolDiameter.toFixed(2)}mm / 进给 {snapshot.settings.feedRate.toFixed(0)} / 毛坯 {formatBlankProfile(snapshot.settings)} / X步距 {snapshot.settings.stepoverMm.toFixed(3)}
                       </small>
                       <button className="demo-action snapshot-action" type="button" onClick={() => restoreSnapshot(snapshot)}>
                         回退到此版本
@@ -3205,6 +3254,53 @@ function getRolePermissionText(role: UserRole) {
   if (role === "designer") return "可整理素材、生成模型和查看预览；正式导出仍需工艺/管理确认。";
   if (role === "process") return "可调整工艺、生成刀路、仿真并完成导出前确认。";
   return "拥有完整项目、工艺、导出和反馈管理权限。";
+}
+
+function normalizeSettings(settings: ModelSettings): ModelSettings {
+  const left = settings.blankLeftDiameterMm;
+  const center = settings.blankCenterDiameterMm;
+  const right = settings.blankRightDiameterMm;
+  return {
+    ...settings,
+    blankLeftMidDiameterMm: Number.isFinite(settings.blankLeftMidDiameterMm) ? settings.blankLeftMidDiameterMm : (left + center) / 2,
+    blankRightMidDiameterMm: Number.isFinite(settings.blankRightMidDiameterMm) ? settings.blankRightMidDiameterMm : (right + center) / 2
+  };
+}
+
+function getBlankProfileDiameters(settings: ModelSettings) {
+  const normalized = normalizeSettings(settings);
+  return [
+    normalized.blankLeftDiameterMm,
+    normalized.blankLeftMidDiameterMm,
+    normalized.blankCenterDiameterMm,
+    normalized.blankRightMidDiameterMm,
+    normalized.blankRightDiameterMm
+  ];
+}
+
+function formatBlankProfile(settings: ModelSettings) {
+  return getBlankProfileDiameters(settings).map((diameter) => diameter.toFixed(1)).join("-");
+}
+
+function roundBlankProfile(settings: ModelSettings): ModelSettings {
+  return {
+    ...settings,
+    blankLeftDiameterMm: roundToTenth(settings.blankLeftDiameterMm),
+    blankLeftMidDiameterMm: roundToTenth(settings.blankLeftMidDiameterMm),
+    blankCenterDiameterMm: roundToTenth(settings.blankCenterDiameterMm),
+    blankRightMidDiameterMm: roundToTenth(settings.blankRightMidDiameterMm),
+    blankRightDiameterMm: roundToTenth(settings.blankRightDiameterMm)
+  };
+}
+
+function roundToTenth(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function formatBlankTemplate(template: "standard" | "tapered" | "offset") {
+  if (template === "standard") return "标准核胚";
+  if (template === "tapered") return "两端收尖";
+  return "偏心核胚";
 }
 
 function createDefaultMachineAcceptanceRecord(machine: MachineProfile): MachineAcceptanceRecord {
