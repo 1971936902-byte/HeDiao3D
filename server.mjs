@@ -660,6 +660,8 @@ async function processOrchestratorJob(job, settings) {
     pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-report.json"));
     pushIfArtifactExists(job, "freecad-cam-plan.json");
     pushIfArtifactExists(job, "freecad-run-template.py");
+    pushIfArtifactExists(job, "camotics-simulation-plan.json");
+    pushIfArtifactExists(job, "camotics-project-template.json");
     const adapterStatus = adapterReport.status === "completed" ? "completed" : "review";
     updatePipelineStage(job, "external-cam", adapterStatus, adapterReport.error ?? `adapter 状态 ${adapterReport.status}`);
     appendOrchestratorLog(job, `${selected.name} adapter 返回 ${adapterReport.status}，${adapterReport.error ?? "无错误信息"}`);
@@ -714,11 +716,14 @@ async function processOrchestratorJob(job, settings) {
     warnings: toolpath.summary?.warnings ?? []
   }, null, 2), "utf8");
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
+  const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selected, camoticsInput);
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
   await writeFile(join(job.workDir, "machine-controller-profile.json"), JSON.stringify(machineControllerProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
   await writeFile(join(job.workDir, "controller-dialect-report.json"), JSON.stringify(controllerDialectReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
+  await writeFile(join(job.workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
+  await writeFile(join(job.workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
@@ -754,6 +759,7 @@ async function processOrchestratorJob(job, settings) {
     productionGate,
     postprocessProfile,
     camoticsInput,
+    camoticsSimulationPlan,
     ncStaticAnalysis,
     machineControllerProfile,
     controllerDialectReport,
@@ -771,6 +777,8 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "nc-static-analysis.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "controller-dialect-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-simulation-plan.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-project-template.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
@@ -799,6 +807,7 @@ async function processOrchestratorJob(job, settings) {
       productionGate,
       postprocessProfile,
       camoticsInput,
+      camoticsSimulationPlan,
       ncStaticAnalysis,
       machineControllerProfile,
       controllerDialectReport,
@@ -2111,6 +2120,112 @@ function createCamoticsInputPlan(job, toolpath, settings, selectedEngine) {
   };
 }
 
+function createCamoticsSimulationPlan(job, toolpath, settings, selectedEngine, camoticsInput) {
+  const bounds = camoticsInput.stock.boundsMm;
+  const margin = Math.max(1, Number(settings.toolDiameter ?? 1));
+  const stockMin = {
+    x: Number(bounds.xMin) - margin,
+    y: Number(bounds.yMin) - margin,
+    z: Math.min(Number(bounds.zMin), -Number(settings.depthMm ?? 0)) - margin
+  };
+  const stockMax = {
+    x: Number(bounds.xMax) + margin,
+    y: Number(bounds.yMax) + margin,
+    z: Math.max(Number(bounds.zMax), Number(settings.safeZ ?? 0)) + margin
+  };
+  const pointCount = toolpath.points?.length ?? 0;
+  const previewPointCount = toolpath.previewPoints?.length ?? 0;
+  const tool = camoticsInput.tool;
+
+  return {
+    schema: "hediao3d.camotics-simulation-plan.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status: camoticsInput.compatibility.canRunInCamotics ? "ready-for-camotics-preview" : "review-required",
+    engine: {
+      selectedEngine: selectedEngine.id,
+      adapter: "camotics",
+      execution: "planned-not-run",
+      reason: "当前产物准备 CAMotics 输入和项目模板；真实 CLI 执行会在 CAMotics adapter 启用后写入结果。"
+    },
+    inputs: {
+      preferredGcode: "camotics-preview.nc",
+      machineGcodeForReferenceOnly: "toolpath.nc",
+      airRun: "air-run.nc",
+      camoticsInput: "camotics-input.json"
+    },
+    coordinateInterpretation: {
+      mode: camoticsInput.compatibility.mode,
+      interpretation: camoticsInput.compatibility.interpretation,
+      rotaryAxis: camoticsInput.compatibility.rotaryAxis,
+      note: camoticsInput.compatibility.reason
+    },
+    stock: {
+      shape: camoticsInput.stock.shape,
+      boundsMm: {
+        min: stockMin,
+        max: stockMax
+      },
+      sourceBoundsMm: bounds,
+      marginMm: margin,
+      note: camoticsInput.stock.note
+    },
+    tool: {
+      id: tool.toolProfileId,
+      description: tool.description,
+      diameterMm: tool.diameterMm,
+      flatTipMm: tool.flatTipMm,
+      angleDeg: tool.angleDeg,
+      spindleRpm: Number(settings.spindleRpm ?? 0),
+      feedRateMmMin: Number(settings.feedRate ?? 0)
+    },
+    expectedChecks: [
+      "确认 camotics-preview.nc 没有超出展开毛坯包络。",
+      "确认 Z 最小值不超过单刀最大切深和目标深度。",
+      "确认空跑 air-run.nc 全程位于安全 Z。",
+      "确认 toolpath.nc 仅作为机床后处理对照，不直接当 CAMotics 三轴结论。"
+    ],
+    metricsSeed: {
+      pointCount,
+      previewPointCount,
+      estimatedMinutes: Number(toolpath.estimatedMinutes ?? 0)
+    },
+    commands: {
+      openPreview: "camotics camotics-preview.nc",
+      openAirRun: "camotics air-run.nc",
+      cliPlaceholder: "camotics-cli --simulate camotics-project-template.json"
+    },
+    projectTemplate: {
+      schema: "hediao3d.camotics-project-template.v1",
+      jobId: job.id,
+      units: "mm",
+      coordinateSystem: "G21/G90",
+      files: {
+        gcode: "camotics-preview.nc",
+        referenceMachineGcode: "toolpath.nc",
+        airRun: "air-run.nc"
+      },
+      stock: {
+        min: stockMin,
+        max: stockMax,
+        shape: camoticsInput.stock.shape
+      },
+      tool: {
+        type: tool.angleDeg ? "v-bit-flat-tip" : "flat-endmill",
+        diameterMm: tool.diameterMm,
+        flatTipMm: tool.flatTipMm,
+        angleDeg: tool.angleDeg
+      },
+      outputRequests: {
+        screenshot: "camotics-preview.png",
+        materialMesh: "camotics-material-removal.stl",
+        summary: "camotics-result.json"
+      },
+      limitations: camoticsInput.limitations
+    }
+  };
+}
+
 function createCamoticsBounds(points, settings, rotaryAxis) {
   const xs = points.map((point) => Number(point.x)).filter(Number.isFinite);
   const ys = points.map((point) => Number(point.y)).filter(Number.isFinite);
@@ -2145,6 +2260,8 @@ function createCamoticsRunbook(camoticsInput) {
     "- camotics-preview.nc: 展开平面三轴仿真预览刀路，不用于上机",
     "- air-run.nc: 离料空跑刀路",
     "- camotics-input.json: CAMotics 输入参数和限制说明",
+    "- camotics-simulation-plan.json: CAMotics 仿真计划、毛坯和刀具参数",
+    "- camotics-project-template.json: 后续生成真实 CAMotics 项目的结构化模板",
     "",
     "## 建议命令",
     "",
@@ -2261,6 +2378,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
       simulationOnly: [
         getFile("camotics-input.json"),
+        getFile("camotics-simulation-plan.json"),
+        getFile("camotics-project-template.json"),
         getFile("camotics-run.md"),
         getFile("camotics-preview.nc"),
         getFile("simulation-summary.json")
@@ -2329,6 +2448,8 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
+    createDeliveryFile(job.id, "camotics-simulation-plan.json", "CAMotics 仿真计划", "report", true, "记录 CAMotics 预览 NC、展开毛坯、刀具、坐标解释和待执行检查项。"),
+    createDeliveryFile(job.id, "camotics-project-template.json", "CAMotics 项目模板", "report", true, "后续 CAMotics adapter 生成真实项目/截图/材料去除网格的结构化模板。"),
     createDeliveryFile(job.id, "camotics-run.md", "CAMotics 操作说明", "report", true, "说明如何用 CAMotics 打开 toolpath.nc 和 air-run.nc，以及旋转夹具模式限制。"),
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),

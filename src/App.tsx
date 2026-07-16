@@ -421,6 +421,29 @@ type V3OrchestratorJob = {
         };
         limitations?: string[];
       };
+      camoticsSimulationPlan?: {
+        status: string;
+        engine?: {
+          execution: string;
+          reason: string;
+        };
+        inputs?: {
+          preferredGcode: string;
+          machineGcodeForReferenceOnly: string;
+          airRun: string;
+        };
+        coordinateInterpretation?: {
+          interpretation: string;
+          note: string;
+        };
+        stock?: {
+          shape: string;
+          marginMm: number;
+        };
+        projectTemplate?: {
+          schema: string;
+        };
+      };
       machiningPackageIndex?: {
         packageLevel: string;
         summary: string;
@@ -5990,6 +6013,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
+  const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
   const packageIndex = summary?.machiningPackageIndex;
   const externalCamRecipe = summary?.externalCamRecipe;
   const lines = [
@@ -6062,6 +6086,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `可在CAMotics检查: ${camoticsInput?.compatibility?.canRunInCamotics ? "是，按三轴/展开刀路检查" : "否，需要旋转轴仿真软件复核"}`,
     "推荐文件: camotics-preview.nc（仅仿真，不可上机）",
     `说明: ${camoticsInput?.compatibility?.reason ?? "-"}`,
+    `项目模板: ${camoticsSimulationPlan?.projectTemplate?.schema ? "camotics-project-template.json" : "未生成"}`,
+    `计划状态: ${camoticsSimulationPlan?.status ?? "未生成"}`,
     "",
     "## 刀路摘要",
     "",

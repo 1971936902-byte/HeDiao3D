@@ -98,13 +98,20 @@ try {
       assert(existsSync(report.metrics.freecadPlan.planPath), "freecad CAM plan file missing");
       assert(existsSync(report.metrics.freecadPlan.runTemplatePath), "freecad run template file missing");
     }
+    if (adapter.id === "camotics") {
+      assert(report.metrics.camoticsPlan?.status === "generated", "camotics adapter did not generate a simulation plan");
+      assert(existsSync(report.metrics.camoticsPlan.planPath), "camotics simulation plan file missing");
+      assert(existsSync(report.metrics.camoticsPlan.projectTemplatePath), "camotics project template file missing");
+      assert(report.metrics.camoticsPlan.preferredGcode === "camotics-preview.nc", "camotics preferred gcode mismatch");
+    }
     results.push({
       id: adapter.id,
       status: report.status,
       protocolVersion: report.protocolVersion,
       warningCount: report.warnings?.length ?? 0,
       recipeOperations: report.metrics.recipe.operationCount,
-      freecadPlan: report.metrics.freecadPlan?.status ?? null
+      freecadPlan: report.metrics.freecadPlan?.status ?? null,
+      camoticsPlan: report.metrics.camoticsPlan?.status ?? null
     });
   }
 

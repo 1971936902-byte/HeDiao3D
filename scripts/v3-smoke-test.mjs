@@ -87,6 +87,8 @@ async function main() {
     "controller-dialect-report.json",
     "simulation-summary.json",
     "camotics-input.json",
+    "camotics-simulation-plan.json",
+    "camotics-project-template.json",
     "camotics-run.md",
     "camotics-preview.nc",
     "air-run.nc",

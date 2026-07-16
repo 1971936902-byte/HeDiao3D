@@ -90,6 +90,11 @@ async function main() {
   assert(previewText.includes("CAMOTICS PREVIEW ONLY - not for machine"), "camotics-preview.nc header missing not-for-machine warning");
   assert(previewText.includes("Coordinate: X/Y unwrapped stock"), "camotics-preview.nc header missing unwrapped coordinate note");
 
+  const camoticsPlan = await getArtifactJson(job.id, "camotics-simulation-plan.json");
+  assert(camoticsPlan.schema === "hediao3d.camotics-simulation-plan.v1", "CAMotics simulation plan schema mismatch");
+  assert(camoticsPlan.inputs?.preferredGcode === "camotics-preview.nc", "CAMotics plan preferred G-code mismatch");
+  assert(camoticsPlan.projectTemplate?.schema === "hediao3d.camotics-project-template.v1", "CAMotics project template missing from plan");
+
   const dialect = await getArtifactJson(job.id, "controller-dialect-report.json");
   assert(dialect.level === "ready", `controller dialect expected ready, got ${dialect.level}: ${dialect.summary}`);
   assert(dialect.dialect.profileArtifact === "machine-controller-profile.json", "controller dialect report should reference machine-controller-profile.json");
