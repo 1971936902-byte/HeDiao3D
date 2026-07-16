@@ -108,12 +108,30 @@ rotary `{ "x", "y", "z" }`, Orchestrator converts `y` to degrees with
 
 - `freecad/freecad_cam_job.py`: scriptable FreeCAD Path Workbench adapter skeleton. It validates the protocol, detects FreeCAD/Path Python modules, writes `freecad-cam-plan.json`, and writes a reviewable `freecad-run-template.py`. Production G-code remains locked unless the deployment server sets `HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=true` and the Path operation recipe has been validated.
 - `blendercam/blendercam_job.py`: BlenderCAM/FabexCNC artistic-surface adapter skeleton. It validates the protocol, detects Blender Python and possible CAM add-on modules, writes `blendercam-cam-plan.json`, and writes `blendercam-run-template.py`. Production G-code remains locked unless the deployment server sets `HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=true` and the operation recipe has been validated.
-- `camotics/camotics_job.js`: CAMotics simulation adapter skeleton. It validates the protocol, detects `camotics-cli`/`camotics`, writes `camotics-simulation-plan.json`, and writes `camotics-project-template.json`. Material-removal execution remains locked unless the deployment server sets `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true` and result extraction has been validated.
+- `camotics/camotics_job.js`: CAMotics simulation adapter. It validates the protocol, detects `camotics-cli`/`camotics`, writes `camotics-simulation-plan.json`, and writes `camotics-project-template.json`. It can also write `camotics-result.json` back to Orchestrator. The gated `HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=true` mode only validates the Orchestrator simulation handoff; real material-removal execution remains locked unless the deployment server sets `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true` and CAMotics result extraction has been validated.
 - `opencamlib/opencamlib_job.py`: OpenCAMLib geometry-kernel adapter skeleton. It validates the protocol, detects `opencamlib`/`ocl`, writes `opencamlib-kernel-plan.json`, and writes `opencamlib-run-template.py`. It also supports a gated synthetic `hediao3d.neutral-toolpath.v1` handoff for contract tests via `HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true` plus `HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT=true`; this validates Orchestrator ingestion only and is not real CAM output.
 
 The internal Mesh CAM fallback remains the verified V3 small-loop implementation until the external engines are installed and the adapter recipes are completed.
 
 When an adapter returns `"status": "completed"` and writes a non-empty G-code file to `outputs.gcode`/`gcodePath`, the Orchestrator ingests that file as the job toolpath, parses G0/G1 motion points for preview/reporting, and then continues through the shared simulation summary, production gate and delivery manifest pipeline. When it writes `neutralToolpathPath` instead, Orchestrator converts the neutral points through the HeDiao3D postprocessor to produce the final machine NC. If the adapter is missing, not ready, fails, or does not write G-code/neutral toolpath, the job falls back to the internal Mesh CAM baseline.
+
+CAMotics is called as an independent simulation adapter after `toolpath.nc`,
+`air-run.nc` and `camotics-preview.nc` are written. It writes:
+
+```json
+{
+  "status": "completed",
+  "protocolVersion": "hediao3d.adapter.v1",
+  "engine": "camotics",
+  "simulationResultPath": "C:/.../camotics-result.json",
+  "outputs": {
+    "simulationResult": "C:/.../camotics-result.json"
+  }
+}
+```
+
+The result artifact uses `hediao3d.camotics-result.v1`. In synthetic mode it
+only records preview-G-code envelope metrics and must not unlock production NC.
 
 ## Contract Test
 

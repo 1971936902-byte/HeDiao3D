@@ -56,7 +56,9 @@ async function main() {
       ENABLE_EXTERNAL_CAM_ADAPTERS: "true",
       HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER: "true",
       HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
-      HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "true"
+      HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "true",
+      HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
+      HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "true"
     },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"]
@@ -110,6 +112,19 @@ async function main() {
   assert(machine?.axisCounts?.y > 0, "neutral adapter machine NC should contain Y motion");
   assert(machine?.axisCounts?.a === 0, "neutral adapter machine NC should not contain A motion");
 
+  const camoticsReport = await getArtifactJson(job.id, "camotics-adapter-report.json");
+  assert(camoticsReport.status === "completed", `CAMotics adapter expected completed, got ${camoticsReport.status}`);
+  assert(camoticsReport.simulationResultPath || camoticsReport.outputs?.simulationResult, "CAMotics adapter missing simulation result path");
+  const camoticsResult = await getArtifactJson(job.id, "camotics-result.json");
+  assert(camoticsResult.schema === "hediao3d.camotics-result.v1", "CAMotics result schema mismatch");
+  assert(camoticsResult.synthetic === true, "CAMotics result should be synthetic in this contract test");
+  assert(camoticsResult.metrics?.motionLineCount > 0, "CAMotics result should include motion line metrics");
+  const simulationSummary = await getArtifactJson(job.id, "simulation-summary.json");
+  assert(simulationSummary.engine === "camotics-synthetic", `simulation summary expected camotics-synthetic, got ${simulationSummary.engine}`);
+  assert(simulationSummary.camoticsAdapter?.status === "completed", "simulation summary missing completed CAMotics adapter status");
+  const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
+  assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-result.json"), "package index missing camotics-result.json");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
@@ -117,6 +132,8 @@ async function main() {
     resultEngine: job.result.engine,
     source: toolpathSummary.source,
     neutralPoints: neutralToolpath.points.length,
+    simulationEngine: simulationSummary.engine,
+    camoticsMotionLines: camoticsResult.metrics.motionLineCount,
     ncLevel: analysis.level,
     machineAxes: machine.axisCounts
   }, null, 2));

@@ -54,10 +54,13 @@ const result = missing.length > 0
       error: attempt.error,
       warnings: [
         "CAMotics adapter now emits a simulation plan and project template.",
-        "Material-removal execution remains locked until CAMotics CLI behavior is validated on the deployment server."
+        attempt.synthetic
+          ? "Synthetic CAMotics result validates Orchestrator simulation handoff only; it is not real material-removal output."
+          : "Material-removal execution remains locked until CAMotics CLI behavior is validated on the deployment server."
       ],
       metrics: {
         gcodePath: job.outputs?.gcode ?? null,
+        resultPath: attempt.resultPath ?? null,
         camMode: settings.camMode ?? null,
         recipe: recipeSummary,
         camotics: camoticsDetection,
@@ -68,7 +71,8 @@ const result = missing.length > 0
           preferredGcode: simulationPlan.inputs.preferredGcode,
           canRunInCamotics: simulationPlan.compatibility.canRunInCamotics
         }
-      }
+      },
+      ...(attempt.resultPath ? { simulationResultPath: attempt.resultPath, outputs: { simulationResult: attempt.resultPath } } : {})
     };
 
 mkdirSync(dirname(resultPath), { recursive: true });
@@ -204,6 +208,9 @@ function attemptCamoticsExecution(adapterJob, simulationPlan, detection) {
       error: "CAMotics simulation plan generated, but experimental CLI execution is disabled. Set HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true only after validating the deployment server."
     };
   }
+  if (String(process.env.HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT ?? "").toLowerCase() === "true") {
+    return writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection);
+  }
   if (!detection.available) {
     return {
       status: "adapter_not_ready",
@@ -226,6 +233,74 @@ function attemptCamoticsExecution(adapterJob, simulationPlan, detection) {
     status: "adapter_not_ready",
     error: "CAMotics command detected, but material-removal result extraction is still locked pending server validation."
   };
+}
+
+function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {
+  if (!simulationPlan.compatibility.canRunInCamotics) {
+    return {
+      status: "adapter_not_ready",
+      error: "The current CAM mode is not suitable for CAMotics 3-axis preview execution."
+    };
+  }
+  const dir = adapterJob.workDir ?? dirname(resultPath);
+  const previewPath = join(dir, simulationPlan.inputs.preferredGcode);
+  if (!existsSync(previewPath)) {
+    return {
+      status: "adapter_not_ready",
+      error: "Preferred CAMotics preview G-code does not exist yet."
+    };
+  }
+  const previewText = readFileSync(previewPath, "utf8");
+  const motionLines = previewText
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\([^)]*\)/g, "").trim().toUpperCase())
+    .filter((line) => /\bG0?0\b|\bG0?1\b/.test(line));
+  const zValues = motionLines
+    .map((line) => parseWord(line, "Z"))
+    .filter(Number.isFinite);
+  const bounds = simulationPlan.stock?.boundsMm ?? {};
+  const result = {
+    schema: "hediao3d.camotics-result.v1",
+    jobId: adapterJob.jobId ?? null,
+    engine,
+    mode: "synthetic-contract",
+    synthetic: true,
+    createdAt: new Date().toISOString(),
+    status: "completed",
+    riskLevel: "review",
+    summary: "Synthetic CAMotics result generated from camotics-preview.nc for Orchestrator handoff validation.",
+    inputs: {
+      preferredGcode: simulationPlan.inputs.preferredGcode,
+      previewBytes: Buffer.byteLength(previewText),
+      motionLineCount: motionLines.length
+    },
+    metrics: {
+      motionLineCount: motionLines.length,
+      zMin: zValues.length ? Math.min(...zValues) : null,
+      zMax: zValues.length ? Math.max(...zValues) : null,
+      estimatedMinutes: simulationPlan.metricsSeed?.estimatedMinutes ?? null,
+      stockBoundsMm: bounds
+    },
+    artifacts: {
+      screenshot: null,
+      materialMesh: null,
+      note: "Real CAMotics screenshot/material mesh extraction is still a deployment validation step."
+    },
+    detection
+  };
+  const outputPath = join(dir, "camotics-result.json");
+  writeFileSync(outputPath, JSON.stringify(result, null, 2));
+  return {
+    status: "completed",
+    error: null,
+    resultPath: outputPath,
+    synthetic: true
+  };
+}
+
+function parseWord(line, word) {
+  const match = line.match(new RegExp(`${word}\\s*(-?\\d+(?:\\.\\d+)?)`));
+  return match ? Number(match[1]) : NaN;
 }
 
 function isVFlat25(s) {
