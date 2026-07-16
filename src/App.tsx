@@ -309,6 +309,28 @@ type V3OrchestratorJob = {
           pointCount: number;
         };
       };
+      ncStaticAnalysis?: {
+        level: "ready" | "review" | "critical";
+        summary: string;
+        criticalIssues: string[];
+        warningIssues: string[];
+        programs: Array<{
+          filename: string;
+          role: string;
+          motionLineCount: number;
+          level: string;
+          axisCounts: {
+            x: number;
+            y: number;
+            z: number;
+            a: number;
+          };
+          zRange: {
+            min: number | null;
+            max: number | null;
+          };
+        }>;
+      };
       camoticsInput?: {
         status: string;
         compatibility: {
@@ -3705,6 +3727,17 @@ export function App() {
                   刀具 {v3Job.result.summary.postprocessProfile.tool?.description ?? "未记录"}
                 </small>
               )}
+              {v3Job?.result?.summary.ncStaticAnalysis && (
+                <small>
+                  NC静态分析：{v3Job.result.summary.ncStaticAnalysis.level}
+                  {" · "}
+                  阻断 {v3Job.result.summary.ncStaticAnalysis.criticalIssues.length}
+                  {" · "}
+                  复核 {v3Job.result.summary.ncStaticAnalysis.warningIssues.length}
+                  {" · "}
+                  程序 {v3Job.result.summary.ncStaticAnalysis.programs.length}
+                </small>
+              )}
               {v3Job?.result?.summary.deliveryManifest && (
                 <small>
                   交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
@@ -5875,6 +5908,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const engineReadiness = summary?.engineReadiness;
   const repairExecution = summary?.repairExecution;
   const postprocessProfile = summary?.postprocessProfile;
+  const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const camoticsInput = summary?.camoticsInput;
   const packageIndex = summary?.machiningPackageIndex;
   const externalCamRecipe = summary?.externalCamRecipe;
@@ -5914,6 +5948,13 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `旋转轴: ${postprocessProfile?.coordinateMapping?.rotaryAxis ?? "-"}`,
     `旋转等效: ${postprocessProfile?.machine?.rotaryWrapPerRevolutionMm ? `${postprocessProfile.machine.rotaryWrapPerRevolutionMm} mm/圈` : "-"}`,
     `刀具: ${postprocessProfile?.tool?.description ?? "-"} / ${postprocessProfile?.tool?.toolDiameterMm ?? "-"} mm`,
+    "",
+    "## NC静态分析",
+    "",
+    `等级: ${ncStaticAnalysis?.level ?? "未生成"}`,
+    `结论: ${ncStaticAnalysis?.summary ?? "-"}`,
+    `阻断项: ${ncStaticAnalysis?.criticalIssues?.length ?? 0}`,
+    `复核项: ${ncStaticAnalysis?.warningIssues?.length ?? 0}`,
     "",
     "## CAMotics 输入",
     "",

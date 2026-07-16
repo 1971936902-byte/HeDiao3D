@@ -79,6 +79,7 @@ async function main() {
     "adapter-preflight.json",
     "toolpath.nc",
     "toolpath-summary.json",
+    "nc-static-analysis.json",
     "simulation-summary.json",
     "camotics-input.json",
     "camotics-run.md",

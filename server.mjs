@@ -683,6 +683,14 @@ async function processOrchestratorJob(job, settings) {
   const simulationSummary = createSimulationSummary(toolpath, settings, selected);
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
   const camoticsPreviewGcode = createCamoticsPreviewGcode(toolpath.points, settings, toolpath.estimatedMinutes);
+  const ncStaticAnalysis = createNcStaticAnalysis({
+    settings,
+    files: [
+      { filename: "toolpath.nc", role: "machine", gcode: toolpath.gcode },
+      { filename: "air-run.nc", role: "air-run", gcode: airRunGcode },
+      { filename: "camotics-preview.nc", role: "simulation-only", gcode: camoticsPreviewGcode }
+    ]
+  });
   await writeFile(join(job.workDir, "toolpath-summary.json"), JSON.stringify({
     engine: externalToolpath ? selected.id : "internal-mesh-cam",
     fallbackFrom: selected.id,
@@ -695,6 +703,7 @@ async function processOrchestratorJob(job, settings) {
   }, null, 2), "utf8");
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+  await writeFile(join(job.workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
@@ -711,7 +720,8 @@ async function processOrchestratorJob(job, settings) {
     camInputPlan,
     engineReadiness,
     simulationSummary,
-    camoticsInput
+    camoticsInput,
+    ncStaticAnalysis
   });
   const postprocessProfile = createPostprocessProfile({
     job,
@@ -728,6 +738,7 @@ async function processOrchestratorJob(job, settings) {
     productionGate,
     postprocessProfile,
     camoticsInput,
+    ncStaticAnalysis,
     deliveryManifest
   });
   await writeFile(join(job.workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
@@ -738,6 +749,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "nc-static-analysis.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
@@ -767,6 +779,7 @@ async function processOrchestratorJob(job, settings) {
       productionGate,
       postprocessProfile,
       camoticsInput,
+      ncStaticAnalysis,
       machiningPackageIndex,
       deliveryManifest,
       points: toolpath.points.length,
@@ -1485,7 +1498,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary, camoticsInput }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary, camoticsInput, ncStaticAnalysis }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -1520,6 +1533,14 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   if (simulationSummary.riskLevel !== "ready") {
     warnings.push(`仿真风险等级为 ${simulationSummary.riskLevel}。`);
     requiredActions.push("检查未命中点、夹具方向、Z 安全高度和两端夹持余量。");
+  }
+
+  if (ncStaticAnalysis?.level === "critical") {
+    blockers.push(`NC 静态分析存在阻断项：${ncStaticAnalysis.criticalIssues[0] ?? "请查看 nc-static-analysis.json"}`);
+    requiredActions.push("修复后处理轴映射、空跑安全高度或文件用途标记后重新生成 NC。");
+  } else if (ncStaticAnalysis?.level === "review") {
+    warnings.push(`NC 静态分析需要复核：${ncStaticAnalysis.warningIssues[0] ?? "请查看 nc-static-analysis.json"}`);
+    requiredActions.push("上机前查看 nc-static-analysis.json，确认轴字、Z范围和文件用途。");
   }
 
   if ((toolpath.points?.length ?? 0) <= 0) {
@@ -1681,6 +1702,117 @@ function createPostprocessProfile({ job, settings, toolpath, selectedEngine, res
       "若机床把旋转夹具接到 Y 轴，请确认控制器每转一圈等效距离与 rotaryWrapPerRevolutionMm 一致。"
     ]
   };
+}
+
+function createNcStaticAnalysis({ settings, files }) {
+  const reports = files.map((file) => analyzeNcProgram(file, settings));
+  const criticalIssues = reports.flatMap((report) => report.issues.filter((issue) => issue.level === "critical").map((issue) => `${report.filename}: ${issue.message}`));
+  const warningIssues = reports.flatMap((report) => report.issues.filter((issue) => issue.level === "warning").map((issue) => `${report.filename}: ${issue.message}`));
+  return {
+    schema: "hediao3d.nc-static-analysis.v1",
+    createdAt: new Date().toISOString(),
+    level: criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "review" : "ready",
+    camMode: settings.camMode,
+    postProcessor: settings.postProcessor,
+    rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
+    safeZMm: Number(settings.safeZ),
+    programs: reports,
+    criticalIssues,
+    warningIssues,
+    summary: criticalIssues.length > 0
+      ? `发现 ${criticalIssues.length} 个阻断项，禁止直接上机。`
+      : warningIssues.length > 0
+        ? `发现 ${warningIssues.length} 个复核项，上机前需人工确认。`
+        : "NC 静态分析通过。"
+  };
+}
+
+function analyzeNcProgram(file, settings) {
+  const lines = String(file.gcode ?? "").split(/\r?\n/);
+  const axisCounts = { x: 0, y: 0, z: 0, a: 0 };
+  const zValues = [];
+  let motionLineCount = 0;
+  let spindleStartCount = 0;
+  let spindleStopCount = 0;
+  let hasRotaryHeader = false;
+  let hasPreviewOnlyMarker = false;
+  let hasAirRunMarker = false;
+  let hasLengthAxisHeader = false;
+  const expectedRotaryAxis = settings.camMode === "rotaryWrap" ? String(settings.rotaryOutputAxis ?? "Y") : null;
+
+  for (const rawLine of lines) {
+    const upper = rawLine.toUpperCase();
+    if (upper.includes("ROTARY_WRAP_AXIS=")) hasRotaryHeader = true;
+    if (upper.includes("LENGTH_AXIS=")) hasLengthAxisHeader = true;
+    if (upper.includes("CAMOTICS PREVIEW ONLY") || upper.includes("NOT FOR MACHINE")) hasPreviewOnlyMarker = true;
+    if (upper.includes("AIR RUN ONLY")) hasAirRunMarker = true;
+    if (/\bM3\b/.test(upper)) spindleStartCount += 1;
+    if (/\bM5\b/.test(upper)) spindleStopCount += 1;
+    if (!/(?:\bG0?0\b|\bG0?1\b)/.test(upper)) continue;
+    motionLineCount += 1;
+    if (parseGcodeWord(upper, "X") !== null && Number.isFinite(parseGcodeWord(upper, "X"))) axisCounts.x += 1;
+    if (parseGcodeWord(upper, "Y") !== null && Number.isFinite(parseGcodeWord(upper, "Y"))) axisCounts.y += 1;
+    if (parseGcodeWord(upper, "A") !== null && Number.isFinite(parseGcodeWord(upper, "A"))) axisCounts.a += 1;
+    const z = parseGcodeWord(upper, "Z");
+    if (z !== null && Number.isFinite(z)) {
+      axisCounts.z += 1;
+      zValues.push(z);
+    }
+  }
+
+  const issues = [];
+  if (motionLineCount === 0) issues.push(createNcIssue("critical", "no-motion", "未解析到 G0/G1 运动。"));
+  if (axisCounts.z === 0) issues.push(createNcIssue("critical", "missing-z", "未解析到 Z 轴运动。"));
+
+  if (file.role === "machine") {
+    if (hasPreviewOnlyMarker) issues.push(createNcIssue("critical", "machine-marked-preview", "机床 NC 含有仿真专用标记。"));
+    if (settings.camMode === "rotaryWrap") {
+      if (!hasRotaryHeader || !hasLengthAxisHeader) issues.push(createNcIssue("critical", "missing-rotary-header", "旋转包裹 NC 缺少 ROTARY_WRAP_AXIS/LENGTH_AXIS 头部标记。"));
+      if (expectedRotaryAxis === "Y" && axisCounts.y === 0) issues.push(createNcIssue("critical", "missing-y-rotary", "Y轴旋转夹具模式未发现 Y 轴运动。"));
+      if (expectedRotaryAxis === "A" && axisCounts.a === 0) issues.push(createNcIssue("critical", "missing-a-rotary", "A轴旋转夹具模式未发现 A 轴运动。"));
+    }
+    if (spindleStartCount === 0) issues.push(createNcIssue("warning", "spindle-not-started", "机床 NC 未发现 M3 主轴启动指令。"));
+  }
+
+  if (file.role === "air-run") {
+    if (!hasAirRunMarker) issues.push(createNcIssue("warning", "missing-air-run-marker", "空跑文件缺少 AIR RUN ONLY 标记。"));
+    if (spindleStartCount > 0) issues.push(createNcIssue("critical", "air-run-spindle-start", "空跑文件不应包含 M3 主轴启动。"));
+    const minZ = zValues.length ? Math.min(...zValues) : Number.NaN;
+    if (Number.isFinite(minZ) && minZ < Number(settings.safeZ) - 0.001) {
+      issues.push(createNcIssue("critical", "air-run-below-safe-z", `空跑文件最低 Z=${fmt(minZ)}，低于安全高度 ${fmt(settings.safeZ)}。`));
+    }
+  }
+
+  if (file.role === "simulation-only") {
+    if (!hasPreviewOnlyMarker) issues.push(createNcIssue("critical", "simulation-missing-preview-marker", "仿真 NC 缺少不可上机标记。"));
+    if (spindleStartCount > 0) issues.push(createNcIssue("warning", "simulation-spindle-start", "仿真预览文件出现 M3，建议保持主轴关闭。"));
+  }
+
+  return {
+    filename: file.filename,
+    role: file.role,
+    lineCount: lines.length,
+    motionLineCount,
+    axisCounts,
+    zRange: {
+      min: zValues.length ? Math.min(...zValues) : null,
+      max: zValues.length ? Math.max(...zValues) : null
+    },
+    markers: {
+      hasRotaryHeader,
+      hasLengthAxisHeader,
+      hasPreviewOnlyMarker,
+      hasAirRunMarker,
+      spindleStartCount,
+      spindleStopCount
+    },
+    level: issues.some((issue) => issue.level === "critical") ? "critical" : issues.length > 0 ? "review" : "ready",
+    issues
+  };
+}
+
+function createNcIssue(level, id, message) {
+  return { level, id, message };
 }
 
 function createCamoticsInputPlan(job, toolpath, settings, selectedEngine) {
@@ -1894,6 +2026,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       readFirst: [
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
+        getFile("nc-static-analysis.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json")
@@ -1966,7 +2099,8 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
     createDeliveryFile(job.id, "toolpath.nc", "试雕/生产 NC", "nc", productionGate.allowTrialNc, productionGate.allowProductionNc ? "已允许生产下载。" : "当前仅建议小料试雕，不建议直接生产上机。"),
-    createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。")
+    createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。"),
+    createDeliveryFile(job.id, "nc-static-analysis.json", "NC 静态分析", "report", true, "检查机床 NC、空跑 NC、仿真 NC 的轴字、Z范围、头部标记和不可上机标记。")
   ];
 
   return {
