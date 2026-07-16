@@ -70,8 +70,9 @@ const defaultSettings: ModelSettings = {
 };
 
 type ToolpathKind = "rough" | "finish";
-type WorkflowStage = "source" | "model" | "process" | "cam" | "tasks" | "feedback";
+type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks" | "feedback";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
+type UserRole = "designer" | "process" | "operator" | "admin";
 type TaskEvent = {
   id: string;
   title: string;
@@ -151,6 +152,28 @@ type CostCalibrationReport = {
   matchedSamples: MachineFeedback[];
 };
 
+type ProjectProfile = {
+  projectName: string;
+  customerName: string;
+  projectCode: string;
+  role: UserRole;
+};
+
+type ProjectArchive = {
+  id: string;
+  createdAt: string;
+  projectName: string;
+  customerName: string;
+  projectCode: string;
+  sourceLabel: string;
+  machineName: string;
+  toolName: string;
+  materialName: string;
+  hasToolpath: boolean;
+  exportReady: boolean;
+  feedbackCount: number;
+};
+
 type CaptureGuideSlot = {
   label: string;
   imageName: string | null;
@@ -180,6 +203,7 @@ const toolpathColors = {
 };
 
 const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> = [
+  { id: "project", label: "项目", hint: "客户/权限" },
   { id: "source", label: "素材", hint: "上传/载入" },
   { id: "model", label: "建模", hint: "3D/Meshy" },
   { id: "process", label: "工艺", hint: "刀具/机床" },
@@ -190,6 +214,14 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
 
 const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
 const MACHINE_FEEDBACK_STORAGE_KEY = "hediao3d.machineFeedback.v1";
+const PROJECT_PROFILE_STORAGE_KEY = "hediao3d.projectProfile.v1";
+const PROJECT_ARCHIVE_STORAGE_KEY = "hediao3d.projectArchive.v1";
+const defaultProjectProfile: ProjectProfile = {
+  projectName: "核雕试雕项目",
+  customerName: "默认客户",
+  projectCode: "HD3D-V2",
+  role: "admin"
+};
 const defaultFeedbackDraft: FeedbackDraft = {
   outcome: "success",
   actualMinutes: "",
@@ -219,6 +251,29 @@ function loadMachineFeedback(): MachineFeedback[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isMachineFeedback).slice(0, 40);
+  } catch {
+    return [];
+  }
+}
+
+function loadProjectProfile(): ProjectProfile {
+  try {
+    const raw = window.localStorage.getItem(PROJECT_PROFILE_STORAGE_KEY);
+    if (!raw) return defaultProjectProfile;
+    const parsed = JSON.parse(raw);
+    return isProjectProfile(parsed) ? parsed : defaultProjectProfile;
+  } catch {
+    return defaultProjectProfile;
+  }
+}
+
+function loadProjectArchives(): ProjectArchive[] {
+  try {
+    const raw = window.localStorage.getItem(PROJECT_ARCHIVE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isProjectArchive).slice(0, 30);
   } catch {
     return [];
   }
@@ -261,11 +316,45 @@ function isMachineFeedback(value: unknown): value is MachineFeedback {
   );
 }
 
+function isProjectProfile(value: unknown): value is ProjectProfile {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Partial<ProjectProfile>;
+  return (
+    typeof profile.projectName === "string" &&
+    typeof profile.customerName === "string" &&
+    typeof profile.projectCode === "string" &&
+    isUserRole(profile.role)
+  );
+}
+
+function isProjectArchive(value: unknown): value is ProjectArchive {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<ProjectArchive>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.createdAt === "string" &&
+    typeof item.projectName === "string" &&
+    typeof item.customerName === "string" &&
+    typeof item.projectCode === "string" &&
+    typeof item.sourceLabel === "string" &&
+    typeof item.machineName === "string" &&
+    typeof item.toolName === "string" &&
+    typeof item.materialName === "string" &&
+    typeof item.hasToolpath === "boolean" &&
+    typeof item.exportReady === "boolean" &&
+    typeof item.feedbackCount === "number"
+  );
+}
+
+function isUserRole(role: unknown): role is UserRole {
+  return role === "designer" || role === "process" || role === "operator" || role === "admin";
+}
+
 export function App() {
   const [images, setImages] = useState<CarvingImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
-  const [activeStage, setActiveStage] = useState<WorkflowStage>("source");
+  const [activeStage, setActiveStage] = useState<WorkflowStage>("project");
   const [wireframe, setWireframe] = useState(false);
   const [toolpath, setToolpath] = useState<GeneratedToolpath | null>(null);
   const [isReading, setIsReading] = useState(false);
@@ -290,6 +379,8 @@ export function App() {
   const [customProcessTemplates, setCustomProcessTemplates] = useState<ProcessTemplate[]>(loadCustomProcessTemplates);
   const [machineFeedback, setMachineFeedback] = useState<MachineFeedback[]>(loadMachineFeedback);
   const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft>(defaultFeedbackDraft);
+  const [projectProfile, setProjectProfile] = useState<ProjectProfile>(loadProjectProfile);
+  const [projectArchives, setProjectArchives] = useState<ProjectArchive[]>(loadProjectArchives);
   const [exportGate, setExportGate] = useState<ExportGateState>({
     safetyReportReviewed: false,
     airRunVerified: false,
@@ -316,6 +407,10 @@ export function App() {
   );
   const safetyIssues = useMemo(() => [...validateManufacturingSetup(settings, toolpath), ...validateGcodeProgram(settings, toolpath)], [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
+  const exportGateReady = Boolean(toolpath && !exportBlocked && exportGate.safetyReportReviewed && exportGate.airRunVerified && exportGate.fixtureConfirmed);
+  const isOperatorMode = projectProfile.role === "operator";
+  const canDownloadProduction = !isOperatorMode || exportGateReady;
+  const productionDownloadTitle = getProductionDownloadTitle(isOperatorMode, exportBlocked, exportGateReady);
   const activeQuality = activeImage?.quality;
   const captureGuide = useMemo(() => createCaptureGuideReport(images), [images]);
   const manufacturingQuality = useMemo(
@@ -335,7 +430,6 @@ export function App() {
     () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
     [settings, toolpath]
   );
-  const exportGateReady = Boolean(toolpath && !exportBlocked && exportGate.safetyReportReviewed && exportGate.airRunVerified && exportGate.fixtureConfirmed);
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
   const workbenchTitle =
     workbenchView === "simulation" && toolpath
@@ -373,6 +467,14 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(MACHINE_FEEDBACK_STORAGE_KEY, JSON.stringify(machineFeedback));
   }, [machineFeedback]);
+
+  useEffect(() => {
+    window.localStorage.setItem(PROJECT_PROFILE_STORAGE_KEY, JSON.stringify(projectProfile));
+  }, [projectProfile]);
+
+  useEffect(() => {
+    window.localStorage.setItem(PROJECT_ARCHIVE_STORAGE_KEY, JSON.stringify(projectArchives));
+  }, [projectArchives]);
 
   useEffect(() => {
     if (!aiMeshStlUrl) {
@@ -562,6 +664,43 @@ export function App() {
       status: "ok",
       title: "手动保存参数版本",
       detail: "已保存当前刀具、材料、机床、步距、进给和夹持参数。"
+    });
+  };
+
+  const updateProjectProfile = <K extends keyof ProjectProfile>(key: K, value: ProjectProfile[K]) => {
+    setProjectProfile((current) => ({ ...current, [key]: value }));
+  };
+
+  const handleSaveProjectProfile = () => {
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: "保存项目档案",
+      detail: `${projectProfile.projectCode} / ${projectProfile.customerName} / ${formatUserRole(projectProfile.role)}`
+    });
+  };
+
+  const handleArchiveProject = () => {
+    const archive: ProjectArchive = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+      projectName: projectProfile.projectName,
+      customerName: projectProfile.customerName,
+      projectCode: projectProfile.projectCode,
+      sourceLabel: generationLabel,
+      machineName: selectedMachine.name,
+      toolName: selectedTool.name,
+      materialName: selectedMaterial.name,
+      hasToolpath: Boolean(toolpath),
+      exportReady: exportGateReady,
+      feedbackCount: machineFeedback.length
+    };
+    setProjectArchives((current) => [archive, ...current].slice(0, 30));
+    recordTask({
+      category: "process",
+      status: archive.exportReady ? "ok" : "warning",
+      title: "归档当前项目",
+      detail: `${archive.projectName} / ${archive.hasToolpath ? "已有刀路" : "未生成刀路"} / ${archive.exportReady ? "可正式导出" : "未解锁正式导出"}`
     });
   };
 
@@ -817,6 +956,7 @@ export function App() {
 
     const operatorNote = createOperatorPackageMarkdown(reportInput);
     const parameters = createPackageParameters({
+      projectProfile,
       settings,
       sourceLabel: generationLabel,
       aiMeshUrl,
@@ -879,9 +1019,10 @@ export function App() {
     }
 
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+    const projectSlug = createFileSlug(projectProfile.projectCode || projectProfile.projectName);
     const machineSlug = createFileSlug(selectedMachine.id);
     const toolSlug = createFileSlug(selectedTool.id);
-    downloadBlob(`hediao3d-${stamp}-${machineSlug}-${toolSlug}-v2.zip`, createZipBlob(files));
+    downloadBlob(`hediao3d-${projectSlug}-${stamp}-${machineSlug}-${toolSlug}-v2.zip`, createZipBlob(files));
     recordTask({
       category: "cam",
       status: exportBlocked ? "warning" : "ok",
@@ -1387,6 +1528,87 @@ export function App() {
             </button>
           ))}
         </nav>
+
+        {activeStage === "project" && (
+          <>
+            <section className="panel">
+              <div className="panel-title">
+                <Library size={18} />
+                <h2>项目档案</h2>
+              </div>
+              <p className="panel-note">把客户、项目编号、素材、模型、刀路和反馈绑定在一起，导出包和任务记录可追溯。</p>
+              <label className="field-control">
+                <span>项目名称</span>
+                <input value={projectProfile.projectName} onChange={(event) => updateProjectProfile("projectName", event.target.value)} />
+              </label>
+              <label className="field-control">
+                <span>客户名称</span>
+                <input value={projectProfile.customerName} onChange={(event) => updateProjectProfile("customerName", event.target.value)} />
+              </label>
+              <label className="field-control">
+                <span>项目编号</span>
+                <input value={projectProfile.projectCode} onChange={(event) => updateProjectProfile("projectCode", event.target.value)} />
+              </label>
+              <label className="select-row">
+                <span>当前角色</span>
+                <select value={projectProfile.role} onChange={(event) => updateProjectProfile("role", event.target.value as UserRole)}>
+                  <option value="admin">管理员</option>
+                  <option value="designer">设计员</option>
+                  <option value="process">工艺员</option>
+                  <option value="operator">操作员</option>
+                </select>
+              </label>
+              <div className={`permission-card ${projectProfile.role}`}>
+                <strong>{formatUserRole(projectProfile.role)}</strong>
+                <span>{getRolePermissionText(projectProfile.role)}</span>
+              </div>
+              <button className="primary-action package-action" type="button" onClick={handleSaveProjectProfile}>
+                <Save size={17} />
+                保存项目档案
+              </button>
+              <button className="demo-action package-action" type="button" onClick={handleArchiveProject}>
+                <Library size={17} />
+                归档当前项目
+              </button>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <BadgeInfo size={18} />
+                <h2>项目状态</h2>
+              </div>
+              <div className="project-summary">
+                <span><strong>{images.length}</strong> 素材</span>
+                <span><strong>{aiMeshUrl ? "AI Mesh" : generatedDepth ? "浮雕" : "待建模"}</strong> 模型</span>
+                <span><strong>{toolpath ? toolpath.points.length.toLocaleString() : "-"}</strong> 刀路点</span>
+                <span><strong>{exportGateReady ? "已解锁" : "未解锁"}</strong> 导出</span>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <Clock3 size={18} />
+                <h2>项目归档</h2>
+              </div>
+              {projectArchives.length === 0 ? (
+                <p className="panel-note">还没有归档记录。完成建模、刀路或反馈后，可以把当前项目状态保存为一条生产记录。</p>
+              ) : (
+                <div className="project-archive-list">
+                  {projectArchives.map((archive) => (
+                    <div className={`project-archive-card ${archive.exportReady ? "ready" : "review"}`} key={archive.id}>
+                      <div>
+                        <strong>{archive.projectName}</strong>
+                        <span>{archive.createdAt}</span>
+                      </div>
+                      <p>{archive.customerName} / {archive.projectCode}</p>
+                      <small>{archive.machineName} / {archive.toolName} / {archive.hasToolpath ? "已有刀路" : "未生成刀路"} / 反馈 {archive.feedbackCount}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
 
         {activeStage === "source" && (
           <>
@@ -2049,7 +2271,7 @@ export function App() {
               <span>安全报告</span>
               <span>交付清单</span>
             </div>
-            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!exportGateReady} type="button" title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 ZIP 加工包" : "请先完成正式导出确认"}>
+            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!exportGateReady || !canDownloadProduction} type="button" title={productionDownloadTitle}>
               <Download size={17} />
               下载 ZIP 加工包
             </button>
@@ -2367,12 +2589,12 @@ export function App() {
                   <strong>{toolpathKind === "finish" ? "精加工刀路" : "普通刀路"}</strong>
                 </div>
               )}
-              <a className="download" href={aiMeshUrl} target="_blank" rel="noreferrer">
+              <a className={`download ${canDownloadProduction ? "" : "disabled-link"}`} href={aiMeshUrl} target="_blank" rel="noreferrer" aria-disabled={!canDownloadProduction} title={productionDownloadTitle} onClick={(event) => { if (!canDownloadProduction) event.preventDefault(); }}>
                 <Download size={17} />
                 下载 GLB
               </a>
               {aiMeshStlUrl && (
-                <a className="download secondary" href={aiMeshStlUrl} target="_blank" rel="noreferrer">
+                <a className={`download secondary ${canDownloadProduction ? "" : "disabled-link"}`} href={aiMeshStlUrl} target="_blank" rel="noreferrer" aria-disabled={!canDownloadProduction} title={productionDownloadTitle} onClick={(event) => { if (!canDownloadProduction) event.preventDefault(); }}>
                   <Download size={17} />
                   下载 AI STL
                 </a>
@@ -2401,7 +2623,7 @@ export function App() {
             </div>
           )}
           {!aiMeshUrl && (
-            <button className="download secondary" onClick={() => exportGeometryAsStl(geometry, "nuclear-carving-relief.stl")}>
+            <button className="download secondary" onClick={() => exportGeometryAsStl(geometry, "nuclear-carving-relief.stl")} disabled={!canDownloadProduction} title={productionDownloadTitle}>
               <Download size={17} />
               下载 STL
             </button>
@@ -2497,7 +2719,7 @@ export function App() {
                 <Layers3 size={17} />
                 {viewingSimulation ? "返回3D视图" : "模拟雕刻"}
               </button>
-              <button className="download secondary" onClick={handleDownloadOperatorPackage}>
+              <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={isOperatorMode && !exportGateReady} title={productionDownloadTitle}>
                 <Download size={17} />
                 加工包说明
               </button>
@@ -2505,37 +2727,37 @@ export function App() {
                 <Download size={17} />
                 下载空跑 NC
               </button>
-              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 NC" : "请先完成正式导出确认"}>
+              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载合并 NC
               </button>
               {toolpath.programs?.rough && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载粗加工 NC" : "请先完成正式导出确认"}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载粗加工
                 </button>
               )}
               {toolpath.programs?.finish && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载精加工 NC" : "请先完成正式导出确认"}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载精加工
                 </button>
               )}
               {toolpath.programs?.rest && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载清残 NC" : "请先完成正式导出确认"}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载清残
                 </button>
               )}
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 TAP" : "请先完成正式导出确认"}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 TAP
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 TXT" : "请先完成正式导出确认"}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 TXT
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!exportGateReady} title={exportBlocked ? "导出前安全校验存在阻断项" : exportGateReady ? "下载 CSV" : "请先完成正式导出确认"}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 CSV
               </button>
@@ -2661,6 +2883,27 @@ function formatCalibrationConfidence(confidence: CostCalibrationReport["confiden
   return "无样本";
 }
 
+function formatUserRole(role: UserRole) {
+  if (role === "admin") return "管理员";
+  if (role === "designer") return "设计员";
+  if (role === "process") return "工艺员";
+  return "操作员";
+}
+
+function getRolePermissionText(role: UserRole) {
+  if (role === "operator") return "仅允许下载已通过安全校验并完成正式导出确认的文件；适合交给机台操作员。";
+  if (role === "designer") return "可整理素材、生成模型和查看预览；正式导出仍需工艺/管理确认。";
+  if (role === "process") return "可调整工艺、生成刀路、仿真并完成导出前确认。";
+  return "拥有完整项目、工艺、导出和反馈管理权限。";
+}
+
+function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: boolean, exportGateReady: boolean) {
+  if (isOperatorMode && !exportGateReady) return "操作员模式：只能下载已通过安全校验并完成正式确认的文件";
+  if (exportBlocked) return "导出前安全校验存在阻断项";
+  if (!exportGateReady) return "请先完成正式导出确认";
+  return "下载已确认文件";
+}
+
 function captureWorkbenchPreviewPng() {
   const canvas = document.querySelector<HTMLCanvasElement>(".workbench .viewer canvas");
   if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
@@ -2692,6 +2935,7 @@ function dataUrlToUint8Array(dataUrl: string) {
 }
 
 function createPackageParameters(input: {
+  projectProfile: ProjectProfile;
   settings: ModelSettings;
   sourceLabel: string;
   aiMeshUrl: string | null;
@@ -2709,6 +2953,7 @@ function createPackageParameters(input: {
   return {
     packageVersion: "V2",
     createdAt: new Date().toISOString(),
+    project: input.projectProfile,
     source: {
       label: input.sourceLabel,
       aiMeshUrl: input.aiMeshUrl,

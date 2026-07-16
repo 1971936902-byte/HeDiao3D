@@ -1752,6 +1752,102 @@ button:disabled {
   justify-content: flex-start;
 }
 
+.permission-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(25, 199, 180, 0.28);
+  border-radius: 8px;
+  background: rgba(25, 199, 180, 0.06);
+}
+
+.permission-card.operator {
+  border-color: rgba(234, 181, 88, 0.34);
+  background: rgba(234, 181, 88, 0.08);
+}
+
+.permission-card strong {
+  color: #f2f8f5;
+  font-size: 14px;
+}
+
+.permission-card span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.project-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.project-summary span {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+}
+
+.project-summary strong {
+  overflow: hidden;
+  color: #f2f8f5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.project-archive-list {
+  display: grid;
+  gap: 8px;
+}
+
+.project-archive-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.project-archive-card.ready {
+  border-left-color: var(--green);
+}
+
+.project-archive-card div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.project-archive-card strong {
+  color: #f2f8f5;
+  font-size: 13px;
+}
+
+.project-archive-card span,
+.project-archive-card small,
+.project-archive-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.disabled-link {
+  pointer-events: auto;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .job-list {
   display: grid;
   gap: 8px;
