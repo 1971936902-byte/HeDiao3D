@@ -67,6 +67,7 @@ async function main() {
   assert(job.result?.summary?.productionGate?.level, "production gate missing");
   assert(job.result?.summary?.productionUnlockMatrix?.schema === "hediao3d.production-unlock-matrix.v1", "production unlock matrix missing");
   assert(job.result.summary.productionUnlockMatrix.rows?.some((row) => row.id === "simulation-evidence"), "production unlock matrix missing simulation row");
+  assert(job.result.summary.productionUnlockMatrix.rows?.some((row) => row.id === "cam-handoff-quality"), "production unlock matrix missing CAM handoff quality row");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   assert(job.result?.summary?.machineControllerProfile?.rotary?.outputAxis === "Y", "machine controller profile should use Y rotary output");
   assert(job.result?.summary?.machineAcceptanceChecklist?.schema === "hediao3d.machine-acceptance-checklist.v1", "machine acceptance checklist missing");
@@ -84,6 +85,8 @@ async function main() {
   assert(job.result.summary.rotaryCalibrationSheet.axisMapping.rotaryWrapPerRevolutionMm === 100, "rotary calibration should capture wrap distance");
   assert(job.result?.summary?.nativeCamReadiness?.schema === "hediao3d.native-cam-readiness.v1", "native CAM readiness report missing");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
+  assert(job.result?.summary?.camHandoffQuality?.schema === "hediao3d.cam-handoff-quality.v1", "CAM handoff quality report missing");
+  assert(job.result.summary.camHandoffQuality.metrics?.pointCount > 0, "CAM handoff quality should count points");
   assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
   assert(job.result?.summary?.camInputPlan?.schema === "hediao3d.cam-input-plan.v1", "CAM input plan schema missing");
   assert(job.result?.summary?.camInputPlan?.modelSelection?.schema === "hediao3d.cam-input-model-selection.v1", "CAM input model selection missing");
@@ -111,6 +114,7 @@ async function main() {
     "trial-feedback-template.json",
     "machine-controller-profile.json",
     "machine-acceptance-checklist.json",
+    "cam-handoff-quality.json",
     "nc-static-analysis.json",
     "controller-dialect-report.json",
     "simulation-summary.json",
@@ -146,6 +150,7 @@ async function main() {
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "trial-feedback-template.json"), "readFirst missing trial feedback template");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-handoff-quality.json"), "readFirst missing CAM handoff quality report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
@@ -157,6 +162,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-template.json" && file.sha256), "package integrity missing trial feedback template hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "cam-handoff-quality.json" && file.sha256), "package integrity missing CAM handoff quality hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");

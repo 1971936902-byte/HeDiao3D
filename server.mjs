@@ -2010,6 +2010,16 @@ async function processOrchestratorJob(job, settings) {
   const toolpath = externalToolpath ?? await generateToolpathFromLocalModel(job.modelUrl, settings);
   checkOrchestratorCancellation(job);
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+  const camHandoffQuality = createCamHandoffQualityReport({
+    job,
+    settings,
+    toolpath,
+    selectedEngine: selected,
+    resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
+    adapterReport,
+    externalToolpathUsed: Boolean(externalToolpath)
+  });
+  await writeFile(join(job.workDir, "cam-handoff-quality.json"), JSON.stringify(camHandoffQuality, null, 2), "utf8");
   updatePipelineStage(job, "toolpath", "completed", `生成 ${toolpath.points.length} 个刀路点。`);
   updatePipelineStage(job, "simulation", "running", "正在生成自研旋转包裹预览、CAMotics 仿真输入和离料空跑。");
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
@@ -2074,6 +2084,7 @@ async function processOrchestratorJob(job, settings) {
     nativeCamReadiness,
     simulationSummary,
     camoticsInput,
+    camHandoffQuality,
     ncStaticAnalysis,
     machineControllerProfile,
     controllerDialectReport
@@ -2138,6 +2149,7 @@ async function processOrchestratorJob(job, settings) {
     nativeCamReadiness,
     simulationSummary,
     ncStaticAnalysis,
+    camHandoffQuality,
     controllerDialectReport,
     toolSetupSheet,
     rotaryCalibrationSheet
@@ -2163,6 +2175,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     camoticsInput,
     camoticsSimulationPlan,
+    camHandoffQuality,
     ncStaticAnalysis,
     nativeCamReadiness,
     camEngineSelection,
@@ -2180,6 +2193,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-handoff-quality.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
@@ -2233,6 +2247,7 @@ async function processOrchestratorJob(job, settings) {
       rotaryCalibrationSheet,
       productionUnlockMatrix,
       trialFeedbackTemplate,
+      camHandoffQuality,
       camoticsInput,
       camoticsSimulationPlan,
       ncStaticAnalysis,
@@ -3294,7 +3309,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, ncStaticAnalysis, controllerDialectReport }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, ncStaticAnalysis, controllerDialectReport }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -3332,6 +3347,14 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   if (resultEngine === "internal-mesh-cam") {
     warnings.push("本次刀路仍由内置 Mesh CAM fallback 生成，不是外部专业 CAM 输出。");
     requiredActions.push("确认 adapter-report.json；外部 CAM 未返回 completed 前不要按生产级 CAM 精度评估。");
+  }
+
+  if (camHandoffQuality?.level === "critical") {
+    blockers.push(`CAM handoff 质量存在阻断项：${camHandoffQuality.criticalIssues[0] ?? "请查看 cam-handoff-quality.json"}`);
+    requiredActions.push("修复外部 adapter 输出的点数、轴覆盖、行程或 synthetic/fixture 标记后重新生成。");
+  } else if (camHandoffQuality?.level === "review") {
+    warnings.push(`CAM handoff 质量需要复核：${camHandoffQuality.warningIssues[0] ?? "请查看 cam-handoff-quality.json"}`);
+    requiredActions.push("查看 cam-handoff-quality.json，确认外部 CAM 输出是真实可复核刀路，不是合约 fixture。");
   }
 
   if (!simulationEvidence.productionUnlockEligible) {
@@ -3416,6 +3439,8 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       simulationEvidenceLevel: simulationEvidence.level,
       realMaterialRemovalVerified: simulationEvidence.realMaterialRemovalVerified,
       simulationRiskLevel: simulationSummary.riskLevel,
+      camHandoffQualityLevel: camHandoffQuality?.level ?? "unknown",
+      camHandoffSource: camHandoffQuality?.source ?? "unknown",
       fitRate: simulationSummary.metrics.fitRate,
       missCount: simulationSummary.metrics.missCount,
       pointCount: toolpath.points?.length ?? 0,
@@ -3477,6 +3502,148 @@ function createSimulationEvidence(simulationSummary) {
     summary,
     requiredActions
   };
+}
+
+function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine, resultEngine, adapterReport, externalToolpathUsed }) {
+  const points = Array.isArray(toolpath?.points) ? toolpath.points : [];
+  const source = externalToolpathUsed ? "external-adapter" : "internal-fallback";
+  const expectedRotary = settings.camMode === "rotaryWrap";
+  const rotaryAxis = String(settings.rotaryOutputAxis ?? "Y").toUpperCase();
+  const stats = summarizeHandoffPointStats(points);
+  const criticalIssues = [];
+  const warningIssues = [];
+  const requiredActions = [];
+  const adapterSynthetic = Boolean(adapterReport?.synthetic || adapterReport?.metrics?.neutralToolpath?.synthetic);
+  const adapterImportedFixture = Boolean(adapterReport?.imported || adapterReport?.metrics?.neutralToolpath?.imported);
+  const externalCommandGenerated = Boolean(adapterReport?.externalCommand || adapterReport?.metrics?.neutralToolpath?.generatedByExternalCommand);
+
+  if (points.length <= 0) {
+    criticalIssues.push("未生成任何可解析刀路点。");
+  } else if (points.length < 100) {
+    warningIssues.push(`刀路点数 ${points.length} 偏少，只适合 adapter 合约或小样验证。`);
+  }
+
+  const usableLengthMm = Math.max(0.001, Number(settings.lengthMm ?? 0) - Number(settings.leftHoldMm ?? 0) - Number(settings.rightHoldMm ?? 0));
+  const xCoverage = usableLengthMm > 0 ? clamp01(stats.xSpan / usableLengthMm) : 0;
+  const expectedRotarySpan = expectedRotary ? Number(settings.reliefAngleDeg ?? 360) : 0;
+  const rotarySpan = rotaryAxis === "A" ? stats.aSpan : Math.max(stats.ySpan, stats.aSpan);
+  const rotaryCoverage = expectedRotary && expectedRotarySpan > 0 ? clamp01(rotarySpan / expectedRotarySpan) : null;
+
+  if (xCoverage < 0.65) {
+    warningIssues.push(`X 长度覆盖 ${(xCoverage * 100).toFixed(1)}% 偏低，可能只加工了局部区域。`);
+  }
+  if (expectedRotary && rotaryCoverage !== null && rotaryCoverage < 0.75) {
+    warningIssues.push(`旋转覆盖 ${(rotaryCoverage * 100).toFixed(1)}% 偏低，可能未完整包裹 360°。`);
+  }
+  if (stats.zMin === null || stats.zMax === null) {
+    criticalIssues.push("无法统计 Z 轴范围。");
+  } else if (stats.zSpan <= 0.001) {
+    warningIssues.push("Z 轴范围几乎没有变化，刀路可能没有真实切深。");
+  }
+
+  if (source === "internal-fallback") {
+    warningIssues.push("本次 handoff 来自内置 fallback，只能验证流程，不能代表 FreeCAD/BlenderCAM/OpenCAMLib 精度。");
+    requiredActions.push("启用外部 CAM adapter 并取得非 synthetic 的真实输出后再评估生产精度。");
+  }
+  if (adapterSynthetic) {
+    warningIssues.push("外部 adapter 输出带 synthetic 标记，只能用于合约测试。");
+    requiredActions.push("关闭 synthetic/fixture 模式，使用真实外部 CAM 命令输出。");
+  }
+  if (adapterImportedFixture) {
+    warningIssues.push("外部 adapter 输出来自导入 fixture，需要确认它不是测试样例。");
+  }
+  if (externalToolpathUsed && !externalCommandGenerated && !adapterImportedFixture) {
+    warningIssues.push("未检测到外部命令生成记录，需复核 adapter-report.json。");
+  }
+
+  const level = criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "review" : "ready";
+  return {
+    schema: "hediao3d.cam-handoff-quality.v1",
+    createdAt: new Date().toISOString(),
+    jobId: job.id,
+    level,
+    source,
+    selectedEngine: selectedEngine?.id ?? null,
+    resultEngine,
+    adapterStatus: adapterReport?.status ?? null,
+    externalToolpathUsed,
+    synthetic: adapterSynthetic,
+    importedFixture: adapterImportedFixture,
+    externalCommandGenerated,
+    metrics: {
+      pointCount: points.length,
+      previewPointCount: toolpath?.previewPoints?.length ?? 0,
+      estimatedMinutes: Number(toolpath?.estimatedMinutes ?? 0),
+      xRangeMm: { min: stats.xMin, max: stats.xMax, span: stats.xSpan },
+      yRange: { min: stats.yMin, max: stats.yMax, span: stats.ySpan },
+      aRangeDeg: { min: stats.aMin, max: stats.aMax, span: stats.aSpan },
+      zRangeMm: { min: stats.zMin, max: stats.zMax, span: stats.zSpan },
+      depthRangeMm: { min: stats.depthMin, max: stats.depthMax, span: stats.depthSpan },
+      xCoverage,
+      rotaryCoverage,
+      expectedRotaryAxis: expectedRotary ? rotaryAxis : null,
+      expectedRotarySpanDeg: expectedRotary ? expectedRotarySpan : null
+    },
+    criticalIssues,
+    warningIssues,
+    requiredActions,
+    summary: criticalIssues.length > 0
+      ? `CAM handoff 存在 ${criticalIssues.length} 个阻断项。`
+      : warningIssues.length > 0
+        ? `CAM handoff 有 ${warningIssues.length} 个复核项。`
+        : "CAM handoff 质量检查通过。"
+  };
+}
+
+function summarizeHandoffPointStats(points) {
+  if (!points.length) {
+    return {
+      xMin: null, xMax: null, xSpan: 0,
+      yMin: null, yMax: null, ySpan: 0,
+      aMin: null, aMax: null, aSpan: 0,
+      zMin: null, zMax: null, zSpan: 0,
+      depthMin: null, depthMax: null, depthSpan: 0
+    };
+  }
+  const xs = points.map((point) => Number(point.x)).filter(Number.isFinite);
+  const ys = points.map((point) => Number(point.y ?? 0)).filter(Number.isFinite);
+  const as = points.map((point) => Number(point.a ?? 0)).filter(Number.isFinite);
+  const zs = points.map((point) => Number(point.z)).filter(Number.isFinite);
+  const depths = points.map((point) => Number(point.depth ?? 0)).filter(Number.isFinite);
+  return {
+    xMin: minOrNull(xs),
+    xMax: maxOrNull(xs),
+    xSpan: spanOrZero(xs),
+    yMin: minOrNull(ys),
+    yMax: maxOrNull(ys),
+    ySpan: spanOrZero(ys),
+    aMin: minOrNull(as),
+    aMax: maxOrNull(as),
+    aSpan: spanOrZero(as),
+    zMin: minOrNull(zs),
+    zMax: maxOrNull(zs),
+    zSpan: spanOrZero(zs),
+    depthMin: minOrNull(depths),
+    depthMax: maxOrNull(depths),
+    depthSpan: spanOrZero(depths)
+  };
+}
+
+function minOrNull(values) {
+  return values.length ? Math.min(...values) : null;
+}
+
+function maxOrNull(values) {
+  return values.length ? Math.max(...values) : null;
+}
+
+function spanOrZero(values) {
+  return values.length ? Math.max(...values) - Math.min(...values) : 0;
+}
+
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function createToolSetupSheet({ job, settings, toolpath, productionGate, postprocessProfile }) {
@@ -3752,7 +3919,7 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
   return `${lines.join("\n")}\n`;
 }
 
-function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
+function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
   const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const rows = [
     {
@@ -3785,6 +3952,14 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
       status: nativeCamReadiness?.level === "ready" ? "pass" : "review",
       evidence: "native-cam-readiness.json",
       summary: nativeCamReadiness?.summary ?? "未生成 Native CAM 就绪报告。",
+      requiredForProduction: true
+    },
+    {
+      id: "cam-handoff-quality",
+      label: "CAM Handoff质量",
+      status: camHandoffQuality?.level === "ready" ? "pass" : camHandoffQuality?.level === "critical" ? "block" : "review",
+      evidence: "cam-handoff-quality.json",
+      summary: camHandoffQuality?.summary ?? "未生成 CAM handoff 质量报告。",
       requiredForProduction: true
     },
     {
@@ -4748,7 +4923,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camHandoffQuality, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -4776,6 +4951,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
         getFile("production-unlock-matrix.json"),
+        getFile("cam-handoff-quality.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("operator-runbook.md"),
@@ -4847,6 +5023,16 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       level: ncStaticAnalysis?.level ?? "unknown",
       summary: ncStaticAnalysis?.summary ?? null
     },
+    camHandoffQuality: camHandoffQuality ? {
+      level: camHandoffQuality.level,
+      source: camHandoffQuality.source,
+      pointCount: camHandoffQuality.metrics?.pointCount ?? 0,
+      xCoverage: camHandoffQuality.metrics?.xCoverage ?? null,
+      rotaryCoverage: camHandoffQuality.metrics?.rotaryCoverage ?? null,
+      summary: camHandoffQuality.summary,
+      criticalIssues: camHandoffQuality.criticalIssues ?? [],
+      warningIssues: camHandoffQuality.warningIssues ?? []
+    } : null,
     controllerDialect: {
       level: controllerDialectReport?.level ?? "unknown",
       summary: controllerDialectReport?.summary ?? null,
@@ -4905,6 +5091,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
+    createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
     createDeliveryFile(job.id, "camotics-simulation-plan.json", "CAMotics 仿真计划", "report", true, "记录 CAMotics 预览 NC、展开毛坯、刀具、坐标解释和待执行检查项。"),

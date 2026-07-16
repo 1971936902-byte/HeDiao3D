@@ -484,6 +484,23 @@ type V3OrchestratorJob = {
           };
         }>;
       };
+      camHandoffQuality?: {
+        schema: string;
+        level: "ready" | "review" | "critical";
+        source: string;
+        selectedEngine: string | null;
+        resultEngine: string;
+        synthetic: boolean;
+        importedFixture: boolean;
+        summary: string;
+        criticalIssues: string[];
+        warningIssues: string[];
+        metrics: {
+          pointCount: number;
+          xCoverage: number;
+          rotaryCoverage: number | null;
+        };
+      };
       controllerDialectReport?: {
         level: "ready" | "review" | "critical";
         summary: string;
@@ -4686,6 +4703,20 @@ export function App() {
                   程序 {v3Job.result.summary.ncStaticAnalysis.programs.length}
                 </small>
               )}
+              {v3Job?.result?.summary.camHandoffQuality && (
+                <small className={v3Job.result.summary.camHandoffQuality.level === "ready" ? "v3-inline-ok" : v3Job.result.summary.camHandoffQuality.level === "critical" ? "v3-inline-critical" : "v3-inline-warning"}>
+                  CAM交接质量：{v3Job.result.summary.camHandoffQuality.level}
+                  {" · "}
+                  {v3Job.result.summary.camHandoffQuality.source}
+                  {" · "}
+                  点 {v3Job.result.summary.camHandoffQuality.metrics.pointCount}
+                  {" · "}
+                  X覆盖 {(v3Job.result.summary.camHandoffQuality.metrics.xCoverage * 100).toFixed(1)}%
+                  {v3Job.result.summary.camHandoffQuality.metrics.rotaryCoverage !== null
+                    ? ` · 旋转覆盖 ${(v3Job.result.summary.camHandoffQuality.metrics.rotaryCoverage * 100).toFixed(1)}%`
+                    : ""}
+                </small>
+              )}
               {v3Job?.result?.summary.controllerDialectReport && (
                 <small>
                   控制器方言：{v3Job.result.summary.controllerDialectReport.level}
@@ -6960,6 +6991,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const postprocessProfile = summary?.postprocessProfile;
   const machineControllerProfile = summary?.machineControllerProfile;
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
+  const camHandoffQuality = summary?.camHandoffQuality;
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
@@ -6992,6 +7024,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `允许离料空跑: ${gate?.allowAirRun ? "是" : "否"}`,
     `解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
     "矩阵报告: production-unlock-matrix.json",
+    `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
+    "CAM交接报告: cam-handoff-quality.json",
     "",
     "## 机床验收",
     "",
