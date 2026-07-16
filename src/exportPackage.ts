@@ -133,11 +133,15 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
       ? [
           `- 综合评分：${input.materialRemoval.score.toFixed(1)} / 100`,
           `- 结论：${input.materialRemoval.summary}`,
+          `- 仿真模式：${input.materialRemoval.simulationMode}`,
+          `- 刀具扫掠：${input.materialRemoval.toolGeometry.type} / 有效半径 ${input.materialRemoval.toolGeometry.effectiveRadiusMm.toFixed(3)}mm / 接触宽度 ${input.materialRemoval.toolGeometry.contactWidthMm.toFixed(3)}mm`,
           `- 估算最大刀痕：${(input.materialRemoval.maxTextureMm * 1000).toFixed(0)} μm`,
           `- 刀路覆盖率：${input.materialRemoval.coverageRate.toFixed(1)}%`,
+          `- 扫掠覆盖率：${input.materialRemoval.sweptAreaRate.toFixed(1)}%`,
           `- 清残占比：${input.materialRemoval.restAreaRate.toFixed(1)}%`,
           `- 最大过切风险：${input.materialRemoval.maxOvercutMm.toFixed(3)} mm`,
           `- 最大欠切/残料：${input.materialRemoval.maxUndercutMm.toFixed(3)} mm`,
+          `- 细节残料风险：${input.materialRemoval.residualRiskMm.toFixed(3)} mm`,
           ...input.materialRemoval.suggestions.map((item) => `- 建议：${item}`)
         ]
       : ["- 尚未生成刀路，无法完成材料去除仿真。"]),

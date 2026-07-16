@@ -2443,7 +2443,7 @@ export function App() {
                 </div>
               </>
             ) : (
-              <p className="panel-note">生成刀路后会按球刀半径、X/A 步距、清残占比和覆盖率估算材料去除效果。</p>
+              <p className="panel-note">生成刀路后会按球刀、平刀、锥刀等刀具扫掠几何，估算刀痕、覆盖、过切、欠切和残料风险。</p>
             )}
           </section>
         )}

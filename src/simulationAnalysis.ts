@@ -1,4 +1,5 @@
 import type { GeneratedToolpath, ModelSettings, ToolpathPoint } from "./types";
+import { getToolProfile, type ToolProfile } from "./manufacturingProfiles";
 
 export type MaterialRemovalMetric = {
   label: string;
@@ -11,12 +12,21 @@ export type MaterialRemovalReport = {
   score: number;
   verdict: "ready" | "review" | "risk";
   summary: string;
+  simulationMode: "preview" | "swept-tool";
+  toolGeometry: {
+    type: ToolProfile["type"];
+    effectiveRadiusMm: number;
+    contactWidthMm: number;
+    angleDeg: number | null;
+  };
   maxTextureMm: number;
   meanTextureMm: number;
   coverageRate: number;
   restAreaRate: number;
   maxOvercutMm: number;
   maxUndercutMm: number;
+  residualRiskMm: number;
+  sweptAreaRate: number;
   metrics: MaterialRemovalMetric[];
   suggestions: string[];
 };
@@ -27,29 +37,45 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
   const cuttingPoints = removeSafeMoves(toolpath.programs?.combined?.points ?? toolpath.points, settings);
   if (cuttingPoints.length === 0) return null;
 
-  const toolRadius = Math.max(0.001, settings.toolDiameter / 2);
-  const xScallop = estimateScallopHeight(settings.stepoverMm, toolRadius);
+  const tool = getToolProfile(settings.toolProfileId);
+  const maxDepth = cuttingPoints.reduce((max, point) => Math.max(max, point.depth), 0);
+  const geometry = createToolSweepGeometry(tool, settings, maxDepth);
+  const xScallop = estimateScallopHeightByTool(settings.stepoverMm, geometry);
   const arcStepMm = (Math.PI / 180) * settings.stepoverDeg * (settings.diameterMm / 2);
-  const aScallop = estimateScallopHeight(arcStepMm, toolRadius);
+  const aScallop = estimateScallopHeightByTool(arcStepMm, geometry);
   const maxTextureMm = Math.max(xScallop, aScallop);
   const meanTextureMm = (xScallop + aScallop) / 2;
   const coverageRate = estimateCoverageRate(cuttingPoints, settings);
   const restAreaRate = estimateRestAreaRate(toolpath);
-  const maxDepth = cuttingPoints.reduce((max, point) => Math.max(max, point.depth), 0);
-  const maxOvercutMm = Math.max(0, maxDepth - settings.depthMm);
-  const maxUndercutMm = Math.max(0, settings.stockAllowance - maxDepth);
+  const sweptAreaRate = estimateSweptAreaRate(cuttingPoints, settings, geometry.contactWidthMm);
+  const removalBias = estimateToolRemovalBias(tool, settings, geometry, maxDepth);
+  const maxOvercutMm = Math.max(0, maxDepth - settings.depthMm + removalBias.overcutMm);
+  const maxUndercutMm = Math.max(0, settings.stockAllowance - maxDepth + removalBias.undercutMm);
+  const residualRiskMm = estimateResidualRisk(settings, geometry, restAreaRate, maxDepth);
   const metrics: MaterialRemovalMetric[] = [
+    {
+      label: "仿真模式",
+      value: formatToolType(tool.type),
+      status: geometry.status,
+      detail: `${geometry.detail}；有效半径 ${geometry.effectiveRadiusMm.toFixed(3)}mm，扫掠宽度 ${geometry.contactWidthMm.toFixed(3)}mm。`
+    },
     {
       label: "刀痕纹理",
       value: `${(maxTextureMm * 1000).toFixed(0)} μm`,
       status: maxTextureMm <= 0.012 ? "ok" : maxTextureMm <= 0.035 ? "warning" : "critical",
-      detail: `按球刀半径与 X/A 步距估算；X ${(xScallop * 1000).toFixed(0)}μm，A ${(aScallop * 1000).toFixed(0)}μm。`
+      detail: `按 ${formatToolType(tool.type)} 扫掠几何估算；X ${(xScallop * 1000).toFixed(0)}μm，A ${(aScallop * 1000).toFixed(0)}μm。`
     },
     {
       label: "刀路覆盖",
       value: `${coverageRate.toFixed(1)}%`,
       status: coverageRate >= 92 ? "ok" : coverageRate >= 82 ? "warning" : "critical",
       detail: "按可雕刻区 X/A 网格估算覆盖率，低覆盖率可能留下未加工区域。"
+    },
+    {
+      label: "扫掠覆盖",
+      value: `${sweptAreaRate.toFixed(1)}%`,
+      status: sweptAreaRate >= 96 ? "ok" : sweptAreaRate >= 88 ? "warning" : "critical",
+      detail: "按刀具接触宽度扩展估算实际材料被刀刃扫过的比例。"
     },
     {
       label: "清残占比",
@@ -68,6 +94,12 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
       value: `${maxUndercutMm.toFixed(3)} mm`,
       status: maxUndercutMm <= 0.03 ? "ok" : maxUndercutMm <= settings.stockAllowance + 0.02 ? "warning" : "critical",
       detail: "估算目标深度与实际最大切深差值；粗加工余量会由精加工/清残继续处理。"
+    },
+    {
+      label: "残料风险",
+      value: `${residualRiskMm.toFixed(3)} mm`,
+      status: residualRiskMm <= 0.025 ? "ok" : residualRiskMm <= 0.08 ? "warning" : "critical",
+      detail: "结合刀具形状、清残占比和最大切深估算细节凹槽可能残留的材料。"
     }
   ];
 
@@ -75,7 +107,9 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
     100 -
       Math.max(0, maxTextureMm - 0.012) * 950 -
       Math.max(0, 94 - coverageRate) * 1.4 -
+      Math.max(0, 96 - sweptAreaRate) * 0.8 -
       Math.max(0, maxOvercutMm - 0.02) * 180 -
+      Math.max(0, residualRiskMm - 0.025) * 160 -
       (restAreaRate === 0 ? 8 : restAreaRate > 45 ? 7 : 0),
     0,
     100
@@ -85,20 +119,33 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
   const suggestions: string[] = [];
   if (maxTextureMm > 0.035) suggestions.push("刀痕纹理偏大，建议降低 X/A 步距或改用更小球刀精修。");
   if (coverageRate < 92) suggestions.push("刀路覆盖不足，建议减小步距或检查夹持/过渡区是否过大。");
+  if (sweptAreaRate < 88) suggestions.push("按刀具扫掠估算仍有覆盖缺口，建议减小步距或增加交叉精修。");
   if (restAreaRate === 0) suggestions.push("没有有效清残点，细节较深时建议使用清残刀路或更小刀具。");
   if (restAreaRate > 35) suggestions.push("清残占比偏高，可能说明模型细节过密或刀具偏大，建议先小样试雕。");
   if (maxOvercutMm > 0.02) suggestions.push("检测到过切风险，建议降低浮雕深度或提高安全余量。");
+  if (residualRiskMm > 0.08) suggestions.push("残料风险偏高，建议改用更小球刀/锥刀清残或增加精加工遍数。");
+  if (tool.type === "flat") suggestions.push("当前为平刀模型，适合粗加工去料；最终细节建议再用球刀或锥刀精修。");
+  if (tool.type === "taper" && maxDepth > tool.fluteLengthMm * 0.75) suggestions.push("锥刀切深接近刃长上限，建议降低单层切深并检查刀尖磨损。");
 
   return {
     score,
     verdict,
     summary,
+    simulationMode: "swept-tool",
+    toolGeometry: {
+      type: tool.type,
+      effectiveRadiusMm: geometry.effectiveRadiusMm,
+      contactWidthMm: geometry.contactWidthMm,
+      angleDeg: tool.angleDeg ?? null
+    },
     maxTextureMm,
     meanTextureMm,
     coverageRate,
     restAreaRate,
     maxOvercutMm,
     maxUndercutMm,
+    residualRiskMm,
+    sweptAreaRate,
     metrics,
     suggestions: suggestions.length > 0 ? suggestions : ["材料去除快览指标正常，可继续进行模拟雕刻和离料空跑。"]
   };
@@ -109,11 +156,105 @@ function removeSafeMoves(points: ToolpathPoint[], settings: ModelSettings) {
   return points.filter((point) => Number.isFinite(point.z) && point.z < safeCutoff);
 }
 
-function estimateScallopHeight(stepMm: number, toolRadiusMm: number) {
+type ToolSweepGeometry = {
+  effectiveRadiusMm: number;
+  contactWidthMm: number;
+  status: MaterialRemovalMetric["status"];
+  detail: string;
+  flatFactor: number;
+  taperFactor: number;
+};
+
+function createToolSweepGeometry(tool: ToolProfile, settings: ModelSettings, maxDepth: number): ToolSweepGeometry {
+  const nominalRadius = Math.max(0.001, settings.toolDiameter / 2);
+  if (tool.type === "flat") {
+    return {
+      effectiveRadiusMm: nominalRadius * 4,
+      contactWidthMm: Math.max(settings.toolDiameter, tool.diameterMm),
+      status: "warning",
+      detail: "按平刀圆柱扫掠估算，底面去料强但细节圆角能力弱",
+      flatFactor: 1,
+      taperFactor: 0
+    };
+  }
+
+  if (tool.type === "taper" || tool.type === "v-bit" || tool.type === "micro") {
+    const angleRad = ((tool.angleDeg ?? 20) * Math.PI) / 180;
+    const radiusAtDepth = Math.max(tool.tipRadiusMm, tool.tipRadiusMm + Math.tan(angleRad / 2) * Math.max(0, maxDepth));
+    return {
+      effectiveRadiusMm: Math.max(0.001, radiusAtDepth),
+      contactWidthMm: Math.max(tool.tipRadiusMm * 2, radiusAtDepth * 2),
+      status: maxDepth > tool.fluteLengthMm * 0.75 ? "warning" : "ok",
+      detail: "按锥刀刀尖角随深度扩大的扫掠宽度估算",
+      flatFactor: 0,
+      taperFactor: 1
+    };
+  }
+
+  return {
+    effectiveRadiusMm: Math.max(0.001, tool.tipRadiusMm || nominalRadius),
+    contactWidthMm: Math.max(settings.toolDiameter, (tool.tipRadiusMm || nominalRadius) * 2),
+    status: "ok",
+    detail: "按球刀球面半径扣除材料并估算等高刀痕",
+    flatFactor: 0,
+    taperFactor: 0
+  };
+}
+
+function estimateScallopHeightByTool(stepMm: number, geometry: ToolSweepGeometry) {
+  if (geometry.flatFactor > 0) {
+    return Math.max(0, stepMm - geometry.contactWidthMm * 0.82) * 0.18;
+  }
+  const scallop = estimateBallScallopHeight(stepMm, geometry.effectiveRadiusMm);
+  return geometry.taperFactor > 0 ? scallop * 1.18 : scallop;
+}
+
+function estimateBallScallopHeight(stepMm: number, toolRadiusMm: number) {
   if (stepMm <= 0 || toolRadiusMm <= 0) return 0;
   const halfStep = stepMm / 2;
   if (halfStep >= toolRadiusMm) return toolRadiusMm;
   return toolRadiusMm - Math.sqrt(Math.max(0, toolRadiusMm * toolRadiusMm - halfStep * halfStep));
+}
+
+function estimateSweptAreaRate(points: ToolpathPoint[], settings: ModelSettings, contactWidthMm: number) {
+  const rawCoverage = estimateCoverageRate(points, settings);
+  const xBoost = contactWidthMm / Math.max(settings.stepoverMm, 0.001);
+  const aArcStepMm = (Math.PI / 180) * settings.stepoverDeg * (settings.diameterMm / 2);
+  const aBoost = contactWidthMm / Math.max(aArcStepMm, 0.001);
+  const boost = clamp((xBoost + aBoost) / 2, 0.7, 1.45);
+  return Math.min(100, rawCoverage * boost);
+}
+
+function estimateToolRemovalBias(tool: ToolProfile, settings: ModelSettings, geometry: ToolSweepGeometry, maxDepth: number) {
+  if (tool.type === "flat") {
+    return {
+      overcutMm: settings.stepoverMm > geometry.contactWidthMm * 0.55 ? 0.01 : 0,
+      undercutMm: Math.max(0, settings.stockAllowance * 0.22)
+    };
+  }
+  if (geometry.taperFactor > 0) {
+    const sideGrowth = Math.max(0, geometry.effectiveRadiusMm - Math.max(0.001, tool.tipRadiusMm));
+    return {
+      overcutMm: sideGrowth * 0.12,
+      undercutMm: maxDepth < settings.depthMm * 0.55 ? 0.03 : 0
+    };
+  }
+  return { overcutMm: 0, undercutMm: 0 };
+}
+
+function estimateResidualRisk(settings: ModelSettings, geometry: ToolSweepGeometry, restAreaRate: number, maxDepth: number) {
+  const stepResidual = Math.max(0, settings.stepoverMm - geometry.contactWidthMm * 0.42) * 0.35;
+  const depthResidual = Math.max(0, settings.depthMm - maxDepth) * 0.18;
+  const noRestPenalty = restAreaRate > 0 ? 0 : Math.min(0.08, settings.stockAllowance * 0.35);
+  return stepResidual + depthResidual + noRestPenalty;
+}
+
+function formatToolType(type: ToolProfile["type"]) {
+  if (type === "ball") return "球刀扫掠";
+  if (type === "flat") return "平刀扫掠";
+  if (type === "taper") return "锥刀扫掠";
+  if (type === "v-bit") return "V 刀扫掠";
+  return "微雕刀扫掠";
 }
 
 function estimateCoverageRate(points: ToolpathPoint[], settings: ModelSettings) {
