@@ -1581,7 +1581,7 @@ function createToolpathFromAdapterReport(adapterReport, job, settings, selectedE
     txt: gcode,
     csv: toCsv(points),
     estimatedMinutes,
-    postProcessorName: `${selectedEngine.name} adapter G-code`,
+    postProcessorName: `${selectedEngine.name} adapter G-code + ${postProcessorName(settings.postProcessor)}`,
     summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
   };
 }
@@ -4200,6 +4200,13 @@ function createAdapterCommandArgs(selectedEngine, scriptPath, jobPath, resultPat
     };
   }
   if (selectedEngine.id === "blendercam") {
+    const command = String(selectedEngine.command ?? "");
+    if (/^(python|python3|py)(\.exe)?$/i.test(command.split(/[\\/]/).pop() ?? command)) {
+      return {
+        command: selectedEngine.command,
+        args: [scriptPath, jobPath, resultPath]
+      };
+    }
     return {
       command: selectedEngine.command,
       args: ["--background", "--python", scriptPath, "--", jobPath, resultPath]
@@ -4572,13 +4579,7 @@ function pushIfArtifactExists(job, filename) {
 function detectCamEngines() {
   return [
     detectFreeCadEngine(),
-    detectCommandEngine({
-      id: "blendercam",
-      name: "BlenderCAM / FabexCNC",
-      commands: ["blender"],
-      role: "艺术曲面/浮雕 CAM adapter",
-      adapterReady: true
-    }),
+    detectBlenderCamEngine(),
     detectCommandEngine({
       id: "camotics",
       name: "CAMotics",
@@ -4598,6 +4599,29 @@ function detectCamEngines() {
       notes: "用于外部 CAM 未安装时的小闭环验证；正式 V3 将优先调用 FreeCAD/BlenderCAM/CAMotics。"
     }
   ];
+}
+
+function detectBlenderCamEngine() {
+  if (String(process.env.HEDIAO3D_FORCE_BLENDERCAM_ADAPTER ?? "").toLowerCase() === "true") {
+    const command = process.env.PYTHON ?? "python";
+    return {
+      id: "blendercam",
+      name: "BlenderCAM / FabexCNC",
+      role: "艺术曲面/浮雕 CAM adapter",
+      available: true,
+      adapterReady: true,
+      command,
+      version: "forced adapter contract mode",
+      notes: "HEDIAO3D_FORCE_BLENDERCAM_ADAPTER=true，仅用于 adapter/Orchestrator 合约测试；生产环境必须安装真实 Blender + BlenderCAM/FabexCNC。"
+    };
+  }
+  return detectCommandEngine({
+    id: "blendercam",
+    name: "BlenderCAM / FabexCNC",
+    commands: ["blender"],
+    role: "艺术曲面/浮雕 CAM adapter",
+    adapterReady: true
+  });
 }
 
 function detectFreeCadEngine() {

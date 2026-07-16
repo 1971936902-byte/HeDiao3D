@@ -218,6 +218,53 @@ try {
     gcode: freecadExternalReport.metrics.gcode?.status ?? null
   });
 
+  const blendercamRunnerPath = resolve("adapters", "blendercam", "blendercam_runner.py");
+  const blendercamExternalJobPath = join(workDir, "blendercam-external-job.json");
+  const blendercamExternalResultPath = join(workDir, "blendercam-external-report.json");
+  const blendercamExternalGcodePath = join(workDir, "outputs", "blendercam-external-toolpath.nc");
+  const blendercamExternalModelPath = join(workDir, "blendercam-sample.stl");
+  writeFileSync(blendercamExternalModelPath, createTinyAsciiStl());
+  writeFileSync(blendercamExternalJobPath, JSON.stringify({
+    ...job,
+    engine: "blendercam",
+    modelPath: blendercamExternalModelPath,
+    outputs: {
+      ...job.outputs,
+      report: blendercamExternalResultPath,
+      gcode: blendercamExternalGcodePath
+    }
+  }, null, 2));
+  const blendercamExternalRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/blendercam/blendercam_job.py", blendercamExternalJobPath, blendercamExternalResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", blendercamRunnerPath]),
+      HEDIAO3D_BLENDERCAM_RUNNER_FIXTURE_OUTPUT: "true"
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(blendercamExternalRun.status === 0, `blendercam external handoff exited ${blendercamExternalRun.status}: ${blendercamExternalRun.stderr || blendercamExternalRun.stdout}`);
+  const blendercamExternalReport = JSON.parse(readFileSync(blendercamExternalResultPath, "utf8"));
+  validateReport("blendercam", blendercamExternalReport);
+  assert(blendercamExternalReport.status === "completed", "blendercam external handoff should complete in fixture mode");
+  assert(blendercamExternalReport.gcodePath === blendercamExternalGcodePath, "blendercam report should expose gcodePath");
+  assert(blendercamExternalReport.metrics?.gcode?.status === "generated", "blendercam metrics should mark G-code generated");
+  assert(existsSync(blendercamExternalGcodePath), "blendercam external G-code file missing");
+  const blendercamExternalGcode = readFileSync(blendercamExternalGcodePath, "utf8");
+  assert(blendercamExternalGcode.includes("HeDiao3D BlenderCAM external runner fixture"), "blendercam external G-code marker missing");
+  assert(/\bG1\b/.test(blendercamExternalGcode), "blendercam external G-code should contain G1 motion");
+  results.push({
+    id: "blendercam-external-handoff",
+    status: blendercamExternalReport.status,
+    protocolVersion: blendercamExternalReport.protocolVersion,
+    warningCount: blendercamExternalReport.warnings?.length ?? 0,
+    recipeOperations: blendercamExternalReport.metrics.recipe.operationCount,
+    gcode: blendercamExternalReport.metrics.gcode?.status ?? null
+  });
+
   console.log(JSON.stringify({ ok: true, adapters: results }, null, 2));
 } finally {
   rmSync(workDir, { recursive: true, force: true });
