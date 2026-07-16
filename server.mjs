@@ -418,11 +418,24 @@ async function processOrchestratorJob(job, settings) {
   appendOrchestratorLog(job, `Mesh 体检完成：评分 ${meshQuality.score.toFixed(1)}，${repairPlan.statusText}`);
   await writeJobManifest(job);
 
+  updatePipelineStage(job, "cam-input", "running", "正在准备外部 CAM 输入模型和预处理策略。");
+  const camInputPlan = createCamInputPlan(job, meshQuality, repairPlan, settings);
+  await writeFile(join(job.workDir, "cam-input-plan.json"), JSON.stringify(camInputPlan, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-input-plan.json"));
+  updatePipelineStage(job, "cam-input", camInputPlan.status === "blocked" ? "review" : "completed", camInputPlan.summary);
+  appendOrchestratorLog(job, `CAM 输入准备完成：${camInputPlan.summary}`);
+  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan });
+  await writeJobManifest(job);
+
   appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
   const engines = detectCamEngines();
-  const selected = selectCamEngine(engines, job.requestedEngine);
+  const selected = selectCamEngine(engines, job.requestedEngine, settings);
   job.selectedEngine = selected.id;
-  updatePipelineStage(job, "engine", "completed", `选择 ${selected.name}。`);
+  const engineReadiness = createEngineReadinessReport(engines, selected, settings);
+  await writeFile(join(job.workDir, "engine-diagnostics.json"), JSON.stringify(engineReadiness, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "engine-diagnostics.json"));
+  updatePipelineStage(job, "engine", engineReadiness.externalReady ? "completed" : "review", `选择 ${selected.name}；${engineReadiness.summary}`);
+  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, engineReadiness });
 
   let adapterReport = null;
   if (selected.id !== "internal-mesh-cam" && selected.available && enableExternalCamAdapters) {
@@ -476,6 +489,8 @@ async function processOrchestratorJob(job, settings) {
     summary: {
       meshQuality,
       repairPlan,
+      camInputPlan,
+      engineReadiness,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
       estimatedMinutes: toolpath.estimatedMinutes,
@@ -503,10 +518,17 @@ function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine)
   };
 }
 
+async function writeAdapterJobSpec(job, settings, extras = {}) {
+  const jobSpec = createAdapterJobSpec(job, job.modelUrl, settings, job.workDir, job.requestedEngine);
+  Object.assign(jobSpec, extras);
+  await writeFile(join(job.workDir, "job.json"), JSON.stringify(jobSpec, null, 2), "utf8");
+}
+
 function createInitialOrchestratorPipeline() {
   return [
     { id: "queue", label: "队列调度", status: "queued", message: "等待 Orchestrator 调度。" },
     { id: "mesh-quality", label: "Mesh 体检/修复计划", status: "queued", message: "等待模型质量分析。" },
+    { id: "cam-input", label: "CAM 输入准备", status: "queued", message: "等待选择可加工输入模型。" },
     { id: "engine", label: "CAM 引擎选择", status: "queued", message: "等待引擎探测。" },
     { id: "external-cam", label: "外部 CAM adapter", status: "queued", message: "等待判断是否调用 FreeCAD/BlenderCAM。" },
     { id: "toolpath", label: "刀路生成", status: "queued", message: "等待生成 NC。" },
@@ -628,6 +650,178 @@ function createRepairPlan(meshQuality, settings) {
       "BlenderCAM/Fabex 更适合 Meshy 艺术网格、佛头和浮雕类曲面。",
       "FreeCAD CAM 更适合规则实体和标准三轴加工，导入高面数艺术网格前建议先修复/降面。",
       "CAMotics 用于 NC 仿真，不替代刀路生成。"
+    ]
+  };
+}
+
+function createCamInputPlan(job, meshQuality, repairPlan, settings) {
+  const needsRepair = repairPlan.status === "repair-required";
+  const needsReview = repairPlan.status === "review-required";
+  const highPoly = meshQuality.triangleCount > 180000;
+  const veryHighPoly = meshQuality.triangleCount > 500000;
+  const thinOrOpen = meshQuality.boundaryEdges > 0 || meshQuality.nonManifoldEdges > 0;
+  const sourceModelPath = localModelUrlToPath(job.modelUrl);
+  const preferredExternalEngine = settings.camMode === "3axis" ? "freecad" : "blendercam";
+  const adapterModelPolicy = settings.camMode === "rotaryWrap"
+    ? "unwrap-rotary-surface-heightfield"
+    : settings.camMode === "3axis"
+      ? "top-projection-heightfield-or-solid-stock"
+      : "indexed-or-continuous-rotary-surface-sampling";
+  const preprocessing = [];
+
+  if (thinOrOpen) {
+    preprocessing.push({
+      id: "mesh-heal",
+      required: true,
+      output: "healed-model.stl",
+      tool: "Meshy repair / Blender mesh cleanup",
+      reason: "边界边或非流形边会让 CAM 接触计算出现缺口，正式上机前应先封孔和修法线。"
+    });
+  }
+  if (meshQuality.degenerateFaces > 0) {
+    preprocessing.push({
+      id: "remove-degenerate-faces",
+      required: needsRepair,
+      output: "cleaned-model.stl",
+      tool: "Blender cleanup / Meshy remesh",
+      reason: "退化面会制造局部尖刺或空采样点，建议在外部 CAM 前清理。"
+    });
+  }
+  if (highPoly) {
+    preprocessing.push({
+      id: "cam-decimation",
+      required: veryHighPoly,
+      output: "cam-decimated-model.stl",
+      tool: "Blender decimate / Meshy remesh",
+      reason: `当前 ${meshQuality.triangleCount} 面，外部 CAM 和仿真会明显变慢；建议生成一份保细节降面 CAM 输入模型。`
+    });
+  }
+  if (settings.camMode === "rotaryWrap") {
+    preprocessing.push({
+      id: "rotary-fixture-alignment",
+      required: false,
+      output: "axis-aligned-model.stl",
+      tool: "HeDiao3D axis analyzer",
+      reason: "旋转夹具模式需要确认模型长轴、夹持余量和 Y/A 轴换算，否则会出现拉长或顶部缺口。"
+    });
+  }
+
+  const status = needsRepair ? "blocked" : needsReview || highPoly ? "review" : "ready";
+  const selectedModelKind = status === "blocked"
+    ? "requires-repaired-model"
+    : highPoly
+      ? "source-model-with-decimation-recommended"
+      : "source-model";
+  const summary = status === "blocked"
+    ? "当前模型需先修复后再进入生产 CAM，小闭环仍可使用 fallback 试算。"
+    : status === "review"
+      ? "当前模型可试算刀路，但建议先按计划清理/降面后交给外部 CAM。"
+      : "当前模型可作为 CAM 输入进入小闭环。";
+
+  return {
+    status,
+    summary,
+    selectedModelKind,
+    sourceModelUrl: job.modelUrl,
+    sourceModelPath,
+    selectedModelUrl: status === "blocked" ? null : job.modelUrl,
+    selectedModelPath: status === "blocked" ? null : sourceModelPath,
+    preferredExternalEngine,
+    adapterModelPolicy,
+    camMode: settings.camMode,
+    rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
+    preprocessing,
+    gate: {
+      allowInternalFallback: true,
+      allowExternalCamTrial: status !== "blocked",
+      allowProductionNc: status === "ready",
+      reason: summary
+    }
+  };
+}
+
+function createEngineReadinessReport(engines, selected, settings) {
+  const byId = new Map(engines.map((engine) => [engine.id, engine]));
+  const required = settings.camMode === "3axis"
+    ? ["freecad", "camotics"]
+    : ["blendercam", "camotics"];
+  const optional = settings.camMode === "3axis"
+    ? ["blendercam", "opencamlib"]
+    : ["freecad", "opencamlib"];
+  const engineChecks = [
+    ...engines.map((engine) => ({
+      id: engine.id,
+      name: engine.name,
+      role: engine.role,
+      required: required.includes(engine.id),
+      available: engine.available,
+      adapterReady: engine.adapterReady,
+      command: engine.command,
+      version: engine.version,
+      status: engine.available && engine.adapterReady ? "ready" : engine.available ? "adapter-pending" : "missing",
+      notes: engine.notes
+    })),
+    {
+      id: "opencamlib",
+      name: "OpenCAMLib",
+      role: "底层刀具接触/drop-cutter 算法库",
+      required: false,
+      available: false,
+      adapterReady: false,
+      command: null,
+      version: null,
+      status: "planned",
+      notes: "当前还未接入 Python/OpenCAMLib wrapper；适合后续替换自研采样核心。"
+    }
+  ];
+  const missingRequired = engineChecks.filter((engine) => engine.required && !engine.available);
+  const adapterPending = engineChecks.filter((engine) => engine.required && engine.available && !engine.adapterReady);
+  const externalReady = required.some((id) => {
+    const engine = byId.get(id);
+    return engine?.available && engine?.adapterReady;
+  });
+
+  return {
+    selectedEngine: selected.id,
+    selectedEngineName: selected.name,
+    camMode: settings.camMode,
+    externalReady,
+    enableExternalCamAdapters,
+    summary: externalReady
+      ? "已有外部 CAM adapter 可执行。"
+      : missingRequired.length > 0
+        ? `缺少 ${missingRequired.map((engine) => engine.name).join("、")}，当前将使用内置 fallback。`
+        : adapterPending.length > 0
+          ? "外部软件已检测到，但 adapter 仍未启用生产输出。"
+          : "当前将使用内置 fallback。",
+    requiredEngines: required,
+    optionalEngines: optional,
+    engines: engineChecks,
+    installHints: [
+      {
+        engine: "BlenderCAM / FabexCNC",
+        when: "Meshy 生成的佛头、艺术曲面、核雕浮雕和旋转夹具展开优先接入",
+        windows: "安装 Blender，再安装 Fabex/BlenderCAM 插件；确保 blender 命令可被 PATH 找到。",
+        linux: "安装 blender 和 Fabex/BlenderCAM 插件；在服务环境中暴露 blender 命令。"
+      },
+      {
+        engine: "FreeCAD CAM",
+        when: "规则实体、三轴平面/2.5D、夹具或治具类零件优先接入",
+        windows: "安装 FreeCAD，并确保 FreeCADCmd 或 freecadcmd 可被 PATH 找到。",
+        linux: "安装 freecad/freecadcmd；服务器上建议使用 FreeCADCmd 无界面运行 adapter。"
+      },
+      {
+        engine: "CAMotics",
+        when: "所有生产 NC 下载前做材料去除仿真和空跑验证",
+        windows: "安装 CAMotics，并确保 camotics-cli 或 camotics 可被 PATH 找到。",
+        linux: "安装 camotics/camotics-cli；由 Orchestrator 生成项目文件后执行仿真。"
+      },
+      {
+        engine: "OpenCAMLib",
+        when: "需要更可靠的刀具接触、drop-cutter、水线和曲面清根算法",
+        windows: "优先在 Linux 服务端接入 Python wrapper，Windows 本地仅做前端调试。",
+        linux: "安装 opencamlib Python wrapper，封装为 adapter 服务供 Orchestrator 调用。"
+      }
     ]
   };
 }
@@ -863,12 +1057,13 @@ function detectCommandEngine({ id, name, commands, role, adapterReady }) {
   };
 }
 
-function selectCamEngine(engines, requestedEngine) {
+function selectCamEngine(engines, requestedEngine, settings = {}) {
   if (requestedEngine && requestedEngine !== "auto") {
     return engines.find((engine) => engine.id === requestedEngine) ?? engines.find((engine) => engine.id === "internal-mesh-cam");
   }
+  const preferredExternalId = settings.camMode === "3axis" ? "freecad" : "blendercam";
   return engines.find((engine) => engine.available && engine.adapterReady && engine.id !== "internal-mesh-cam")
-    ?? engines.find((engine) => engine.id === "freecad")
+    ?? engines.find((engine) => engine.id === preferredExternalId)
     ?? engines.find((engine) => engine.id === "internal-mesh-cam");
 }
 

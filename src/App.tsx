@@ -173,6 +173,34 @@ type V3OrchestratorJob = {
           reason: string;
         }>;
       };
+      camInputPlan?: {
+        status: string;
+        summary: string;
+        selectedModelKind: string;
+        preferredExternalEngine: string;
+        adapterModelPolicy: string;
+        gate: {
+          allowInternalFallback: boolean;
+          allowExternalCamTrial: boolean;
+          allowProductionNc: boolean;
+          reason: string;
+        };
+      };
+      engineReadiness?: {
+        selectedEngine: string;
+        selectedEngineName: string;
+        externalReady: boolean;
+        enableExternalCamAdapters: boolean;
+        summary: string;
+        engines: Array<{
+          id: string;
+          name: string;
+          required: boolean;
+          available: boolean;
+          adapterReady: boolean;
+          status: string;
+        }>;
+      };
       points: number;
       previewPoints: number;
       estimatedMinutes: number;
@@ -3255,6 +3283,20 @@ export function App() {
                 <small>
                   修复计划：{v3Job.result.summary.repairPlan.statusText}
                   {v3Job.result.summary.repairPlan.recommendedActions[0] ? `，优先 ${v3Job.result.summary.repairPlan.recommendedActions[0].label}` : ""}
+                </small>
+              )}
+              {v3Job?.result?.summary.camInputPlan && (
+                <small>
+                  CAM输入：{v3Job.result.summary.camInputPlan.summary}
+                  {" · "}
+                  {v3Job.result.summary.camInputPlan.gate.allowProductionNc ? "允许生产NC" : "仅建议试算/空跑"}
+                </small>
+              )}
+              {v3Job?.result?.summary.engineReadiness && (
+                <small>
+                  外部引擎：{v3Job.result.summary.engineReadiness.summary}
+                  {" · "}
+                  开关 {v3Job.result.summary.engineReadiness.enableExternalCamAdapters ? "已启用" : "未启用"}
                 </small>
               )}
               {v3Job?.result && (
