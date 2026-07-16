@@ -63,6 +63,18 @@ curl http://127.0.0.1:8787/api/orchestrator/diagnostics
 curl http://127.0.0.1:8787/api/orchestrator/engines
 ```
 
+如果服务器已经有测试模型 `/meshy-results/material01-meshy.glb`，可执行完整 V3 小闭环 smoke test：
+
+```bash
+npm run test:v3
+```
+
+如需指定模型：
+
+```bash
+V3_SMOKE_MODEL_URL=/imported-models/example.glb npm run test:v3
+```
+
 诊断结果建议：
 
 - `critical` 必须为 0。
@@ -197,6 +209,7 @@ server {
 - [ ] `npm run build` 成功。
 - [ ] `systemctl status hediao3d-api` 正常。
 - [ ] `/api/orchestrator/diagnostics` 无 critical。
+- [ ] `npm run test:v3` 成功，或已使用 `V3_SMOKE_MODEL_URL` 指定服务器上的测试模型。
 - [ ] 前端 V3 面板环境自检可见。
 - [ ] 可导入 GLB/STL。
 - [ ] 可运行 V3 小闭环。

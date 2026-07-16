@@ -8,7 +8,8 @@
     "dev": "vite --host 127.0.0.1",
     "dev:all": "start powershell -NoExit -Command npm run api && vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "test:v3": "node scripts/v3-smoke-test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
