@@ -2,6 +2,8 @@ import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
@@ -17,6 +19,7 @@ loadEnv();
 const port = Number(process.env.API_PORT ?? 8787);
 const meshyBase = process.env.MESHY_API_BASE ?? "https://api.meshy.ai";
 const maxToolpathPreviewPoints = Number(process.env.MAX_TOOLPATH_PREVIEW_POINTS ?? 650000);
+const orchestratorJobs = new Map();
 
 const server = createServer(async (req, res) => {
   try {
@@ -40,12 +43,25 @@ const server = createServer(async (req, res) => {
       return createMeshToolpath(req, res);
     }
 
+    if (req.method === "GET" && req.url === "/api/orchestrator/engines") {
+      return getOrchestratorEngines(res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/orchestrator/jobs") {
+      return createOrchestratorJob(req, res);
+    }
+
     if (req.method === "POST" && req.url === "/api/mesh/import") {
       return importLocalMesh(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/mesh/analyze") {
       return analyzeMesh(req, res);
+    }
+
+    const orchestratorJobMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#]+)$/);
+    if (req.method === "GET" && orchestratorJobMatch) {
+      return getOrchestratorJob(orchestratorJobMatch[1], res);
     }
 
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
@@ -223,9 +239,20 @@ async function createMeshToolpath(req, res) {
     return json(res, 400, { error: "本地 Mesh 模型地址或刀路参数无效" });
   }
 
-  const modelPath = join(process.cwd(), "public", modelUrl.replace(/^\//, ""));
+  try {
+    const toolpath = await generateToolpathFromLocalModel(modelUrl, settings);
+    return json(res, 200, toolpath);
+  } catch (error) {
+    return json(res, 500, {
+      error: error instanceof Error ? `Mesh CAM 解析失败：${error.message}` : "Mesh CAM 解析失败"
+    });
+  }
+}
+
+async function generateToolpathFromLocalModel(modelUrl, settings) {
+  const modelPath = localModelUrlToPath(modelUrl);
   if (!existsSync(modelPath)) {
-    return json(res, 404, { error: "找不到本地 Mesh 文件，请重新生成或重新导入模型" });
+    throw new Error("找不到本地 Mesh 文件，请重新生成或重新导入模型");
   }
 
   let geometry;
@@ -238,8 +265,7 @@ async function createMeshToolpath(req, res) {
     const toolpath = generateMeshSurfaceToolpath(mesh, settings);
     geometry.disposeBoundsTree();
     geometry.dispose();
-
-    return json(res, 200, toolpath);
+    return toolpath;
   } catch (error) {
     if (geometry) {
       try {
@@ -249,9 +275,7 @@ async function createMeshToolpath(req, res) {
         // Ignore cleanup errors so the original CAM error can be reported.
       }
     }
-    return json(res, 500, {
-      error: error instanceof Error ? `Mesh CAM 解析失败：${error.message}` : "Mesh CAM 解析失败"
-    });
+    throw error;
   }
 }
 
@@ -286,6 +310,172 @@ async function analyzeMesh(req, res) {
   }
 }
 
+async function getOrchestratorEngines(res) {
+  return json(res, 200, {
+    engines: detectCamEngines(),
+    architecture: {
+      frontend: "HeDiao3D workflow UI",
+      orchestrator: "local Node.js job coordinator",
+      cam: "FreeCAD CAM / BlenderCAM / OpenCAMLib adapter slots with internal Mesh CAM fallback",
+      simulation: "CAMotics adapter slot + internal rotary wrap preview",
+      postprocess: "HeDiao3D post processors for 4-axis, 3-axis and Y/X rotary-wrap NC"
+    }
+  });
+}
+
+async function createOrchestratorJob(req, res) {
+  const input = await readJson(req);
+  const settings = input.settings;
+  const modelUrl = String(input.stlUrl ?? input.modelUrl ?? "");
+  const requestedEngine = String(input.engine ?? "auto");
+
+  if (!settings || !isAllowedLocalModelUrl(modelUrl)) {
+    return json(res, 400, { error: "Orchestrator 需要本地 Mesh 模型地址和刀路参数" });
+  }
+
+  const job = {
+    id: randomUUID(),
+    status: "running",
+    requestedEngine,
+    selectedEngine: null,
+    modelUrl,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    logs: [],
+    result: null,
+    error: null
+  };
+  orchestratorJobs.set(job.id, job);
+
+  try {
+    appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
+    const engines = detectCamEngines();
+    const selected = selectCamEngine(engines, requestedEngine);
+    job.selectedEngine = selected.id;
+
+    if (selected.id !== "internal-mesh-cam" && selected.available && selected.adapterReady) {
+      appendOrchestratorLog(job, `${selected.name} 可用，准备进入外部 CAM adapter。`);
+      throw new Error(`${selected.name} adapter 尚未启用生产刀路输出；V3 小闭环当前先使用内置 Mesh CAM fallback。`);
+    }
+
+    appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
+    const toolpath = await generateToolpathFromLocalModel(modelUrl, settings);
+    job.status = "completed";
+    job.result = {
+      engine: "internal-mesh-cam",
+      fallbackFrom: selected.id,
+      externalAvailable: selected.available,
+      adapterReady: selected.adapterReady,
+      toolpath,
+      summary: {
+        points: toolpath.points.length,
+        previewPoints: toolpath.previewPoints?.length ?? 0,
+        estimatedMinutes: toolpath.estimatedMinutes,
+        postProcessorName: toolpath.postProcessorName,
+        warnings: toolpath.summary?.warnings ?? []
+      }
+    };
+    appendOrchestratorLog(job, `闭环完成：${toolpath.points.length} 点，后处理 ${toolpath.postProcessorName}。`);
+  } catch (error) {
+    if (job.result) {
+      job.status = "completed";
+    } else {
+      job.status = "failed";
+      job.error = error instanceof Error ? error.message : "Orchestrator 任务失败";
+      appendOrchestratorLog(job, job.error);
+    }
+  } finally {
+    job.updatedAt = new Date().toISOString();
+  }
+
+  return json(res, job.status === "failed" ? 500 : 200, job);
+}
+
+async function getOrchestratorJob(jobId, res) {
+  const job = orchestratorJobs.get(jobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  return json(res, 200, job);
+}
+
+function detectCamEngines() {
+  return [
+    detectCommandEngine({
+      id: "freecad",
+      name: "FreeCAD CAM",
+      commands: ["FreeCADCmd", "freecadcmd", "FreeCAD", "freecad"],
+      role: "专业 CAM job / Path Workbench adapter",
+      adapterReady: false
+    }),
+    detectCommandEngine({
+      id: "blendercam",
+      name: "BlenderCAM / FabexCNC",
+      commands: ["blender"],
+      role: "艺术曲面/浮雕 CAM adapter",
+      adapterReady: false
+    }),
+    detectCommandEngine({
+      id: "camotics",
+      name: "CAMotics",
+      commands: ["camotics-cli", "camotics"],
+      role: "材料去除仿真 adapter",
+      adapterReady: false
+    }),
+    {
+      id: "internal-mesh-cam",
+      name: "HeDiao3D internal Mesh CAM",
+      role: "V3 fallback and rotary-wrap postprocess baseline",
+      available: true,
+      adapterReady: true,
+      command: "node",
+      version: "built-in",
+      notes: "用于外部 CAM 未安装时的小闭环验证；正式 V3 将优先调用 FreeCAD/BlenderCAM/CAMotics。"
+    }
+  ];
+}
+
+function detectCommandEngine({ id, name, commands, role, adapterReady }) {
+  for (const command of commands) {
+    const probe = spawnSync(command, ["--version"], { encoding: "utf8", windowsHide: true, timeout: 2500 });
+    if (!probe.error || probe.status === 0) {
+      return {
+        id,
+        name,
+        role,
+        available: true,
+        adapterReady,
+        command,
+        version: `${probe.stdout ?? ""}${probe.stderr ?? ""}`.trim().split(/\r?\n/).slice(0, 2).join(" | ") || "detected",
+        notes: adapterReady ? "adapter ready" : "已检测到命令，但 V3 仍需补齐脚本化 adapter。"
+      };
+    }
+  }
+
+  return {
+    id,
+    name,
+    role,
+    available: false,
+    adapterReady,
+    command: null,
+    version: null,
+    notes: "本机未检测到该引擎命令；可在服务器安装后由 Orchestrator 调用。"
+  };
+}
+
+function selectCamEngine(engines, requestedEngine) {
+  if (requestedEngine && requestedEngine !== "auto") {
+    return engines.find((engine) => engine.id === requestedEngine) ?? engines.find((engine) => engine.id === "internal-mesh-cam");
+  }
+  return engines.find((engine) => engine.available && engine.adapterReady && engine.id !== "internal-mesh-cam")
+    ?? engines.find((engine) => engine.id === "freecad")
+    ?? engines.find((engine) => engine.id === "internal-mesh-cam");
+}
+
+function appendOrchestratorLog(job, message) {
+  job.logs.push({ time: new Date().toISOString(), message });
+  job.updatedAt = new Date().toISOString();
+}
+
 async function importLocalMesh(req, res) {
   const input = await readJson(req, 90_000_000);
   const filename = String(input.filename ?? "imported-model").replace(/[\\/:*?"<>|]/g, "_");
@@ -314,6 +504,10 @@ async function importLocalMesh(req, res) {
 function isAllowedLocalModelUrl(modelUrl) {
   if (modelUrl.includes("..")) return false;
   return modelUrl.startsWith("/meshy-results/") || modelUrl.startsWith("/imported-models/");
+}
+
+function localModelUrlToPath(modelUrl) {
+  return join(process.cwd(), "public", modelUrl.replace(/^\//, ""));
 }
 
 async function loadModelGeometry(modelPath) {

@@ -112,6 +112,43 @@ type TaskJobLog = {
   message: string;
 };
 
+type V3EngineStatus = {
+  id: string;
+  name: string;
+  role: string;
+  available: boolean;
+  adapterReady: boolean;
+  command: string | null;
+  version: string | null;
+  notes: string;
+};
+
+type V3OrchestratorJob = {
+  id: string;
+  status: "running" | "completed" | "failed";
+  requestedEngine: string;
+  selectedEngine: string | null;
+  modelUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  logs: Array<{ time: string; message: string }>;
+  result: null | {
+    engine: string;
+    fallbackFrom: string;
+    externalAvailable: boolean;
+    adapterReady: boolean;
+    toolpath: GeneratedToolpath;
+    summary: {
+      points: number;
+      previewPoints: number;
+      estimatedMinutes: number;
+      postProcessorName: string;
+      warnings: string[];
+    };
+  };
+  error: string | null;
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -489,6 +526,10 @@ export function App() {
   const [toolpathKind, setToolpathKind] = useState<ToolpathKind>("rough");
   const [meshQuality, setMeshQuality] = useState<MeshQualityReport | null>(null);
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
+  const [v3Engines, setV3Engines] = useState<V3EngineStatus[]>([]);
+  const [v3Job, setV3Job] = useState<V3OrchestratorJob | null>(null);
+  const [isV3JobRunning, setIsV3JobRunning] = useState(false);
+  const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
   const [selectedTaskJobId, setSelectedTaskJobId] = useState<string | null>(null);
@@ -686,6 +727,29 @@ export function App() {
       cancelled = true;
     };
   }, [aiMeshStlUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/orchestrator/engines")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "V3 Orchestrator 引擎探测失败");
+        return data.engines as V3EngineStatus[];
+      })
+      .then((engines) => {
+        if (cancelled) return;
+        setV3Engines(engines);
+        const externalCount = engines.filter((engine) => engine.id !== "internal-mesh-cam" && engine.available).length;
+        setV3Status(externalCount > 0 ? `已检测到 ${externalCount} 个外部引擎` : "未检测到 FreeCAD/Blender/CAMotics，将使用内置 CAM fallback 做小闭环");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setV3Status(error instanceof Error ? error.message : "V3 Orchestrator 引擎探测失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const updateSetting = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => {
     setSettings((current) => normalizeSettings({ ...current, [key]: value }));
@@ -1397,6 +1461,59 @@ export function App() {
 
   const handleGenerateToolpath = async () => {
     await generateToolpathForSettings(settings, false);
+  };
+
+  const handleRunV3OrchestratorLoop = async () => {
+    if (!aiMeshStlUrl) {
+      setV3Status("请先导入或生成一个 GLB/STL 模型，再运行 V3 小闭环。");
+      return;
+    }
+
+    setIsV3JobRunning(true);
+    setV3Status("正在提交 V3 Orchestrator 小闭环任务");
+    const jobId = startTaskJob({
+      category: "cam",
+      title: "V3 Orchestrator 小闭环",
+      detail: "正在探测外部 CAM 引擎，并用当前模型验证 Orchestrator -> CAM -> 后处理 -> 预览闭环。",
+      retryAction: "generate-toolpath"
+    });
+
+    try {
+      appendTaskJobLog(jobId, "提交 Orchestrator job。", 20);
+      const response = await fetch("/api/orchestrator/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelUrl: aiMeshStlUrl, settings, engine: "auto" })
+      });
+      const data = await response.json() as V3OrchestratorJob;
+      if (!response.ok) throw new Error(data.error ?? "V3 Orchestrator 小闭环失败");
+
+      setV3Job(data);
+      if (data.result?.toolpath) {
+        setToolpath(data.result.toolpath);
+        setToolpathKind("rough");
+        setWorkbenchView("model");
+        setIsSimulationMode(false);
+        appendTaskJobLog(jobId, `返回刀路：${data.result.summary.points} 点。`, 86);
+        finishTaskJob(jobId, "done", `完成：${data.result.engine}，${data.result.summary.points} 点。`);
+        setV3Status(`闭环完成：${data.result.engine}${data.result.fallbackFrom !== data.result.engine ? `（从 ${data.result.fallbackFrom} fallback）` : ""}`);
+      } else {
+        finishTaskJob(jobId, "error", data.error ?? "Orchestrator 未返回刀路");
+        setV3Status(data.error ?? "Orchestrator 未返回刀路");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "V3 Orchestrator 小闭环失败";
+      setV3Status(message);
+      finishTaskJob(jobId, "error", message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "V3 Orchestrator 小闭环失败",
+        detail: message
+      });
+    } finally {
+      setIsV3JobRunning(false);
+    }
   };
 
   const handleDownloadOperatorPackage = () => {
@@ -3034,6 +3151,47 @@ export function App() {
             ) : (
               <p className="panel-note">生成刀路后会按机床小时费、准备时间、材料和刀具损耗估算总占机时间与成本区间。</p>
             )}
+          </section>
+        )}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
+              <Cloud size={18} />
+              <h2>V3 Orchestrator 小闭环</h2>
+            </div>
+            <p className="panel-note">先验证 Orchestrator 调度层：探测 FreeCAD / BlenderCAM / CAMotics，未安装时使用内置 Mesh CAM fallback 完成模型到刀路闭环。</p>
+            <div className="v3-engine-grid">
+              {v3Engines.map((engine) => (
+                <div className={`v3-engine ${engine.available ? "ok" : ""} ${engine.adapterReady ? "ready" : ""}`} key={engine.id}>
+                  <div>
+                    <strong>{engine.name}</strong>
+                    <span>{engine.available ? engine.command ?? "available" : "未安装"}</span>
+                  </div>
+                  <small>{engine.notes}</small>
+                </div>
+              ))}
+            </div>
+            <div className="v3-status-card">
+              <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
+              <span>{v3Status}</span>
+              {v3Job?.result && (
+                <small>
+                  引擎 {v3Job.result.engine} / 点数 {v3Job.result.summary.points} / 预览点 {v3Job.result.summary.previewPoints} / {v3Job.result.summary.estimatedMinutes.toFixed(1)} min
+                </small>
+              )}
+            </div>
+            {v3Job && (
+              <div className="v3-log-list">
+                {v3Job.logs.slice(-4).map((log) => (
+                  <span key={`${log.time}-${log.message}`}>{log.message}</span>
+                ))}
+              </div>
+            )}
+            <button className="demo-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
+              <Cloud size={17} />
+              {isV3JobRunning ? "闭环运行中..." : "运行 V3 小闭环"}
+            </button>
           </section>
         )}
 

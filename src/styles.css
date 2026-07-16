@@ -1877,6 +1877,67 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.v3-engine-grid {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.v3-engine,
+.v3-status-card {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v3-engine.ok,
+.v3-status-card {
+  border-left-color: var(--teal);
+}
+
+.v3-engine.ready {
+  border-left-color: var(--green);
+}
+
+.v3-engine div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.v3-engine strong,
+.v3-status-card strong {
+  color: #f2f8f5;
+  font-size: 13px;
+}
+
+.v3-engine span,
+.v3-engine small,
+.v3-status-card span,
+.v3-status-card small,
+.v3-log-list span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.v3-log-list {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.v3-log-list span {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(25, 199, 180, 0.055);
+}
+
 .calibration-card {
   display: grid;
   gap: 7px;
