@@ -658,6 +658,8 @@ async function processOrchestratorJob(job, settings) {
     appendOrchestratorLog(job, `${selected.name} 可用且 ENABLE_EXTERNAL_CAM_ADAPTERS=true，尝试执行外部 CAM adapter。`);
     adapterReport = await runExternalCamAdapter(selected, job);
     pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-report.json"));
+    pushIfArtifactExists(job, "freecad-cam-plan.json");
+    pushIfArtifactExists(job, "freecad-run-template.py");
     const adapterStatus = adapterReport.status === "completed" ? "completed" : "review";
     updatePipelineStage(job, "external-cam", adapterStatus, adapterReport.error ?? `adapter 状态 ${adapterReport.status}`);
     appendOrchestratorLog(job, `${selected.name} adapter 返回 ${adapterReport.status}，${adapterReport.error ?? "无错误信息"}`);
@@ -1539,6 +1541,10 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
     warnings.push("尚未接入可执行的外部专业 CAM adapter。");
     requiredActions.push("安装并启用 BlenderCAM/FabexCNC 或 FreeCAD CAM adapter。");
   }
+  if (resultEngine === "internal-mesh-cam") {
+    warnings.push("本次刀路仍由内置 Mesh CAM fallback 生成，不是外部专业 CAM 输出。");
+    requiredActions.push("确认 adapter-report.json；外部 CAM 未返回 completed 前不要按生产级 CAM 精度评估。");
+  }
 
   if (simulationSummary.engine !== "camotics") {
     warnings.push("当前不是 CAMotics 真实材料去除仿真，仅为内置旋转包裹预览。");
@@ -2335,6 +2341,12 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "nc-static-analysis.json", "NC 静态分析", "report", true, "检查机床 NC、空跑 NC、仿真 NC 的轴字、Z范围、头部标记和不可上机标记。"),
     createDeliveryFile(job.id, "controller-dialect-report.json", "控制器方言兼容", "report", true, "检查 NC 是否只使用三轴控制器 + Y轴旋转夹具常见基础 G/M/轴字。")
   ];
+  if (existsSync(join(job.workDir, "freecad-cam-plan.json"))) {
+    files.push(createDeliveryFile(job.id, "freecad-cam-plan.json", "FreeCAD CAM 执行计划", "report", true, "外部 FreeCAD adapter 生成的可审计 CAM 配方和环境探测结果。"));
+  }
+  if (existsSync(join(job.workDir, "freecad-run-template.py"))) {
+    files.push(createDeliveryFile(job.id, "freecad-run-template.py", "FreeCAD 运行模板", "report", true, "外部 FreeCAD adapter 生成的 FreeCADCmd 脚本模板，用于服务器端二次验证。"));
+  }
 
   return {
     jobId: job.id,
@@ -2685,6 +2697,12 @@ function pushUnique(list, value) {
   if (!list.includes(value)) list.push(value);
 }
 
+function pushIfArtifactExists(job, filename) {
+  if (job?.workDir && existsSync(join(job.workDir, filename))) {
+    pushUnique(job.artifacts, publicArtifactUrl(job.id, filename));
+  }
+}
+
 function detectCamEngines() {
   return [
     detectCommandEngine({
@@ -2692,7 +2710,7 @@ function detectCamEngines() {
       name: "FreeCAD CAM",
       commands: ["FreeCADCmd", "freecadcmd", "FreeCAD", "freecad"],
       role: "专业 CAM job / Path Workbench adapter",
-      adapterReady: false
+      adapterReady: true
     }),
     detectCommandEngine({
       id: "blendercam",

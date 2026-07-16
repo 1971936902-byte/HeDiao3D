@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -93,12 +93,18 @@ try {
 
     const report = JSON.parse(readFileSync(resultPath, "utf8"));
     validateReport(adapter.id, report);
+    if (adapter.id === "freecad") {
+      assert(report.metrics.freecadPlan?.status === "generated", "freecad adapter did not generate a CAM plan");
+      assert(existsSync(report.metrics.freecadPlan.planPath), "freecad CAM plan file missing");
+      assert(existsSync(report.metrics.freecadPlan.runTemplatePath), "freecad run template file missing");
+    }
     results.push({
       id: adapter.id,
       status: report.status,
       protocolVersion: report.protocolVersion,
       warningCount: report.warnings?.length ?? 0,
-      recipeOperations: report.metrics.recipe.operationCount
+      recipeOperations: report.metrics.recipe.operationCount,
+      freecadPlan: report.metrics.freecadPlan?.status ?? null
     });
   }
 
