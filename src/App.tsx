@@ -531,6 +531,7 @@ export function App() {
     [settings, toolpath, safetyIssues, envelopeQuality]
   );
   const materialRemoval = useMemo(() => analyzeMaterialRemoval(settings, toolpath), [settings, toolpath]);
+  const meshCalibrationGuide = useMemo(() => (meshQuality ? createMeshCalibrationGuide(meshQuality, settings) : null), [meshQuality, settings]);
   const costEstimate = useMemo(
     () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
     [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
@@ -894,6 +895,34 @@ export function App() {
     setToolpath(null);
     setIsSimulationMode(false);
     setWorkbenchView("model");
+  };
+
+  const handleApplyMeshDimensions = () => {
+    if (!meshQuality) return;
+    const dims = meshQuality.dimensions;
+    const axis = meshQuality.detectedLongAxis;
+    const length = Math.max(1, dims[axis]);
+    const diameterAxes = (["x", "y", "z"] as const).filter((item) => item !== axis);
+    const diameter = Math.max(1, (dims[diameterAxes[0]] + dims[diameterAxes[1]]) / 2);
+    const nextSettings = roundBlankProfile({
+      ...settings,
+      lengthMm: Number(length.toFixed(1)),
+      diameterMm: Number(diameter.toFixed(1)),
+      blankLeftDiameterMm: Number((diameter * 0.92).toFixed(1)),
+      blankLeftMidDiameterMm: Number((diameter * 0.98).toFixed(1)),
+      blankCenterDiameterMm: Number(diameter.toFixed(1)),
+      blankRightMidDiameterMm: Number((diameter * 0.98).toFixed(1)),
+      blankRightDiameterMm: Number((diameter * 0.92).toFixed(1)),
+      meshLengthAxis: axis
+    });
+    applySettingsPreset(nextSettings);
+    saveSnapshot("Mesh 尺寸校准", nextSettings, `长轴 ${axis.toUpperCase()}，长度 ${length.toFixed(1)}mm，直径 ${diameter.toFixed(1)}mm。`);
+    recordTask({
+      category: "model",
+      status: "ok",
+      title: "应用 Mesh 姿态/比例校准",
+      detail: `已按体检尺寸同步核胚长度 ${length.toFixed(1)}mm、直径 ${diameter.toFixed(1)}mm，并采用 ${axis.toUpperCase()} 长轴。`
+    });
   };
 
   const applyBlankProfileTemplate = (template: "standard" | "tapered" | "offset") => {
@@ -2096,6 +2125,23 @@ export function App() {
                       <span key={recommendation}>{recommendation}</span>
                     ))}
                   </div>
+                  {meshCalibrationGuide && (
+                    <div className="mesh-calibration-guide">
+                      <div className={`mesh-calibration-verdict ${meshCalibrationGuide.status}`}>
+                        <strong>{meshCalibrationGuide.title}</strong>
+                        <span>{meshCalibrationGuide.detail}</span>
+                      </div>
+                      <div className="mesh-calibration-steps">
+                        {meshCalibrationGuide.steps.map((step) => (
+                          <div className={step.status} key={step.label}>
+                            <span>{step.label}</span>
+                            <strong>{step.value}</strong>
+                            <small>{step.detail}</small>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="calibration-controls">
                     <label className="select-row">
                       <span>CAM长轴</span>
@@ -2113,6 +2159,10 @@ export function App() {
                     <button className="demo-action" type="button" onClick={() => updateSetting("meshLengthAxis", meshQuality.detectedLongAxis)}>
                       <Layers3 size={17} />
                       采用体检长轴 {meshQuality.detectedLongAxis.toUpperCase()}
+                    </button>
+                    <button className="demo-action" type="button" onClick={handleApplyMeshDimensions}>
+                      <SlidersHorizontal size={17} />
+                      同步 Mesh 尺寸
                     </button>
                   </div>
                   <div className="repair-steps">
@@ -4319,6 +4369,47 @@ function formatProviderTraits(provider: (typeof ai3dProviders)[number]) {
   const fit = provider.productionFit === "ready" ? "生产" : provider.productionFit === "pilot" ? "试点" : "研究";
   const cost = provider.costLevel === "low" ? "低成本" : provider.costLevel === "medium" ? "中成本" : provider.costLevel === "high" ? "高成本" : "成本浮动";
   return `${speed} / ${privacy} / ${fit} / ${cost}`;
+}
+
+function createMeshCalibrationGuide(meshQuality: MeshQualityReport, settings: ModelSettings) {
+  const axis = meshQuality.detectedLongAxis;
+  const selectedAxis = settings.meshLengthAxis === "auto" ? axis : settings.meshLengthAxis;
+  const axisOk = selectedAxis === axis;
+  const dims = meshQuality.dimensions;
+  const meshLength = Math.max(0.001, dims[axis]);
+  const diameterAxes = (["x", "y", "z"] as const).filter((item) => item !== axis);
+  const meshDiameter = Math.max(0.001, (dims[diameterAxes[0]] + dims[diameterAxes[1]]) / 2);
+  const lengthDelta = Math.abs(settings.lengthMm - meshLength) / Math.max(1, settings.lengthMm);
+  const diameterDelta = Math.abs(settings.diameterMm - meshDiameter) / Math.max(1, settings.diameterMm);
+  const scaleOk = lengthDelta <= 0.18 && diameterDelta <= 0.22;
+  const reverseHint = settings.meshAxisReverse ? "当前已反向，生成刀路后重点看左右端是否互换。" : "当前未反向；若刀路左右颠倒，再打开反向采样。";
+  const status: "ok" | "warning" | "critical" = axisOk && scaleOk ? "ok" : axisOk || scaleOk ? "warning" : "critical";
+
+  return {
+    status,
+    title: status === "ok" ? "姿态比例基本匹配" : status === "warning" ? "建议复核姿态或比例" : "姿态比例需要校准",
+    detail: `体检长轴 ${axis.toUpperCase()}，Mesh 约 ${meshLength.toFixed(1)} x ${meshDiameter.toFixed(1)}mm；当前核胚 ${settings.lengthMm.toFixed(1)} x ${settings.diameterMm.toFixed(1)}mm。`,
+    steps: [
+      {
+        label: "旋转长轴",
+        value: axisOk ? "匹配" : "不一致",
+        status: axisOk ? "ok" : "critical",
+        detail: axisOk ? `CAM 将沿 ${selectedAxis.toUpperCase()} 轴展开。` : `建议采用体检长轴 ${axis.toUpperCase()}，避免刀路沿错误方向包覆。`
+      },
+      {
+        label: "比例尺寸",
+        value: scaleOk ? "接近" : "偏差",
+        status: scaleOk ? "ok" : "warning",
+        detail: `长度差 ${(lengthDelta * 100).toFixed(0)}%，直径差 ${(diameterDelta * 100).toFixed(0)}%。`
+      },
+      {
+        label: "采样方向",
+        value: settings.meshAxisReverse ? "已反向" : "未反向",
+        status: "ok",
+        detail: reverseHint
+      }
+    ]
+  };
 }
 
 async function imageToDataUri(url: string): Promise<string> {
