@@ -82,10 +82,25 @@ V3_SMOKE_MODEL_URL=/imported-models/example.glb npm run test:v3
 外部 adapter 上机前先跑计划产物验证：
 
 ```bash
+npm run test:v3:native-cam
 npm run test:v3:external-adapters
 ```
 
-这个命令使用安全默认命令运行 adapter，确认四条路线都能生成计划产物，并把结果保存在：
+`test:v3:native-cam` 会检查 Linux CAM 服务器上是否能由同一服务用户调用 FreeCAD、Blender/BlenderCAM、OpenCAMLib 和 CAMotics，并生成：
+
+```text
+public/native-cam-readiness/<timestamp>/
+  native-cam-readiness.json
+  native-cam-readiness.md
+```
+
+如果只是想生成报告但不阻断部署，可以直接运行上面的命令；如果希望 CI/上线脚本在未就绪时失败，可使用：
+
+```bash
+npm run test:v3:native-cam -- --strict
+```
+
+`test:v3:external-adapters` 使用安全默认命令运行 adapter，确认四条路线都能生成计划产物，并把结果保存在：
 
 ```text
 public/orchestrator-adapter-validation/<timestamp>/
@@ -96,6 +111,7 @@ public/orchestrator-adapter-validation/<timestamp>/
 当服务器已经安装 FreeCAD / Blender / OpenCAMLib / CAMotics 后，再运行 native 命令模式：
 
 ```bash
+npm run test:v3:native-cam
 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters
 ```
 
@@ -106,6 +122,7 @@ native 模式会尝试 `FreeCADCmd/freecadcmd`、`blender`、Python `opencamlib/
 - `critical` 必须为 0。
 - `warning` 可以存在，通常表示外部 CAM/CAMotics 尚未安装。
 - `public/orchestrator-jobs`、`public/imported-models`、`public/meshy-results` 必须可写。
+- `native-cam-readiness.json` 中 `readyCount/requiredCount` 必须逐步提升；生产部署目标是目标 CAM 模式所需项全部 ready。
 
 ## 4. 外部 CAM 安装路线
 
@@ -172,6 +189,7 @@ HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 然后重启 API。启用后仍应先用小模型 dry-run，查看：
 
 - `engine-diagnostics.json`
+- `native-cam-readiness.json`
 - `adapter-preflight.json`
 - `adapter-report.json`
 - `freecad-cam-plan.json`（FreeCAD adapter 执行时生成）

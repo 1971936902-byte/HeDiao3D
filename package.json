@@ -13,6 +13,7 @@
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
     "test:v3:adapter-api": "node scripts/v3-adapter-validation-api-test.mjs",
     "test:v3:external-adapters": "node scripts/v3-external-adapter-validation.mjs",
+    "test:v3:native-cam": "node scripts/v3-linux-native-cam-check.mjs",
     "test:v3:postprocess": "node scripts/v3-postprocess-regression-test.mjs"
   },
   "dependencies": {
