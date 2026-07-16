@@ -1925,6 +1925,47 @@ button:disabled {
   line-height: 1.35;
 }
 
+.v3-pipeline {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.v3-pipeline-stage {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.v3-pipeline-stage small {
+  grid-column: 1 / -1;
+}
+
+.v3-pipeline-stage.running {
+  border-left-color: var(--amber);
+}
+
+.v3-pipeline-stage.completed {
+  border-left-color: var(--green);
+}
+
+.v3-pipeline-stage.review {
+  border-left-color: #f59e0b;
+}
+
+.v3-pipeline-stage.skipped {
+  border-left-color: #7a8c96;
+}
+
+.v3-pipeline-stage.failed {
+  border-left-color: var(--rose);
+}
+
 .v3-log-list {
   display: grid;
   gap: 5px;

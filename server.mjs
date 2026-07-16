@@ -23,6 +23,7 @@ const orchestratorJobs = new Map();
 const orchestratorQueue = [];
 let orchestratorRunning = 0;
 const maxOrchestratorConcurrency = Math.max(1, Number(process.env.ORCHESTRATOR_CONCURRENCY ?? 1));
+const enableExternalCamAdapters = String(process.env.ENABLE_EXTERNAL_CAM_ADAPTERS ?? "").toLowerCase() === "true";
 
 const server = createServer(async (req, res) => {
   try {
@@ -345,6 +346,7 @@ async function createOrchestratorJob(req, res) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     workDir: null,
+    pipeline: [],
     artifacts: [],
     logs: [],
     result: null,
@@ -400,22 +402,50 @@ function runNextOrchestratorJob() {
 
 async function processOrchestratorJob(job, settings) {
   job.status = "running";
+  job.pipeline = createInitialOrchestratorPipeline();
+  updatePipelineStage(job, "queue", "completed", "任务已从队列取出。");
   appendOrchestratorLog(job, "任务已进入运行队列。");
+  await writeJobManifest(job);
+
+  updatePipelineStage(job, "mesh-quality", "running", "正在读取 Mesh 并执行可加工性体检。");
+  appendOrchestratorLog(job, "执行 Mesh 质量检测和修复计划生成。");
+  const meshQuality = await createMeshQualityArtifact(job);
+  const repairPlan = createRepairPlan(meshQuality, settings);
+  await writeFile(join(job.workDir, "repair-plan.json"), JSON.stringify(repairPlan, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "mesh-quality.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-plan.json"));
+  updatePipelineStage(job, "mesh-quality", meshQuality.verdict === "ready" ? "completed" : "review", `Mesh 评分 ${meshQuality.score.toFixed(1)}，结论 ${meshQuality.verdict}。`);
+  appendOrchestratorLog(job, `Mesh 体检完成：评分 ${meshQuality.score.toFixed(1)}，${repairPlan.statusText}`);
   await writeJobManifest(job);
 
   appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
   const engines = detectCamEngines();
   const selected = selectCamEngine(engines, job.requestedEngine);
   job.selectedEngine = selected.id;
+  updatePipelineStage(job, "engine", "completed", `选择 ${selected.name}。`);
 
-  if (selected.id !== "internal-mesh-cam" && selected.available && selected.adapterReady) {
-    appendOrchestratorLog(job, `${selected.name} 可用，准备进入外部 CAM adapter。`);
-    throw new Error(`${selected.name} adapter 尚未启用生产刀路输出；V3 小闭环当前先使用内置 Mesh CAM fallback。`);
+  let adapterReport = null;
+  if (selected.id !== "internal-mesh-cam" && selected.available && enableExternalCamAdapters) {
+    updatePipelineStage(job, "external-cam", "running", `${selected.name} adapter 已开启，正在尝试执行。`);
+    appendOrchestratorLog(job, `${selected.name} 可用且 ENABLE_EXTERNAL_CAM_ADAPTERS=true，尝试执行外部 CAM adapter。`);
+    adapterReport = await runExternalCamAdapter(selected, job);
+    pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-report.json"));
+    const adapterStatus = adapterReport.status === "completed" ? "completed" : "review";
+    updatePipelineStage(job, "external-cam", adapterStatus, adapterReport.error ?? `adapter 状态 ${adapterReport.status}`);
+    appendOrchestratorLog(job, `${selected.name} adapter 返回 ${adapterReport.status}，${adapterReport.error ?? "无错误信息"}`);
+  } else if (selected.id !== "internal-mesh-cam" && selected.available) {
+    updatePipelineStage(job, "external-cam", "skipped", "外部 CAM 命令已检测到，但环境开关未启用。");
+    appendOrchestratorLog(job, `${selected.name} 已检测到，但 ENABLE_EXTERNAL_CAM_ADAPTERS 未开启，先不执行外部 adapter。`);
+  } else {
+    updatePipelineStage(job, "external-cam", "skipped", "未检测到可执行外部 CAM，进入内置 fallback。");
   }
 
+  updatePipelineStage(job, "toolpath", "running", "正在生成内置 Mesh CAM fallback 刀路。");
   appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
   const toolpath = await generateToolpathFromLocalModel(job.modelUrl, settings);
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+  updatePipelineStage(job, "toolpath", "completed", `生成 ${toolpath.points.length} 个刀路点。`);
+  updatePipelineStage(job, "simulation", "running", "正在生成自研旋转包裹预览和离料空跑。");
   const simulationSummary = createSimulationSummary(toolpath, settings, selected);
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
   await writeFile(join(job.workDir, "toolpath-summary.json"), JSON.stringify({
@@ -429,6 +459,8 @@ async function processOrchestratorJob(job, settings) {
   }, null, 2), "utf8");
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
+  updatePipelineStage(job, "simulation", "completed", `仿真贴合 ${simulationSummary.metrics.fitRate.toFixed(1)}%，未命中 ${simulationSummary.metrics.missCount} 点。`);
+  updatePipelineStage(job, "postprocess", "completed", `已输出 ${toolpath.postProcessorName} 和 air-run.nc。`);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
@@ -439,8 +471,11 @@ async function processOrchestratorJob(job, settings) {
     fallbackFrom: selected.id,
     externalAvailable: selected.available,
     adapterReady: selected.adapterReady,
+    adapterReport,
     toolpath,
     summary: {
+      meshQuality,
+      repairPlan,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
       estimatedMinutes: toolpath.estimatedMinutes,
@@ -465,6 +500,209 @@ function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine)
       report: join(workDir, "adapter-report.json"),
       preview: join(workDir, "preview.json")
     }
+  };
+}
+
+function createInitialOrchestratorPipeline() {
+  return [
+    { id: "queue", label: "队列调度", status: "queued", message: "等待 Orchestrator 调度。" },
+    { id: "mesh-quality", label: "Mesh 体检/修复计划", status: "queued", message: "等待模型质量分析。" },
+    { id: "engine", label: "CAM 引擎选择", status: "queued", message: "等待引擎探测。" },
+    { id: "external-cam", label: "外部 CAM adapter", status: "queued", message: "等待判断是否调用 FreeCAD/BlenderCAM。" },
+    { id: "toolpath", label: "刀路生成", status: "queued", message: "等待生成 NC。" },
+    { id: "simulation", label: "仿真/空跑", status: "queued", message: "等待材料去除预览和空跑文件。" },
+    { id: "postprocess", label: "后处理交付", status: "queued", message: "等待生成机床文件。" }
+  ];
+}
+
+function updatePipelineStage(job, id, status, message) {
+  const stage = job.pipeline?.find((item) => item.id === id);
+  if (!stage) return;
+  stage.status = status;
+  stage.message = message;
+  stage.updatedAt = new Date().toISOString();
+}
+
+async function createMeshQualityArtifact(job) {
+  let geometry;
+  try {
+    geometry = await loadModelGeometry(localModelUrlToPath(job.modelUrl));
+    if (geometry.index) {
+      const nonIndexed = geometry.toNonIndexed();
+      geometry.dispose();
+      geometry = nonIndexed;
+    }
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    geometry.computeVertexNormals();
+    const meshQuality = buildMeshQualityReport(geometry);
+    await writeFile(join(job.workDir, "mesh-quality.json"), JSON.stringify(meshQuality, null, 2), "utf8");
+    return meshQuality;
+  } finally {
+    geometry?.dispose?.();
+  }
+}
+
+function createRepairPlan(meshQuality, settings) {
+  const criticalChecks = meshQuality.checks.filter((check) => check.status === "critical");
+  const warningChecks = meshQuality.checks.filter((check) => check.status === "warning");
+  const actions = [];
+  const camModeLabel = settings.camMode === "rotaryWrap" ? "三轴控制器 + 旋转夹具展开刀路" : settings.camMode === "3axis" ? "三轴平面/浮雕刀路" : "四轴联动刀路";
+
+  if (meshQuality.boundaryEdges > 0) {
+    actions.push({
+      id: "close-boundaries",
+      priority: "high",
+      label: "封孔/补面",
+      engine: "Meshy repair / Blender Mesh cleanup / FreeCAD mesh heal",
+      reason: `检测到 ${meshQuality.boundaryEdges} 条边界边，开口区域会导致刀路采样未命中或顶部/两端缺损。`
+    });
+  }
+  if (meshQuality.nonManifoldEdges > 0) {
+    actions.push({
+      id: "fix-non-manifold",
+      priority: "high",
+      label: "修复非流形边",
+      engine: "Blender cleanup / OpenCAMLib 前置过滤",
+      reason: `检测到 ${meshQuality.nonManifoldEdges} 条非流形边，外部 CAM 可能无法稳定计算刀具接触。`
+    });
+  }
+  if (meshQuality.degenerateFaces > 0) {
+    actions.push({
+      id: "remove-degenerate-faces",
+      priority: meshQuality.degenerateFaces > meshQuality.triangleCount * 0.01 ? "high" : "medium",
+      label: "删除退化面并重算法线",
+      engine: "Blender remesh / Meshy remesh",
+      reason: `检测到 ${meshQuality.degenerateFaces} 个退化面，容易造成局部尖刺、空洞或仿真误差。`
+    });
+  }
+  if (meshQuality.triangleCount > 180000) {
+    actions.push({
+      id: "decimate",
+      priority: "medium",
+      label: "降面到可加工密度",
+      engine: "Blender decimate / Meshy remesh",
+      reason: `当前 ${meshQuality.triangleCount} 面，建议先降面再进入 CAM 队列，减少计算时间和浏览器预览压力。`
+    });
+  }
+  if (meshQuality.triangleCount < 1500) {
+    actions.push({
+      id: "increase-detail",
+      priority: "medium",
+      label: "提高模型细节",
+      engine: "Meshy 重新生成 / 高精度 remesh",
+      reason: "面数偏低，佛头五官、发髻和衣纹可能无法生成稳定精加工刀路。"
+    });
+  }
+  const riskyRegions = meshQuality.regions.filter((region) => region.status !== "ok");
+  if (riskyRegions.length > 0) {
+    actions.push({
+      id: "inspect-risk-regions",
+      priority: "medium",
+      label: "重点检查风险区域",
+      engine: "HeDiao3D QA preview",
+      reason: `风险集中在 ${riskyRegions.map((region) => region.label).join("、")}，建议在生成刀路前放大检查。`
+    });
+  }
+  if (actions.length === 0) {
+    actions.push({
+      id: "direct-cam",
+      priority: "low",
+      label: "可直接进入 CAM",
+      engine: "BlenderCAM / FreeCAD CAM / internal fallback",
+      reason: "基础几何质量通过，进入刀路生成后仍需查看包络贴合和空跑仿真。"
+    });
+  }
+
+  const status = criticalChecks.length > 0 ? "repair-required" : warningChecks.length > 0 ? "review-required" : "ready";
+  return {
+    status,
+    statusText: status === "repair-required" ? "建议先修复 Mesh 再上正式 CAM" : status === "review-required" ? "可试算刀路，但建议人工复核风险点" : "Mesh 可进入 CAM 小闭环",
+    camMode: settings.camMode,
+    camModeLabel,
+    qualityScore: meshQuality.score,
+    criticalChecks: criticalChecks.map((check) => check.label),
+    warningChecks: warningChecks.map((check) => check.label),
+    recommendedActions: actions,
+    externalCamNotes: [
+      "BlenderCAM/Fabex 更适合 Meshy 艺术网格、佛头和浮雕类曲面。",
+      "FreeCAD CAM 更适合规则实体和标准三轴加工，导入高面数艺术网格前建议先修复/降面。",
+      "CAMotics 用于 NC 仿真，不替代刀路生成。"
+    ]
+  };
+}
+
+async function runExternalCamAdapter(selectedEngine, job) {
+  const jobPath = join(job.workDir, "job.json");
+  const resultPath = join(job.workDir, "adapter-report.json");
+  const adapterScriptMap = {
+    freecad: join(process.cwd(), "adapters", "freecad", "freecad_cam_job.py"),
+    blendercam: join(process.cwd(), "adapters", "blendercam", "blendercam_job.py"),
+    camotics: join(process.cwd(), "adapters", "camotics", "camotics_job.js")
+  };
+  const scriptPath = adapterScriptMap[selectedEngine.id];
+  if (!scriptPath || !existsSync(scriptPath)) {
+    const report = {
+      status: "adapter_missing",
+      engine: selectedEngine.id,
+      error: "未找到 adapter 脚本",
+      warnings: [],
+      metrics: {}
+    };
+    await writeFile(resultPath, JSON.stringify(report, null, 2), "utf8");
+    return report;
+  }
+
+  const args = createAdapterCommandArgs(selectedEngine, scriptPath, jobPath, resultPath);
+  const startedAt = Date.now();
+  const run = spawnSync(args.command, args.args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: Number(process.env.EXTERNAL_CAM_ADAPTER_TIMEOUT_MS ?? 120000)
+  });
+  let report = null;
+  if (existsSync(resultPath)) {
+    try {
+      report = JSON.parse(readFileSync(resultPath, "utf8"));
+    } catch {
+      report = null;
+    }
+  }
+  if (!report) {
+    report = {
+      status: run.status === 0 ? "completed_without_report" : "failed",
+      engine: selectedEngine.id,
+      error: run.error?.message ?? (run.status === 0 ? null : `adapter exit ${run.status}`),
+      warnings: [],
+      metrics: {}
+    };
+  }
+  report.command = `${args.command} ${args.args.join(" ")}`;
+  report.exitCode = run.status;
+  report.durationMs = Date.now() - startedAt;
+  report.stdout = String(run.stdout ?? "").slice(-6000);
+  report.stderr = String(run.stderr ?? "").slice(-6000);
+  await writeFile(resultPath, JSON.stringify(report, null, 2), "utf8");
+  return report;
+}
+
+function createAdapterCommandArgs(selectedEngine, scriptPath, jobPath, resultPath) {
+  if (selectedEngine.id === "freecad") {
+    return {
+      command: selectedEngine.command,
+      args: [scriptPath, jobPath, resultPath]
+    };
+  }
+  if (selectedEngine.id === "blendercam") {
+    return {
+      command: selectedEngine.command,
+      args: ["--background", "--python", scriptPath, "--", jobPath, resultPath]
+    };
+  }
+  return {
+    command: process.execPath,
+    args: [scriptPath, jobPath, resultPath]
   };
 }
 

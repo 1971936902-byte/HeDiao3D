@@ -132,6 +132,13 @@ type V3OrchestratorJob = {
   createdAt: string;
   updatedAt: string;
   workDir: string | null;
+  pipeline?: Array<{
+    id: string;
+    label: string;
+    status: "queued" | "running" | "completed" | "review" | "skipped" | "failed";
+    message: string;
+    updatedAt?: string;
+  }>;
   artifacts: string[];
   logs: Array<{ time: string; message: string }>;
   result: null | {
@@ -139,8 +146,33 @@ type V3OrchestratorJob = {
     fallbackFrom: string;
     externalAvailable: boolean;
     adapterReady: boolean;
+    adapterReport?: {
+      status: string;
+      engine: string;
+      error?: string | null;
+      durationMs?: number;
+    } | null;
     toolpath: GeneratedToolpath;
     summary: {
+      meshQuality?: {
+        score: number;
+        verdict: string;
+        triangleCount: number;
+        boundaryEdges: number;
+        nonManifoldEdges: number;
+        degenerateFaces: number;
+      };
+      repairPlan?: {
+        status: string;
+        statusText: string;
+        recommendedActions: Array<{
+          id: string;
+          priority: string;
+          label: string;
+          engine: string;
+          reason: string;
+        }>;
+      };
       points: number;
       previewPoints: number;
       estimatedMinutes: number;
@@ -3197,9 +3229,43 @@ export function App() {
             <div className="v3-status-card">
               <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
               <span>{v3Status}</span>
+              {v3Job?.pipeline && v3Job.pipeline.length > 0 && (
+                <div className="v3-pipeline">
+                  {v3Job.pipeline.map((stage) => (
+                    <div className={`v3-pipeline-stage ${stage.status}`} key={stage.id}>
+                      <strong>{stage.label}</strong>
+                      <span>{stage.status}</span>
+                      <small>{stage.message}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {v3Job?.result?.summary.meshQuality && (
+                <small>
+                  Mesh 评分 {v3Job.result.summary.meshQuality.score.toFixed(1)} / {v3Job.result.summary.meshQuality.verdict}
+                  {" · "}
+                  面 {v3Job.result.summary.meshQuality.triangleCount}
+                  {" · "}
+                  边界 {v3Job.result.summary.meshQuality.boundaryEdges}
+                  {" · "}
+                  非流形 {v3Job.result.summary.meshQuality.nonManifoldEdges}
+                </small>
+              )}
+              {v3Job?.result?.summary.repairPlan && (
+                <small>
+                  修复计划：{v3Job.result.summary.repairPlan.statusText}
+                  {v3Job.result.summary.repairPlan.recommendedActions[0] ? `，优先 ${v3Job.result.summary.repairPlan.recommendedActions[0].label}` : ""}
+                </small>
+              )}
               {v3Job?.result && (
                 <small>
                   引擎 {v3Job.result.engine} / 点数 {v3Job.result.summary.points} / 预览点 {v3Job.result.summary.previewPoints} / {v3Job.result.summary.estimatedMinutes.toFixed(1)} min
+                </small>
+              )}
+              {v3Job?.result?.adapterReport && (
+                <small>
+                  外部 adapter {v3Job.result.adapterReport.engine} / {v3Job.result.adapterReport.status}
+                  {v3Job.result.adapterReport.error ? ` / ${v3Job.result.adapterReport.error}` : ""}
                 </small>
               )}
               {v3Job?.result?.summary.simulation && (
