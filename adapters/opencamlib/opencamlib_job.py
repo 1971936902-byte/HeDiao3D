@@ -202,6 +202,9 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
             "status": "adapter_not_ready",
             "error": "OpenCAMLib kernel plan generated, but experimental output is disabled. Set HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true after validating the server recipe.",
         }
+    imported = try_import_neutral_toolpath(job)
+    if imported is not None:
+        return imported
     if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT")):
         neutral_path = write_synthetic_neutral_toolpath(job, plan)
         return {
@@ -219,6 +222,73 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
         "status": "adapter_not_ready",
         "error": "OpenCAMLib module detected, but cutter-contact output is still locked pending server validation.",
     }
+
+
+def try_import_neutral_toolpath(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    source = os.environ.get("HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON")
+    if not source:
+        return None
+    source_path = Path(source)
+    if not source_path.exists():
+        return {
+            "status": "adapter_not_ready",
+            "error": f"HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON does not exist: {source}",
+        }
+    try:
+        neutral = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "status": "adapter_not_ready",
+            "error": f"HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON is not valid JSON: {source}",
+        }
+    validation_errors = validate_imported_neutral_toolpath(neutral)
+    if validation_errors:
+        return {
+            "status": "adapter_not_ready",
+            "error": "Imported neutral toolpath failed validation: " + "; ".join(validation_errors),
+        }
+
+    outputs = job.get("outputs") or {}
+    work_dir = Path(str(job.get("workDir") or Path(outputs.get("report", ".")).parent))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    neutral_path = Path(str(outputs.get("neutralToolpath") or work_dir / "neutral-toolpath.json"))
+    neutral_path.parent.mkdir(parents=True, exist_ok=True)
+    neutral = {
+        **neutral,
+        "jobId": neutral.get("jobId") or job.get("jobId"),
+        "engine": ENGINE,
+        "synthetic": False,
+        "importedFrom": str(source_path),
+    }
+    neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "status": "completed",
+        "error": None,
+        "neutralToolpathPath": str(neutral_path),
+        "synthetic": False,
+        "imported": True,
+        "sourcePath": str(source_path),
+    }
+
+
+def validate_imported_neutral_toolpath(neutral: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(neutral, dict):
+        return ["neutral toolpath is not an object"]
+    if neutral.get("schema") != "hediao3d.neutral-toolpath.v1":
+        errors.append("schema must be hediao3d.neutral-toolpath.v1")
+    if neutral.get("synthetic") is True:
+        errors.append("synthetic neutral toolpath cannot be imported as real OpenCAMLib output")
+    points = neutral.get("points")
+    if not isinstance(points, list) or not points:
+        errors.append("points must be a non-empty array")
+    else:
+        first = points[0]
+        if not isinstance(first, dict):
+            errors.append("points must contain objects")
+        elif "x" not in first or "z" not in first:
+            errors.append("points must include at least x and z values")
+    return errors
 
 
 def write_synthetic_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any]) -> str:
@@ -350,6 +420,7 @@ def main() -> int:
                     "status": "generated" if attempt.get("neutralToolpathPath") else "not_generated",
                     "path": attempt.get("neutralToolpathPath"),
                     "synthetic": bool(attempt.get("synthetic")),
+                    "imported": bool(attempt.get("imported")),
                     "schema": "hediao3d.neutral-toolpath.v1" if attempt.get("neutralToolpathPath") else None,
                 },
             },

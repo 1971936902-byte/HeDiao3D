@@ -85,6 +85,7 @@ V3_SMOKE_MODEL_URL=/imported-models/example.glb npm run test:v3
 npm run test:v3:native-cam
 npm run test:v3:external-adapters
 npm run test:v3:neutral-adapter
+npm run test:v3:neutral-import
 npm run test:v3:camotics-import
 ```
 
@@ -147,6 +148,8 @@ native 模式会尝试 `FreeCADCmd/freecadcmd`、`blender`、Python `opencamlib/
 - `simulation-summary.json`、`machining-package-index.json` 和 NC 静态分析能识别这条链路。
 
 该测试是“协议/交接链路”验证，不代表真实 CAM 精度，也不会解锁生产 NC。
+
+`test:v3:neutral-import` 会验证 OpenCAMLib adapter 可以导入一份 `hediao3d.neutral-toolpath.v1` 的非 synthetic 中立刀路，并交给 HeDiao3D 后处理。它用于把真实 OpenCAMLib/包装脚本输出接入统一刀路链路。
 
 `test:v3:camotics-import` 会验证 CAMotics adapter 可以导入一份 `hediao3d.camotics-result.v1` 的非 synthetic 结果，并把它回填为 `camotics-result.json`。这用于部署服务器上把真实 CAMotics/包装脚本的材料去除结果接入 HeDiao3D；它验证的是结果接入契约，不会替代真实 CAMotics 仿真本身。
 
@@ -217,6 +220,8 @@ ENABLE_EXTERNAL_CAM_ADAPTERS=true
 HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=false
 HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=false
 HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=false
+# 仅当外部 OpenCAMLib/包装脚本已生成真实中立刀路时设置：
+# HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON=/absolute/path/to/neutral-toolpath.json
 HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 # 仅当外部 CAMotics/包装脚本已生成真实结果时设置：
 # HEDIAO3D_CAMOTICS_RESULT_JSON=/absolute/path/to/real-camotics-result.json
@@ -243,6 +248,8 @@ HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 `HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT` 必须继续保持 `false`，直到 `blendercam-cam-plan.json`、`blendercam-run-template.py`、BlenderCAM/FabexCNC add-on API 和小模型试算在目标服务器上人工验收通过。
 
 `HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT` 必须继续保持 `false`，直到 `opencamlib-kernel-plan.json`、`opencamlib-run-template.py`、中性 cutter-contact 输出和 HeDiao3D 后处理交接在目标服务器上人工验收通过。
+
+如果部署服务器使用外部 OpenCAMLib 包装脚本生成中立刀路，可以让包装脚本输出 `hediao3d.neutral-toolpath.v1`，并在运行 adapter 时设置 `HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON=/absolute/path/to/neutral-toolpath.json`。该文件必须是非 synthetic，包含非空 `points`，并至少具备 `x` 与 `z` 字段；HeDiao3D 会继续负责 Y/A 旋转夹具后处理和安全门禁。
 
 `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN` 也必须继续保持 `false`，直到 `camotics-simulation-plan.json`、`camotics-project-template.json`、截图/材料去除结果导出在目标服务器上人工验收通过。
 
