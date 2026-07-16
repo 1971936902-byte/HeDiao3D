@@ -125,7 +125,7 @@ type V3EngineStatus = {
 
 type V3OrchestratorJob = {
   id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "canceled";
   requestedEngine: string;
   selectedEngine: string | null;
   modelUrl: string;
@@ -141,6 +141,7 @@ type V3OrchestratorJob = {
   }>;
   artifacts: string[];
   logs: Array<{ time: string; message: string }>;
+  cancelRequested?: boolean;
   result: null | {
     engine: string;
     fallbackFrom: string;
@@ -275,7 +276,7 @@ type V3OrchestratorJob = {
 
 type V3JobSummary = {
   id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "canceled";
   requestedEngine: string;
   selectedEngine: string | null;
   modelUrl: string;
@@ -927,6 +928,23 @@ export function App() {
       setV3Status(`已恢复任务 ${job.status}：${job.logs[job.logs.length - 1]?.message ?? job.id}`);
     } catch (error) {
       setV3Status(error instanceof Error ? error.message : "V3 任务恢复失败");
+    }
+  };
+
+  const handleCancelV3Job = async () => {
+    if (!v3Job || (v3Job.status !== "queued" && v3Job.status !== "running")) return;
+    try {
+      setV3Status(`正在取消 V3 任务 ${v3Job.id.slice(0, 8)}`);
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/cancel`, {
+        method: "POST"
+      });
+      const job = await response.json() as V3OrchestratorJob;
+      if (!response.ok) throw new Error(job.error ?? "V3 任务取消失败");
+      setV3Job(job);
+      await refreshV3JobHistory();
+      setV3Status(job.status === "canceled" ? "任务已取消" : "已请求取消，等待当前阶段停止");
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "V3 任务取消失败");
     }
   };
 
@@ -1675,7 +1693,11 @@ export function App() {
         setV3Status(`任务 ${job.status}：${job.logs[job.logs.length - 1]?.message ?? "处理中"}`);
       });
 
-      if (finalJob.result?.toolpath) {
+      if (finalJob.status === "canceled") {
+        await refreshV3JobHistory();
+        finishTaskJob(jobId, "canceled", "V3 Orchestrator 任务已取消。");
+        setV3Status("V3 Orchestrator 任务已取消");
+      } else if (finalJob.result?.toolpath) {
         setToolpath(finalJob.result.toolpath);
         setToolpathKind("rough");
         setWorkbenchView("model");
@@ -3532,6 +3554,12 @@ export function App() {
               <Cloud size={17} />
               {isV3JobRunning ? "闭环运行中..." : "运行 V3 小闭环"}
             </button>
+            {v3Job && (v3Job.status === "queued" || v3Job.status === "running") && (
+              <button className="demo-action package-action" onClick={handleCancelV3Job} type="button">
+                <Trash2 size={17} />
+                取消 V3 任务
+              </button>
+            )}
             <button className="demo-action package-action" onClick={handleDownloadV3Package} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button">
               <Download size={17} />
               {isV3PackageDownloading ? "正在打包..." : "下载 V3 加工包"}
@@ -5703,6 +5731,7 @@ async function pollV3OrchestratorJob(jobId: string, onUpdate: (job: V3Orchestrat
     }
     onUpdate(job);
     if (job.status === "completed") return job;
+    if (job.status === "canceled") return job;
     if (job.status === "failed") throw new Error(job.error ?? "V3 Orchestrator 任务失败");
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
   }

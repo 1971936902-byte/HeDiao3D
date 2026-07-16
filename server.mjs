@@ -67,12 +67,17 @@ const server = createServer(async (req, res) => {
       return analyzeMesh(req, res);
     }
 
-    const orchestratorJobMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#]+)$/);
+    const orchestratorJobMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorJobMatch) {
       return getOrchestratorJob(orchestratorJobMatch[1], res);
     }
 
-    const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#]+)\/artifacts\/([^/?#]+)$/);
+    const orchestratorCancelMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/cancel$/);
+    if (req.method === "POST" && orchestratorCancelMatch) {
+      return cancelOrchestratorJob(orchestratorCancelMatch[1], res);
+    }
+
+    const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/artifacts\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorArtifactMatch) {
       return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
     }
@@ -358,6 +363,7 @@ async function createOrchestratorJob(req, res) {
     pipeline: [],
     artifacts: [],
     logs: [],
+    cancelRequested: false,
     result: null,
     error: null
   };
@@ -389,6 +395,29 @@ function enqueueOrchestratorJob(job, settings) {
   runNextOrchestratorJob();
 }
 
+async function cancelOrchestratorJob(jobId, res) {
+  const job = orchestratorJobs.get(jobId) ?? readJobManifest(jobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  if (job.status === "completed" || job.status === "failed" || job.status === "canceled") {
+    return json(res, 200, job);
+  }
+
+  const queuedIndex = orchestratorQueue.findIndex((item) => item.job.id === jobId);
+  if (queuedIndex >= 0) {
+    orchestratorQueue.splice(queuedIndex, 1);
+    job.status = "canceled";
+    job.cancelRequested = true;
+    appendOrchestratorLog(job, "任务已在队列中取消，未进入 CAM 计算。");
+    await writeJobManifest(job);
+    return json(res, 200, job);
+  }
+
+  job.cancelRequested = true;
+  appendOrchestratorLog(job, "已请求取消；当前阶段完成检查点后会停止后续交付。");
+  await writeJobManifest(job);
+  return json(res, 202, job);
+}
+
 function runNextOrchestratorJob() {
   while (orchestratorRunning < maxOrchestratorConcurrency && orchestratorQueue.length > 0) {
     const item = orchestratorQueue.shift();
@@ -396,9 +425,15 @@ function runNextOrchestratorJob() {
     orchestratorRunning += 1;
     processOrchestratorJob(item.job, item.settings)
       .catch((error) => {
-        item.job.status = "failed";
-        item.job.error = error instanceof Error ? error.message : "Orchestrator 任务失败";
-        appendOrchestratorLog(item.job, item.job.error);
+        if (error?.code === "ORCHESTRATOR_CANCELED") {
+          item.job.status = "canceled";
+          item.job.error = null;
+          appendOrchestratorLog(item.job, "任务已取消。");
+        } else {
+          item.job.status = "failed";
+          item.job.error = error instanceof Error ? error.message : "Orchestrator 任务失败";
+          appendOrchestratorLog(item.job, item.job.error);
+        }
       })
       .finally(async () => {
         item.job.updatedAt = new Date().toISOString();
@@ -415,6 +450,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "queue", "completed", "任务已从队列取出。");
   appendOrchestratorLog(job, "任务已进入运行队列。");
   await writeJobManifest(job);
+  checkOrchestratorCancellation(job);
 
   updatePipelineStage(job, "mesh-quality", "running", "正在读取 Mesh 并执行可加工性体检。");
   appendOrchestratorLog(job, "执行 Mesh 质量检测和修复计划生成。");
@@ -430,6 +466,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-execution.json"));
   appendOrchestratorLog(job, `Mesh 修复执行状态：${repairExecution.summary}`);
   await writeJobManifest(job);
+  checkOrchestratorCancellation(job);
 
   updatePipelineStage(job, "cam-input", "running", "正在准备外部 CAM 输入模型和预处理策略。");
   const camInputPlan = createCamInputPlan(job, meshQuality, repairPlan, settings);
@@ -439,6 +476,7 @@ async function processOrchestratorJob(job, settings) {
   appendOrchestratorLog(job, `CAM 输入准备完成：${camInputPlan.summary}`);
   await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution });
   await writeJobManifest(job);
+  checkOrchestratorCancellation(job);
 
   appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
   const engines = detectCamEngines();
@@ -453,6 +491,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "adapter-preflight.json"), JSON.stringify(adapterPreflight, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-preflight.json"));
   appendOrchestratorLog(job, `Adapter 预检完成：${adapterPreflight.summary}`);
+  checkOrchestratorCancellation(job);
 
   let adapterReport = null;
   if (selected.id !== "internal-mesh-cam" && selected.available && enableExternalCamAdapters) {
@@ -473,6 +512,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "toolpath", "running", "正在生成内置 Mesh CAM fallback 刀路。");
   appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
   const toolpath = await generateToolpathFromLocalModel(job.modelUrl, settings);
+  checkOrchestratorCancellation(job);
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
   updatePipelineStage(job, "toolpath", "completed", `生成 ${toolpath.points.length} 个刀路点。`);
   updatePipelineStage(job, "simulation", "running", "正在生成自研旋转包裹预览和离料空跑。");
@@ -580,6 +620,13 @@ function updatePipelineStage(job, id, status, message) {
   stage.status = status;
   stage.message = message;
   stage.updatedAt = new Date().toISOString();
+}
+
+function checkOrchestratorCancellation(job) {
+  if (!job.cancelRequested) return;
+  const error = new Error("Orchestrator 任务已取消");
+  error.code = "ORCHESTRATOR_CANCELED";
+  throw error;
 }
 
 async function createMeshQualityArtifact(job) {
