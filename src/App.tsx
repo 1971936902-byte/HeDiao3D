@@ -173,6 +173,13 @@ type V3OrchestratorJob = {
           reason: string;
         }>;
       };
+      repairExecution?: {
+        status: string;
+        summary: string;
+        autoRepairEnabled: boolean;
+        repairRequired: boolean;
+        repairSuggested: boolean;
+      };
       camInputPlan?: {
         status: string;
         summary: string;
@@ -3377,6 +3384,13 @@ export function App() {
                   {v3Job.result.summary.repairPlan.recommendedActions[0] ? `，优先 ${v3Job.result.summary.repairPlan.recommendedActions[0].label}` : ""}
                 </small>
               )}
+              {v3Job?.result?.summary.repairExecution && (
+                <small>
+                  修复执行：{v3Job.result.summary.repairExecution.status}
+                  {" · "}
+                  {v3Job.result.summary.repairExecution.summary}
+                </small>
+              )}
               {v3Job?.result?.summary.camInputPlan && (
                 <small>
                   CAM输入：{v3Job.result.summary.camInputPlan.summary}
@@ -5535,6 +5549,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const manifest = summary?.deliveryManifest;
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
+  const repairExecution = summary?.repairExecution;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -5552,6 +5567,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "",
     "## 外部CAM状态",
     "",
+    `Mesh修复执行: ${repairExecution?.summary ?? "未生成"}`,
     `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
     `Adapter预检: ${preflight?.summary ?? "未生成"}`,
     "",

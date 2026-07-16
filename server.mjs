@@ -421,6 +421,10 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-plan.json"));
   updatePipelineStage(job, "mesh-quality", meshQuality.verdict === "ready" ? "completed" : "review", `Mesh 评分 ${meshQuality.score.toFixed(1)}，结论 ${meshQuality.verdict}。`);
   appendOrchestratorLog(job, `Mesh 体检完成：评分 ${meshQuality.score.toFixed(1)}，${repairPlan.statusText}`);
+  const repairExecution = createRepairExecutionReport(job, meshQuality, repairPlan, settings);
+  await writeFile(join(job.workDir, "repair-execution.json"), JSON.stringify(repairExecution, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-execution.json"));
+  appendOrchestratorLog(job, `Mesh 修复执行状态：${repairExecution.summary}`);
   await writeJobManifest(job);
 
   updatePipelineStage(job, "cam-input", "running", "正在准备外部 CAM 输入模型和预处理策略。");
@@ -429,7 +433,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-input-plan.json"));
   updatePipelineStage(job, "cam-input", camInputPlan.status === "blocked" ? "review" : "completed", camInputPlan.summary);
   appendOrchestratorLog(job, `CAM 输入准备完成：${camInputPlan.summary}`);
-  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan });
+  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution });
   await writeJobManifest(job);
 
   appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
@@ -440,7 +444,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "engine-diagnostics.json"), JSON.stringify(engineReadiness, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "engine-diagnostics.json"));
   updatePipelineStage(job, "engine", engineReadiness.externalReady ? "completed" : "review", `选择 ${selected.name}；${engineReadiness.summary}`);
-  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, engineReadiness });
+  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution, engineReadiness });
   const adapterPreflight = createAdapterPreflightReport(selected, job, settings, camInputPlan, engineReadiness);
   await writeFile(join(job.workDir, "adapter-preflight.json"), JSON.stringify(adapterPreflight, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-preflight.json"));
@@ -514,6 +518,7 @@ async function processOrchestratorJob(job, settings) {
     summary: {
       meshQuality,
       repairPlan,
+      repairExecution,
       camInputPlan,
       engineReadiness,
       adapterPreflight,
@@ -680,6 +685,108 @@ function createRepairPlan(meshQuality, settings) {
       "CAMotics 用于 NC 仿真，不替代刀路生成。"
     ]
   };
+}
+
+function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
+  const autoRepairEnabled = String(process.env.ORCHESTRATOR_AUTO_MESH_REPAIR ?? "").toLowerCase() === "true";
+  const hasMeshyKey = Boolean(process.env.MESHY_API_KEY);
+  const required = repairPlan.status === "repair-required";
+  const suggested = repairPlan.status === "review-required" || repairPlan.recommendedActions.some((action) => action.id !== "direct-cam" && action.priority !== "low");
+  const sourceModelPath = localModelUrlToPath(job.modelUrl);
+  const recommendedActions = repairPlan.recommendedActions.map((action) => ({
+    id: action.id,
+    label: action.label,
+    priority: action.priority,
+    engine: action.engine,
+    reason: action.reason,
+    executableByOrchestrator: ["close-boundaries", "fix-non-manifold", "remove-degenerate-faces", "cam-decimation"].includes(action.id)
+  }));
+
+  let status = "not-needed";
+  let summary = "Mesh 质量满足 V3 小闭环要求，未执行自动修复。";
+  if (required && !autoRepairEnabled) {
+    status = "manual-required";
+    summary = "Mesh 需要修复，但自动修复未启用；请先执行 Meshy 修复/重网格后再生产上机。";
+  } else if (required && autoRepairEnabled && !hasMeshyKey) {
+    status = "blocked-missing-key";
+    summary = "Mesh 需要修复且自动修复已开启，但缺少 MESHY_API_KEY。";
+  } else if (required && autoRepairEnabled && hasMeshyKey) {
+    status = "ready-for-auto-repair";
+    summary = "自动修复条件已满足；当前 V3 记录执行计划，下一步可接入后台 Meshy repair polling。";
+  } else if (suggested) {
+    status = "recommended";
+    summary = "Mesh 可试算刀路，但建议在正式 CAM 前执行清理/降面/重网格。";
+  }
+
+  return {
+    status,
+    summary,
+    autoRepairEnabled,
+    hasMeshyKey,
+    repairRequired: required,
+    repairSuggested: suggested,
+    sourceModelUrl: job.modelUrl,
+    sourceModelPath,
+    selectedModelUrl: job.modelUrl,
+    selectedModelPath: sourceModelPath,
+    outputCandidates: {
+      repairedStl: join(job.workDir, "repaired-model.stl"),
+      remeshedGlb: join(job.workDir, "remeshed-model.glb"),
+      camDecimatedStl: join(job.workDir, "cam-decimated-model.stl")
+    },
+    settings: {
+      camMode: settings.camMode,
+      rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
+      toolDiameter: settings.toolDiameter,
+      stepoverMm: settings.stepoverMm,
+      stepoverDeg: settings.stepoverDeg
+    },
+    quality: {
+      score: meshQuality.score,
+      verdict: meshQuality.verdict,
+      triangleCount: meshQuality.triangleCount,
+      boundaryEdges: meshQuality.boundaryEdges,
+      nonManifoldEdges: meshQuality.nonManifoldEdges,
+      degenerateFaces: meshQuality.degenerateFaces
+    },
+    recommendedActions,
+    nextSteps: createRepairExecutionNextSteps(status)
+  };
+}
+
+function createRepairExecutionNextSteps(status) {
+  if (status === "manual-required") {
+    return [
+      "在前端执行 Mesh 修复或重网格，重新导入修复后的 STL/GLB。",
+      "确认 mesh-quality.json 中 boundary/non-manifold/degenerate 风险下降。",
+      "重新运行 V3 小闭环，再下载试雕/空跑包。"
+    ];
+  }
+  if (status === "blocked-missing-key") {
+    return [
+      "配置 MESHY_API_KEY。",
+      "确认 ORCHESTRATOR_AUTO_MESH_REPAIR=true。",
+      "重新运行 V3 job，让后端进入自动修复队列。"
+    ];
+  }
+  if (status === "ready-for-auto-repair") {
+    return [
+      "接入后台 Meshy repair polling。",
+      "将 repaired-model.stl 写入 job 工作目录。",
+      "让 cam-input-plan.json 选择修复后的模型作为外部 CAM 输入。"
+    ];
+  }
+  if (status === "recommended") {
+    return [
+      "当前可继续试算刀路。",
+      "正式上机前建议先清理退化面、降面或重网格。",
+      "如包络未贴合，优先修复模型再调 CAM 参数。"
+    ];
+  }
+  return [
+    "继续进入 CAM 输入准备。",
+    "仍需查看生产门禁和空跑仿真结果。"
+  ];
 }
 
 function createCamInputPlan(job, meshQuality, repairPlan, settings) {
@@ -1030,6 +1137,7 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "job-status.json", "任务状态和日志", "report", true, "用于追踪队列、日志和结果摘要。"),
     createDeliveryFile(job.id, "mesh-quality.json", "Mesh 质量报告", "report", true, "上机前必须查看模型风险。"),
     createDeliveryFile(job.id, "repair-plan.json", "Mesh 修复计划", "report", true, "说明是否需要封孔、降面、重网格。"),
+    createDeliveryFile(job.id, "repair-execution.json", "Mesh 修复执行记录", "report", true, "说明是否自动修复、为何跳过以及下一步修复动作。"),
     createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
