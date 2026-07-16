@@ -78,6 +78,18 @@ Run the adapter protocol test before enabling external CAM execution:
 npm run test:v3:adapters
 ```
 
+Run the deployment validation suite on a CAM server when you want to keep each
+adapter's generated plan artifacts and inspect native-tool readiness:
+
+```bash
+npm run test:v3:external-adapters
+V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters
+```
+
+The validation suite writes `v3-external-adapter-validation.json` and
+`v3-external-adapter-validation.md` under
+`public/orchestrator-adapter-validation/<timestamp>/`.
+
 The test runs each adapter script with a synthetic job and verifies:
 
 - `protocolVersion` is `hediao3d.adapter.v1`.

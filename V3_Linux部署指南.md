@@ -79,6 +79,28 @@ npm run test:v3
 V3_SMOKE_MODEL_URL=/imported-models/example.glb npm run test:v3
 ```
 
+外部 adapter 上机前先跑计划产物验证：
+
+```bash
+npm run test:v3:external-adapters
+```
+
+这个命令使用安全默认命令运行 adapter，确认四条路线都能生成计划产物，并把结果保存在：
+
+```text
+public/orchestrator-adapter-validation/<timestamp>/
+  v3-external-adapter-validation.json
+  v3-external-adapter-validation.md
+```
+
+当服务器已经安装 FreeCAD / Blender / OpenCAMLib / CAMotics 后，再运行 native 命令模式：
+
+```bash
+V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters
+```
+
+native 模式会尝试 `FreeCADCmd/freecadcmd`、`blender`、Python `opencamlib/ocl`、以及 CAMotics 检测。它仍不会自动放开生产输出；实验输出必须继续受下面的 `HEDIAO3D_*` 开关保护。
+
 诊断结果建议：
 
 - `critical` 必须为 0。
