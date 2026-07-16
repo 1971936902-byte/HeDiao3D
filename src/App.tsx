@@ -754,6 +754,27 @@ type V3ReadinessSummary = {
     acceptanceAtReport: string | null;
     artifactPath: string;
   } | null;
+  externalHandoff: {
+    id: string;
+    status: string;
+    updatedAt: string;
+    selectedEngine: string | null;
+    resultEngine: string | null;
+    source: string | null;
+    simulationEngine: string | null;
+    simulationStatus: string | null;
+    syntheticSimulation: boolean;
+    points: number | null;
+    postProcessorName: string | null;
+    packageLevel: string | null;
+    artifacts?: {
+      adapterReport?: string;
+      neutralToolpath?: string;
+      camoticsResult?: string;
+      simulationSummary?: string;
+      toolpath?: string;
+    };
+  } | null;
   latestJob: V3JobSummary | null;
   apiArtifacts?: {
     json?: string;
@@ -4047,6 +4068,11 @@ export function App() {
                   {v3Readiness.adapterValidation && (
                     <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
                   )}
+                  <small className={v3Readiness.externalHandoff ? v3Readiness.externalHandoff.status === "completed" && v3Readiness.externalHandoff.simulationStatus === "completed" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                    Handoff：{v3Readiness.externalHandoff ? `${v3Readiness.externalHandoff.resultEngine ?? "-"} → ${v3Readiness.externalHandoff.simulationEngine ?? "-"}` : "未验证"}
+                    {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
+                    {v3Readiness.externalHandoff?.points ? ` · ${v3Readiness.externalHandoff.points}点` : ""}
+                  </small>
                   <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}

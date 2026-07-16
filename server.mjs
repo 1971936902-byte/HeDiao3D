@@ -506,9 +506,10 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const nativeCam = readLatestFromDirectory("public/native-cam-readiness", "native-cam-readiness.json", createNativeCamReadinessPublicSummary);
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
   const runbookResult = readLatestV3RunbookResultSummary();
+  const externalHandoff = getLatestExternalHandoffJobSummary();
   const latestJob = getLatestOrchestratorJobSummary();
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, latestJob });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, latestJob });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, latestJob });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, latestJob });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -522,12 +523,13 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     nativeCam,
     adapterValidation,
     runbookResult,
+    externalHandoff,
     latestJob,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, latestJob }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, latestJob }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -571,6 +573,14 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     nextActions.push("查看 runbook result JSON，优先修复失败步骤后重新运行验收脚本。");
   }
 
+  if (!externalHandoff) {
+    warnings.push("尚未运行外部 CAM neutral handoff + CAMotics 回填小闭环。");
+    nextActions.push("运行 npm run test:v3:neutral-adapter，验证外部 neutral 刀位点、Y轴旋转后处理和 CAMotics 仿真回填。");
+  } else if (externalHandoff.status !== "completed" || externalHandoff.simulationStatus !== "completed") {
+    warnings.push(`外部 handoff 验证未完成：${externalHandoff.status} / ${externalHandoff.simulationStatus ?? "unknown"}。`);
+    nextActions.push("查看最近 handoff job 的 adapter-report.json、camotics-adapter-report.json 和 simulation-summary.json。");
+  }
+
   if (!latestJob) {
     warnings.push("尚未运行 V3 Orchestrator 小闭环任务。");
     nextActions.push("导入/生成一个 GLB/STL 后运行 V3 小闭环，生成加工包与生产门禁报告。");
@@ -598,7 +608,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, latestJob }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, latestJob }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -649,6 +659,22 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 4,
+      id: "external-neutral-handoff",
+      title: "外部 CAM Handoff 小闭环",
+      status: !externalHandoff
+        ? "pending"
+        : externalHandoff.status === "completed" && externalHandoff.simulationStatus === "completed"
+          ? "done"
+          : "blocked",
+      command: "npm run test:v3:neutral-adapter",
+      evidence: ["adapter-report.json", "neutral-toolpath.json", "camotics-result.json", "simulation-summary.json", "toolpath.nc"],
+      detail: externalHandoff
+        ? `${externalHandoff.id} / ${externalHandoff.resultEngine} / ${externalHandoff.source} / ${externalHandoff.simulationEngine} / ${externalHandoff.points ?? 0} 点`
+        : "尚未验证外部 neutral 刀位点、Y轴旋转后处理和 CAMotics 回填链路。",
+      blocksProduction: !externalHandoff || externalHandoff.status !== "completed" || externalHandoff.simulationStatus !== "completed"
+    }),
+    createAcceptanceStep({
+      order: 5,
       id: "v3-small-loop",
       title: "V3 小闭环加工包",
       status: !latestJob
@@ -666,7 +692,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestJob || latestJob.status !== "completed" || !latestJob.allowTrialNc || !latestJob.allowAirRun
     }),
     createAcceptanceStep({
-      order: 5,
+      order: 6,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -714,6 +740,68 @@ function getLatestOrchestratorJobSummary() {
     .map(createOrchestratorJobSummary)
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   return summaries[0] ?? null;
+}
+
+function getLatestExternalHandoffJobSummary() {
+  const jobs = [];
+  for (const job of orchestratorJobs.values()) jobs.push(job);
+  const root = join(process.cwd(), "public", "orchestrator-jobs");
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = readJobManifest(entry.name);
+      if (manifest) jobs.push(manifest);
+    }
+  }
+  const handoffs = jobs
+    .map(createExternalHandoffJobSummary)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime());
+  return handoffs[0] ?? null;
+}
+
+function createExternalHandoffJobSummary(job) {
+  const summary = job?.result?.summary;
+  const simulation = summary?.simulation;
+  const camoticsAdapter = simulation?.camoticsAdapter;
+  const toolpathSummaryPath = job?.workDir ? join(job.workDir, "toolpath-summary.json") : null;
+  const toolpathSummary = toolpathSummaryPath && existsSync(toolpathSummaryPath)
+    ? readJsonFileSafe(toolpathSummaryPath)
+    : null;
+  const source = toolpathSummary?.source ?? (job?.result?.engine && job.result.engine !== "internal-mesh-cam" ? "external-adapter" : null);
+  const resultEngine = job?.result?.engine ?? toolpathSummary?.engine ?? null;
+  const hasExternalToolpath = source === "external-adapter" && resultEngine && resultEngine !== "internal-mesh-cam";
+  const hasCamoticsResult = Boolean(camoticsAdapter?.status === "completed" || (job?.workDir && existsSync(join(job.workDir, "camotics-result.json"))));
+  if (!hasExternalToolpath || !hasCamoticsResult) return null;
+  return {
+    id: job.id,
+    status: job.status,
+    updatedAt: job.updatedAt ?? job.createdAt,
+    selectedEngine: job.selectedEngine,
+    resultEngine,
+    source,
+    simulationEngine: simulation?.engine ?? null,
+    simulationStatus: camoticsAdapter?.status ?? (hasCamoticsResult ? "completed" : null),
+    syntheticSimulation: Boolean(camoticsAdapter?.synthetic),
+    points: summary?.points ?? toolpathSummary?.points ?? null,
+    postProcessorName: summary?.postProcessorName ?? toolpathSummary?.postProcessorName ?? null,
+    packageLevel: summary?.productionGate?.level ?? summary?.deliveryManifest?.packageLevel ?? null,
+    artifacts: {
+      adapterReport: publicArtifactUrl(job.id, "adapter-report.json"),
+      neutralToolpath: publicArtifactUrl(job.id, "neutral-toolpath.json"),
+      camoticsResult: publicArtifactUrl(job.id, "camotics-result.json"),
+      simulationSummary: publicArtifactUrl(job.id, "simulation-summary.json"),
+      toolpath: publicArtifactUrl(job.id, "toolpath.nc")
+    }
+  };
+}
+
+function readJsonFileSafe(filePath) {
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function readLatestFromDirectory(relativeRoot, filename, mapper) {
@@ -812,6 +900,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
       readyForProduction: report.adapterValidation.overall.readyForProduction
     } : null,
     runbookResult: report.runbookResult ?? null,
+    externalHandoff: report.externalHandoff ?? null,
     latestJob: report.latestJob,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
@@ -893,6 +982,7 @@ function createV3ReadinessMarkdown(report) {
     `- Native CAM: ${report.nativeCam ? `${report.nativeCam.summary.readyCount}/${report.nativeCam.summary.requiredCount} ${report.nativeCam.summary.level}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / ${report.runbookResult.stepCount} steps` : "missing"}`,
+    `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
     ""
   ];

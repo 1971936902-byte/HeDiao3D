@@ -84,6 +84,7 @@ V3_SMOKE_MODEL_URL=/imported-models/example.glb npm run test:v3
 ```bash
 npm run test:v3:native-cam
 npm run test:v3:external-adapters
+npm run test:v3:neutral-adapter
 ```
 
 `test:v3:native-cam` 会检查 Linux CAM 服务器上是否能由同一服务用户调用 FreeCAD、Blender/BlenderCAM、OpenCAMLib 和 CAMotics，并生成：
@@ -137,12 +138,22 @@ V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters
 
 native 模式会尝试 `FreeCADCmd/freecadcmd`、`blender`、Python `opencamlib/ocl`、以及 CAMotics 检测。它仍不会自动放开生产输出；实验输出必须继续受下面的 `HEDIAO3D_*` 开关保护。
 
+`test:v3:neutral-adapter` 会启动一个独立本地 API 端口，强制运行 OpenCAMLib synthetic neutral handoff 与 CAMotics synthetic result 回填，用来验证：
+
+- 外部 CAM adapter 可以输出 `neutral-toolpath.json`。
+- HeDiao3D 可以把 neutral 刀位点后处理为 `Y轴旋转夹具` 的 `toolpath.nc`。
+- CAMotics 仿真 adapter 可以回填 `camotics-result.json`。
+- `simulation-summary.json`、`machining-package-index.json` 和 NC 静态分析能识别这条链路。
+
+该测试是“协议/交接链路”验证，不代表真实 CAM 精度，也不会解锁生产 NC。
+
 诊断结果建议：
 
 - `critical` 必须为 0。
 - `warning` 可以存在，通常表示外部 CAM/CAMotics 尚未安装。
 - `public/orchestrator-jobs`、`public/imported-models`、`public/meshy-results` 必须可写。
 - `native-cam-readiness.json` 中 `readyCount/requiredCount` 必须逐步提升；生产部署目标是目标 CAM 模式所需项全部 ready。
+- V3 总门禁中的 `externalHandoff` 应至少出现一次完成记录；它证明外部 neutral 刀位点、Y轴旋转后处理和 CAMotics 回填链路已跑通。
 
 ## 4. 外部 CAM 安装路线
 
