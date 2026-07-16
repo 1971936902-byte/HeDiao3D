@@ -190,10 +190,13 @@ type ProjectArchive = {
 
 type CaptureGuideSlot = {
   label: string;
+  angleDeg: number;
   imageName: string | null;
   score: number | null;
   status: "ready" | "usable" | "retake" | "missing";
   hint: string;
+  issue: string;
+  retakeAction: string;
 };
 
 type CaptureGuideReport = {
@@ -1885,8 +1888,19 @@ export function App() {
                   <span>{slot.label}</span>
                   <strong>{slot.imageName ?? "待补拍"}</strong>
                   <small>{slot.hint}</small>
+                  <em>{slot.retakeAction}</em>
                 </button>
               ))}
+            </div>
+            <div className="capture-retake-plan">
+              {captureGuide.slots
+                .filter((slot) => slot.status !== "ready")
+                .map((slot) => (
+                  <div className={slot.status} key={`${slot.label}-plan`}>
+                    <strong>{slot.label} {slot.angleDeg}°：{slot.issue}</strong>
+                    <span>{slot.retakeAction}</span>
+                  </div>
+                ))}
             </div>
             <div className="quality-notes">
               {captureGuide.suggestions.map((suggestion) => (
@@ -4134,27 +4148,39 @@ function depthMapToPreviewUrl(depthMap: DepthMap): string {
 }
 
 function createCaptureGuideReport(images: CarvingImage[]): CaptureGuideReport {
-  const angleLabels = ["正面", "左侧", "右侧", "背面"];
-  const slots = angleLabels.map((label, index): CaptureGuideSlot => {
+  const angleSlots = [
+    { label: "正面", angleDeg: 0 },
+    { label: "左侧", angleDeg: 90 },
+    { label: "右侧", angleDeg: 270 },
+    { label: "背面", angleDeg: 180 }
+  ];
+  const slots = angleSlots.map(({ label, angleDeg }, index): CaptureGuideSlot => {
     const image = images[index];
     if (!image) {
       return {
         label,
+        angleDeg,
         imageName: null,
         score: null,
         status: "missing",
-        hint: "缺少该角度"
+        hint: "缺少该角度",
+        issue: "角度缺失",
+        retakeAction: `补拍 ${angleDeg}° ${label}，核胚长轴保持水平，主体占画面约 60%。`
       };
     }
 
     const score = image.quality?.score ?? 60;
     const status: CaptureGuideSlot["status"] = score >= 82 ? "ready" : score >= 64 ? "usable" : "retake";
+    const advice = createCaptureSlotAdvice(image, label, angleDeg);
     return {
       label,
+      angleDeg,
       imageName: image.name,
       score,
       status,
-      hint: status === "ready" ? `${score.toFixed(1)} 分，可用` : status === "usable" ? `${score.toFixed(1)} 分，建议复核` : `${score.toFixed(1)} 分，建议重拍`
+      hint: status === "ready" ? `${score.toFixed(1)} 分，可用` : status === "usable" ? `${score.toFixed(1)} 分，建议复核` : `${score.toFixed(1)} 分，建议重拍`,
+      issue: advice.issue,
+      retakeAction: advice.action
     };
   });
 
@@ -4179,11 +4205,57 @@ function createCaptureGuideReport(images: CarvingImage[]): CaptureGuideReport {
   if (images.length < 4) suggestions.push(`建议补齐 4 个角度，目前还缺 ${4 - images.length} 张。`);
   if (images.length > 4) suggestions.push("Meshy 多图入口最多使用前 4 张，请把最佳角度排在前面。");
   if (missingCount > 0) suggestions.push(`缺少：${slots.filter((slot) => slot.status === "missing").map((slot) => slot.label).join("、")}。`);
-  if (retakeCount > 0) suggestions.push("存在低质量照片，建议固定手机、加强补光并使用纯色背景重拍。");
-  if (usableCount > 0) suggestions.push("部分照片可用于测试，但正式生成前建议复核主体是否居中、边缘是否清晰。");
+  if (retakeCount > 0) suggestions.push("存在低质量照片，请优先按下方补拍动作重拍，再调用 Meshy 多图 3D。");
+  if (usableCount > 0) suggestions.push("部分照片可用于测试，但正式生成前建议复核主体居中、边缘清晰和背景反差。");
+  if (images.length >= 2 && images.length < 4) suggestions.push("只有 2-3 张时适合快速测试；想得到完整 360° 立体 Mesh，建议补齐正/左/右/背四个方向。");
   if (suggestions.length === 0) suggestions.push("角度覆盖和基础质量正常，可以进入 Meshy 或其他 AI Provider 生成。");
 
   return { score, verdict, summary, slots, suggestions };
+}
+
+function createCaptureSlotAdvice(image: CarvingImage, label: string, angleDeg: number) {
+  const critical = image.quality?.metrics.find((metric) => metric.status === "critical");
+  const warning = image.quality?.metrics.find((metric) => metric.status === "warning");
+  const metric = critical ?? warning;
+  if (!metric) {
+    return {
+      issue: "质量达标",
+      action: `${angleDeg}° ${label} 可用；保持同一焦距、同一背景和同一光向继续拍摄其他角度。`
+    };
+  }
+
+  const prefix = `${angleDeg}° ${label}`;
+  if (metric.label === "主体覆盖") {
+    return metric.value < 18
+      ? { issue: "主体占画面偏小", action: `${prefix} 需要靠近拍摄或裁切背景，主体建议占画面 55%-70%。` }
+      : { issue: "主体贴边过多", action: `${prefix} 需要后退一点，左右和上下都留出完整轮廓边缘。` };
+  }
+
+  if (metric.label === "深度对比") {
+    return {
+      issue: "主体与背景反差不足",
+      action: `${prefix} 建议使用纯色亚光背景，从侧前方补光，避免背景纹理抢边缘。`
+    };
+  }
+
+  if (metric.label === "边缘清晰") {
+    return {
+      issue: "边缘清晰度不足",
+      action: `${prefix} 建议固定手机/相机，点按主体重新对焦，快门前等待画面稳定。`
+    };
+  }
+
+  if (metric.label === "主体居中") {
+    return {
+      issue: "主体偏离中心",
+      action: `${prefix} 重拍时让核胚中心落在画面中心线，长轴保持水平。`
+    };
+  }
+
+  return {
+    issue: `${metric.label}需复核`,
+    action: `${prefix} 建议重拍一张同角度照片，并保持纯色背景、稳定对焦和均匀补光。`
+  };
 }
 
 async function imageToDataUri(url: string): Promise<string> {

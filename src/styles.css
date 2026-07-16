@@ -973,6 +973,46 @@ button:disabled {
   line-height: 1.35;
 }
 
+.capture-slot em {
+  display: block;
+  color: #c9d7d0;
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.capture-retake-plan {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.capture-retake-plan div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.capture-retake-plan div.retake,
+.capture-retake-plan div.missing {
+  border-left-color: var(--rose);
+}
+
+.capture-retake-plan strong {
+  color: #f2f8f5;
+  font-size: 12px;
+}
+
+.capture-retake-plan span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .quality-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
