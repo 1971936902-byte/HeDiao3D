@@ -47,6 +47,10 @@ function validateReadiness(report, label) {
   assert(report.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", `${label} missing acceptancePlan`);
   assert(Array.isArray(report.acceptancePlan.steps), `${label} acceptancePlan.steps missing`);
   assert(report.acceptancePlan.steps.some((step) => step.command && step.evidence?.length), `${label} acceptance steps missing command/evidence`);
+  assert(report.acceptancePlan.steps.find((step) => step.id === "orchestrator-diagnostics")?.status !== "pending", `${label} orchestrator base check should not be pending when only external CAM is missing`);
+  if (report.nativeCam?.level === "missing") {
+    assert(report.acceptancePlan.nextStep?.id === "native-cam-readiness", `${label} next step should be native CAM readiness when native engines are missing`);
+  }
   assert(["production-ready", "trial-only", "blocked"].includes(report.level), `${label} unexpected level ${report.level}`);
   assert(Array.isArray(report.gates.blockers), `${label} gates.blockers missing`);
   assert(Array.isArray(report.gates.warnings), `${label} gates.warnings missing`);

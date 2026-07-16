@@ -581,16 +581,23 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, lat
 }
 
 function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, latestJob }) {
+  const orchestratorBaseReady = diagnostics.level !== "critical"
+    && Array.isArray(diagnostics.checks)
+    && diagnostics.checks
+      .filter((check) => ["api-port", "concurrency", "orchestrator-jobs", "imported-models", "meshy-results"].includes(check.id))
+      .every((check) => check.level === "ok");
   const steps = [
     createAcceptanceStep({
       order: 1,
       id: "orchestrator-diagnostics",
       title: "Orchestrator 环境自检",
-      status: diagnostics.level === "critical" ? "blocked" : diagnostics.level === "ok" ? "done" : "pending",
+      status: diagnostics.level === "critical" ? "blocked" : orchestratorBaseReady ? "done" : "pending",
       command: "curl http://127.0.0.1:8787/api/orchestrator/diagnostics",
       evidence: ["/api/orchestrator/diagnostics", "V3 面板环境自检"],
-      detail: diagnostics.summary,
-      blocksProduction: diagnostics.level !== "ok"
+      detail: orchestratorBaseReady
+        ? "API、队列和文件缓存目录可用；外部 CAM 缺失由后续 Native CAM/Adapter 步骤验收。"
+        : diagnostics.summary,
+      blocksProduction: diagnostics.level === "critical" || !orchestratorBaseReady
     }),
     createAcceptanceStep({
       order: 2,
