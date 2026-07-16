@@ -273,6 +273,28 @@ type V3OrchestratorJob = {
   error: string | null;
 };
 
+type V3JobSummary = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  requestedEngine: string;
+  selectedEngine: string | null;
+  modelUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  artifactCount: number;
+  latestLog: string;
+  resultEngine: string | null;
+  fallbackFrom: string | null;
+  points: number | null;
+  estimatedMinutes: number | null;
+  packageLevel: string | null;
+  repairStatus: string | null;
+  preflightStatus: string | null;
+  allowProductionNc: boolean;
+  allowTrialNc: boolean;
+  allowAirRun: boolean;
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -652,6 +674,7 @@ export function App() {
   const [meshQualityStatus, setMeshQualityStatus] = useState("等待 STL 模型");
   const [v3Engines, setV3Engines] = useState<V3EngineStatus[]>([]);
   const [v3Job, setV3Job] = useState<V3OrchestratorJob | null>(null);
+  const [v3JobHistory, setV3JobHistory] = useState<V3JobSummary[]>([]);
   const [isV3JobRunning, setIsV3JobRunning] = useState(false);
   const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
@@ -871,10 +894,41 @@ export function App() {
         if (cancelled) return;
         setV3Status(error instanceof Error ? error.message : "V3 Orchestrator 引擎探测失败");
       });
+    refreshV3JobHistory();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const refreshV3JobHistory = async () => {
+    try {
+      const response = await fetch("/api/orchestrator/jobs");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "V3 历史任务加载失败");
+      setV3JobHistory(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "V3 历史任务加载失败");
+    }
+  };
+
+  const handleLoadV3Job = async (jobId: string) => {
+    try {
+      setV3Status(`正在恢复 V3 任务 ${jobId.slice(0, 8)}`);
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
+      const job = await response.json() as V3OrchestratorJob;
+      if (!response.ok) throw new Error(job.error ?? "V3 任务恢复失败");
+      setV3Job(job);
+      if (job.result?.toolpath) {
+        setToolpath(job.result.toolpath);
+        setToolpathKind("rough");
+        setWorkbenchView("model");
+        setIsSimulationMode(false);
+      }
+      setV3Status(`已恢复任务 ${job.status}：${job.logs[job.logs.length - 1]?.message ?? job.id}`);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "V3 任务恢复失败");
+    }
+  };
 
   const updateSetting = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => {
     setSettings((current) => normalizeSettings({ ...current, [key]: value }));
@@ -1626,6 +1680,7 @@ export function App() {
         setToolpathKind("rough");
         setWorkbenchView("model");
         setIsSimulationMode(false);
+        await refreshV3JobHistory();
         appendTaskJobLog(jobId, `返回刀路：${finalJob.result.summary.points} 点。`, 86);
         finishTaskJob(jobId, "done", `完成：${finalJob.result.engine}，${finalJob.result.summary.points} 点。`);
         setV3Status(`闭环完成：${finalJob.result.engine}${finalJob.result.fallbackFrom !== finalJob.result.engine ? `（从 ${finalJob.result.fallbackFrom} fallback）` : ""}`);
@@ -3456,6 +3511,20 @@ export function App() {
                   <a href={artifact} target="_blank" rel="noreferrer" key={artifact}>
                     {extractDownloadFilename(artifact, artifact)}
                   </a>
+                ))}
+              </div>
+            )}
+            {v3JobHistory.length > 0 && (
+              <div className="v3-history-list">
+                <div className="v3-history-heading">
+                  <strong>最近任务</strong>
+                  <button type="button" onClick={refreshV3JobHistory}>刷新</button>
+                </div>
+                {v3JobHistory.slice(0, 5).map((job) => (
+                  <button className="v3-history-item" type="button" onClick={() => handleLoadV3Job(job.id)} key={job.id}>
+                    <span>{job.id.slice(0, 8)} · {job.status} · {job.packageLevel ?? "no-package"}</span>
+                    <small>{job.points ? `${job.points} 点` : "无刀路"} · {job.updatedAt.slice(0, 19).replace("T", " ")}</small>
+                  </button>
                 ))}
               </div>
             )}

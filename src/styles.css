@@ -1995,6 +1995,65 @@ button:disabled {
   font-size: 12px;
 }
 
+.v3-history-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.v3-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.v3-history-heading strong {
+  color: #f2f8f5;
+  font-size: 13px;
+}
+
+.v3-history-heading button,
+.v3-history-item {
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v3-history-heading button {
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.v3-history-item {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 9px;
+  border-left: 3px solid var(--teal);
+  border-radius: 7px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v3-history-item span,
+.v3-history-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-history-item span {
+  color: #f2f8f5;
+  font-size: 12px;
+}
+
+.v3-history-item small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .calibration-card {
   display: grid;
   gap: 7px;

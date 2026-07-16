@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -49,6 +49,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && req.url === "/api/orchestrator/engines") {
       return getOrchestratorEngines(res);
+    }
+
+    if (req.method === "GET" && req.url === "/api/orchestrator/jobs") {
+      return listOrchestratorJobs(res);
     }
 
     if (req.method === "POST" && req.url === "/api/orchestrator/jobs") {
@@ -1323,6 +1327,63 @@ async function getOrchestratorJob(jobId, res) {
   const job = orchestratorJobs.get(jobId) ?? readJobManifest(jobId);
   if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
   return json(res, 200, job);
+}
+
+function listOrchestratorJobs(res) {
+  const jobs = new Map();
+  for (const job of orchestratorJobs.values()) {
+    jobs.set(job.id, job);
+  }
+
+  const root = join(process.cwd(), "public", "orchestrator-jobs");
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = readJobManifest(entry.name);
+      if (manifest) jobs.set(manifest.id ?? entry.name, manifest);
+    }
+  }
+
+  const items = [...jobs.values()]
+    .map(createOrchestratorJobSummary)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 50);
+
+  return json(res, 200, {
+    jobs: items,
+    queue: {
+      queued: orchestratorQueue.length,
+      running: orchestratorRunning,
+      concurrency: maxOrchestratorConcurrency
+    }
+  });
+}
+
+function createOrchestratorJobSummary(job) {
+  const statusFile = job.workDir ? join(job.workDir, "job-status.json") : null;
+  const diskUpdatedAt = statusFile && existsSync(statusFile) ? statSync(statusFile).mtime.toISOString() : null;
+  const summary = job.result?.summary ?? {};
+  return {
+    id: job.id,
+    status: job.status,
+    requestedEngine: job.requestedEngine,
+    selectedEngine: job.selectedEngine,
+    modelUrl: job.modelUrl,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt ?? diskUpdatedAt ?? job.createdAt,
+    artifactCount: job.artifacts?.length ?? 0,
+    latestLog: job.logs?.[job.logs.length - 1]?.message ?? "",
+    resultEngine: job.result?.engine ?? null,
+    fallbackFrom: job.result?.fallbackFrom ?? null,
+    points: summary.points ?? null,
+    estimatedMinutes: summary.estimatedMinutes ?? null,
+    packageLevel: summary.productionGate?.level ?? summary.deliveryManifest?.packageLevel ?? null,
+    repairStatus: summary.repairExecution?.status ?? null,
+    preflightStatus: summary.adapterPreflight?.status ?? null,
+    allowProductionNc: summary.productionGate?.allowProductionNc ?? false,
+    allowTrialNc: summary.productionGate?.allowTrialNc ?? false,
+    allowAirRun: summary.productionGate?.allowAirRun ?? false
+  };
 }
 
 function getOrchestratorArtifact(jobId, filename, res) {
