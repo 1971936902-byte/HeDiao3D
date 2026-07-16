@@ -2086,6 +2086,10 @@ button:disabled {
   border-left-color: var(--green);
 }
 
+.v3-adapter-list span.critical {
+  border-left-color: var(--rose);
+}
+
 .v3-history-list {
   display: grid;
   gap: 6px;

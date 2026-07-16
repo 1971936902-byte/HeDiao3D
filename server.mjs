@@ -502,6 +502,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
   const latestJob = getLatestOrchestratorJobSummary();
   const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, latestJob });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, latestJob });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -510,6 +511,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     level: gates.level,
     summary: gates.summary,
     gates,
+    acceptancePlan,
     diagnostics,
     nativeCam,
     adapterValidation,
@@ -578,6 +580,100 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, lat
   };
 }
 
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, latestJob }) {
+  const steps = [
+    createAcceptanceStep({
+      order: 1,
+      id: "orchestrator-diagnostics",
+      title: "Orchestrator 环境自检",
+      status: diagnostics.level === "critical" ? "blocked" : diagnostics.level === "ok" ? "done" : "pending",
+      command: "curl http://127.0.0.1:8787/api/orchestrator/diagnostics",
+      evidence: ["/api/orchestrator/diagnostics", "V3 面板环境自检"],
+      detail: diagnostics.summary,
+      blocksProduction: diagnostics.level !== "ok"
+    }),
+    createAcceptanceStep({
+      order: 2,
+      id: "native-cam-readiness",
+      title: "Native CAM 环境验收",
+      status: !nativeCam ? "pending" : nativeCam.summary.level === "ready" ? "done" : "pending",
+      command: "npm run test:v3:native-cam",
+      evidence: ["native-cam-readiness.json", "/api/orchestrator/native-cam/latest"],
+      detail: nativeCam
+        ? `${nativeCam.summary.readyCount}/${nativeCam.summary.requiredCount} ${nativeCam.summary.level}`
+        : "尚未生成 Native CAM 环境验收报告。",
+      blocksProduction: !nativeCam || nativeCam.summary.level !== "ready"
+    }),
+    createAcceptanceStep({
+      order: 3,
+      id: "adapter-validation",
+      title: "外部 CAM Adapter 验证",
+      status: !adapterValidation
+        ? "pending"
+        : adapterValidation.overall.failed > 0
+          ? "blocked"
+          : adapterValidation.overall.completedAdapters > 0
+            ? "done"
+            : "pending",
+      command: "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      evidence: ["v3-external-adapter-validation.json", "adapter-report.json"],
+      detail: adapterValidation
+        ? `计划 ${adapterValidation.overall.generatedPlans}/${adapterValidation.overall.adapterCount}，completed ${adapterValidation.overall.completedAdapters}，失败 ${adapterValidation.overall.failed}`
+        : "尚未运行外部 Adapter 验证。",
+      blocksProduction: !adapterValidation || adapterValidation.overall.failed > 0 || adapterValidation.overall.completedAdapters === 0
+    }),
+    createAcceptanceStep({
+      order: 4,
+      id: "v3-small-loop",
+      title: "V3 小闭环加工包",
+      status: !latestJob
+        ? "pending"
+        : latestJob.status !== "completed"
+          ? "blocked"
+          : latestJob.allowTrialNc && latestJob.allowAirRun
+            ? "done"
+            : "pending",
+      command: "npm run test:v3",
+      evidence: ["machining-package-index.json", "production-gate.json", "delivery-manifest.json"],
+      detail: latestJob
+        ? `${latestJob.status} / ${latestJob.packageLevel ?? "unknown"} / ${latestJob.points ?? 0} 点`
+        : "尚未运行 V3 Orchestrator 小闭环。",
+      blocksProduction: !latestJob || latestJob.status !== "completed" || !latestJob.allowTrialNc || !latestJob.allowAirRun
+    }),
+    createAcceptanceStep({
+      order: 5,
+      id: "production-gate",
+      title: "生产 NC 门禁",
+      status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
+      command: "curl http://127.0.0.1:8787/api/orchestrator/readiness/latest",
+      evidence: ["v3-readiness-report.json", "production-gate.json", "nc-static-analysis.json", "controller-dialect-report.json"],
+      detail: gates.summary,
+      blocksProduction: !gates.allowProductionNc
+    })
+  ];
+  return {
+    schema: "hediao3d.v3-deployment-acceptance-plan.v1",
+    level: gates.level,
+    nextStep: steps.find((step) => step.status !== "done") ?? null,
+    completed: steps.filter((step) => step.status === "done").length,
+    total: steps.length,
+    steps
+  };
+}
+
+function createAcceptanceStep({ order, id, title, status, command, evidence, detail, blocksProduction }) {
+  return {
+    order,
+    id,
+    title,
+    status,
+    command,
+    evidence,
+    detail,
+    blocksProduction
+  };
+}
+
 function getLatestOrchestratorJobSummary() {
   const jobs = [];
   for (const job of orchestratorJobs.values()) jobs.push(job);
@@ -630,6 +726,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     level: report.level,
     summary: report.summary,
     gates: report.gates,
+    acceptancePlan: report.acceptancePlan ?? { steps: [], nextStep: null },
     diagnostics: {
       level: report.diagnostics?.level ?? "unknown",
       summary: report.diagnostics?.summary ?? null
@@ -703,6 +800,21 @@ function createV3ReadinessMarkdown(report) {
     "## Next Actions",
     "",
     ...(report.gates.nextActions.length ? report.gates.nextActions.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Acceptance Plan",
+    "",
+    ...(report.acceptancePlan?.steps?.length
+      ? report.acceptancePlan.steps.flatMap((step) => [
+        `### ${step.order}. ${step.title}`,
+        "",
+        `- Status: ${step.status}`,
+        `- Blocks production: ${step.blocksProduction ? "yes" : "no"}`,
+        `- Command: ${step.command ?? "(manual)"}`,
+        `- Evidence: ${step.evidence.join("; ")}`,
+        `- Detail: ${step.detail}`,
+        ""
+      ])
+      : ["- none"]),
     "",
     "## Components",
     "",

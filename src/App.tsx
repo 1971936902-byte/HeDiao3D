@@ -657,6 +657,32 @@ type V3ReadinessSummary = {
     warnings: string[];
     nextActions: string[];
   };
+  acceptancePlan?: {
+    schema: string;
+    level: string;
+    completed: number;
+    total: number;
+    nextStep: null | {
+      order: number;
+      id: string;
+      title: string;
+      status: string;
+      command: string | null;
+      evidence: string[];
+      detail: string;
+      blocksProduction: boolean;
+    };
+    steps: Array<{
+      order: number;
+      id: string;
+      title: string;
+      status: string;
+      command: string | null;
+      evidence: string[];
+      detail: string;
+      blocksProduction: boolean;
+    }>;
+  };
   diagnostics: {
     level: string;
     summary: string | null;
@@ -3963,6 +3989,21 @@ export function App() {
                   )}
                   {v3Readiness.adapterValidation && (
                     <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
+                  )}
+                  {v3Readiness.acceptancePlan && (
+                    <>
+                      <small>
+                        部署验收 {v3Readiness.acceptancePlan.completed}/{v3Readiness.acceptancePlan.total}
+                        {v3Readiness.acceptancePlan.nextStep ? ` · 下一步：${v3Readiness.acceptancePlan.nextStep.title}` : " · 已完成"}
+                      </small>
+                      <div className="v3-adapter-list">
+                        {v3Readiness.acceptancePlan.steps.slice(0, 4).map((step) => (
+                          <span className={step.status === "done" ? "ok" : step.status === "blocked" ? "critical" : "warning"} key={step.id}>
+                            {step.order}. {step.title} · {step.status}
+                          </span>
+                        ))}
+                      </div>
+                    </>
                   )}
                   {v3Readiness.gates.warnings[0] && (
                     <small>提示：{v3Readiness.gates.warnings[0]}</small>

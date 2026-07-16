@@ -20,6 +20,8 @@ async function main() {
   assert(full.schema === "hediao3d.v3-readiness-report.v1", "full readiness artifact schema mismatch");
   assert(full.diagnostics, "full readiness artifact missing diagnostics");
   assert(full.gates, "full readiness artifact missing gates");
+  assert(full.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", "full readiness artifact missing acceptance plan");
+  assert(full.acceptancePlan.steps.length >= 5, "acceptance plan should include deployment steps");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
@@ -30,6 +32,7 @@ async function main() {
     ok: true,
     reportId: report.id,
     level: report.level,
+    acceptance: `${report.acceptancePlan.completed}/${report.acceptancePlan.total}`,
     production: report.gates.allowProductionNc,
     trial: report.gates.allowTrialNc,
     airRun: report.gates.allowAirRun,
@@ -41,6 +44,9 @@ function validateReadiness(report, label) {
   assert(report.id, `${label} missing id`);
   assert(report.schema === "hediao3d.v3-readiness-report.v1", `${label} schema mismatch`);
   assert(report.gates, `${label} missing gates`);
+  assert(report.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", `${label} missing acceptancePlan`);
+  assert(Array.isArray(report.acceptancePlan.steps), `${label} acceptancePlan.steps missing`);
+  assert(report.acceptancePlan.steps.some((step) => step.command && step.evidence?.length), `${label} acceptance steps missing command/evidence`);
   assert(["production-ready", "trial-only", "blocked"].includes(report.level), `${label} unexpected level ${report.level}`);
   assert(Array.isArray(report.gates.blockers), `${label} gates.blockers missing`);
   assert(Array.isArray(report.gates.warnings), `${label} gates.warnings missing`);
