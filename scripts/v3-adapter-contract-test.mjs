@@ -98,6 +98,12 @@ try {
       assert(existsSync(report.metrics.freecadPlan.planPath), "freecad CAM plan file missing");
       assert(existsSync(report.metrics.freecadPlan.runTemplatePath), "freecad run template file missing");
     }
+    if (adapter.id === "blendercam") {
+      assert(report.metrics.blendercamPlan?.status === "generated", "blendercam adapter did not generate a CAM plan");
+      assert(existsSync(report.metrics.blendercamPlan.planPath), "blendercam CAM plan file missing");
+      assert(existsSync(report.metrics.blendercamPlan.runTemplatePath), "blendercam run template file missing");
+      assert(report.metrics.blendercamPlan.preferredForMeshyOutput === true, "blendercam plan should prefer Meshy GLB/OBJ/STL inputs");
+    }
     if (adapter.id === "camotics") {
       assert(report.metrics.camoticsPlan?.status === "generated", "camotics adapter did not generate a simulation plan");
       assert(existsSync(report.metrics.camoticsPlan.planPath), "camotics simulation plan file missing");
@@ -111,6 +117,7 @@ try {
       warningCount: report.warnings?.length ?? 0,
       recipeOperations: report.metrics.recipe.operationCount,
       freecadPlan: report.metrics.freecadPlan?.status ?? null,
+      blendercamPlan: report.metrics.blendercamPlan?.status ?? null,
       camoticsPlan: report.metrics.camoticsPlan?.status ?? null
     });
   }

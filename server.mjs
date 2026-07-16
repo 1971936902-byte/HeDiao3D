@@ -660,6 +660,8 @@ async function processOrchestratorJob(job, settings) {
     pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-report.json"));
     pushIfArtifactExists(job, "freecad-cam-plan.json");
     pushIfArtifactExists(job, "freecad-run-template.py");
+    pushIfArtifactExists(job, "blendercam-cam-plan.json");
+    pushIfArtifactExists(job, "blendercam-run-template.py");
     pushIfArtifactExists(job, "camotics-simulation-plan.json");
     pushIfArtifactExists(job, "camotics-project-template.json");
     const adapterStatus = adapterReport.status === "completed" ? "completed" : "review";
@@ -2468,6 +2470,12 @@ function createDeliveryManifest(job, toolpath, productionGate) {
   if (existsSync(join(job.workDir, "freecad-run-template.py"))) {
     files.push(createDeliveryFile(job.id, "freecad-run-template.py", "FreeCAD 运行模板", "report", true, "外部 FreeCAD adapter 生成的 FreeCADCmd 脚本模板，用于服务器端二次验证。"));
   }
+  if (existsSync(join(job.workDir, "blendercam-cam-plan.json"))) {
+    files.push(createDeliveryFile(job.id, "blendercam-cam-plan.json", "BlenderCAM 曲面加工计划", "report", true, "外部 BlenderCAM/FabexCNC adapter 生成的艺术曲面 CAM 配方和环境探测结果。"));
+  }
+  if (existsSync(join(job.workDir, "blendercam-run-template.py"))) {
+    files.push(createDeliveryFile(job.id, "blendercam-run-template.py", "BlenderCAM 运行模板", "report", true, "外部 BlenderCAM/FabexCNC adapter 生成的 Blender 后台脚本模板，用于服务器端二次验证。"));
+  }
 
   return {
     jobId: job.id,
@@ -2838,7 +2846,7 @@ function detectCamEngines() {
       name: "BlenderCAM / FabexCNC",
       commands: ["blender"],
       role: "艺术曲面/浮雕 CAM adapter",
-      adapterReady: false
+      adapterReady: true
     }),
     detectCommandEngine({
       id: "camotics",

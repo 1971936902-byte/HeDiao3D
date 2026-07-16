@@ -1,24 +1,37 @@
 #!/usr/bin/env python3
-"""BlenderCAM/FabexCNC adapter placeholder for HeDiao3D V3.
+"""BlenderCAM/FabexCNC adapter for HeDiao3D V3.
 
 Run target:
   blender --background --python adapters/blendercam/blendercam_job.py -- job.json result.json
+
+The adapter prepares an auditable artistic-surface CAM plan for BlenderCAM or
+FabexCNC. Production G-code output is still locked behind
+HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=true because BlenderCAM operation setup,
+tool libraries and postprocessors must be validated on the deployment server.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
-def adapter_args() -> list[str]:
+PROTOCOL_VERSION = "hediao3d.adapter.v1"
+ENGINE = "blendercam"
+SUPPORTED_MODEL_FORMATS = {".glb", ".gltf", ".obj", ".stl", ".ply", ".fbx"}
+
+
+def adapter_args() -> List[str]:
     if "--" in sys.argv:
         return sys.argv[sys.argv.index("--") + 1 :]
     return sys.argv[1:]
 
 
-def recipe_summary(job: dict) -> dict:
+def recipe_summary(job: Dict[str, Any]) -> Dict[str, Any]:
     recipe = job.get("externalCamRecipe") or {}
     operations = recipe.get("operations") or []
     enabled_operations = [operation for operation in operations if operation.get("enabled")]
@@ -34,6 +47,213 @@ def recipe_summary(job: dict) -> dict:
     }
 
 
+def detect_blendercam_environment() -> Dict[str, Any]:
+    bpy_spec = safe_find_spec("bpy")
+    module_candidates = ["cam", "blendercam", "fabex", "cam.ui", "cam.ops"]
+    modules = {
+        name: {
+            "available": (spec := safe_find_spec(name)) is not None,
+            "origin": spec.origin if spec and spec.origin else None,
+        }
+        for name in module_candidates
+    }
+    return {
+        "blenderPythonAvailable": bpy_spec is not None,
+        "bpyOrigin": bpy_spec.origin if bpy_spec and bpy_spec.origin else None,
+        "camAddonDetected": any(item["available"] for item in modules.values()),
+        "modules": modules,
+        "experimentalOutputEnabled": is_true(os.environ.get("HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT")),
+    }
+
+
+def safe_find_spec(name: str) -> Any:
+    try:
+        return importlib.util.find_spec(name)
+    except (ImportError, AttributeError, ValueError):
+        return None
+
+
+def build_blendercam_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[str, Any]:
+    settings = job.get("settings") or {}
+    recipe = job.get("externalCamRecipe") or {}
+    operations = recipe.get("operations") or []
+    enabled_operations = [operation for operation in operations if operation.get("enabled")]
+    model_path = Path(str(job.get("modelPath") or ""))
+    suffix = model_path.suffix.lower()
+    stock = recipe.get("stock") or {}
+    tool = recipe.get("tool") or {}
+    postprocess = recipe.get("postprocess") or {}
+    cam_mode = settings.get("camMode")
+    rotary_axis = settings.get("rotaryOutputAxis") if cam_mode == "rotaryWrap" else None
+
+    return {
+        "schema": "hediao3d.blendercam-cam-plan.v1",
+        "jobId": job.get("jobId"),
+        "engine": ENGINE,
+        "model": {
+            "path": str(model_path),
+            "format": suffix.lstrip(".") or None,
+            "exists": model_path.exists(),
+            "directlySupportedByAdapter": suffix in SUPPORTED_MODEL_FORMATS,
+            "preferredForMeshyOutput": suffix in {".glb", ".gltf", ".obj", ".stl"},
+            "conversionHint": None if suffix in SUPPORTED_MODEL_FORMATS else "Convert the source model to GLB, OBJ or STL before BlenderCAM execution.",
+        },
+        "stock": {
+            "lengthMm": stock.get("lengthMm") or settings.get("lengthMm"),
+            "diameterMm": stock.get("diameterMm") or settings.get("diameterMm"),
+            "blankShape": "olive-core-rotary-wrap" if cam_mode == "rotaryWrap" else "rectangular-relief",
+            "leftHoldMm": stock.get("leftHoldMm") or settings.get("leftHoldMm"),
+            "rightHoldMm": stock.get("rightHoldMm") or settings.get("rightHoldMm"),
+        },
+        "tool": {
+            "toolProfileId": tool.get("toolProfileId") or settings.get("toolProfileId"),
+            "diameterMm": tool.get("diameterMm") or settings.get("toolDiameter"),
+            "description": tool.get("description"),
+            "spindleRpm": settings.get("spindleRpm"),
+            "feedRateMmMin": settings.get("feedRate"),
+        },
+        "operations": [
+            {
+                "id": operation.get("id"),
+                "enabled": bool(operation.get("enabled")),
+                "strategy": operation.get("strategy"),
+                "blendercamStrategyHint": blendercam_strategy_hint(operation, cam_mode),
+                "parameters": operation.get("parameters") or {},
+            }
+            for operation in operations
+        ],
+        "operationCounts": {
+            "total": len(operations),
+            "enabled": len(enabled_operations),
+        },
+        "postprocess": {
+            "policy": postprocess.get("policy"),
+            "camMode": postprocess.get("camMode") or cam_mode,
+            "postProcessor": postprocess.get("postProcessor") or settings.get("postProcessor"),
+            "rotaryOutputAxis": rotary_axis,
+            "rotaryWrapPerRevolutionMm": settings.get("rotaryWrapPerRevolutionMm"),
+            "handoff": "External BlenderCAM should export neutral/unwrapped G-code or sampled cutter path; HeDiao3D owns final Y/A rotary-wrap postprocess.",
+        },
+        "blendercam": detection,
+        "expectedArtifacts": {
+            "gcode": (job.get("outputs") or {}).get("gcode"),
+            "report": (job.get("outputs") or {}).get("report"),
+            "blendFile": str(Path(str(job.get("workDir") or ".")) / "blendercam-job.blend"),
+        },
+        "limitations": [
+            "The adapter plan is for artistic mesh/surface machining, especially Meshy GLB/OBJ/STL assets.",
+            "BlenderCAM/FabexCNC add-on names differ by installation; deployment validation must confirm the actual Python API.",
+            "Production unlock still requires HeDiao3D postprocessing, NC static analysis, controller dialect check and material-removal simulation.",
+        ],
+    }
+
+
+def blendercam_strategy_hint(operation: Dict[str, Any], cam_mode: Any) -> str:
+    strategy = str(operation.get("strategy") or "").lower()
+    if "rough" in strategy:
+        return "waterline-or-pocket-roughing"
+    if "rest" in strategy or "detail" in strategy:
+        return "pencil/rest-detail-pass"
+    if cam_mode == "rotaryWrap":
+        return "parallel-finish-on-unwrapped-surface"
+    return "parallel-finish-or-projection"
+
+
+def write_plan_artifacts(job: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, str]:
+    work_dir = Path(str(job.get("workDir") or Path((job.get("outputs") or {}).get("report", ".")).parent))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    plan_path = work_dir / "blendercam-cam-plan.json"
+    script_path = work_dir / "blendercam-run-template.py"
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    script_path.write_text(create_blendercam_run_template(plan), encoding="utf-8")
+    return {
+        "blendercamCamPlan": str(plan_path),
+        "blendercamRunTemplate": str(script_path),
+    }
+
+
+def create_blendercam_run_template(plan: Dict[str, Any]) -> str:
+    return f'''# Auto-generated by HeDiao3D BlenderCAM adapter.
+# Run with: blender --background --python blendercam-run-template.py
+# This template documents the expected Blender/FabexCNC setup. It does not
+# guarantee production G-code until validated on the deployment server.
+import json
+
+try:
+    import bpy
+except Exception as exc:
+    raise RuntimeError("This template must run inside Blender Python") from exc
+
+PLAN = {json.dumps(plan, ensure_ascii=False, indent=2)}
+
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.object.delete()
+
+model_path = PLAN["model"]["path"]
+fmt = PLAN["model"]["format"]
+
+if fmt in ("glb", "gltf"):
+    bpy.ops.import_scene.gltf(filepath=model_path)
+elif fmt == "obj":
+    bpy.ops.import_scene.obj(filepath=model_path)
+elif fmt == "stl":
+    bpy.ops.import_mesh.stl(filepath=model_path)
+else:
+    raise RuntimeError("Unsupported BlenderCAM template input format: %s" % fmt)
+
+# Next implementation step:
+# 1. Enable/verify BlenderCAM or FabexCNC add-on in this Blender install.
+# 2. Create CAM operation(s) from PLAN["operations"].
+# 3. Assign PLAN["tool"] and stock bounds.
+# 4. Export neutral/unwrapped G-code or cutter path.
+# 5. Return that path to HeDiao3D for final rotary-wrap postprocessing.
+print("HeDiao3D BlenderCAM template prepared:", PLAN["jobId"])
+'''
+
+
+def attempt_experimental_blendercam_output(job: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+    if not is_true(os.environ.get("HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT")):
+        return {
+            "status": "adapter_not_ready",
+            "error": "BlenderCAM adapter plan generated, but experimental output is disabled. Set HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=true after validating the server recipe.",
+        }
+    if not plan["blendercam"]["blenderPythonAvailable"]:
+        return {
+            "status": "adapter_not_ready",
+            "error": "Blender Python bpy module is not available. Run with blender --background --python.",
+        }
+    if not plan["blendercam"]["camAddonDetected"]:
+        return {
+            "status": "adapter_not_ready",
+            "error": "Blender Python is available, but BlenderCAM/FabexCNC add-on modules were not detected.",
+        }
+    if not plan["model"]["directlySupportedByAdapter"]:
+        return {
+            "status": "adapter_not_ready",
+            "error": "Model format requires conversion before BlenderCAM execution.",
+        }
+    return {
+        "status": "adapter_not_ready",
+        "error": "BlenderCAM/FabexCNC environment detected, but operation creation is still locked pending server validation.",
+    }
+
+
+def base_report(job: Dict[str, Any], status: str, error: Optional[str], warnings: List[str], metrics: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "status": status,
+        "protocolVersion": PROTOCOL_VERSION,
+        "engine": ENGINE,
+        "jobId": job.get("jobId"),
+        "error": error,
+        "warnings": warnings,
+        "metrics": metrics,
+    }
+
+
+def is_true(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main() -> int:
     args = adapter_args()
     if len(args) < 2:
@@ -43,21 +263,52 @@ def main() -> int:
     job_path = Path(args[0])
     result_path = Path(args[1])
     job = json.loads(job_path.read_text(encoding="utf-8"))
-    result = {
-        "status": "adapter_not_ready",
-        "protocolVersion": "hediao3d.adapter.v1",
-        "engine": "blendercam",
-        "jobId": job.get("jobId"),
-        "error": "BlenderCAM/FabexCNC adapter is scaffolded but not enabled for production toolpath output.",
-        "warnings": [
-            "Install Blender and BlenderCAM/FabexCNC, then implement mesh import, operation setup and G-code export."
-        ],
-        "metrics": {
-            "modelPath": job.get("modelPath"),
-            "camMode": job.get("settings", {}).get("camMode"),
-            "recipe": recipe_summary(job)
-        }
-    }
+    detection = detect_blendercam_environment()
+    missing = [key for key in ("jobId", "modelPath", "settings", "outputs") if key not in job]
+
+    if missing:
+        result = base_report(
+            job,
+            "failed",
+            f"Missing adapter job keys: {', '.join(missing)}",
+            [],
+            {
+                "recipe": recipe_summary(job),
+                "blendercam": detection,
+            },
+        )
+    else:
+        plan = build_blendercam_plan(job, detection)
+        artifact_paths = write_plan_artifacts(job, plan)
+        attempt = attempt_experimental_blendercam_output(job, plan)
+        warnings = [
+            "BlenderCAM adapter now emits an auditable artistic-surface CAM plan and run template.",
+            "Production G-code output remains locked until the BlenderCAM/FabexCNC recipe is validated on the deployment server.",
+        ]
+        if not plan["model"]["directlySupportedByAdapter"]:
+            warnings.append(str(plan["model"]["conversionHint"] or "Model conversion is required before BlenderCAM execution."))
+        result = base_report(
+            job,
+            attempt["status"],
+            attempt["error"],
+            warnings,
+            {
+                "modelPath": job.get("modelPath"),
+                "camMode": job.get("settings", {}).get("camMode"),
+                "recipe": recipe_summary(job),
+                "blendercam": detection,
+                "blendercamPlan": {
+                    "status": "generated",
+                    "planPath": artifact_paths["blendercamCamPlan"],
+                    "runTemplatePath": artifact_paths["blendercamRunTemplate"],
+                    "supportedInput": plan["model"]["directlySupportedByAdapter"],
+                    "operationCount": plan["operationCounts"]["total"],
+                    "enabledOperationCount": plan["operationCounts"]["enabled"],
+                    "preferredForMeshyOutput": plan["model"]["preferredForMeshyOutput"],
+                },
+            },
+        )
+
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0
