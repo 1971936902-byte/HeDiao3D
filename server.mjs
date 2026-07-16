@@ -507,9 +507,10 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
   const runbookResult = readLatestV3RunbookResultSummary();
   const externalHandoff = getLatestExternalHandoffJobSummary();
+  const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
   const latestJob = getLatestOrchestratorJobSummary();
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, latestJob });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, latestJob });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, camoticsImport, latestJob });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, camoticsImport, latestJob });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -524,12 +525,13 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     adapterValidation,
     runbookResult,
     externalHandoff,
+    camoticsImport,
     latestJob,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, latestJob }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, camoticsImport, latestJob }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -581,6 +583,14 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     nextActions.push("查看最近 handoff job 的 adapter-report.json、camotics-adapter-report.json 和 simulation-summary.json。");
   }
 
+  if (!camoticsImport) {
+    warnings.push("尚未运行 CAMotics 真实结果导入契约测试。");
+    nextActions.push("运行 npm run test:v3:camotics-import，验证非 synthetic 材料去除结果可回填。");
+  } else if (!camoticsImport.ok || !camoticsImport.productionEvidenceEligible) {
+    warnings.push(`CAMotics 导入契约未通过：${camoticsImport.status ?? "unknown"}。`);
+    nextActions.push("查看 camotics-import-contract.json、camotics-adapter-report.json 和 camotics-result.json。");
+  }
+
   if (!latestJob) {
     warnings.push("尚未运行 V3 Orchestrator 小闭环任务。");
     nextActions.push("导入/生成一个 GLB/STL 后运行 V3 小闭环，生成加工包与生产门禁报告。");
@@ -608,7 +618,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, latestJob }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, camoticsImport, latestJob }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -675,6 +685,22 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 5,
+      id: "camotics-result-import",
+      title: "CAMotics 真实结果导入契约",
+      status: !camoticsImport
+        ? "pending"
+        : camoticsImport.ok && camoticsImport.productionEvidenceEligible
+          ? "done"
+          : "blocked",
+      command: "npm run test:v3:camotics-import",
+      evidence: ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
+      detail: camoticsImport
+        ? `${camoticsImport.status} / synthetic=${camoticsImport.synthetic} / risk=${camoticsImport.riskLevel ?? "unknown"}`
+        : "尚未验证真实 CAMotics 结果导入契约。",
+      blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible
+    }),
+    createAcceptanceStep({
+      order: 6,
       id: "v3-small-loop",
       title: "V3 小闭环加工包",
       status: !latestJob
@@ -692,7 +718,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestJob || latestJob.status !== "completed" || !latestJob.allowTrialNc || !latestJob.allowAirRun
     }),
     createAcceptanceStep({
-      order: 6,
+      order: 7,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -864,6 +890,23 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
   };
 }
 
+function createCamoticsImportContractPublicSummary(report, contractId) {
+  return {
+    id: contractId,
+    schema: report.schema ?? "unknown",
+    createdAt: report.createdAt ?? null,
+    ok: Boolean(report.ok),
+    status: report.status ?? null,
+    synthetic: Boolean(report.synthetic),
+    riskLevel: report.riskLevel ?? null,
+    materialRemovedMm3: report.materialRemovedMm3 ?? null,
+    productionEvidenceEligible: Boolean(report.productionEvidenceEligible),
+    adapterReport: report.adapterReport ?? null,
+    camoticsResult: report.camoticsResult ?? null,
+    outputRoot: report.outputRoot ?? null
+  };
+}
+
 function readV3ReadinessSummary(reportId) {
   if (!/^[a-zA-Z0-9_.:-]+$/.test(reportId)) return null;
   const reportPath = join(process.cwd(), "public", "orchestrator-readiness", reportId, "v3-readiness-report.json");
@@ -901,6 +944,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     } : null,
     runbookResult: report.runbookResult ?? null,
     externalHandoff: report.externalHandoff ?? null,
+    camoticsImport: report.camoticsImport ?? null,
     latestJob: report.latestJob,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
@@ -983,6 +1027,7 @@ function createV3ReadinessMarkdown(report) {
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / ${report.runbookResult.stepCount} steps` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
+    `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
     ""
   ];

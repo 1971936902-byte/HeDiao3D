@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
 const root = process.cwd();
 const workDir = join(tmpdir(), `hediao3d-camotics-import-${Date.now()}`);
+const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+const outputRoot = resolve(process.env.V3_CAMOTICS_IMPORT_DIR ?? join(root, "public", "orchestrator-camotics-import", stamp));
 mkdirSync(workDir, { recursive: true });
+mkdirSync(outputRoot, { recursive: true });
 
 const jobPath = join(workDir, "camotics-job.json");
 const resultPath = join(workDir, "camotics-adapter-report.json");
@@ -94,14 +97,25 @@ assert(result.synthetic === false, "imported result must remain non-synthetic");
 assert(result.importedFrom === importedPath, "imported result should record source path");
 assert(result.metrics?.materialRemovedMm3 === 1.2, "imported metrics were not preserved");
 
-console.log(JSON.stringify({
+const contract = {
+  schema: "hediao3d.camotics-import-contract.v1",
+  createdAt: new Date().toISOString(),
   ok: true,
   workDir,
+  outputRoot,
   status: report.status,
+  adapterReport: join(outputRoot, "camotics-adapter-report.json"),
+  camoticsResult: join(outputRoot, "camotics-result.json"),
   synthetic: result.synthetic,
   riskLevel: result.riskLevel,
-  materialRemovedMm3: result.metrics.materialRemovedMm3
-}, null, 2));
+  materialRemovedMm3: result.metrics.materialRemovedMm3,
+  productionEvidenceEligible: result.synthetic === false && result.status === "completed"
+};
+copyFileSync(resultPath, contract.adapterReport);
+copyFileSync(join(workDir, "camotics-result.json"), contract.camoticsResult);
+writeFileSync(join(outputRoot, "camotics-import-contract.json"), JSON.stringify(contract, null, 2));
+
+console.log(JSON.stringify(contract, null, 2));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

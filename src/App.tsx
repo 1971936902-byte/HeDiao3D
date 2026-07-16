@@ -823,6 +823,20 @@ type V3ReadinessSummary = {
       toolpath?: string;
     };
   } | null;
+  camoticsImport: {
+    id: string;
+    schema: string;
+    createdAt: string | null;
+    ok: boolean;
+    status: string | null;
+    synthetic: boolean;
+    riskLevel: string | null;
+    materialRemovedMm3: number | null;
+    productionEvidenceEligible: boolean;
+    adapterReport: string | null;
+    camoticsResult: string | null;
+    outputRoot: string | null;
+  } | null;
   latestJob: V3JobSummary | null;
   apiArtifacts?: {
     json?: string;
@@ -4121,6 +4135,10 @@ export function App() {
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
                     {v3Readiness.externalHandoff?.points ? ` · ${v3Readiness.externalHandoff.points}点` : ""}
                   </small>
+                  <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                    CAMotics导入：{v3Readiness.camoticsImport ? `${v3Readiness.camoticsImport.status ?? "-"} · ${v3Readiness.camoticsImport.synthetic ? "synthetic" : "真实结果"}` : "未验证"}
+                    {v3Readiness.camoticsImport?.riskLevel ? ` · ${v3Readiness.camoticsImport.riskLevel}` : ""}
+                  </small>
                   <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
@@ -4132,7 +4150,7 @@ export function App() {
                         {v3Readiness.acceptancePlan.nextStep ? ` · 下一步：${v3Readiness.acceptancePlan.nextStep.title}` : " · 已完成"}
                       </small>
                       <div className="v3-adapter-list">
-                        {v3Readiness.acceptancePlan.steps.slice(0, 4).map((step) => (
+                        {v3Readiness.acceptancePlan.steps.slice(0, 5).map((step) => (
                           <span className={step.status === "done" ? "ok" : step.status === "blocked" ? "critical" : "warning"} key={step.id}>
                             {step.order}. {step.title} · {step.status}
                           </span>

@@ -27,8 +27,9 @@ async function main() {
   assert(full.diagnostics, "full readiness artifact missing diagnostics");
   assert(full.gates, "full readiness artifact missing gates");
   assert(full.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", "full readiness artifact missing acceptance plan");
-  assert(full.acceptancePlan.steps.length >= 6, "acceptance plan should include deployment steps");
+  assert(full.acceptancePlan.steps.length >= 7, "acceptance plan should include deployment steps");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-neutral-handoff"), "acceptance plan missing external handoff step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-result-import"), "acceptance plan missing CAMotics import step");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
@@ -41,6 +42,7 @@ async function main() {
   assert(runbook.includes("HeDiao3D V3 deployment acceptance runbook"), "readiness runbook missing heading");
   assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
   assert(runbook.includes("npm run test:v3:neutral-adapter"), "readiness runbook missing neutral handoff command");
+  assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
   assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
 
@@ -80,6 +82,11 @@ function validateReadiness(report, label) {
   if (report.externalHandoff) {
     assert(report.externalHandoff.id, `${label} externalHandoff missing id`);
     assert(report.externalHandoff.source === "external-adapter", `${label} externalHandoff source mismatch`);
+  }
+  assert(Object.hasOwn(report, "camoticsImport"), `${label} missing camoticsImport field`);
+  if (report.camoticsImport) {
+    assert(report.camoticsImport.schema === "hediao3d.camotics-import-contract.v1", `${label} camoticsImport schema mismatch`);
+    assert(typeof report.camoticsImport.productionEvidenceEligible === "boolean", `${label} camoticsImport eligibility missing`);
   }
 }
 
