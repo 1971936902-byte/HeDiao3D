@@ -90,10 +90,19 @@ async function main() {
   assert(previewText.includes("CAMOTICS PREVIEW ONLY - not for machine"), "camotics-preview.nc header missing not-for-machine warning");
   assert(previewText.includes("Coordinate: X/Y unwrapped stock"), "camotics-preview.nc header missing unwrapped coordinate note");
 
+  const dialect = await getArtifactJson(job.id, "controller-dialect-report.json");
+  assert(dialect.level === "ready", `controller dialect expected ready, got ${dialect.level}: ${dialect.summary}`);
+  const machineDialect = findProgram(dialect, "toolpath.nc");
+  assert(machineDialect.unsupportedCommands.length === 0, `toolpath.nc has unsupported commands: ${machineDialect.unsupportedCommands.join(", ")}`);
+  assert(machineDialect.unsupportedWords.length === 0, `toolpath.nc has unsupported words: ${machineDialect.unsupportedWords.join(", ")}`);
+  assert((machineDialect.wordCounts?.Y ?? 0) > 0, "toolpath.nc dialect report missing Y motion");
+  assert((machineDialect.wordCounts?.A ?? 0) === 0, "toolpath.nc dialect report should not contain A axis for wrapY");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
     level: analysis.level,
+    dialect: dialect.level,
     machineAxes: machine.axisCounts,
     airRunZ: airRun.zRange,
     previewZ: preview.zRange

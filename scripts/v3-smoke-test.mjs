@@ -67,6 +67,7 @@ async function main() {
   assert(job.result?.summary?.productionGate?.level, "production gate missing");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
+  assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
 
   const requiredArtifacts = [
     "job.json",
@@ -81,6 +82,7 @@ async function main() {
     "toolpath.nc",
     "toolpath-summary.json",
     "nc-static-analysis.json",
+    "controller-dialect-report.json",
     "simulation-summary.json",
     "camotics-input.json",
     "camotics-run.md",

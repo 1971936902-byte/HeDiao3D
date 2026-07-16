@@ -331,6 +331,24 @@ type V3OrchestratorJob = {
           };
         }>;
       };
+      controllerDialectReport?: {
+        level: "ready" | "review" | "critical";
+        summary: string;
+        criticalIssues: string[];
+        warningIssues: string[];
+        dialect: {
+          id: string;
+          name: string;
+          expectedRotaryAxis: string | null;
+        };
+        programs: Array<{
+          filename: string;
+          role: string;
+          level: string;
+          unsupportedCommands: string[];
+          unsupportedWords: string[];
+        }>;
+      };
       camoticsInput?: {
         status: string;
         compatibility: {
@@ -3738,6 +3756,17 @@ export function App() {
                   程序 {v3Job.result.summary.ncStaticAnalysis.programs.length}
                 </small>
               )}
+              {v3Job?.result?.summary.controllerDialectReport && (
+                <small>
+                  控制器方言：{v3Job.result.summary.controllerDialectReport.level}
+                  {" · "}
+                  {v3Job.result.summary.controllerDialectReport.dialect.name}
+                  {" · "}
+                  阻断 {v3Job.result.summary.controllerDialectReport.criticalIssues.length}
+                  {" · "}
+                  复核 {v3Job.result.summary.controllerDialectReport.warningIssues.length}
+                </small>
+              )}
               {v3Job?.result?.summary.deliveryManifest && (
                 <small>
                   交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
@@ -5909,6 +5938,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const repairExecution = summary?.repairExecution;
   const postprocessProfile = summary?.postprocessProfile;
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
+  const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
   const packageIndex = summary?.machiningPackageIndex;
   const externalCamRecipe = summary?.externalCamRecipe;
@@ -5955,6 +5985,14 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `结论: ${ncStaticAnalysis?.summary ?? "-"}`,
     `阻断项: ${ncStaticAnalysis?.criticalIssues?.length ?? 0}`,
     `复核项: ${ncStaticAnalysis?.warningIssues?.length ?? 0}`,
+    "",
+    "## 控制器方言",
+    "",
+    `等级: ${controllerDialectReport?.level ?? "未生成"}`,
+    `方言: ${controllerDialectReport?.dialect?.name ?? "-"}`,
+    `结论: ${controllerDialectReport?.summary ?? "-"}`,
+    `阻断项: ${controllerDialectReport?.criticalIssues?.length ?? 0}`,
+    `复核项: ${controllerDialectReport?.warningIssues?.length ?? 0}`,
     "",
     "## CAMotics 输入",
     "",
