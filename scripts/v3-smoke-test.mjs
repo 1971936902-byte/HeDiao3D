@@ -65,6 +65,8 @@ async function main() {
   assert(job.currentStage === "completed", `currentStage expected completed, got ${job.currentStage}`);
   assert(job.result?.summary?.points > 0, "job result has no toolpath points");
   assert(job.result?.summary?.productionGate?.level, "production gate missing");
+  assert(job.result?.summary?.productionUnlockMatrix?.schema === "hediao3d.production-unlock-matrix.v1", "production unlock matrix missing");
+  assert(job.result.summary.productionUnlockMatrix.rows?.some((row) => row.id === "simulation-evidence"), "production unlock matrix missing simulation row");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   assert(job.result?.summary?.machineControllerProfile?.rotary?.outputAxis === "Y", "machine controller profile should use Y rotary output");
   assert(job.result?.summary?.machineAcceptanceChecklist?.schema === "hediao3d.machine-acceptance-checklist.v1", "machine acceptance checklist missing");
@@ -116,6 +118,7 @@ async function main() {
     "camotics-preview.nc",
     "air-run.nc",
     "production-gate.json",
+    "production-unlock-matrix.json",
     "postprocess-profile.json",
     "machining-package-index.json",
     "delivery-manifest.json",
@@ -138,6 +141,7 @@ async function main() {
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
@@ -148,6 +152,7 @@ async function main() {
   assert(operatorRunbook.includes("camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机"), "operator runbook should forbid CAMotics preview on machine");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");

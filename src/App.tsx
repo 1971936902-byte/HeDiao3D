@@ -631,6 +631,14 @@ type V3OrchestratorJob = {
         artifact: string;
         summary: string;
       };
+      productionUnlockMatrix?: {
+        schema: string;
+        summary: string;
+        passCount: number;
+        reviewCount: number;
+        blockCount: number;
+        allowProductionNc: boolean;
+      };
       toolSetupSheet?: {
         schema: string;
         summary: string;
@@ -4610,6 +4618,15 @@ export function App() {
                   试雕 {v3Job.result.summary.productionGate.allowTrialNc ? "可用" : "不可用"}
                 </small>
               )}
+              {v3Job?.result?.summary.productionUnlockMatrix && (
+                <small className={v3Job.result.summary.productionUnlockMatrix.allowProductionNc ? "v3-inline-ok" : v3Job.result.summary.productionUnlockMatrix.blockCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
+                  解锁矩阵：通过 {v3Job.result.summary.productionUnlockMatrix.passCount}
+                  {" · "}
+                  复核 {v3Job.result.summary.productionUnlockMatrix.reviewCount}
+                  {" · "}
+                  阻断 {v3Job.result.summary.productionUnlockMatrix.blockCount}
+                </small>
+              )}
               {v3Job?.result?.summary.productionGate?.simulationEvidence && (
                 <small className={v3Job.result.summary.productionGate.simulationEvidence.productionUnlockEligible ? "v3-inline-ok" : v3Job.result.summary.productionGate.simulationEvidence.synthetic ? "v3-inline-warning" : "v3-inline-critical"}>
                   仿真证据：{v3Job.result.summary.productionGate.simulationEvidence.level}
@@ -6916,6 +6933,7 @@ async function pollMeshyTaskByEndpoint(endpoint: string, onStatus: (status: stri
 function createV3PackageReadme(job: V3OrchestratorJob) {
   const summary = job.result?.summary;
   const gate = summary?.productionGate;
+  const productionUnlockMatrix = summary?.productionUnlockMatrix;
   const manifest = summary?.deliveryManifest;
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
@@ -6955,6 +6973,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `允许生产NC: ${gate?.allowProductionNc ? "是" : "否"}`,
     `允许试雕NC: ${gate?.allowTrialNc ? "是" : "否"}`,
     `允许离料空跑: ${gate?.allowAirRun ? "是" : "否"}`,
+    `解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
+    "矩阵报告: production-unlock-matrix.json",
     "",
     "## 机床验收",
     "",

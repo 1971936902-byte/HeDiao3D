@@ -2128,6 +2128,21 @@ async function processOrchestratorJob(job, settings) {
     controllerDialectReport
   });
   await writeFile(join(job.workDir, "operator-runbook.md"), operatorRunbook, "utf8");
+  const productionUnlockMatrix = createProductionUnlockMatrix({
+    job,
+    productionGate,
+    meshQuality,
+    repairPlan,
+    camInputPlan,
+    engineReadiness,
+    nativeCamReadiness,
+    simulationSummary,
+    ncStaticAnalysis,
+    controllerDialectReport,
+    toolSetupSheet,
+    rotaryCalibrationSheet
+  });
+  await writeFile(join(job.workDir, "production-unlock-matrix.json"), JSON.stringify(productionUnlockMatrix, null, 2), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -2157,6 +2172,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-acceptance-checklist.json"));
@@ -2203,6 +2219,7 @@ async function processOrchestratorJob(job, settings) {
       },
       toolSetupSheet,
       rotaryCalibrationSheet,
+      productionUnlockMatrix,
       camoticsInput,
       camoticsSimulationPlan,
       ncStaticAnalysis,
@@ -3722,6 +3739,105 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
   return `${lines.join("\n")}\n`;
 }
 
+function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
+  const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
+  const rows = [
+    {
+      id: "mesh-quality",
+      label: "Mesh质量",
+      status: meshQuality.verdict === "ready" || repairPlan.status !== "repair-required" ? "pass" : "block",
+      evidence: "mesh-quality.json",
+      summary: `${meshQuality.verdict} / score ${fmt(meshQuality.score ?? 0, 1)}`,
+      requiredForProduction: true
+    },
+    {
+      id: "cam-input",
+      label: "CAM输入模型",
+      status: camInputPlan.gate?.allowProductionNc ? "pass" : camInputPlan.status === "blocked" ? "block" : "review",
+      evidence: "cam-input-plan.json",
+      summary: camInputPlan.summary,
+      requiredForProduction: true
+    },
+    {
+      id: "external-cam",
+      label: "外部CAM引擎",
+      status: engineReadiness.externalReady ? "pass" : "review",
+      evidence: "engine-diagnostics.json",
+      summary: engineReadiness.summary,
+      requiredForProduction: true
+    },
+    {
+      id: "native-cam",
+      label: "Native CAM环境",
+      status: nativeCamReadiness?.level === "ready" ? "pass" : "review",
+      evidence: "native-cam-readiness.json",
+      summary: nativeCamReadiness?.summary ?? "未生成 Native CAM 就绪报告。",
+      requiredForProduction: true
+    },
+    {
+      id: "simulation-evidence",
+      label: "材料去除仿真证据",
+      status: simulationEvidence.productionUnlockEligible ? "pass" : "review",
+      evidence: "simulation-summary.json / camotics-result.json",
+      summary: simulationEvidence.summary,
+      requiredForProduction: true
+    },
+    {
+      id: "nc-static-analysis",
+      label: "NC静态分析",
+      status: ncStaticAnalysis?.level === "ready" ? "pass" : ncStaticAnalysis?.level === "critical" ? "block" : "review",
+      evidence: "nc-static-analysis.json",
+      summary: ncStaticAnalysis?.summary ?? "未生成 NC 静态分析。",
+      requiredForProduction: true
+    },
+    {
+      id: "controller-dialect",
+      label: "控制器方言兼容",
+      status: controllerDialectReport?.level === "ready" ? "pass" : controllerDialectReport?.level === "critical" ? "block" : "review",
+      evidence: "controller-dialect-report.json",
+      summary: controllerDialectReport?.summary ?? "未生成控制器方言报告。",
+      requiredForProduction: true
+    },
+    {
+      id: "tool-setup",
+      label: "刀具装夹参数",
+      status: toolSetupSheet?.warnings?.length ? "review" : "pass",
+      evidence: "tool-setup-sheet.json",
+      summary: toolSetupSheet?.summary ?? "未生成刀具核验单。",
+      requiredForProduction: true
+    },
+    {
+      id: "rotary-calibration",
+      label: "旋转夹具标定",
+      status: rotaryCalibrationSheet?.warnings?.length ? "review" : "pass",
+      evidence: "rotary-calibration-sheet.json",
+      summary: rotaryCalibrationSheet?.summary ?? "未生成旋转夹具标定单。",
+      requiredForProduction: true
+    }
+  ];
+  const blockCount = rows.filter((row) => row.status === "block").length;
+  const reviewCount = rows.filter((row) => row.status === "review").length;
+  const passCount = rows.filter((row) => row.status === "pass").length;
+
+  return {
+    schema: "hediao3d.production-unlock-matrix.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    allowProductionNc: productionGate.allowProductionNc,
+    summary: productionGate.allowProductionNc
+      ? "生产 NC 已满足矩阵条件。"
+      : `生产 NC 未解锁：${blockCount} 个阻断项，${reviewCount} 个复核项。`,
+    passCount,
+    reviewCount,
+    blockCount,
+    rows,
+    blockers: productionGate.blockers ?? [],
+    warnings: productionGate.warnings ?? [],
+    requiredActions: productionGate.requiredActions ?? []
+  };
+}
+
 function createMachineAcceptanceChecklist({ job, settings, toolpath, productionGate, postprocessProfile, simulationSummary, ncStaticAnalysis, machineControllerProfile, controllerDialectReport }) {
   const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
   const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
@@ -4560,6 +4676,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       readFirst: [
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
+        getFile("production-unlock-matrix.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("operator-runbook.md"),
@@ -4602,6 +4719,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     },
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
+      "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
       "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
@@ -4696,6 +4814,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-run.md", "CAMotics 操作说明", "report", true, "说明如何用 CAMotics 打开 toolpath.nc 和 air-run.nc，以及旋转夹具模式限制。"),
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
+    createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", true, "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
     createDeliveryFile(job.id, "tool-setup-sheet.json", "刀具装夹与切削参数核验单", "report", true, "核验 4mm 25度平底尖刀、切深、步距、进给和主轴转速。"),
