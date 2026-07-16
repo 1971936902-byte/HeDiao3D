@@ -314,6 +314,30 @@ type V3OrchestratorJob = {
         };
         limitations?: string[];
       };
+      machiningPackageIndex?: {
+        packageLevel: string;
+        summary: string;
+        machineCompatibility?: {
+          camMode: string;
+          postProcessorName: string;
+          lengthAxis: string;
+          depthAxis: string;
+          rotaryAxis: string | null;
+          rotaryWrapPerRevolutionMm: number | null;
+          intendedMachine?: string | null;
+        };
+        gates?: {
+          allowProductionNc: boolean;
+          allowTrialNc: boolean;
+          allowAirRun: boolean;
+          productionCandidate: string | null;
+          trialCandidate: string | null;
+          blockers: string[];
+          warnings: string[];
+          requiredActions: string[];
+        };
+        recommendedSequence?: string[];
+      };
       deliveryManifest?: {
         packageLevel: string;
         allowProductionNc: boolean;
@@ -3670,6 +3694,17 @@ export function App() {
                   {v3Job.result.summary.camoticsInput.compatibility.interpretation}
                 </small>
               )}
+              {v3Job?.result?.summary.machiningPackageIndex && (
+                <small>
+                  加工包索引：{v3Job.result.summary.machiningPackageIndex.packageLevel}
+                  {" · "}
+                  生产NC {v3Job.result.summary.machiningPackageIndex.gates?.allowProductionNc ? "允许" : "未解锁"}
+                  {" · "}
+                  试雕 {v3Job.result.summary.machiningPackageIndex.gates?.allowTrialNc ? "可用" : "不可用"}
+                  {" · "}
+                  空跑 {v3Job.result.summary.machiningPackageIndex.gates?.allowAirRun ? "可用" : "不可用"}
+                </small>
+              )}
             </div>
             {v3Job && (
               <div className="v3-log-list">
@@ -5800,6 +5835,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const repairExecution = summary?.repairExecution;
   const postprocessProfile = summary?.postprocessProfile;
   const camoticsInput = summary?.camoticsInput;
+  const packageIndex = summary?.machiningPackageIndex;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -5847,7 +5883,11 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "",
     "## 操作建议",
     "",
-    ...(gate?.requiredActions?.length ? gate.requiredActions.map((item) => `- ${item}`) : ["- 先查看 production-gate.json 和 delivery-manifest.json。"]),
+    ...(packageIndex?.recommendedSequence?.length
+      ? packageIndex.recommendedSequence.map((item) => `- ${item}`)
+      : gate?.requiredActions?.length
+        ? gate.requiredActions.map((item) => `- ${item}`)
+        : ["- 先查看 machining-package-index.json、production-gate.json 和 delivery-manifest.json。"]),
     "",
     "## 文件说明",
     "",

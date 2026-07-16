@@ -711,8 +711,17 @@ async function processOrchestratorJob(job, settings) {
     productionGate
   });
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate);
+  const machiningPackageIndex = createMachiningPackageIndex({
+    job,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    camoticsInput,
+    deliveryManifest
+  });
   await writeFile(join(job.workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
   await writeFile(join(job.workDir, "postprocess-profile.json"), JSON.stringify(postprocessProfile, null, 2), "utf8");
+  await writeFile(join(job.workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
   await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
   updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
@@ -724,6 +733,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-gate.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-profile.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "machining-package-index.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   job.status = "completed";
   job.currentStage = "completed";
@@ -745,6 +755,7 @@ async function processOrchestratorJob(job, settings) {
       productionGate,
       postprocessProfile,
       camoticsInput,
+      machiningPackageIndex,
       deliveryManifest,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
@@ -1671,6 +1682,82 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, camoticsInput, deliveryManifest }) {
+  const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
+  const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
+  const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
+  const trialCandidate = productionGate.allowTrialNc ? "toolpath.nc" : null;
+
+  return {
+    schema: "hediao3d.machining-package-index.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    summary: productionGate.summary,
+    machineCompatibility: {
+      camMode: postprocessProfile.camMode,
+      postProcessorName: postprocessProfile.postProcessorName,
+      lengthAxis: postprocessProfile.coordinateMapping?.lengthAxis ?? "X",
+      depthAxis: postprocessProfile.coordinateMapping?.depthAxis ?? "Z",
+      rotaryAxis: postprocessProfile.coordinateMapping?.rotaryAxis ?? null,
+      rotaryWrapPerRevolutionMm: postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? null,
+      intendedMachine: postprocessProfile.machine?.notes ?? null
+    },
+    filesByPurpose: {
+      readFirst: [
+        getFile("machining-package-index.json"),
+        getFile("production-gate.json"),
+        getFile("postprocess-profile.json"),
+        getFile("delivery-manifest.json")
+      ],
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
+      simulationOnly: [
+        getFile("camotics-input.json"),
+        getFile("camotics-run.md"),
+        getFile("camotics-preview.nc"),
+        getFile("simulation-summary.json")
+      ],
+      airRun: [getFile("air-run.nc")],
+      machineNcCandidates: [
+        ...(trialCandidate ? [{ ...getFile(trialCandidate), usage: productionGate.allowProductionNc ? "production-or-trial" : "trial-only" }] : [])
+      ],
+      neverRunOnMachine: [
+        { ...getFile("camotics-preview.nc"), reason: "展开三轴仿真预览，Z 已被归一化为负向切深，不是机床后处理输出。" },
+        { ...getFile("camotics-run.md"), reason: "Markdown 操作说明，不是 NC。" }
+      ]
+    },
+    recommendedSequence: [
+      "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
+      "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
+      "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
+      "运行 air-run.nc 做离料空跑，确认夹具旋转方向、行程和 Z 安全高度。",
+      productionGate.allowProductionNc
+        ? "通过外部 CAM 与仿真门禁后，可按生产流程运行 toolpath.nc。"
+        : "当前仅允许小料/废料低进给试雕；生产前必须补齐外部 CAM 和真实仿真复核。"
+    ],
+    gates: {
+      allowProductionNc: productionGate.allowProductionNc,
+      allowTrialNc: productionGate.allowTrialNc,
+      allowAirRun: productionGate.allowAirRun,
+      productionCandidate,
+      trialCandidate,
+      blockers: productionGate.blockers,
+      warnings: productionGate.warnings,
+      requiredActions: productionGate.requiredActions
+    },
+    camotics: {
+      status: camoticsInput.status,
+      previewFile: "camotics-preview.nc",
+      compatibility: camoticsInput.compatibility,
+      limitation: "CAMotics 仅用于展开三轴检查；旋转夹具真实材料去除仍需专业仿真或机床控制软件复核。"
+    },
+    metrics: {
+      pointCount: toolpath.points?.length ?? 0,
+      estimatedMinutes: toolpath.estimatedMinutes
+    }
+  };
+}
+
 function createDeliveryManifest(job, toolpath, productionGate) {
   const files = [
     createDeliveryFile(job.id, "job.json", "任务参数快照", "report", true, "用于复现本次 Orchestrator 输入。"),
@@ -1687,6 +1774,7 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
+    createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
     createDeliveryFile(job.id, "toolpath.nc", "试雕/生产 NC", "nc", productionGate.allowTrialNc, productionGate.allowProductionNc ? "已允许生产下载。" : "当前仅建议小料试雕，不建议直接生产上机。"),
     createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。")

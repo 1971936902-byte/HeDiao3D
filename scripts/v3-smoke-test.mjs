@@ -85,6 +85,7 @@ async function main() {
     "air-run.nc",
     "production-gate.json",
     "postprocess-profile.json",
+    "machining-package-index.json",
     "delivery-manifest.json"
   ];
   for (const filename of requiredArtifacts) {
