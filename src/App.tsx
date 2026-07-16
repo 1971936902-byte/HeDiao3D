@@ -309,6 +309,41 @@ type V3OrchestratorJob = {
           pointCount: number;
         };
       };
+      machineControllerProfile?: {
+        id: string;
+        name: string;
+        camMode: string;
+        controllerClass: string;
+        axisMapping?: {
+          lengthAxis: string;
+          depthAxis: string;
+          rotaryAxis: string | null;
+          planarWidthAxis?: string | null;
+          description?: string;
+        };
+        rotary?: {
+          enabled: boolean;
+          outputAxis: string | null;
+          outputUnit: string | null;
+          wrapPerRevolutionMm: number | null;
+          warning?: string | null;
+        };
+        dialect?: {
+          allowedG: string[];
+          allowedM: string[];
+          allowedWords: string[];
+          expectedRotaryAxis: string | null;
+          forbiddenWords?: string[];
+        };
+        safety?: {
+          safeZMm: number;
+          spindleRpm: number;
+          feedRateMmMin: number;
+          airRunRequired: boolean;
+          softTrialRequiredBeforeProduction: boolean;
+          notes: string[];
+        };
+      };
       ncStaticAnalysis?: {
         level: "ready" | "review" | "critical";
         summary: string;
@@ -3745,6 +3780,20 @@ export function App() {
                   刀具 {v3Job.result.summary.postprocessProfile.tool?.description ?? "未记录"}
                 </small>
               )}
+              {v3Job?.result?.summary.machineControllerProfile && (
+                <small>
+                  机床配置：{v3Job.result.summary.machineControllerProfile.name}
+                  {" · "}
+                  长度 {v3Job.result.summary.machineControllerProfile.axisMapping?.lengthAxis ?? "X"}
+                  {" · "}
+                  刀深 {v3Job.result.summary.machineControllerProfile.axisMapping?.depthAxis ?? "Z"}
+                  {" · "}
+                  旋转 {v3Job.result.summary.machineControllerProfile.rotary?.outputAxis ?? "无"}
+                  {v3Job.result.summary.machineControllerProfile.rotary?.wrapPerRevolutionMm
+                    ? ` · ${v3Job.result.summary.machineControllerProfile.rotary.wrapPerRevolutionMm}mm/圈`
+                    : ""}
+                </small>
+              )}
               {v3Job?.result?.summary.ncStaticAnalysis && (
                 <small>
                   NC静态分析：{v3Job.result.summary.ncStaticAnalysis.level}
@@ -5937,6 +5986,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const engineReadiness = summary?.engineReadiness;
   const repairExecution = summary?.repairExecution;
   const postprocessProfile = summary?.postprocessProfile;
+  const machineControllerProfile = summary?.machineControllerProfile;
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
@@ -5978,6 +6028,17 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `旋转轴: ${postprocessProfile?.coordinateMapping?.rotaryAxis ?? "-"}`,
     `旋转等效: ${postprocessProfile?.machine?.rotaryWrapPerRevolutionMm ? `${postprocessProfile.machine.rotaryWrapPerRevolutionMm} mm/圈` : "-"}`,
     `刀具: ${postprocessProfile?.tool?.description ?? "-"} / ${postprocessProfile?.tool?.toolDiameterMm ?? "-"} mm`,
+    "",
+    "## 机床控制器配置",
+    "",
+    `配置: ${machineControllerProfile?.name ?? "未生成"}`,
+    `控制器类型: ${machineControllerProfile?.controllerClass ?? "-"}`,
+    `长度轴: ${machineControllerProfile?.axisMapping?.lengthAxis ?? "-"}`,
+    `刀深轴: ${machineControllerProfile?.axisMapping?.depthAxis ?? "-"}`,
+    `旋转轴: ${machineControllerProfile?.rotary?.outputAxis ?? "-"}`,
+    `旋转等效: ${machineControllerProfile?.rotary?.wrapPerRevolutionMm ? `${machineControllerProfile.rotary.wrapPerRevolutionMm} mm/圈` : "-"}`,
+    `允许轴字: ${machineControllerProfile?.dialect?.allowedWords?.join(", ") ?? "-"}`,
+    `安全Z: ${machineControllerProfile?.safety?.safeZMm ?? "-"} mm`,
     "",
     "## NC静态分析",
     "",

@@ -683,6 +683,7 @@ async function processOrchestratorJob(job, settings) {
   const simulationSummary = createSimulationSummary(toolpath, settings, selected);
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
   const camoticsPreviewGcode = createCamoticsPreviewGcode(toolpath.points, settings, toolpath.estimatedMinutes);
+  const machineControllerProfile = createMachineControllerProfile(settings);
   const ncStaticAnalysis = createNcStaticAnalysis({
     settings,
     files: [
@@ -693,6 +694,7 @@ async function processOrchestratorJob(job, settings) {
   });
   const controllerDialectReport = createControllerDialectReport({
     settings,
+    machineControllerProfile,
     files: [
       { filename: "toolpath.nc", role: "machine", gcode: toolpath.gcode },
       { filename: "air-run.nc", role: "air-run", gcode: airRunGcode },
@@ -711,6 +713,7 @@ async function processOrchestratorJob(job, settings) {
   }, null, 2), "utf8");
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+  await writeFile(join(job.workDir, "machine-controller-profile.json"), JSON.stringify(machineControllerProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
   await writeFile(join(job.workDir, "controller-dialect-report.json"), JSON.stringify(controllerDialectReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
@@ -731,6 +734,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     camoticsInput,
     ncStaticAnalysis,
+    machineControllerProfile,
     controllerDialectReport
   });
   const postprocessProfile = createPostprocessProfile({
@@ -749,6 +753,7 @@ async function processOrchestratorJob(job, settings) {
     postprocessProfile,
     camoticsInput,
     ncStaticAnalysis,
+    machineControllerProfile,
     controllerDialectReport,
     deliveryManifest
   });
@@ -760,6 +765,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "nc-static-analysis.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "controller-dialect-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
@@ -792,6 +798,7 @@ async function processOrchestratorJob(job, settings) {
       postprocessProfile,
       camoticsInput,
       ncStaticAnalysis,
+      machineControllerProfile,
       controllerDialectReport,
       machiningPackageIndex,
       deliveryManifest,
@@ -1836,19 +1843,91 @@ function createNcIssue(level, id, message) {
   return { level, id, message };
 }
 
-function createControllerDialectReport({ settings, files }) {
-  const expectedRotaryAxis = settings.camMode === "rotaryWrap" ? String(settings.rotaryOutputAxis ?? "Y").toUpperCase() : null;
+function createMachineControllerProfile(settings) {
+  const postProcessor = settings.postProcessor ?? "generic";
+  const rotaryAxis = settings.camMode === "rotaryWrap"
+    ? String(settings.rotaryOutputAxis || (postProcessor === "wrapX" ? "X" : postProcessor === "wrapY" ? "Y" : "A")).toUpperCase()
+    : null;
+  const lengthAxis = settings.camMode === "rotaryWrap" && rotaryAxis === "X" ? "Y" : "X";
+  const wrapPerRev = settings.camMode === "rotaryWrap"
+    ? Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100))
+    : null;
+  const allowedWords = settings.camMode === "rotaryWrap"
+    ? dedupeStrings([lengthAxis, "Z", rotaryAxis, "F", "S"].filter(Boolean))
+    : ["X", "Y", "Z", "F", "S"];
+
+  return {
+    schema: "hediao3d.machine-controller-profile.v1",
+    createdAt: new Date().toISOString(),
+    id: settings.machineProfileId ?? (settings.camMode === "rotaryWrap" ? "desktop-rotary-y-wrap" : "desktop-3axis-relief"),
+    name: settings.camMode === "rotaryWrap"
+      ? `三轴控制器 + ${rotaryAxis}轴旋转夹具`
+      : "常规三轴平面浮雕控制器",
+    camMode: settings.camMode ?? "relief3axis",
+    controllerClass: settings.camMode === "rotaryWrap" ? "3axis-controller-with-rotary-fixture" : "3axis-cartesian",
+    axisMapping: {
+      lengthAxis,
+      depthAxis: "Z",
+      rotaryAxis,
+      planarWidthAxis: settings.camMode === "rotaryWrap" ? null : "Y",
+      description: settings.camMode === "rotaryWrap"
+        ? `${lengthAxis}=长度方向，Z=刀深/安全高度，${rotaryAxis}=旋转夹具线性化坐标。`
+        : "X/Y=平面运动，Z=刀深/安全高度。"
+    },
+    rotary: {
+      enabled: settings.camMode === "rotaryWrap",
+      outputAxis: rotaryAxis,
+      outputUnit: rotaryAxis && rotaryAxis !== "A" ? "linearized-mm" : rotaryAxis === "A" ? "degree" : null,
+      wrapPerRevolutionMm: wrapPerRev,
+      warning: settings.camMode === "rotaryWrap"
+        ? "确认控制器中该轴每转一圈对应的脉冲/等效距离与 wrapPerRevolutionMm 一致。"
+        : null
+    },
+    dialect: {
+      allowedG: ["G0", "G00", "G1", "G01", "G21", "G90", "G94"],
+      allowedM: ["M3", "M03", "M5", "M05", "M30"],
+      allowedWords,
+      expectedRotaryAxis: rotaryAxis,
+      forbiddenWords: settings.camMode === "rotaryWrap" && rotaryAxis === "Y" ? ["A"] : [],
+      unsupportedByDefault: ["G2", "G02", "G3", "G03", "G17", "G18", "G19", "G40", "G41", "G42", "G43", "G49", "G80", "G81", "G83"]
+    },
+    safety: {
+      safeZMm: Number(settings.safeZ ?? 0),
+      spindleRpm: Number(settings.spindleRpm ?? 0),
+      feedRateMmMin: Number(settings.feedRate ?? 0),
+      airRunRequired: true,
+      softTrialRequiredBeforeProduction: true,
+      notes: [
+        "首次换机床、换夹具、换后处理器或修改旋转等效距离后，必须先运行 air-run.nc。",
+        "空跑确认长度方向、旋转方向、Z正负方向、限位和夹持安全距离后，再做软材料试雕。",
+        "当前 profile 是保守控制器能力集；若真实控制器支持圆弧、刀补或更多 M 指令，应新增机床 profile 后再放开。"
+      ]
+    },
+    postprocessExpectation: {
+      requestedPostProcessor: postProcessor,
+      expectedOutput: settings.camMode === "rotaryWrap"
+        ? `只输出 ${allowedWords.join("/")} 字地址和基础 G0/G1/G21/G90/G94/M3/M5/M30。`
+        : "只输出 X/Y/Z/F/S 和基础 G0/G1/G21/G90/G94/M3/M5/M30。"
+    }
+  };
+}
+
+function createControllerDialectReport({ settings, machineControllerProfile, files }) {
+  const profile = machineControllerProfile ?? createMachineControllerProfile(settings);
   const dialect = {
-    id: settings.machineProfileId ?? "desktop-rotary-y-wrap",
-    name: "三轴控制器 + 旋转夹具简化 G-code",
-    allowedG: ["G0", "G00", "G1", "G01", "G21", "G90", "G94"],
-    allowedM: ["M3", "M03", "M5", "M05", "M30"],
-    allowedWords: ["X", "Y", "Z", "A", "F", "S"],
-    expectedRotaryAxis,
+    id: profile.id,
+    name: profile.name,
+    allowedG: profile.dialect.allowedG,
+    allowedM: profile.dialect.allowedM,
+    allowedWords: profile.dialect.allowedWords,
+    expectedRotaryAxis: profile.dialect.expectedRotaryAxis,
+    forbiddenWords: profile.dialect.forbiddenWords ?? [],
+    profileArtifact: "machine-controller-profile.json",
     notes: [
-      "当前检查按保守三轴控制器能力集判断；若机床控制器支持更多指令，可在后续加入控制器配置。",
-      "Y轴旋转夹具模式下，机床 NC 应只使用 X/Y/Z/F/S 和基础 G/M 指令，不应混入 A 轴或圆弧插补。"
-    ]
+      profile.axisMapping.description,
+      profile.rotary.warning,
+      ...(profile.safety.notes ?? [])
+    ].filter(Boolean)
   };
   const programs = files.map((file) => analyzeControllerDialectProgram(file, settings, dialect));
   const criticalIssues = programs.flatMap((program) => program.issues.filter((issue) => issue.level === "critical").map((issue) => `${program.filename}: ${issue.message}`));
@@ -1875,8 +1954,10 @@ function analyzeControllerDialectProgram(file, settings, dialect) {
   const wordCounts = {};
   const unsupportedCommands = [];
   const unsupportedWords = [];
+  const forbiddenWords = [];
   const issues = [];
   const expectedRotaryAxis = dialect.expectedRotaryAxis;
+  const forbiddenWordSet = new Set(dialect.forbiddenWords ?? []);
 
   for (const rawLine of String(file.gcode ?? "").split(/\r?\n/)) {
     const stripped = rawLine.replace(/\([^)]*\)/g, "").trim().toUpperCase();
@@ -1894,17 +1975,23 @@ function analyzeControllerDialectProgram(file, settings, dialect) {
         if (!dialect.allowedM.includes(normalized)) unsupportedCommands.push(normalized);
       } else if (!dialect.allowedWords.includes(letter)) {
         unsupportedWords.push(letter);
+      } else if (forbiddenWordSet.has(letter)) {
+        forbiddenWords.push(letter);
       }
     }
   }
 
   const uniqueUnsupportedCommands = dedupeStrings(unsupportedCommands);
   const uniqueUnsupportedWords = dedupeStrings(unsupportedWords);
+  const uniqueForbiddenWords = dedupeStrings(forbiddenWords);
   if (uniqueUnsupportedCommands.length > 0) {
     issues.push(createNcIssue(file.role === "simulation-only" ? "warning" : "critical", "unsupported-commands", `发现不在保守控制器方言中的指令：${uniqueUnsupportedCommands.join(", ")}。`));
   }
   if (uniqueUnsupportedWords.length > 0) {
     issues.push(createNcIssue(file.role === "simulation-only" ? "warning" : "critical", `unsupported-words`, `发现不在保守控制器方言中的字地址：${uniqueUnsupportedWords.join(", ")}。`));
+  }
+  if (uniqueForbiddenWords.length > 0) {
+    issues.push(createNcIssue(file.role === "simulation-only" ? "warning" : "critical", "forbidden-words", `发现当前机床 Profile 禁止的字地址：${uniqueForbiddenWords.join(", ")}。`));
   }
 
   if (file.role === "machine" && settings.camMode === "rotaryWrap") {
@@ -1931,6 +2018,7 @@ function analyzeControllerDialectProgram(file, settings, dialect) {
     wordCounts,
     unsupportedCommands: uniqueUnsupportedCommands,
     unsupportedWords: uniqueUnsupportedWords,
+    forbiddenWords: uniqueForbiddenWords,
     issues
   };
 }
@@ -2130,7 +2218,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, camoticsInput, ncStaticAnalysis, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, camoticsInput, ncStaticAnalysis, machineControllerProfile, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -2143,25 +2231,28 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     packageLevel: productionGate.level,
     summary: productionGate.summary,
     machineCompatibility: {
+      machineControllerProfileId: machineControllerProfile?.id ?? null,
+      controllerClass: machineControllerProfile?.controllerClass ?? null,
       camMode: postprocessProfile.camMode,
       postProcessorName: postprocessProfile.postProcessorName,
-      lengthAxis: postprocessProfile.coordinateMapping?.lengthAxis ?? "X",
-      depthAxis: postprocessProfile.coordinateMapping?.depthAxis ?? "Z",
-      rotaryAxis: postprocessProfile.coordinateMapping?.rotaryAxis ?? null,
-      rotaryWrapPerRevolutionMm: postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? null,
-      intendedMachine: postprocessProfile.machine?.notes ?? null
+      lengthAxis: machineControllerProfile?.axisMapping?.lengthAxis ?? postprocessProfile.coordinateMapping?.lengthAxis ?? "X",
+      depthAxis: machineControllerProfile?.axisMapping?.depthAxis ?? postprocessProfile.coordinateMapping?.depthAxis ?? "Z",
+      rotaryAxis: machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? null,
+      rotaryWrapPerRevolutionMm: machineControllerProfile?.rotary?.wrapPerRevolutionMm ?? postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? null,
+      intendedMachine: machineControllerProfile?.name ?? postprocessProfile.machine?.notes ?? null
     },
     filesByPurpose: {
       readFirst: [
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
         getFile("nc-static-analysis.json"),
+        getFile("machine-controller-profile.json"),
         getFile("controller-dialect-report.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "controller-dialect-report.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
       simulationOnly: [
         getFile("camotics-input.json"),
         getFile("camotics-run.md"),
@@ -2179,6 +2270,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     },
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
+      "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
       "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
       "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
       "运行 air-run.nc 做离料空跑，确认夹具旋转方向、行程和 Z 安全高度。",
@@ -2234,6 +2326,7 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "camotics-run.md", "CAMotics 操作说明", "report", true, "说明如何用 CAMotics 打开 toolpath.nc 和 air-run.nc，以及旋转夹具模式限制。"),
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
+    createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),

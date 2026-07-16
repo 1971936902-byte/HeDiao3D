@@ -92,17 +92,29 @@ async function main() {
 
   const dialect = await getArtifactJson(job.id, "controller-dialect-report.json");
   assert(dialect.level === "ready", `controller dialect expected ready, got ${dialect.level}: ${dialect.summary}`);
+  assert(dialect.dialect.profileArtifact === "machine-controller-profile.json", "controller dialect report should reference machine-controller-profile.json");
   const machineDialect = findProgram(dialect, "toolpath.nc");
   assert(machineDialect.unsupportedCommands.length === 0, `toolpath.nc has unsupported commands: ${machineDialect.unsupportedCommands.join(", ")}`);
   assert(machineDialect.unsupportedWords.length === 0, `toolpath.nc has unsupported words: ${machineDialect.unsupportedWords.join(", ")}`);
   assert((machineDialect.wordCounts?.Y ?? 0) > 0, "toolpath.nc dialect report missing Y motion");
   assert((machineDialect.wordCounts?.A ?? 0) === 0, "toolpath.nc dialect report should not contain A axis for wrapY");
 
+  const profile = await getArtifactJson(job.id, "machine-controller-profile.json");
+  assert(profile.schema === "hediao3d.machine-controller-profile.v1", "machine controller profile schema mismatch");
+  assert(profile.controllerClass === "3axis-controller-with-rotary-fixture", "machine controller profile class mismatch");
+  assert(profile.axisMapping?.lengthAxis === "X", "machine controller profile should map X to length");
+  assert(profile.axisMapping?.depthAxis === "Z", "machine controller profile should map Z to depth");
+  assert(profile.rotary?.outputAxis === "Y", "machine controller profile should map Y to rotary fixture");
+  assert(profile.rotary?.wrapPerRevolutionMm === settings.rotaryWrapPerRevolutionMm, "machine controller wrap distance mismatch");
+  assert(profile.dialect?.allowedWords?.includes("Y"), "machine controller profile should allow Y word");
+  assert(profile.dialect?.forbiddenWords?.includes("A"), "Y rotary machine profile should forbid A word");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
     level: analysis.level,
     dialect: dialect.level,
+    machineControllerProfile: profile.id,
     machineAxes: machine.axisCounts,
     airRunZ: airRun.zRange,
     previewZ: preview.zRange
