@@ -9,6 +9,7 @@ public/imported-models/
 public/import-previews/
 public/orchestrator-jobs/
 public/orchestrator-adapter-validation/
+public/orchestrator-readiness/
 public/native-cam-readiness/
 public/meshy-results/019f*.glb
 public/meshy-results/019f*.stl

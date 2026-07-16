@@ -55,6 +55,14 @@ const server = createServer(async (req, res) => {
       return getOrchestratorDiagnostics(res);
     }
 
+    if (req.method === "GET" && req.url === "/api/orchestrator/readiness/latest") {
+      return getLatestV3Readiness(res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/orchestrator/readiness") {
+      return createV3ReadinessReport(req, res);
+    }
+
     if (req.method === "GET" && req.url === "/api/orchestrator/adapter-validation/latest") {
       return getLatestAdapterValidation(res);
     }
@@ -110,6 +118,11 @@ const server = createServer(async (req, res) => {
     const nativeCamArtifactMatch = req.url?.match(/^\/api\/orchestrator\/native-cam\/([^/?#/]+)\/([^/?#/]+)$/);
     if (req.method === "GET" && nativeCamArtifactMatch) {
       return getNativeCamReadinessArtifact(nativeCamArtifactMatch[1], nativeCamArtifactMatch[2], res);
+    }
+
+    const readinessArtifactMatch = req.url?.match(/^\/api\/orchestrator\/readiness\/([^/?#/]+)\/([^/?#/]+)$/);
+    if (req.method === "GET" && readinessArtifactMatch) {
+      return getV3ReadinessArtifact(readinessArtifactMatch[1], readinessArtifactMatch[2], res);
     }
 
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
@@ -372,6 +385,10 @@ async function getOrchestratorEngines(res) {
 }
 
 async function getOrchestratorDiagnostics(res) {
+  return json(res, 200, await createOrchestratorDiagnosticsReport());
+}
+
+async function createOrchestratorDiagnosticsReport() {
   const engines = detectCamEngines();
   const checks = [
     createDiagnosticCheck("api-port", "ok", `API_PORT=${port}`, "本地 API 端口可读取。"),
@@ -397,7 +414,7 @@ async function getOrchestratorDiagnostics(res) {
   const warning = checks.filter((check) => check.level === "warning").length;
   const level = critical > 0 ? "critical" : warning > 0 ? "warning" : "ok";
 
-  return json(res, 200, {
+  return {
     level,
     summary: level === "ok" ? "V3 Orchestrator 环境可用。" : level === "warning" ? "V3 Orchestrator 可运行，但仍缺少生产级外部 CAM/仿真配置。" : "V3 Orchestrator 存在阻断项。",
     platform: {
@@ -423,7 +440,7 @@ async function getOrchestratorDiagnostics(res) {
     engines,
     checks,
     recommendedActions: createDiagnosticsRecommendedActions(checks, engines)
-  });
+  };
 }
 
 function createDiagnosticCheck(id, level, value, detail) {
@@ -451,6 +468,251 @@ function createDiagnosticsRecommendedActions(checks, engines) {
   if (!engines.some((engine) => engine.id === "opencamlib" && engine.available)) actions.push("在 Linux CAM 服务端安装 OpenCAMLib/ocl，用于后续 drop-cutter 和水线算法。");
   if (actions.length === 0) actions.push("环境自检通过，可继续运行 V3 小闭环和外部 CAM adapter 试算。");
   return actions;
+}
+
+async function createV3ReadinessReport(req, res) {
+  await readJson(req, 100_000).catch(() => ({}));
+  const reportId = `readiness-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+  const outputRoot = join(process.cwd(), "public", "orchestrator-readiness", reportId);
+  await mkdir(outputRoot, { recursive: true });
+  const report = await buildV3ReadinessReport(reportId, outputRoot);
+  await writeFile(join(outputRoot, "v3-readiness-report.json"), JSON.stringify(report, null, 2), "utf8");
+  await writeFile(join(outputRoot, "v3-readiness-report.md"), createV3ReadinessMarkdown(report), "utf8");
+  return json(res, 200, createV3ReadinessPublicSummary(report, reportId));
+}
+
+function getLatestV3Readiness(res) {
+  const root = join(process.cwd(), "public", "orchestrator-readiness");
+  if (!existsSync(root)) return json(res, 200, { latest: null, reports: [] });
+  const reports = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readV3ReadinessSummary(entry.name))
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())
+    .slice(0, 12);
+  return json(res, 200, {
+    latest: reports[0] ?? null,
+    reports
+  });
+}
+
+async function buildV3ReadinessReport(reportId, outputRoot) {
+  const diagnostics = await createOrchestratorDiagnosticsReport();
+  const nativeCam = readLatestFromDirectory("public/native-cam-readiness", "native-cam-readiness.json", createNativeCamReadinessPublicSummary);
+  const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
+  const latestJob = getLatestOrchestratorJobSummary();
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, latestJob });
+  return {
+    schema: "hediao3d.v3-readiness-report.v1",
+    id: reportId,
+    createdAt: new Date().toISOString(),
+    outputRoot,
+    level: gates.level,
+    summary: gates.summary,
+    gates,
+    diagnostics,
+    nativeCam,
+    adapterValidation,
+    latestJob,
+    apiArtifacts: createV3ReadinessArtifactLinks(reportId)
+  };
+}
+
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, latestJob }) {
+  const blockers = [];
+  const warnings = [];
+  const nextActions = [];
+
+  if (diagnostics.level === "critical") {
+    blockers.push(`Orchestrator 自检 critical：${diagnostics.summary}`);
+  } else if (diagnostics.level === "warning") {
+    warnings.push(diagnostics.summary);
+  }
+  nextActions.push(...(diagnostics.recommendedActions ?? []));
+
+  if (!nativeCam) {
+    warnings.push("尚未运行 Native CAM 环境验收。");
+    nextActions.push("在 V3 面板点击“验收Native CAM”，或运行 npm run test:v3:native-cam。");
+  } else if (nativeCam.summary.level !== "ready") {
+    warnings.push(`Native CAM 未就绪：${nativeCam.summary.readyCount}/${nativeCam.summary.requiredCount}，${nativeCam.summary.level}`);
+    nextActions.push(...(nativeCam.summary.nextActions ?? []));
+  }
+
+  if (!adapterValidation) {
+    warnings.push("尚未运行外部 Adapter 验证。");
+    nextActions.push("先运行安全模板 Adapter 验证，再在 CAM 服务器上运行 Native 验证。");
+  } else {
+    if (adapterValidation.overall.failed > 0) blockers.push(`Adapter 验证失败 ${adapterValidation.overall.failed} 项。`);
+    if (adapterValidation.overall.completedAdapters === 0) {
+      warnings.push("Adapter 还没有 completed 外部输出，当前仍依赖内置 fallback。");
+    }
+    if (!adapterValidation.overall.readyForProduction) {
+      nextActions.push(adapterValidation.overall.note ?? "继续完成外部 CAM adapter 的真实输出验收。");
+    }
+  }
+
+  if (!latestJob) {
+    warnings.push("尚未运行 V3 Orchestrator 小闭环任务。");
+    nextActions.push("导入/生成一个 GLB/STL 后运行 V3 小闭环，生成加工包与生产门禁报告。");
+  } else {
+    if (latestJob.status !== "completed") warnings.push(`最近 V3 任务状态为 ${latestJob.status}。`);
+    if (!latestJob.allowAirRun) warnings.push("最近任务未生成可用离料空跑文件。");
+    if (!latestJob.allowTrialNc) warnings.push("最近任务未解锁试雕 NC。");
+    if (!latestJob.allowProductionNc) warnings.push(`最近任务生产 NC 未解锁，包级别 ${latestJob.packageLevel ?? "unknown"}。`);
+  }
+
+  const level = blockers.length > 0 ? "blocked" : warnings.length > 0 ? "trial-only" : "production-ready";
+  return {
+    level,
+    summary: level === "production-ready"
+      ? "V3 部署、外部 CAM、仿真和最近任务门禁均已通过。"
+      : level === "blocked"
+        ? `V3 存在阻断项：${blockers[0]}`
+        : "V3 可继续小闭环/试雕，但尚未达到生产级 CAM 门禁。",
+    allowProductionNc: level === "production-ready",
+    allowTrialNc: Boolean(latestJob?.allowTrialNc) && blockers.length === 0,
+    allowAirRun: Boolean(latestJob?.allowAirRun),
+    blockers: dedupeStrings(blockers),
+    warnings: dedupeStrings(warnings),
+    nextActions: dedupeStrings(nextActions).slice(0, 12)
+  };
+}
+
+function getLatestOrchestratorJobSummary() {
+  const jobs = [];
+  for (const job of orchestratorJobs.values()) jobs.push(job);
+  const root = join(process.cwd(), "public", "orchestrator-jobs");
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = readJobManifest(entry.name);
+      if (manifest) jobs.push(manifest);
+    }
+  }
+  const summaries = jobs
+    .map(createOrchestratorJobSummary)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return summaries[0] ?? null;
+}
+
+function readLatestFromDirectory(relativeRoot, filename, mapper) {
+  const root = join(process.cwd(), relativeRoot);
+  if (!existsSync(root)) return null;
+  const entries = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({ id: entry.name, path: join(root, entry.name, filename) }))
+    .filter((entry) => existsSync(entry.path))
+    .sort((a, b) => statSync(b.path).mtimeMs - statSync(a.path).mtimeMs);
+  if (!entries[0]) return null;
+  try {
+    return mapper(JSON.parse(readFileSync(entries[0].path, "utf8")), entries[0].id);
+  } catch {
+    return null;
+  }
+}
+
+function readV3ReadinessSummary(reportId) {
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(reportId)) return null;
+  const reportPath = join(process.cwd(), "public", "orchestrator-readiness", reportId, "v3-readiness-report.json");
+  if (!existsSync(reportPath)) return null;
+  try {
+    return createV3ReadinessPublicSummary(JSON.parse(readFileSync(reportPath, "utf8")), reportId);
+  } catch {
+    return null;
+  }
+}
+
+function createV3ReadinessPublicSummary(report, reportId) {
+  return {
+    id: reportId,
+    schema: report.schema,
+    createdAt: report.createdAt,
+    level: report.level,
+    summary: report.summary,
+    gates: report.gates,
+    diagnostics: {
+      level: report.diagnostics?.level ?? "unknown",
+      summary: report.diagnostics?.summary ?? null
+    },
+    nativeCam: report.nativeCam ? {
+      level: report.nativeCam.summary.level,
+      readyCount: report.nativeCam.summary.readyCount,
+      requiredCount: report.nativeCam.summary.requiredCount
+    } : null,
+    adapterValidation: report.adapterValidation ? {
+      failed: report.adapterValidation.overall.failed,
+      generatedPlans: report.adapterValidation.overall.generatedPlans,
+      completedAdapters: report.adapterValidation.overall.completedAdapters,
+      readyForProduction: report.adapterValidation.overall.readyForProduction
+    } : null,
+    latestJob: report.latestJob,
+    apiArtifacts: createV3ReadinessArtifactLinks(reportId)
+  };
+}
+
+function createV3ReadinessArtifactLinks(reportId) {
+  return {
+    json: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.json`,
+    markdown: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.md`
+  };
+}
+
+function getV3ReadinessArtifact(reportId, filename, res) {
+  const safeId = decodeURIComponent(reportId);
+  const safeFilename = decodeURIComponent(filename);
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(safeId) || !/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return json(res, 400, { error: "非法 V3 readiness 路径" });
+  }
+  const filePath = join(process.cwd(), "public", "orchestrator-readiness", safeId, safeFilename);
+  if (!existsSync(filePath)) return json(res, 404, { error: "找不到 V3 readiness 产物" });
+  const content = readFileSync(filePath);
+  res.writeHead(200, {
+    "Content-Type": artifactContentType(safeFilename),
+    "Content-Length": content.length,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(content);
+}
+
+function createV3ReadinessMarkdown(report) {
+  const lines = [
+    "# HeDiao3D V3 Readiness Report",
+    "",
+    `Created: ${report.createdAt}`,
+    `Level: ${report.level}`,
+    "",
+    "## Summary",
+    "",
+    report.summary,
+    "",
+    "## Gates",
+    "",
+    `- Production NC: ${report.gates.allowProductionNc ? "yes" : "no"}`,
+    `- Trial NC: ${report.gates.allowTrialNc ? "yes" : "no"}`,
+    `- Air run: ${report.gates.allowAirRun ? "yes" : "no"}`,
+    "",
+    "## Blockers",
+    "",
+    ...(report.gates.blockers.length ? report.gates.blockers.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Warnings",
+    "",
+    ...(report.gates.warnings.length ? report.gates.warnings.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Next Actions",
+    "",
+    ...(report.gates.nextActions.length ? report.gates.nextActions.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Components",
+    "",
+    `- Diagnostics: ${report.diagnostics?.level ?? "unknown"} / ${report.diagnostics?.summary ?? ""}`,
+    `- Native CAM: ${report.nativeCam ? `${report.nativeCam.summary.readyCount}/${report.nativeCam.summary.requiredCount} ${report.nativeCam.summary.level}` : "missing"}`,
+    `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
+    `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
+    ""
+  ];
+  return `${lines.join("\n")}\n`;
 }
 
 async function runAdapterValidation(req, res) {

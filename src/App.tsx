@@ -643,6 +643,42 @@ type V3NativeCamReadinessSummary = {
   };
 };
 
+type V3ReadinessSummary = {
+  id: string;
+  schema: string;
+  createdAt: string;
+  level: "production-ready" | "trial-only" | "blocked" | string;
+  summary: string;
+  gates: {
+    allowProductionNc: boolean;
+    allowTrialNc: boolean;
+    allowAirRun: boolean;
+    blockers: string[];
+    warnings: string[];
+    nextActions: string[];
+  };
+  diagnostics: {
+    level: string;
+    summary: string | null;
+  };
+  nativeCam: {
+    level: string;
+    readyCount: number;
+    requiredCount: number;
+  } | null;
+  adapterValidation: {
+    failed: number;
+    generatedPlans: number;
+    completedAdapters: number;
+    readyForProduction: boolean;
+  } | null;
+  latestJob: V3JobSummary | null;
+  apiArtifacts?: {
+    json?: string;
+    markdown?: string;
+  };
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -1026,10 +1062,12 @@ export function App() {
   const [v3Diagnostics, setV3Diagnostics] = useState<V3Diagnostics | null>(null);
   const [v3AdapterValidation, setV3AdapterValidation] = useState<V3AdapterValidationSummary | null>(null);
   const [v3NativeCamReadiness, setV3NativeCamReadiness] = useState<V3NativeCamReadinessSummary | null>(null);
+  const [v3Readiness, setV3Readiness] = useState<V3ReadinessSummary | null>(null);
   const [isV3JobRunning, setIsV3JobRunning] = useState(false);
   const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
   const [isV3AdapterValidating, setIsV3AdapterValidating] = useState(false);
   const [isV3NativeCamChecking, setIsV3NativeCamChecking] = useState(false);
+  const [isV3ReadinessChecking, setIsV3ReadinessChecking] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -1251,6 +1289,7 @@ export function App() {
     refreshV3Diagnostics();
     refreshV3AdapterValidation();
     refreshV3NativeCamReadiness();
+    refreshV3Readiness();
     return () => {
       cancelled = true;
     };
@@ -1337,6 +1376,37 @@ export function App() {
       setV3Status(error instanceof Error ? error.message : "Native CAM 环境验收失败");
     } finally {
       setIsV3NativeCamChecking(false);
+    }
+  };
+
+  const refreshV3Readiness = async () => {
+    try {
+      const response = await fetch("/api/orchestrator/readiness/latest");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "V3 总门禁记录加载失败");
+      setV3Readiness(data.latest ?? null);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "V3 总门禁记录加载失败");
+    }
+  };
+
+  const handleRunV3Readiness = async () => {
+    try {
+      setIsV3ReadinessChecking(true);
+      setV3Status("正在生成 V3 生产就绪总报告");
+      const response = await fetch("/api/orchestrator/readiness", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await response.json() as V3ReadinessSummary & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "V3 生产就绪总报告生成失败");
+      setV3Readiness(data);
+      setV3Status(`V3 总门禁：${data.level}，${data.summary}`);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "V3 生产就绪总报告生成失败");
+    } finally {
+      setIsV3ReadinessChecking(false);
     }
   };
 
@@ -3871,6 +3941,53 @@ export function App() {
                 ))}
               </div>
             )}
+            <div className={`v3-diagnostics ${v3Readiness?.level === "production-ready" ? "ok" : v3Readiness?.level === "blocked" ? "critical" : "warning"}`}>
+              <div className="v3-history-heading">
+                <strong>V3 生产就绪总门禁</strong>
+                <button type="button" onClick={refreshV3Readiness}>刷新</button>
+              </div>
+              {v3Readiness ? (
+                <>
+                  <span>
+                    {v3Readiness.level}
+                    {" · "}
+                    生产NC {v3Readiness.gates.allowProductionNc ? "允许" : "未解锁"}
+                    {" · "}
+                    试雕 {v3Readiness.gates.allowTrialNc ? "可用" : "不可用"}
+                    {" · "}
+                    空跑 {v3Readiness.gates.allowAirRun ? "可用" : "不可用"}
+                  </span>
+                  <small>{v3Readiness.summary}</small>
+                  {v3Readiness.nativeCam && (
+                    <small>Native CAM {v3Readiness.nativeCam.readyCount}/{v3Readiness.nativeCam.requiredCount} · {v3Readiness.nativeCam.level}</small>
+                  )}
+                  {v3Readiness.adapterValidation && (
+                    <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
+                  )}
+                  {v3Readiness.gates.warnings[0] && (
+                    <small>提示：{v3Readiness.gates.warnings[0]}</small>
+                  )}
+                  <div className="v3-artifact-list compact">
+                    {v3Readiness.apiArtifacts?.json && (
+                      <a href={v3Readiness.apiArtifacts.json} download>
+                        下载总门禁JSON
+                      </a>
+                    )}
+                    {v3Readiness.apiArtifacts?.markdown && (
+                      <a href={v3Readiness.apiArtifacts.markdown} download>
+                        下载总门禁报告
+                      </a>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <small>还没有 V3 总门禁报告；建议在 Native CAM、Adapter 验证和 V3 小闭环后生成。</small>
+              )}
+              <button className="demo-action package-action" onClick={handleRunV3Readiness} disabled={isV3ReadinessChecking} type="button">
+                <ClipboardCheck size={17} />
+                {isV3ReadinessChecking ? "生成中..." : "生成V3总门禁"}
+              </button>
+            </div>
             <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
               <div className="v3-history-heading">
                 <strong>Native CAM 环境验收</strong>
