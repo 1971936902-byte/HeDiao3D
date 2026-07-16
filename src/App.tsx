@@ -221,6 +221,7 @@ type V3OrchestratorJob = {
         summary: string;
         blockers: string[];
         warnings: string[];
+        requiredActions: string[];
         checks: {
           fitRate: number;
           missCount: number;
@@ -645,6 +646,7 @@ export function App() {
   const [v3Engines, setV3Engines] = useState<V3EngineStatus[]>([]);
   const [v3Job, setV3Job] = useState<V3OrchestratorJob | null>(null);
   const [isV3JobRunning, setIsV3JobRunning] = useState(false);
+  const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -1675,6 +1677,55 @@ export function App() {
         title: "模型文件下载失败",
         detail: message
       });
+    }
+  };
+
+  const handleDownloadV3Package = async () => {
+    const manifest = v3Job?.result?.summary.deliveryManifest;
+    if (!v3Job || !manifest) {
+      setV3Status("请先运行 V3 小闭环，生成交付清单后再下载加工包。");
+      return;
+    }
+
+    setIsV3PackageDownloading(true);
+    setV3Status("正在打包 V3 加工包");
+    try {
+      const files: ZipFile[] = [];
+      const downloadableFiles = manifest.files.filter((file) => file.downloadable);
+      for (const file of downloadableFiles) {
+        const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/artifacts/${encodeURIComponent(file.filename)}`);
+        if (!response.ok) throw new Error(`${file.filename} 下载失败：${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        files.push({
+          name: `hediao3d-v3/${file.kind}/${file.filename}`,
+          content: bytes
+        });
+      }
+      files.push({
+        name: "hediao3d-v3/README-V3.md",
+        content: createV3PackageReadme(v3Job),
+        mime: "text/markdown"
+      });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-${manifest.packageLevel}-${stamp}.zip`, createZipBlob(files));
+      setV3Status(`V3 加工包已打包：${downloadableFiles.length} 个产物`);
+      recordTask({
+        category: "cam",
+        status: manifest.allowProductionNc ? "ok" : "warning",
+        title: "下载 V3 加工包",
+        detail: manifest.allowProductionNc ? "生产 NC 已包含在加工包中。" : "当前加工包为试算/空跑级别，正式上机前仍需外部 CAM 和仿真验证。"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "V3 加工包下载失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "V3 加工包下载失败",
+        detail: message
+      });
+    } finally {
+      setIsV3PackageDownloading(false);
     }
   };
 
@@ -3397,6 +3448,10 @@ export function App() {
             <button className="demo-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
               <Cloud size={17} />
               {isV3JobRunning ? "闭环运行中..." : "运行 V3 小闭环"}
+            </button>
+            <button className="demo-action package-action" onClick={handleDownloadV3Package} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button">
+              <Download size={17} />
+              {isV3PackageDownloading ? "正在打包..." : "下载 V3 加工包"}
             </button>
           </section>
         )}
@@ -5472,6 +5527,50 @@ async function pollMeshyTask(taskId: string, onStatus: (status: string) => void)
 
 async function pollMeshyTaskByEndpoint(endpoint: string, onStatus: (status: string) => void, label: string) {
   return pollAi3dTask(endpoint, onStatus, label);
+}
+
+function createV3PackageReadme(job: V3OrchestratorJob) {
+  const summary = job.result?.summary;
+  const gate = summary?.productionGate;
+  const manifest = summary?.deliveryManifest;
+  const preflight = summary?.adapterPreflight;
+  const engineReadiness = summary?.engineReadiness;
+  const lines = [
+    "# HeDiao3D V3 加工包",
+    "",
+    `Job ID: ${job.id}`,
+    `状态: ${job.status}`,
+    `生成时间: ${job.updatedAt}`,
+    `包级别: ${manifest?.packageLevel ?? gate?.level ?? "unknown"}`,
+    "",
+    "## 生产门禁",
+    "",
+    `结论: ${gate?.summary ?? "未生成生产门禁"}`,
+    `允许生产NC: ${gate?.allowProductionNc ? "是" : "否"}`,
+    `允许试雕NC: ${gate?.allowTrialNc ? "是" : "否"}`,
+    `允许离料空跑: ${gate?.allowAirRun ? "是" : "否"}`,
+    "",
+    "## 外部CAM状态",
+    "",
+    `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
+    `Adapter预检: ${preflight?.summary ?? "未生成"}`,
+    "",
+    "## 刀路摘要",
+    "",
+    `结果引擎: ${job.result?.engine ?? "unknown"}`,
+    `fallbackFrom: ${job.result?.fallbackFrom ?? "unknown"}`,
+    `点数: ${summary?.points ?? 0}`,
+    `估算时间: ${summary?.estimatedMinutes?.toFixed?.(1) ?? "-"} min`,
+    "",
+    "## 操作建议",
+    "",
+    ...(gate?.requiredActions?.length ? gate.requiredActions.map((item) => `- ${item}`) : ["- 先查看 production-gate.json 和 delivery-manifest.json。"]),
+    "",
+    "## 文件说明",
+    "",
+    ...(manifest?.files.map((file) => `- ${file.filename}: ${file.label}，${file.downloadable ? "已打包" : "未打包"}。${file.note}`) ?? [])
+  ];
+  return `${lines.join("\n")}\n`;
 }
 
 async function pollAi3dTask(endpoint: string, onStatus: (status: string) => void, label: string) {

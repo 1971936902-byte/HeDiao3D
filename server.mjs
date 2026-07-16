@@ -68,6 +68,11 @@ const server = createServer(async (req, res) => {
       return getOrchestratorJob(orchestratorJobMatch[1], res);
     }
 
+    const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#]+)\/artifacts\/([^/?#]+)$/);
+    if (req.method === "GET" && orchestratorArtifactMatch) {
+      return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
+    }
+
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
     if (req.method === "GET" && taskMatch) {
       return getMultiImageTask(taskMatch[1], res);
@@ -1210,6 +1215,33 @@ async function getOrchestratorJob(jobId, res) {
   const job = orchestratorJobs.get(jobId) ?? readJobManifest(jobId);
   if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
   return json(res, 200, job);
+}
+
+function getOrchestratorArtifact(jobId, filename, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  const safeFilename = decodeURIComponent(filename);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId) || !/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return json(res, 400, { error: "非法 artifact 路径" });
+  }
+  const filePath = join(process.cwd(), "public", "orchestrator-jobs", safeJobId, safeFilename);
+  if (!existsSync(filePath)) return json(res, 404, { error: "找不到 artifact 文件" });
+  const content = readFileSync(filePath);
+  res.writeHead(200, {
+    "Content-Type": artifactContentType(safeFilename),
+    "Content-Length": content.length,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(content);
+}
+
+function artifactContentType(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".json")) return "application/json; charset=utf-8";
+  if (lower.endsWith(".nc") || lower.endsWith(".gcode") || lower.endsWith(".tap") || lower.endsWith(".txt")) return "text/plain; charset=utf-8";
+  if (lower.endsWith(".csv")) return "text/csv; charset=utf-8";
+  if (lower.endsWith(".md")) return "text/markdown; charset=utf-8";
+  return "application/octet-stream";
 }
 
 async function writeJobManifest(job) {
