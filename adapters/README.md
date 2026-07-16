@@ -21,6 +21,16 @@ V3 Orchestrator calls external CAM/simulation engines through small adapter scri
     "gcode": "C:/.../toolpath.nc",
     "report": "C:/.../adapter-report.json",
     "preview": "C:/.../preview.json"
+  },
+  "externalCamRecipe": {
+    "schema": "hediao3d.external-cam-recipe.v1",
+    "engine": {},
+    "model": {},
+    "stock": {},
+    "tool": {},
+    "operations": [],
+    "postprocess": {},
+    "simulation": {}
   }
 }
 ```
@@ -38,7 +48,13 @@ V3 Orchestrator calls external CAM/simulation engines through small adapter scri
   "warnings": [],
   "metrics": {
     "points": 12000,
-    "estimatedMinutes": 45.2
+    "estimatedMinutes": 45.2,
+    "recipe": {
+      "present": true,
+      "operationCount": 3,
+      "enabledOperationCount": 3,
+      "postprocessPolicy": "External CAM returns neutral/unwrapped path..."
+    }
   }
 }
 ```
@@ -67,5 +83,6 @@ The test runs each adapter script with a synthetic job and verifies:
 - `protocolVersion` is `hediao3d.adapter.v1`.
 - `engine` matches the selected adapter.
 - `jobId`, `warnings[]` and `metrics{}` are present.
+- `externalCamRecipe` is accepted and summarized into `metrics.recipe`.
 - Non-completed adapters return a clear `error`.
 - A completed adapter must declare a G-code path; the Orchestrator additionally checks that the file exists and is non-empty before accepting it.

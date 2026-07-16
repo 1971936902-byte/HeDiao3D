@@ -16,6 +16,22 @@ import sys
 from pathlib import Path
 
 
+def recipe_summary(job: dict) -> dict:
+    recipe = job.get("externalCamRecipe") or {}
+    operations = recipe.get("operations") or []
+    enabled_operations = [operation for operation in operations if operation.get("enabled")]
+    return {
+        "present": bool(recipe),
+        "status": recipe.get("status"),
+        "selectedEngine": (recipe.get("engine") or {}).get("selectedEngine"),
+        "engineFamily": (recipe.get("engine") or {}).get("engineFamily"),
+        "operationCount": len(operations),
+        "enabledOperationCount": len(enabled_operations),
+        "postprocessPolicy": (recipe.get("postprocess") or {}).get("policy"),
+        "toolProfileId": (recipe.get("tool") or {}).get("toolProfileId"),
+    }
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print("Usage: freecad_cam_job.py <job.json> <result.json>", file=sys.stderr)
@@ -48,7 +64,8 @@ def main() -> int:
             ],
             "metrics": {
                 "modelPath": job["modelPath"],
-                "camMode": job["settings"].get("camMode")
+                "camMode": job["settings"].get("camMode"),
+                "recipe": recipe_summary(job)
             }
         }
 

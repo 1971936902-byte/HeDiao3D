@@ -18,6 +18,22 @@ def adapter_args() -> list[str]:
     return sys.argv[1:]
 
 
+def recipe_summary(job: dict) -> dict:
+    recipe = job.get("externalCamRecipe") or {}
+    operations = recipe.get("operations") or []
+    enabled_operations = [operation for operation in operations if operation.get("enabled")]
+    return {
+        "present": bool(recipe),
+        "status": recipe.get("status"),
+        "selectedEngine": (recipe.get("engine") or {}).get("selectedEngine"),
+        "engineFamily": (recipe.get("engine") or {}).get("engineFamily"),
+        "operationCount": len(operations),
+        "enabledOperationCount": len(enabled_operations),
+        "postprocessPolicy": (recipe.get("postprocess") or {}).get("policy"),
+        "toolProfileId": (recipe.get("tool") or {}).get("toolProfileId"),
+    }
+
+
 def main() -> int:
     args = adapter_args()
     if len(args) < 2:
@@ -38,7 +54,8 @@ def main() -> int:
         ],
         "metrics": {
             "modelPath": job.get("modelPath"),
-            "camMode": job.get("settings", {}).get("camMode")
+            "camMode": job.get("settings", {}).get("camMode"),
+            "recipe": recipe_summary(job)
         }
     }
     result_path.parent.mkdir(parents=True, exist_ok=True)

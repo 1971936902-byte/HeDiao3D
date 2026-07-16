@@ -27,6 +27,22 @@ def detect_opencamlib() -> dict:
     }
 
 
+def recipe_summary(job: dict) -> dict:
+    recipe = job.get("externalCamRecipe") or {}
+    operations = recipe.get("operations") or []
+    enabled_operations = [operation for operation in operations if operation.get("enabled")]
+    return {
+        "present": bool(recipe),
+        "status": recipe.get("status"),
+        "selectedEngine": (recipe.get("engine") or {}).get("selectedEngine"),
+        "engineFamily": (recipe.get("engine") or {}).get("engineFamily"),
+        "operationCount": len(operations),
+        "enabledOperationCount": len(enabled_operations),
+        "postprocessPolicy": (recipe.get("postprocess") or {}).get("policy"),
+        "toolProfileId": (recipe.get("tool") or {}).get("toolProfileId"),
+    }
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print("Usage: opencamlib_job.py <job.json> <result.json>", file=sys.stderr)
@@ -64,6 +80,7 @@ def main() -> int:
                 "modelPath": job.get("modelPath"),
                 "camMode": job.get("settings", {}).get("camMode"),
                 "toolDiameter": job.get("settings", {}).get("toolDiameter"),
+                "recipe": recipe_summary(job),
             }
         }
 

@@ -51,6 +51,28 @@ try {
       gcode: join(workDir, "outputs", "toolpath.nc"),
       report: join(workDir, "outputs", "adapter-report.json"),
       preview: join(workDir, "outputs", "preview.json")
+    },
+    externalCamRecipe: {
+      schema: "hediao3d.external-cam-recipe.v1",
+      status: "ready-for-adapter",
+      engine: {
+        selectedEngine: "contract",
+        engineFamily: "contract-test"
+      },
+      tool: {
+        toolProfileId: "vflat-4mm-25deg",
+        diameterMm: 4
+      },
+      operations: [
+        { id: "roughing", enabled: true, strategy: "unwrapped-x-scan-roughing" },
+        { id: "finishing", enabled: true, strategy: "x-scan" },
+        { id: "rest-detail", enabled: true, strategy: "local-detail-pass-on-steep-features" }
+      ],
+      postprocess: {
+        camMode: "rotaryWrap",
+        postProcessor: "wrapY",
+        policy: "External CAM returns neutral/unwrapped path; HeDiao3D owns final rotary-wrap Y/A postprocess."
+      }
     }
   };
   writeFileSync(job.modelPath, "placeholder model path for adapter contract test");
@@ -75,7 +97,8 @@ try {
       id: adapter.id,
       status: report.status,
       protocolVersion: report.protocolVersion,
-      warningCount: report.warnings?.length ?? 0
+      warningCount: report.warnings?.length ?? 0,
+      recipeOperations: report.metrics.recipe.operationCount
     });
   }
 
@@ -93,6 +116,11 @@ function validateReport(engineId, report) {
   assert(allowedStatuses.has(report.status), `${engineId} unsupported status ${report.status}`);
   assert(Array.isArray(report.warnings), `${engineId} warnings must be an array`);
   assert(report.metrics && typeof report.metrics === "object", `${engineId} metrics must be an object`);
+  assert(report.metrics.recipe?.present === true, `${engineId} missing external CAM recipe summary`);
+  assert(report.metrics.recipe.operationCount === 3, `${engineId} recipe operation count mismatch`);
+  assert(report.metrics.recipe.enabledOperationCount === 3, `${engineId} enabled recipe operation count mismatch`);
+  assert(report.metrics.recipe.toolProfileId === "vflat-4mm-25deg", `${engineId} recipe tool mismatch`);
+  assert(typeof report.metrics.recipe.postprocessPolicy === "string" && report.metrics.recipe.postprocessPolicy.includes("wrap"), `${engineId} recipe postprocess policy missing`);
   if (report.status === "completed") {
     assert(report.gcodePath || report.outputs?.gcode, `${engineId} completed report must include gcode path`);
   } else {
