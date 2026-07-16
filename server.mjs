@@ -461,11 +461,11 @@ function buildMeshQualityReport(geometry) {
   const box = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(position);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  const edgeStats = analyzeMeshEdges(position);
+  const axis = largestAxis(size);
+  const edgeStats = analyzeMeshEdges(position, box, axis);
   const degenerateFaces = countDegenerateFaces(position);
   const largest = Math.max(size.x, size.y, size.z, 0.0001);
   const smallest = Math.min(size.x || largest, size.y || largest, size.z || largest);
-  const axis = largestAxis(size);
   const boundaryRate = edgeStats.boundaryEdges / Math.max(1, edgeStats.totalEdges);
   const nonManifoldRate = edgeStats.nonManifoldEdges / Math.max(1, edgeStats.totalEdges);
   const degenerateRate = degenerateFaces / Math.max(1, triangleCount);
@@ -480,6 +480,8 @@ function buildMeshQualityReport(geometry) {
 
   if (edgeStats.boundaryEdges > 0) recommendations.push("存在边界开口，建议先执行 Mesh 修复，再生成刀路。");
   if (edgeStats.nonManifoldEdges > 0) recommendations.push("存在非流形边，建议执行重建可雕刻网格。");
+  const riskyRegions = edgeStats.regions.filter((region) => region.status !== "ok");
+  if (riskyRegions.length > 0) recommendations.push(`Mesh 风险集中区域：${riskyRegions.map((region) => region.label).join("、")}，建议优先检查这些位置的孔洞和断面。`);
   if (degenerateFaces > triangleCount * 0.01) recommendations.push("退化面偏多，建议重网格后再进入 CAM。");
   if (triangleCount < 1500) recommendations.push("面数偏少，细节可能不足，建议重新生成或提高重网格目标面数。");
   if (largest / Math.max(0.001, smallest) >= 8) recommendations.push("模型比例差异较大，请检查姿态是否已对齐核胚长轴。");
@@ -510,6 +512,7 @@ function buildMeshQualityReport(geometry) {
     },
     detectedLongAxis: axis,
     checks,
+    regions: edgeStats.regions,
     recommendations
   };
 }
@@ -522,13 +525,17 @@ function createMeshCheck(label, ok, warning, value) {
   };
 }
 
-function analyzeMeshEdges(position) {
+function analyzeMeshEdges(position, box, longAxis) {
   const edges = new Map();
+  const vertices = new Map();
 
   for (let i = 0; i < position.count; i += 3) {
     const a = vertexKey(position, i);
     const b = vertexKey(position, i + 1);
     const c = vertexKey(position, i + 2);
+    rememberVertex(vertices, a, position, i);
+    rememberVertex(vertices, b, position, i + 1);
+    rememberVertex(vertices, c, position, i + 2);
     addEdge(edges, a, b);
     addEdge(edges, b, c);
     addEdge(edges, c, a);
@@ -536,16 +543,80 @@ function analyzeMeshEdges(position) {
 
   let boundaryEdges = 0;
   let nonManifoldEdges = 0;
-  for (const count of edges.values()) {
-    if (count === 1) boundaryEdges += 1;
-    if (count > 2) nonManifoldEdges += 1;
+  const regionBuckets = createMeshRegionBuckets();
+  for (const [key, count] of edges.entries()) {
+    if (count === 1) {
+      boundaryEdges += 1;
+      addMeshEdgeToRegions(regionBuckets, key, vertices, box, longAxis, "boundaryEdges");
+    }
+    if (count > 2) {
+      nonManifoldEdges += 1;
+      addMeshEdgeToRegions(regionBuckets, key, vertices, box, longAxis, "nonManifoldEdges");
+    }
   }
 
   return {
     totalEdges: edges.size,
     boundaryEdges,
-    nonManifoldEdges
+    nonManifoldEdges,
+    regions: finalizeMeshRegions(regionBuckets)
   };
+}
+
+function rememberVertex(vertices, key, position, index) {
+  if (vertices.has(key)) return;
+  vertices.set(key, {
+    x: position.getX(index),
+    y: position.getY(index),
+    z: position.getZ(index)
+  });
+}
+
+function createMeshRegionBuckets() {
+  return [
+    { label: "左端", boundaryEdges: 0, nonManifoldEdges: 0 },
+    { label: "主体", boundaryEdges: 0, nonManifoldEdges: 0 },
+    { label: "右端", boundaryEdges: 0, nonManifoldEdges: 0 },
+    { label: "顶部", boundaryEdges: 0, nonManifoldEdges: 0 },
+    { label: "底部", boundaryEdges: 0, nonManifoldEdges: 0 }
+  ];
+}
+
+function addMeshEdgeToRegions(regions, edgeKey, vertices, box, longAxis, field) {
+  const [aKey, bKey] = edgeKey.split("|");
+  const a = vertices.get(aKey);
+  const b = vertices.get(bKey);
+  if (!a || !b) return;
+  const midpoint = {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+    z: (a.z + b.z) / 2
+  };
+  const min = box.min[longAxis];
+  const max = box.max[longAxis];
+  const ratio = (midpoint[longAxis] - min) / Math.max(0.0001, max - min);
+  if (ratio < 0.22) regions[0][field] += 1;
+  else if (ratio > 0.78) regions[2][field] += 1;
+  else regions[1][field] += 1;
+
+  const zRatio = (midpoint.z - box.min.z) / Math.max(0.0001, box.max.z - box.min.z);
+  if (zRatio > 0.68) regions[3][field] += 1;
+  if (zRatio < 0.32) regions[4][field] += 1;
+}
+
+function finalizeMeshRegions(regions) {
+  return regions.map((region) => {
+    const riskScore = region.boundaryEdges + region.nonManifoldEdges * 3;
+    return {
+      ...region,
+      riskScore,
+      status: riskScore === 0 ? "ok" : riskScore < 20 ? "warning" : "critical",
+      detail:
+        riskScore === 0
+          ? "未发现开口或非流形集中"
+          : `边界 ${region.boundaryEdges}，非流形 ${region.nonManifoldEdges}`
+    };
+  });
 }
 
 function addEdge(edges, a, b) {

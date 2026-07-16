@@ -190,6 +190,7 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
           `- 退化面：${input.meshQuality.degenerateFaces}`,
           `- 尺寸：${input.meshQuality.dimensions.x.toFixed(1)} x ${input.meshQuality.dimensions.y.toFixed(1)} x ${input.meshQuality.dimensions.z.toFixed(1)}`,
           `- 长轴：${input.meshQuality.detectedLongAxis.toUpperCase()}`,
+          ...(input.meshQuality.regions?.map((region) => `- 区域风险：${region.label}，${region.detail}，风险 ${region.riskScore}`) ?? []),
           ...input.meshQuality.recommendations.map((item) => `- 建议：${item}`)
         ]
       : ["- 当前为本地浮雕或尚未完成 Mesh 体检。"]),

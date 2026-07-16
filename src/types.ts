@@ -123,7 +123,17 @@ export type MeshQualityReport = {
   center: { x: number; y: number; z: number };
   detectedLongAxis: "x" | "y" | "z";
   checks: MeshQualityCheck[];
+  regions?: MeshQualityRegion[];
   recommendations: string[];
+};
+
+export type MeshQualityRegion = {
+  label: string;
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  riskScore: number;
+  status: "ok" | "warning" | "critical";
+  detail: string;
 };
 
 export type ToolpathSummary = {

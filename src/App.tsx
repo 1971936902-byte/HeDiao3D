@@ -2080,6 +2080,17 @@ export function App() {
                       </div>
                     ))}
                   </div>
+                  {meshQuality.regions && (
+                    <div className="mesh-region-grid">
+                      {meshQuality.regions.map((region) => (
+                        <div className={`mesh-region ${region.status}`} key={region.label}>
+                          <span>{region.label}</span>
+                          <strong>{region.riskScore}</strong>
+                          <small>{region.detail}</small>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="quality-notes">
                     {meshQuality.recommendations.map((recommendation) => (
                       <span key={recommendation}>{recommendation}</span>

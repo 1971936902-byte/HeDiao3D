@@ -1101,6 +1101,45 @@ button:disabled {
   padding: 8px 9px;
 }
 
+.mesh-region-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mesh-region {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.mesh-region.warning {
+  border-left-color: var(--amber);
+}
+
+.mesh-region.critical {
+  border-left-color: var(--rose);
+  background: rgba(255, 107, 156, 0.06);
+}
+
+.mesh-region span,
+.mesh-region small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.mesh-region strong {
+  color: #f2f8f5;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
 .quality-metric span,
 .inspection-item span {
   color: var(--subtle);
