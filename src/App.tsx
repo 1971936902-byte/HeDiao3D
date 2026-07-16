@@ -639,6 +639,15 @@ type V3OrchestratorJob = {
         blockCount: number;
         allowProductionNc: boolean;
       };
+      trialFeedbackTemplate?: {
+        schema: string;
+        purpose: string;
+        issueOptions: string[];
+        feedbackFields: {
+          outcome: string;
+          notes: string;
+        };
+      };
       toolSetupSheet?: {
         schema: string;
         summary: string;
@@ -4709,6 +4718,13 @@ export function App() {
                   {v3Job.result.summary.operatorRunbook.summary}
                 </small>
               )}
+              {v3Job?.result?.summary.trialFeedbackTemplate && (
+                <small className="v3-inline-ok">
+                  试雕反馈：trial-feedback-template.json
+                  {" · "}
+                  缺陷标签 {v3Job.result.summary.trialFeedbackTemplate.issueOptions.length}
+                </small>
+              )}
               {v3Job?.result?.summary.toolSetupSheet && (
                 <small className={v3Job.result.summary.toolSetupSheet.warnings.length > 0 ? "v3-inline-warning" : "v3-inline-ok"}>
                   刀具核验：{v3Job.result.summary.toolSetupSheet.tool.name}
@@ -6953,6 +6969,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const packageIndex = summary?.machiningPackageIndex;
   const packageIntegrity = summary?.packageIntegrity;
   const operatorRunbook = summary?.operatorRunbook;
+  const trialFeedbackTemplate = summary?.trialFeedbackTemplate;
   const toolSetupSheet = summary?.toolSetupSheet;
   const rotaryCalibrationSheet = summary?.rotaryCalibrationSheet;
   const machineAcceptanceChecklist = summary?.machineAcceptanceChecklist;
@@ -6992,6 +7009,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `缺失可下载文件: ${packageIntegrity?.missingDownloadableCount ?? "-"}`,
     "完整性报告: package-integrity.json",
     `操作员说明书: ${operatorRunbook?.artifact ?? "operator-runbook.md"}`,
+    `试雕反馈模板: ${trialFeedbackTemplate?.schema ? "trial-feedback-template.json" : "未生成"}`,
     "",
     "## 刀具核验",
     "",

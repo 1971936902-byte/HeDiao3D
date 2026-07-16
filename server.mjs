@@ -2143,6 +2143,17 @@ async function processOrchestratorJob(job, settings) {
     rotaryCalibrationSheet
   });
   await writeFile(join(job.workDir, "production-unlock-matrix.json"), JSON.stringify(productionUnlockMatrix, null, 2), "utf8");
+  const trialFeedbackTemplate = createTrialFeedbackTemplate({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    toolSetupSheet,
+    rotaryCalibrationSheet,
+    machineAcceptanceChecklist
+  });
+  await writeFile(join(job.workDir, "trial-feedback-template.json"), JSON.stringify(trialFeedbackTemplate, null, 2), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -2173,6 +2184,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-acceptance-checklist.json"));
@@ -2220,6 +2232,7 @@ async function processOrchestratorJob(job, settings) {
       toolSetupSheet,
       rotaryCalibrationSheet,
       productionUnlockMatrix,
+      trialFeedbackTemplate,
       camoticsInput,
       camoticsSimulationPlan,
       ncStaticAnalysis,
@@ -3838,6 +3851,92 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
   };
 }
 
+function createTrialFeedbackTemplate({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist }) {
+  const issueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "旋转错位", "耗时异常", "刀路停顿"];
+  return {
+    schema: "hediao3d.trial-feedback-template.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    purpose: "现场空跑/试雕后回填，用于校准进给、切深、旋转标定和后续 CAM 参数。",
+    sourceFiles: {
+      operatorRunbook: "operator-runbook.md",
+      productionGate: "production-gate.json",
+      toolSetup: "tool-setup-sheet.json",
+      rotaryCalibration: "rotary-calibration-sheet.json",
+      machineAcceptance: "machine-acceptance-checklist.json"
+    },
+    context: {
+      camMode: postprocessProfile.camMode,
+      postProcessorName: postprocessProfile.postProcessorName,
+      lengthMm: Number(settings.lengthMm ?? 0),
+      diameterMm: Number(settings.diameterMm ?? 0),
+      estimatedMinutes: Number(toolpath.estimatedMinutes ?? 0),
+      pointCount: toolpath.points?.length ?? 0,
+      allowAirRun: productionGate.allowAirRun,
+      allowTrialNc: productionGate.allowTrialNc,
+      allowProductionNc: productionGate.allowProductionNc
+    },
+    tool: {
+      name: toolSetupSheet.tool.name,
+      diameterMm: toolSetupSheet.tool.diameterMm,
+      angleDeg: toolSetupSheet.tool.angleDeg,
+      flatTipMm: toolSetupSheet.tool.flatTipMm,
+      feedRateMmMin: toolSetupSheet.cutting.feedRateMmMin,
+      spindleRpm: toolSetupSheet.cutting.spindleRpm,
+      maxCutDepthMm: toolSetupSheet.cutting.maxCutDepthMm,
+      stepoverMm: toolSetupSheet.cutting.stepoverMm
+    },
+    rotary: {
+      axis: rotaryCalibrationSheet.axisMapping?.rotaryAxis ?? null,
+      wrapPerRevolutionMm: rotaryCalibrationSheet.axisMapping?.rotaryWrapPerRevolutionMm ?? null,
+      degPerLinearMm: rotaryCalibrationSheet.axisMapping?.rotaryDegPerLinearMm ?? null
+    },
+    feedbackFields: {
+      outcome: "success | review | failed",
+      operator: "",
+      machineSerial: "",
+      materialBatch: "",
+      airRunOk: false,
+      trialRunOk: false,
+      actualMinutes: null,
+      measuredMaxDepthMm: null,
+      measuredWrapPerRevolutionMm: null,
+      feedOverridePercent: null,
+      spindleOverridePercent: null,
+      issues: [],
+      notes: "",
+      photoNames: []
+    },
+    issueOptions,
+    acceptanceSteps: (machineAcceptanceChecklist.steps ?? []).map((step) => ({
+      id: step.id,
+      title: step.title,
+      status: "unchecked",
+      expectedEvidence: step.expectedEvidence,
+      notes: ""
+    })),
+    suggestedParameterAdjustments: [
+      {
+        condition: "出现过切或刀具颤动",
+        action: "降低 feedRate 或 maxCutDepth，优先降低 20%-40%。"
+      },
+      {
+        condition: "出现欠切或细节浅",
+        action: "检查 Z 零点、刀尖磨损和模型缩放，再微调 depthMm。"
+      },
+      {
+        condition: "出现旋转错位或左右颠倒",
+        action: "复核 rotaryWrapPerRevolutionMm、旋转方向和 meshAxisReverse。"
+      },
+      {
+        condition: "耗时明显偏离估算",
+        action: "把 actualMinutes 回填到反馈页，用于后续报价和工艺模板校准。"
+      }
+    ]
+  };
+}
+
 function createMachineAcceptanceChecklist({ job, settings, toolpath, productionGate, postprocessProfile, simulationSummary, ncStaticAnalysis, machineControllerProfile, controllerDialectReport }) {
   const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
   const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
@@ -4680,6 +4779,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("operator-runbook.md"),
+        getFile("trial-feedback-template.json"),
         getFile("tool-setup-sheet.json"),
         getFile("rotary-calibration-sheet.json"),
         getFile("machine-acceptance-checklist.json"),
@@ -4721,6 +4821,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
+      "试雕后填写 trial-feedback-template.json，把真实耗时、刀痕和旋转误差回填到工艺优化流程。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
       "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
       "阅读 rotary-calibration-sheet.json，确认旋转轴方向、每圈距离和反向间隙。",
@@ -4817,6 +4918,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", true, "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
+    createDeliveryFile(job.id, "trial-feedback-template.json", "试雕反馈回填模板", "report", true, "记录空跑/试雕结果、实际耗时、缺陷标签和参数调整建议。"),
     createDeliveryFile(job.id, "tool-setup-sheet.json", "刀具装夹与切削参数核验单", "report", true, "核验 4mm 25度平底尖刀、切深、步距、进给和主轴转速。"),
     createDeliveryFile(job.id, "rotary-calibration-sheet.json", "旋转夹具标定单", "report", true, "核验旋转轴方向、每圈等效距离、反向间隙和夹持余量。"),
     createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),

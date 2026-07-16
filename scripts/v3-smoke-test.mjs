@@ -74,6 +74,8 @@ async function main() {
   assert(job.result?.summary?.packageIntegrity?.schema === "hediao3d.package-integrity.v1", "package integrity report missing");
   assert(job.result.summary.packageIntegrity.missingDownloadableCount === 0, "package integrity should not have missing downloadable files");
   assert(job.result?.summary?.operatorRunbook?.artifact === "operator-runbook.md", "operator runbook missing");
+  assert(job.result?.summary?.trialFeedbackTemplate?.schema === "hediao3d.trial-feedback-template.v1", "trial feedback template missing");
+  assert(job.result.summary.trialFeedbackTemplate.issueOptions?.includes("旋转错位"), "trial feedback template missing rotary issue option");
   assert(job.result?.summary?.toolSetupSheet?.schema === "hediao3d.tool-setup-sheet.v1", "tool setup sheet missing");
   assert(job.result.summary.toolSetupSheet.tool.angleDeg === 25, "tool setup sheet should capture 25deg V-bit angle");
   assert(job.result.summary.toolSetupSheet.tool.flatTipMm === 0.4, "tool setup sheet should capture flat tip");
@@ -106,6 +108,7 @@ async function main() {
     "tool-setup-sheet.json",
     "rotary-calibration-sheet.json",
     "operator-runbook.md",
+    "trial-feedback-template.json",
     "machine-controller-profile.json",
     "machine-acceptance-checklist.json",
     "nc-static-analysis.json",
@@ -141,6 +144,7 @@ async function main() {
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "trial-feedback-template.json"), "readFirst missing trial feedback template");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
@@ -152,6 +156,7 @@ async function main() {
   assert(operatorRunbook.includes("camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机"), "operator runbook should forbid CAMotics preview on machine");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-template.json" && file.sha256), "package integrity missing trial feedback template hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");
