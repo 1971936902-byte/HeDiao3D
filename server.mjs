@@ -1816,8 +1816,18 @@ async function processOrchestratorJob(job, settings) {
   const selected = selectCamEngine(engines, job.requestedEngine, settings);
   job.selectedEngine = selected.id;
   const engineReadiness = createEngineReadinessReport(engines, selected, settings);
+  const camEngineSelection = createCamEngineSelectionReport({
+    requestedEngine: job.requestedEngine,
+    selectedEngine: selected,
+    engines,
+    settings,
+    camInputPlan,
+    engineReadiness
+  });
   await writeFile(join(job.workDir, "engine-diagnostics.json"), JSON.stringify(engineReadiness, null, 2), "utf8");
+  await writeFile(join(job.workDir, "cam-engine-selection.json"), JSON.stringify(camEngineSelection, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "engine-diagnostics.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-engine-selection.json"));
   updatePipelineStage(job, "engine", engineReadiness.externalReady ? "completed" : "review", `选择 ${selected.name}；${engineReadiness.summary}`);
   const nativeCamReadiness = createNativeCamReadinessReport(engines, selected, settings, engineReadiness);
   await writeFile(join(job.workDir, "native-cam-readiness.json"), JSON.stringify(nativeCamReadiness, null, 2), "utf8");
@@ -1962,6 +1972,7 @@ async function processOrchestratorJob(job, settings) {
     camoticsSimulationPlan,
     ncStaticAnalysis,
     nativeCamReadiness,
+    camEngineSelection,
     machineControllerProfile,
     controllerDialectReport,
     deliveryManifest
@@ -2004,6 +2015,7 @@ async function processOrchestratorJob(job, settings) {
       repairExecution,
       camInputPlan,
       engineReadiness,
+      camEngineSelection,
       nativeCamReadiness,
       externalCamRecipe,
       adapterPreflight,
@@ -2758,6 +2770,88 @@ function createEngineReadinessReport(engines, selected, settings) {
       }
     ]
   };
+}
+
+function createCamEngineSelectionReport({ requestedEngine, selectedEngine, engines, settings, camInputPlan, engineReadiness }) {
+  const rotaryMode = settings.camMode === "rotaryWrap";
+  const preferredOrder = createCamEnginePreferenceOrder(settings);
+  const candidates = preferredOrder
+    .map((id, index) => {
+      const engine = engines.find((candidate) => candidate.id === id);
+      if (!engine) return null;
+      const reasons = [];
+      if (id === "freecad") reasons.push("适合三轴平面、规则实体和标准 Path/CAM 工序。");
+      if (id === "blendercam") reasons.push("适合 Meshy/艺术曲面/浮雕类高面数网格。");
+      if (id === "opencamlib") reasons.push("适合曲面刀具接触、drop-cutter、水线和中性刀位点输出。");
+      if (id === "internal-mesh-cam") reasons.push("用于外部 CAM 未就绪时完成 V3 小闭环和试雕 fallback。");
+      if (rotaryMode && id !== "internal-mesh-cam") reasons.push("旋转夹具模式优先要求输出展开/中性刀位点，再由 HeDiao3D 后处理。");
+      const blockers = [];
+      if (!engine.available) blockers.push("引擎命令或模块未检测到。");
+      if (!engine.adapterReady) blockers.push("adapter 尚未达到可执行状态。");
+      if (camInputPlan.status === "blocked" && id !== "internal-mesh-cam") blockers.push("CAM 输入模型存在生产阻断，需先修复。");
+      if (!enableExternalCamAdapters && id !== "internal-mesh-cam") blockers.push("ENABLE_EXTERNAL_CAM_ADAPTERS 未启用，暂不执行外部 adapter。");
+      return {
+        id,
+        rank: index + 1,
+        name: engine.name,
+        available: engine.available,
+        adapterReady: engine.adapterReady,
+        command: engine.command ?? null,
+        selected: selectedEngine.id === id,
+        canAttemptNow: id === "internal-mesh-cam"
+          ? true
+          : Boolean(engine.available && engine.adapterReady && camInputPlan.status !== "blocked" && enableExternalCamAdapters),
+        reasons,
+        blockers
+      };
+    })
+    .filter(Boolean);
+  const selectedCandidate = candidates.find((candidate) => candidate.selected);
+  const fallbackUsed = selectedEngine.id === "internal-mesh-cam" || !selectedCandidate?.canAttemptNow;
+  const fallbackReason = fallbackUsed
+    ? selectedEngine.id === "internal-mesh-cam"
+      ? "未找到当前可执行的外部 CAM adapter，使用内置 Mesh CAM 完成小闭环。"
+      : selectedCandidate?.blockers?.[0] ?? "选中引擎暂不可执行，后续会进入内置 fallback。"
+    : "选中外部 CAM adapter 具备尝试执行条件。";
+  return {
+    schema: "hediao3d.cam-engine-selection.v1",
+    createdAt: new Date().toISOString(),
+    requestedEngine: requestedEngine ?? "auto",
+    selectedEngine: selectedEngine.id,
+    selectedEngineName: selectedEngine.name,
+    camMode: settings.camMode,
+    strategy: rotaryMode
+      ? "rotary-wrap prefers BlenderCAM/OpenCAMLib neutral output, then HeDiao3D wrapY/wrapA postprocess"
+      : settings.camMode === "3axis"
+        ? "3-axis prefers FreeCAD Path output, with OpenCAMLib/BlenderCAM as specialist fallback"
+        : "4-axis/artistic mesh prefers BlenderCAM/OpenCAMLib, with internal fallback for trial loop",
+    fallbackUsed,
+    fallbackReason,
+    externalAttemptAllowed: Boolean(selectedCandidate?.canAttemptNow && selectedEngine.id !== "internal-mesh-cam"),
+    externalReady: engineReadiness.externalReady,
+    camInputStatus: camInputPlan.status,
+    camInputModelKind: camInputPlan.selectedModelKind,
+    preferredOrder,
+    candidates,
+    requiredNextActions: createCamEngineSelectionNextActions(candidates, camInputPlan)
+  };
+}
+
+function createCamEnginePreferenceOrder(settings) {
+  if (settings.camMode === "3axis") return ["freecad", "opencamlib", "blendercam", "internal-mesh-cam"];
+  if (settings.camMode === "rotaryWrap") return ["blendercam", "opencamlib", "freecad", "internal-mesh-cam"];
+  return ["blendercam", "opencamlib", "freecad", "internal-mesh-cam"];
+}
+
+function createCamEngineSelectionNextActions(candidates, camInputPlan) {
+  const actions = [];
+  if (camInputPlan.status === "blocked") actions.push("先修复/重网格 CAM 输入模型，再启用外部 CAM 生产试算。");
+  if (candidates.some((candidate) => candidate.id === "freecad" && !candidate.available)) actions.push("安装 FreeCAD 并暴露 FreeCADCmd/freecadcmd。");
+  if (candidates.some((candidate) => candidate.id === "blendercam" && !candidate.available)) actions.push("安装 Blender + BlenderCAM/FabexCNC，用于艺术 Mesh 曲面加工。");
+  if (candidates.some((candidate) => candidate.id === "opencamlib" && !candidate.available)) actions.push("在 CAM 服务端安装 OpenCAMLib/ocl Python 模块。");
+  if (!enableExternalCamAdapters) actions.push("外部 adapter 小模型验证后，设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true。");
+  if (actions.length === 0) actions.push("运行 V3 小闭环并检查 adapter-report.json 与 CAMotics 仿真结果。");
+  return dedupeStrings(actions);
 }
 
 function createNativeCamReadinessReport(engines, selected, settings, engineReadiness) {
@@ -3773,7 +3867,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, ncStaticAnalysis, nativeCamReadiness, machineControllerProfile, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -3804,11 +3898,12 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("machine-controller-profile.json"),
         getFile("controller-dialect-report.json"),
         getFile("native-cam-readiness.json"),
+        getFile("cam-engine-selection.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "native-cam-readiness.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -3870,6 +3965,15 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: nativeCamReadiness.summary,
       requiredActions: nativeCamReadiness.requiredActions
     } : null,
+    camEngineSelection: camEngineSelection ? {
+      selectedEngine: camEngineSelection.selectedEngine,
+      selectedEngineName: camEngineSelection.selectedEngineName,
+      strategy: camEngineSelection.strategy,
+      fallbackUsed: camEngineSelection.fallbackUsed,
+      fallbackReason: camEngineSelection.fallbackReason,
+      externalAttemptAllowed: camEngineSelection.externalAttemptAllowed,
+      requiredNextActions: camEngineSelection.requiredNextActions
+    } : null,
     simulationEvidence: productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary),
     camotics: {
       status: camoticsInput.status,
@@ -3895,6 +3999,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "repair-plan.json", "Mesh 修复计划", "report", true, "说明是否需要封孔、降面、重网格。"),
     createDeliveryFile(job.id, "repair-execution.json", "Mesh 修复执行记录", "report", true, "说明是否自动修复、为何跳过以及下一步修复动作。"),
     createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
+    createDeliveryFile(job.id, "cam-engine-selection.json", "CAM 引擎选择报告", "report", true, "说明当前为何选择 FreeCAD/BlenderCAM/OpenCAMLib 或降级到内置 fallback。"),
     createDeliveryFile(job.id, "external-cam-recipe.json", "外部CAM作业配方", "report", true, "统一描述 FreeCAD/BlenderCAM/OpenCAMLib 所需模型、毛坯、刀具、工序、后处理和仿真要求。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),

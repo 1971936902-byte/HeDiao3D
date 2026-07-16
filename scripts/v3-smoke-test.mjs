@@ -73,6 +73,8 @@ async function main() {
   assert(job.result?.summary?.camInputPlan?.schema === "hediao3d.cam-input-plan.v1", "CAM input plan schema missing");
   assert(job.result?.summary?.camInputPlan?.modelSelection?.schema === "hediao3d.cam-input-model-selection.v1", "CAM input model selection missing");
   assert(job.result?.summary?.camInputPlan?.modelSelection?.selectedModelId, "CAM input model selection did not select a model");
+  assert(job.result?.summary?.camEngineSelection?.schema === "hediao3d.cam-engine-selection.v1", "CAM engine selection report missing");
+  assert(job.result?.summary?.camEngineSelection?.selectedEngineName, "CAM engine selection missing selected engine name");
 
   const requiredArtifacts = [
     "job.json",
@@ -81,6 +83,7 @@ async function main() {
     "repair-plan.json",
     "repair-execution.json",
     "cam-input-plan.json",
+    "cam-engine-selection.json",
     "external-cam-recipe.json",
     "engine-diagnostics.json",
     "native-cam-readiness.json",
@@ -116,7 +119,8 @@ async function main() {
   assert(externalCamRecipe.model?.modelSelection?.selectedModelPath === camInputPlan.selectedModelPath, "external CAM recipe did not receive selected CAM input model");
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
-  assert(createV3SmokeReadmeProbe(job).includes("CAM输入模型"), "V3 package readme should include CAM input model selection");
+  assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
+  assert(createV3SmokeReadmeProbe(job).includes("CAM选择"), "V3 package readme should include CAM engine selection");
 
   const list = await getJson("/api/orchestrator/jobs");
   assert(Array.isArray(list.jobs), "job list missing jobs[]");
@@ -140,7 +144,8 @@ function createV3SmokeReadmeProbe(job) {
   return [
     `CAM输入模型: ${selection?.selectedModelId ?? camInputPlan?.selectedModelKind ?? "-"}`,
     `CAM模型角色: ${selection?.selectedModelRole ?? "-"}`,
-    `CAM模型选择: ${selection?.selectionReason ?? camInputPlan?.summary ?? "-"}`
+    `CAM模型选择: ${selection?.selectionReason ?? camInputPlan?.summary ?? "-"}`,
+    `CAM选择: ${job.result?.summary?.camEngineSelection?.selectedEngineName ?? "-"}`
   ].join("\n");
 }
 

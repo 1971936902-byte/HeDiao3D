@@ -257,6 +257,29 @@ type V3OrchestratorJob = {
           status: string;
         }>;
       };
+      camEngineSelection?: {
+        schema: string;
+        selectedEngine: string;
+        selectedEngineName: string;
+        strategy: string;
+        fallbackUsed: boolean;
+        fallbackReason: string;
+        externalAttemptAllowed: boolean;
+        externalReady: boolean;
+        camInputStatus: string;
+        camInputModelKind: string;
+        candidates?: Array<{
+          id: string;
+          rank: number;
+          name: string;
+          available: boolean;
+          adapterReady: boolean;
+          selected: boolean;
+          canAttemptNow: boolean;
+          blockers?: string[];
+        }>;
+        requiredNextActions?: string[];
+      };
       nativeCamReadiness?: {
         schema: string;
         level: string;
@@ -4389,6 +4412,15 @@ export function App() {
                   开关 {v3Job.result.summary.engineReadiness.enableExternalCamAdapters ? "已启用" : "未启用"}
                 </small>
               )}
+              {v3Job?.result?.summary.camEngineSelection && (
+                <small className={v3Job.result.summary.camEngineSelection.externalAttemptAllowed ? "v3-inline-ok" : "v3-inline-warning"}>
+                  CAM选择：{v3Job.result.summary.camEngineSelection.selectedEngineName}
+                  {" · "}
+                  {v3Job.result.summary.camEngineSelection.fallbackUsed ? "将降级/已降级" : "可尝试外部CAM"}
+                  {" · "}
+                  {v3Job.result.summary.camEngineSelection.fallbackReason}
+                </small>
+              )}
               {v3Job?.result?.summary.nativeCamReadiness && (
                 <small>
                   Native CAM：{v3Job.result.summary.nativeCamReadiness.readyCount}/{v3Job.result.summary.nativeCamReadiness.requiredCount}
@@ -6676,6 +6708,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsAdapter = simulation?.camoticsAdapter;
   const packageIndex = summary?.machiningPackageIndex;
   const externalCamRecipe = summary?.externalCamRecipe;
+  const camEngineSelection = summary?.camEngineSelection;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -6700,6 +6733,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `CAM模型阻断: ${camModelSelection?.blockingReason ?? "无"}`,
     `CAM候选模型: ${camModelSelection?.candidates?.filter((candidate) => candidate.exists).length ?? 0}/${camModelSelection?.candidates?.length ?? repairExecution?.outputs?.length ?? 0}`,
     `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
+    `CAM选择: ${camEngineSelection?.selectedEngineName ?? "-"} / ${camEngineSelection?.fallbackUsed ? "fallback" : "external-attempt"}`,
+    `选择原因: ${camEngineSelection?.fallbackReason ?? "-"}`,
     `Adapter预检: ${preflight?.summary ?? "未生成"}`,
     "",
     "## 外部CAM配方",
