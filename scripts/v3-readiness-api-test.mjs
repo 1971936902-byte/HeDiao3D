@@ -30,8 +30,15 @@ async function main() {
   assert(full.acceptancePlan.steps.length >= 9, "acceptance plan should include deployment steps");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-neutral-handoff"), "acceptance plan missing external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-real-neutral-handoff"), "acceptance plan missing real neutral handoff step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "freecad-external-gcode-handoff"), "acceptance plan missing FreeCAD external handoff step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "blendercam-external-gcode-handoff"), "acceptance plan missing BlenderCAM external handoff step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-external-neutral-handoff"), "acceptance plan missing OpenCAMLib external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-neutral-import"), "acceptance plan missing OpenCAMLib neutral import step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-result-import"), "acceptance plan missing CAMotics import step");
+  assert(full.externalCamHandoffs?.schema === "hediao3d.external-cam-handoffs.v1", "full readiness artifact missing external CAM handoff summary");
+  assert(full.externalCamHandoffs.requiredEngines.includes("freecad"), "external CAM handoff summary missing FreeCAD");
+  assert(full.externalCamHandoffs.requiredEngines.includes("blendercam"), "external CAM handoff summary missing BlenderCAM");
+  assert(full.externalCamHandoffs.requiredEngines.includes("opencamlib"), "external CAM handoff summary missing OpenCAMLib");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
@@ -45,6 +52,9 @@ async function main() {
   assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
   assert(runbook.includes("npm run test:v3:neutral-adapter"), "readiness runbook missing neutral handoff command");
   assert(runbook.includes("npm run test:v3:real-neutral-handoff"), "readiness runbook missing real neutral handoff command");
+  assert(runbook.includes("npm run test:v3:freecad-external-handoff"), "readiness runbook missing FreeCAD external handoff command");
+  assert(runbook.includes("npm run test:v3:blendercam-external-handoff"), "readiness runbook missing BlenderCAM external handoff command");
+  assert(runbook.includes("npm run test:v3:closed-neutral-handoff"), "readiness runbook missing OpenCAMLib external handoff command");
   assert(runbook.includes("npm run test:v3:neutral-import"), "readiness runbook missing neutral import command");
   assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
@@ -86,6 +96,12 @@ function validateReadiness(report, label) {
   if (report.externalHandoff) {
     assert(report.externalHandoff.id, `${label} externalHandoff missing id`);
     assert(report.externalHandoff.source === "external-adapter", `${label} externalHandoff source mismatch`);
+  }
+  assert(Object.hasOwn(report, "externalCamHandoffs"), `${label} missing externalCamHandoffs field`);
+  if (report.externalCamHandoffs) {
+    assert(report.externalCamHandoffs.schema === "hediao3d.external-cam-handoffs.v1", `${label} externalCamHandoffs schema mismatch`);
+    assert(Array.isArray(report.externalCamHandoffs.requiredEngines), `${label} externalCamHandoffs requiredEngines missing`);
+    assert(report.externalCamHandoffs.byEngine && typeof report.externalCamHandoffs.byEngine === "object", `${label} externalCamHandoffs byEngine missing`);
   }
   assert(Object.hasOwn(report, "neutralImport"), `${label} missing neutralImport field`);
   if (report.neutralImport) {

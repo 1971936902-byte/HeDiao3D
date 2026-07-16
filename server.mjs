@@ -507,11 +507,12 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
   const runbookResult = readLatestV3RunbookResultSummary();
   const externalHandoff = getLatestExternalHandoffJobSummary();
+  const externalCamHandoffs = getExternalCamHandoffSummaries();
   const neutralImport = readLatestFromDirectory("public/orchestrator-neutral-import", "neutral-import-contract.json", createNeutralImportContractPublicSummary);
   const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
   const latestJob = getLatestOrchestratorJobSummary();
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, neutralImport, camoticsImport, latestJob });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, neutralImport, camoticsImport, latestJob });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -526,6 +527,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     adapterValidation,
     runbookResult,
     externalHandoff,
+    externalCamHandoffs,
     neutralImport,
     camoticsImport,
     latestJob,
@@ -533,7 +535,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   };
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, neutralImport, camoticsImport, latestJob }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -588,6 +590,17 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     nextActions.push("运行 npm run test:v3:real-neutral-handoff，验证非 synthetic neutral 刀路和 CAMotics 结果回填。");
   }
 
+  const handoffsByEngine = externalCamHandoffs?.byEngine ?? {};
+  for (const engineId of ["freecad", "blendercam", "opencamlib"]) {
+    const handoff = handoffsByEngine[engineId];
+    if (!handoff) {
+      warnings.push(`尚未运行 ${engineLabel(engineId)} 外部 handoff 小闭环。`);
+      nextActions.push(createEngineHandoffCommand(engineId));
+    } else if (handoff.status !== "completed" || handoff.simulationStatus !== "completed") {
+      warnings.push(`${engineLabel(engineId)} handoff 未完成：${handoff.status} / ${handoff.simulationStatus ?? "unknown"}。`);
+    }
+  }
+
   if (!neutralImport) {
     warnings.push("尚未运行 OpenCAMLib 真实 neutral 刀路导入契约测试。");
     nextActions.push("运行 npm run test:v3:neutral-import，验证非 synthetic 中立刀路可进入后处理链路。");
@@ -631,7 +644,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, neutralImport, camoticsImport, latestJob }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -714,6 +727,36 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 6,
+      id: "freecad-external-gcode-handoff",
+      title: "FreeCAD External G-code Handoff",
+      status: createEngineHandoffStatus(externalCamHandoffs, "freecad"),
+      command: "npm run test:v3:freecad-external-handoff",
+      evidence: ["adapter-report.json", "freecad-cam-plan.json", "toolpath.nc", "simulation-summary.json", "production-gate.json"],
+      detail: createEngineHandoffDetail(externalCamHandoffs, "freecad"),
+      blocksProduction: false
+    }),
+    createAcceptanceStep({
+      order: 7,
+      id: "blendercam-external-gcode-handoff",
+      title: "BlenderCAM External G-code Handoff",
+      status: createEngineHandoffStatus(externalCamHandoffs, "blendercam"),
+      command: "npm run test:v3:blendercam-external-handoff",
+      evidence: ["adapter-report.json", "blendercam-cam-plan.json", "toolpath.nc", "simulation-summary.json", "production-gate.json"],
+      detail: createEngineHandoffDetail(externalCamHandoffs, "blendercam"),
+      blocksProduction: false
+    }),
+    createAcceptanceStep({
+      order: 8,
+      id: "opencamlib-external-neutral-handoff",
+      title: "OpenCAMLib External Neutral Handoff",
+      status: createEngineHandoffStatus(externalCamHandoffs, "opencamlib"),
+      command: "npm run test:v3:closed-neutral-handoff",
+      evidence: ["adapter-report.json", "opencamlib-kernel-plan.json", "neutral-toolpath.json", "toolpath.nc", "production-gate.json"],
+      detail: createEngineHandoffDetail(externalCamHandoffs, "opencamlib"),
+      blocksProduction: false
+    }),
+    createAcceptanceStep({
+      order: 9,
       id: "opencamlib-neutral-import",
       title: "OpenCAMLib Neutral 导入契约",
       status: !neutralImport
@@ -729,7 +772,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !neutralImport || !neutralImport.ok || !neutralImport.postprocessEligible
     }),
     createAcceptanceStep({
-      order: 7,
+      order: 10,
       id: "camotics-result-import",
       title: "CAMotics 真实结果导入契约",
       status: !camoticsImport
@@ -745,7 +788,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible
     }),
     createAcceptanceStep({
-      order: 8,
+      order: 11,
       id: "v3-small-loop",
       title: "V3 小闭环加工包",
       status: !latestJob
@@ -763,7 +806,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestJob || latestJob.status !== "completed" || !latestJob.allowTrialNc || !latestJob.allowAirRun
     }),
     createAcceptanceStep({
-      order: 9,
+      order: 12,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -829,6 +872,65 @@ function getLatestExternalHandoffJobSummary() {
     .filter(Boolean)
     .sort((a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime());
   return handoffs[0] ?? null;
+}
+
+function getExternalCamHandoffSummaries() {
+  const jobs = [];
+  for (const job of orchestratorJobs.values()) jobs.push(job);
+  const root = join(process.cwd(), "public", "orchestrator-jobs");
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = readJobManifest(entry.name);
+      if (manifest) jobs.push(manifest);
+    }
+  }
+  const handoffs = jobs
+    .map(createExternalHandoffJobSummary)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime());
+  const byEngine = {};
+  for (const handoff of handoffs) {
+    const engine = handoff.resultEngine ?? handoff.selectedEngine;
+    if (!engine || byEngine[engine]) continue;
+    byEngine[engine] = handoff;
+  }
+  return {
+    schema: "hediao3d.external-cam-handoffs.v1",
+    requiredEngines: ["freecad", "blendercam", "opencamlib"],
+    completedEngines: ["freecad", "blendercam", "opencamlib"].filter((engine) => {
+      const handoff = byEngine[engine];
+      return handoff?.status === "completed" && handoff?.simulationStatus === "completed";
+    }),
+    byEngine,
+    latest: handoffs.slice(0, 8)
+  };
+}
+
+function createEngineHandoffStatus(externalCamHandoffs, engineId) {
+  const handoff = externalCamHandoffs?.byEngine?.[engineId];
+  if (!handoff) return "pending";
+  return handoff.status === "completed" && handoff.simulationStatus === "completed" ? "done" : "blocked";
+}
+
+function createEngineHandoffDetail(externalCamHandoffs, engineId) {
+  const handoff = externalCamHandoffs?.byEngine?.[engineId];
+  if (!handoff) return `尚未验证 ${engineLabel(engineId)} 外部 handoff 小闭环。`;
+  return `${handoff.id} / ${handoff.resultEngine} / ${handoff.source} / ${handoff.simulationEngine ?? "unknown"} / ${handoff.points ?? 0} 点 / synthetic=${handoff.syntheticSimulation}`;
+}
+
+function createEngineHandoffCommand(engineId) {
+  if (engineId === "freecad") return "运行 npm run test:v3:freecad-external-handoff，验证 FreeCAD external G-code 摄取链路。";
+  if (engineId === "blendercam") return "运行 npm run test:v3:blendercam-external-handoff，验证 BlenderCAM external G-code 摄取链路。";
+  if (engineId === "opencamlib") return "运行 npm run test:v3:closed-neutral-handoff，验证 OpenCAMLib external neutral 摄取链路。";
+  return `运行 ${engineLabel(engineId)} 外部 handoff 小闭环测试。`;
+}
+
+function engineLabel(engineId) {
+  if (engineId === "freecad") return "FreeCAD";
+  if (engineId === "blendercam") return "BlenderCAM/FabexCNC";
+  if (engineId === "opencamlib") return "OpenCAMLib";
+  return engineId;
 }
 
 function createExternalHandoffJobSummary(job) {
@@ -1006,6 +1108,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     } : null,
     runbookResult: report.runbookResult ?? null,
     externalHandoff: report.externalHandoff ?? null,
+    externalCamHandoffs: report.externalCamHandoffs ?? null,
     neutralImport: report.neutralImport ?? null,
     camoticsImport: report.camoticsImport ?? null,
     latestJob: report.latestJob,
@@ -1090,6 +1193,7 @@ function createV3ReadinessMarkdown(report) {
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / ${report.runbookResult.stepCount} steps` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
+    `- External CAM handoffs: ${report.externalCamHandoffs ? `${report.externalCamHandoffs.completedEngines.length}/${report.externalCamHandoffs.requiredEngines.length} engines (${report.externalCamHandoffs.completedEngines.join(", ") || "none"})` : "missing"}`,
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
     `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
