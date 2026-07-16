@@ -211,6 +211,14 @@ type V3OrchestratorJob = {
           status: string;
         }>;
       };
+      nativeCamReadiness?: {
+        schema: string;
+        level: string;
+        readyCount: number;
+        requiredCount: number;
+        summary: string;
+        requiredActions?: string[];
+      };
       externalCamRecipe?: {
         status: string;
         engine: {
@@ -3915,6 +3923,15 @@ export function App() {
                   外部引擎：{v3Job.result.summary.engineReadiness.summary}
                   {" · "}
                   开关 {v3Job.result.summary.engineReadiness.enableExternalCamAdapters ? "已启用" : "未启用"}
+                </small>
+              )}
+              {v3Job?.result?.summary.nativeCamReadiness && (
+                <small>
+                  Native CAM：{v3Job.result.summary.nativeCamReadiness.readyCount}/{v3Job.result.summary.nativeCamReadiness.requiredCount}
+                  {" · "}
+                  {v3Job.result.summary.nativeCamReadiness.level}
+                  {" · "}
+                  {v3Job.result.summary.nativeCamReadiness.summary}
                 </small>
               )}
               {v3Job?.result?.summary.externalCamRecipe && (

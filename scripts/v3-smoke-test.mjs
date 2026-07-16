@@ -67,6 +67,7 @@ async function main() {
   assert(job.result?.summary?.productionGate?.level, "production gate missing");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   assert(job.result?.summary?.machineControllerProfile?.rotary?.outputAxis === "Y", "machine controller profile should use Y rotary output");
+  assert(job.result?.summary?.nativeCamReadiness?.schema === "hediao3d.native-cam-readiness.v1", "native CAM readiness report missing");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
   assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
 
@@ -79,6 +80,7 @@ async function main() {
     "cam-input-plan.json",
     "external-cam-recipe.json",
     "engine-diagnostics.json",
+    "native-cam-readiness.json",
     "adapter-preflight.json",
     "toolpath.nc",
     "toolpath-summary.json",
