@@ -125,7 +125,7 @@ type V3EngineStatus = {
 
 type V3OrchestratorJob = {
   id: string;
-  status: "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed";
   requestedEngine: string;
   selectedEngine: string | null;
   modelUrl: string;
@@ -1491,17 +1491,24 @@ export function App() {
       if (!response.ok) throw new Error(data.error ?? "V3 Orchestrator 小闭环失败");
 
       setV3Job(data);
-      if (data.result?.toolpath) {
-        setToolpath(data.result.toolpath);
+      appendTaskJobLog(jobId, `任务已创建：${data.id}`, 36);
+      setV3Status(`任务 ${data.status}，正在等待 Orchestrator 后台处理`);
+      const finalJob = await pollV3OrchestratorJob(data.id, (job) => {
+        setV3Job(job);
+        setV3Status(`任务 ${job.status}：${job.logs[job.logs.length - 1]?.message ?? "处理中"}`);
+      });
+
+      if (finalJob.result?.toolpath) {
+        setToolpath(finalJob.result.toolpath);
         setToolpathKind("rough");
         setWorkbenchView("model");
         setIsSimulationMode(false);
-        appendTaskJobLog(jobId, `返回刀路：${data.result.summary.points} 点。`, 86);
-        finishTaskJob(jobId, "done", `完成：${data.result.engine}，${data.result.summary.points} 点。`);
-        setV3Status(`闭环完成：${data.result.engine}${data.result.fallbackFrom !== data.result.engine ? `（从 ${data.result.fallbackFrom} fallback）` : ""}`);
+        appendTaskJobLog(jobId, `返回刀路：${finalJob.result.summary.points} 点。`, 86);
+        finishTaskJob(jobId, "done", `完成：${finalJob.result.engine}，${finalJob.result.summary.points} 点。`);
+        setV3Status(`闭环完成：${finalJob.result.engine}${finalJob.result.fallbackFrom !== finalJob.result.engine ? `（从 ${finalJob.result.fallbackFrom} fallback）` : ""}`);
       } else {
-        finishTaskJob(jobId, "error", data.error ?? "Orchestrator 未返回刀路");
-        setV3Status(data.error ?? "Orchestrator 未返回刀路");
+        finishTaskJob(jobId, "error", finalJob.error ?? "Orchestrator 未返回刀路");
+        setV3Status(finalJob.error ?? "Orchestrator 未返回刀路");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "V3 Orchestrator 小闭环失败";
@@ -5308,6 +5315,27 @@ async function pollAi3dTask(endpoint: string, onStatus: (status: string) => void
   }
 
   throw new Error(`${label}等待超时`);
+}
+
+async function pollV3OrchestratorJob(jobId: string, onUpdate: (job: V3OrchestratorJob) => void) {
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
+    } catch (error) {
+      throw new Error(formatRequestError(error, "V3 Orchestrator 任务查询失败"));
+    }
+    const job = await response.json() as V3OrchestratorJob;
+    if (!response.ok) {
+      throw new Error(job.error ?? "V3 Orchestrator 任务查询失败");
+    }
+    onUpdate(job);
+    if (job.status === "completed") return job;
+    if (job.status === "failed") throw new Error(job.error ?? "V3 Orchestrator 任务失败");
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+
+  throw new Error("V3 Orchestrator 任务等待超时");
 }
 
 function formatRequestError(error: unknown, fallback: string) {

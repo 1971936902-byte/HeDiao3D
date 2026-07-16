@@ -20,6 +20,9 @@ const port = Number(process.env.API_PORT ?? 8787);
 const meshyBase = process.env.MESHY_API_BASE ?? "https://api.meshy.ai";
 const maxToolpathPreviewPoints = Number(process.env.MAX_TOOLPATH_PREVIEW_POINTS ?? 650000);
 const orchestratorJobs = new Map();
+const orchestratorQueue = [];
+let orchestratorRunning = 0;
+const maxOrchestratorConcurrency = Math.max(1, Number(process.env.ORCHESTRATOR_CONCURRENCY ?? 1));
 
 const server = createServer(async (req, res) => {
   try {
@@ -335,7 +338,7 @@ async function createOrchestratorJob(req, res) {
 
   const job = {
     id: randomUUID(),
-    status: "running",
+    status: "queued",
     requestedEngine,
     selectedEngine: null,
     modelUrl,
@@ -356,60 +359,90 @@ async function createOrchestratorJob(req, res) {
     const jobSpec = createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine);
     await writeFile(join(workDir, "job.json"), JSON.stringify(jobSpec, null, 2), "utf8");
     job.artifacts.push(publicArtifactUrl(job.id, "job.json"));
-    appendOrchestratorLog(job, "已创建 Orchestrator job 工作目录和参数快照。");
+    appendOrchestratorLog(job, "已创建 Orchestrator job 工作目录和参数快照，等待队列调度。");
+    await writeJobManifest(job);
+    enqueueOrchestratorJob(job, settings);
+  } catch (error) {
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : "Orchestrator 任务创建失败";
+    appendOrchestratorLog(job, job.error);
+    job.updatedAt = new Date().toISOString();
+    await writeJobManifest(job);
+  }
 
-    appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
-    const engines = detectCamEngines();
-    const selected = selectCamEngine(engines, requestedEngine);
-    job.selectedEngine = selected.id;
+  return json(res, job.status === "failed" ? 500 : 202, job);
+}
 
-    if (selected.id !== "internal-mesh-cam" && selected.available && selected.adapterReady) {
-      appendOrchestratorLog(job, `${selected.name} 可用，准备进入外部 CAM adapter。`);
-      throw new Error(`${selected.name} adapter 尚未启用生产刀路输出；V3 小闭环当前先使用内置 Mesh CAM fallback。`);
-    }
+function enqueueOrchestratorJob(job, settings) {
+  orchestratorQueue.push({ job, settings });
+  runNextOrchestratorJob();
+}
 
-    appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
-    const toolpath = await generateToolpathFromLocalModel(modelUrl, settings);
-    await writeFile(join(workDir, "toolpath.nc"), toolpath.gcode, "utf8");
-    await writeFile(join(workDir, "toolpath-summary.json"), JSON.stringify({
-      engine: "internal-mesh-cam",
-      fallbackFrom: selected.id,
+function runNextOrchestratorJob() {
+  while (orchestratorRunning < maxOrchestratorConcurrency && orchestratorQueue.length > 0) {
+    const item = orchestratorQueue.shift();
+    if (!item) return;
+    orchestratorRunning += 1;
+    processOrchestratorJob(item.job, item.settings)
+      .catch((error) => {
+        item.job.status = "failed";
+        item.job.error = error instanceof Error ? error.message : "Orchestrator 任务失败";
+        appendOrchestratorLog(item.job, item.job.error);
+      })
+      .finally(async () => {
+        item.job.updatedAt = new Date().toISOString();
+        await writeJobManifest(item.job);
+        orchestratorRunning -= 1;
+        runNextOrchestratorJob();
+      });
+  }
+}
+
+async function processOrchestratorJob(job, settings) {
+  job.status = "running";
+  appendOrchestratorLog(job, "任务已进入运行队列。");
+  await writeJobManifest(job);
+
+  appendOrchestratorLog(job, "读取外部 CAM 引擎状态。");
+  const engines = detectCamEngines();
+  const selected = selectCamEngine(engines, job.requestedEngine);
+  job.selectedEngine = selected.id;
+
+  if (selected.id !== "internal-mesh-cam" && selected.available && selected.adapterReady) {
+    appendOrchestratorLog(job, `${selected.name} 可用，准备进入外部 CAM adapter。`);
+    throw new Error(`${selected.name} adapter 尚未启用生产刀路输出；V3 小闭环当前先使用内置 Mesh CAM fallback。`);
+  }
+
+  appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
+  const toolpath = await generateToolpathFromLocalModel(job.modelUrl, settings);
+  await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+  await writeFile(join(job.workDir, "toolpath-summary.json"), JSON.stringify({
+    engine: "internal-mesh-cam",
+    fallbackFrom: selected.id,
+    points: toolpath.points.length,
+    previewPoints: toolpath.previewPoints?.length ?? 0,
+    estimatedMinutes: toolpath.estimatedMinutes,
+    postProcessorName: toolpath.postProcessorName,
+    warnings: toolpath.summary?.warnings ?? []
+  }, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
+  job.status = "completed";
+  job.result = {
+    engine: "internal-mesh-cam",
+    fallbackFrom: selected.id,
+    externalAvailable: selected.available,
+    adapterReady: selected.adapterReady,
+    toolpath,
+    summary: {
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
       estimatedMinutes: toolpath.estimatedMinutes,
       postProcessorName: toolpath.postProcessorName,
       warnings: toolpath.summary?.warnings ?? []
-    }, null, 2), "utf8");
-    job.artifacts.push(publicArtifactUrl(job.id, "toolpath.nc"), publicArtifactUrl(job.id, "toolpath-summary.json"));
-    job.status = "completed";
-    job.result = {
-      engine: "internal-mesh-cam",
-      fallbackFrom: selected.id,
-      externalAvailable: selected.available,
-      adapterReady: selected.adapterReady,
-      toolpath,
-      summary: {
-        points: toolpath.points.length,
-        previewPoints: toolpath.previewPoints?.length ?? 0,
-        estimatedMinutes: toolpath.estimatedMinutes,
-        postProcessorName: toolpath.postProcessorName,
-        warnings: toolpath.summary?.warnings ?? []
-      }
-    };
-    appendOrchestratorLog(job, `闭环完成：${toolpath.points.length} 点，后处理 ${toolpath.postProcessorName}。`);
-  } catch (error) {
-    if (job.result) {
-      job.status = "completed";
-    } else {
-      job.status = "failed";
-      job.error = error instanceof Error ? error.message : "Orchestrator 任务失败";
-      appendOrchestratorLog(job, job.error);
     }
-  } finally {
-    job.updatedAt = new Date().toISOString();
-  }
-
-  return json(res, job.status === "failed" ? 500 : 200, job);
+  };
+  appendOrchestratorLog(job, `闭环完成：${toolpath.points.length} 点，后处理 ${toolpath.postProcessorName}。`);
 }
 
 function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine) {
@@ -433,9 +466,38 @@ function publicArtifactUrl(jobId, filename) {
 }
 
 async function getOrchestratorJob(jobId, res) {
-  const job = orchestratorJobs.get(jobId);
+  const job = orchestratorJobs.get(jobId) ?? readJobManifest(jobId);
   if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
   return json(res, 200, job);
+}
+
+async function writeJobManifest(job) {
+  if (!job.workDir) return;
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "job-status.json"));
+  const manifest = {
+    ...job,
+    result: job.result
+      ? {
+        ...job.result,
+        toolpath: undefined
+      }
+      : null
+  };
+  await writeFile(join(job.workDir, "job-status.json"), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function readJobManifest(jobId) {
+  const filePath = join(process.cwd(), "public", "orchestrator-jobs", jobId, "job-status.json");
+  if (!existsSync(filePath)) return null;
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function pushUnique(list, value) {
+  if (!list.includes(value)) list.push(value);
 }
 
 function detectCamEngines() {
