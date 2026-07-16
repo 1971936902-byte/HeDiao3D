@@ -825,26 +825,13 @@ type V3ReadinessSummary = {
     acceptanceAtReport: string | null;
     artifactPath: string;
   } | null;
-  externalHandoff: {
-    id: string;
-    status: string;
-    updatedAt: string;
-    selectedEngine: string | null;
-    resultEngine: string | null;
-    source: string | null;
-    simulationEngine: string | null;
-    simulationStatus: string | null;
-    syntheticSimulation: boolean;
-    points: number | null;
-    postProcessorName: string | null;
-    packageLevel: string | null;
-    artifacts?: {
-      adapterReport?: string;
-      neutralToolpath?: string;
-      camoticsResult?: string;
-      simulationSummary?: string;
-      toolpath?: string;
-    };
+  externalHandoff: V3ExternalHandoffSummary | null;
+  externalCamHandoffs: {
+    schema: string;
+    requiredEngines: string[];
+    completedEngines: string[];
+    byEngine: Record<string, V3ExternalHandoffSummary | undefined>;
+    latest: V3ExternalHandoffSummary[];
   } | null;
   neutralImport: {
     id: string;
@@ -880,6 +867,28 @@ type V3ReadinessSummary = {
     markdown?: string;
     runbook?: string;
   };
+};
+
+type V3ExternalHandoffSummary = {
+    id: string;
+    status: string;
+    updatedAt: string;
+    selectedEngine: string | null;
+    resultEngine: string | null;
+    source: string | null;
+    simulationEngine: string | null;
+    simulationStatus: string | null;
+    syntheticSimulation: boolean;
+    points: number | null;
+    postProcessorName: string | null;
+    packageLevel: string | null;
+    artifacts?: {
+      adapterReport?: string;
+      neutralToolpath?: string;
+      camoticsResult?: string;
+      simulationSummary?: string;
+      toolpath?: string;
+    };
 };
 
 type TaskSnapshot = {
@@ -4172,6 +4181,17 @@ export function App() {
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
                     {v3Readiness.externalHandoff?.points ? ` · ${v3Readiness.externalHandoff.points}点` : ""}
                   </small>
+                  <div className="v3-adapter-list">
+                    {(["freecad", "blendercam", "opencamlib"] as const).map((engineId) => {
+                      const handoff = v3Readiness.externalCamHandoffs?.byEngine?.[engineId];
+                      const ready = handoff?.status === "completed" && handoff?.simulationStatus === "completed";
+                      return (
+                        <span className={ready ? "ok" : handoff ? "critical" : "warning"} key={engineId}>
+                          {formatExternalCamEngineLabel(engineId)} · {formatExternalCamHandoff(handoff)}
+                        </span>
+                      );
+                    })}
+                  </div>
                   <small className={v3Readiness.neutralImport ? v3Readiness.neutralImport.postprocessEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     Neutral导入：{v3Readiness.neutralImport ? `${v3Readiness.neutralImport.status ?? "-"} · ${v3Readiness.neutralImport.imported ? "真实导入" : "未导入"}` : "未验证"}
                     {v3Readiness.neutralImport?.pointCount ? ` · ${v3Readiness.neutralImport.pointCount}点` : ""}
@@ -5627,6 +5647,24 @@ function createDeploymentReadiness(profile: DeploymentProfile) {
     checks,
     suggestions
   };
+}
+
+function formatExternalCamEngineLabel(engineId: string) {
+  if (engineId === "freecad") return "FreeCAD";
+  if (engineId === "blendercam") return "BlenderCAM";
+  if (engineId === "opencamlib") return "OpenCAMLib";
+  return engineId;
+}
+
+function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
+  if (!handoff) return "未验证";
+  const status = handoff.status === "completed" && handoff.simulationStatus === "completed"
+    ? "completed"
+    : `${handoff.status}/${handoff.simulationStatus ?? "no-sim"}`;
+  const simulation = handoff.simulationEngine ? ` · ${handoff.simulationEngine}` : "";
+  const synthetic = handoff.syntheticSimulation ? " · synthetic" : "";
+  const points = handoff.points ? ` · ${handoff.points}点` : "";
+  return `${status}${simulation}${synthetic}${points}`;
 }
 
 function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: boolean, exportGateReady: boolean) {
