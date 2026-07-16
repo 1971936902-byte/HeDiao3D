@@ -201,6 +201,18 @@ type V3OrchestratorJob = {
           status: string;
         }>;
       };
+      adapterPreflight?: {
+        status: string;
+        summary: string;
+        selectedEngine: string;
+        canAttemptExternal: boolean;
+        willUseFallback: boolean;
+        checks: Array<{
+          id: string;
+          ok: boolean;
+          detail: string;
+        }>;
+      };
       productionGate?: {
         level: string;
         allowProductionNc: boolean;
@@ -3326,6 +3338,13 @@ export function App() {
                   外部引擎：{v3Job.result.summary.engineReadiness.summary}
                   {" · "}
                   开关 {v3Job.result.summary.engineReadiness.enableExternalCamAdapters ? "已启用" : "未启用"}
+                </small>
+              )}
+              {v3Job?.result?.summary.adapterPreflight && (
+                <small>
+                  Adapter预检：{v3Job.result.summary.adapterPreflight.status}
+                  {" · "}
+                  {v3Job.result.summary.adapterPreflight.summary}
                 </small>
               )}
               {v3Job?.result?.summary.productionGate && (

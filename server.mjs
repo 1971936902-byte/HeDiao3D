@@ -436,6 +436,10 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "engine-diagnostics.json"));
   updatePipelineStage(job, "engine", engineReadiness.externalReady ? "completed" : "review", `选择 ${selected.name}；${engineReadiness.summary}`);
   await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, engineReadiness });
+  const adapterPreflight = createAdapterPreflightReport(selected, job, settings, camInputPlan, engineReadiness);
+  await writeFile(join(job.workDir, "adapter-preflight.json"), JSON.stringify(adapterPreflight, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-preflight.json"));
+  appendOrchestratorLog(job, `Adapter 预检完成：${adapterPreflight.summary}`);
 
   let adapterReport = null;
   if (selected.id !== "internal-mesh-cam" && selected.available && enableExternalCamAdapters) {
@@ -507,6 +511,7 @@ async function processOrchestratorJob(job, settings) {
       repairPlan,
       camInputPlan,
       engineReadiness,
+      adapterPreflight,
       productionGate,
       deliveryManifest,
       points: toolpath.points.length,
@@ -844,6 +849,94 @@ function createEngineReadinessReport(engines, selected, settings) {
   };
 }
 
+function createAdapterPreflightReport(selectedEngine, job, settings, camInputPlan, engineReadiness) {
+  const scriptPath = getAdapterScriptPath(selectedEngine.id);
+  const scriptExists = Boolean(scriptPath && existsSync(scriptPath));
+  const modelPath = localModelUrlToPath(job.modelUrl);
+  const modelExists = existsSync(modelPath);
+  const workDirExists = Boolean(job.workDir && existsSync(job.workDir));
+  const outputGcode = join(job.workDir, "toolpath.nc");
+  const outputReport = join(job.workDir, "adapter-report.json");
+  const commandAvailable = Boolean(selectedEngine.available && selectedEngine.command);
+  const commandArgs = scriptPath ? createAdapterCommandArgs(selectedEngine, scriptPath, join(job.workDir, "job.json"), outputReport) : null;
+  const checks = [
+    createPreflightCheck("adapter-script", scriptExists, scriptPath ?? "未配置 adapter 脚本"),
+    createPreflightCheck("model-file", modelExists, modelPath),
+    createPreflightCheck("work-dir", workDirExists, job.workDir ?? "无工作目录"),
+    createPreflightCheck("external-command", selectedEngine.id === "internal-mesh-cam" || commandAvailable, selectedEngine.command ?? "未检测到外部命令"),
+    createPreflightCheck("env-switch", selectedEngine.id === "internal-mesh-cam" || enableExternalCamAdapters, enableExternalCamAdapters ? "ENABLE_EXTERNAL_CAM_ADAPTERS=true" : "ENABLE_EXTERNAL_CAM_ADAPTERS 未开启"),
+    createPreflightCheck("cam-input", camInputPlan.status !== "blocked", camInputPlan.summary)
+  ];
+  const failed = checks.filter((check) => !check.ok);
+  const canAttemptExternal = selectedEngine.id !== "internal-mesh-cam"
+    && scriptExists
+    && modelExists
+    && workDirExists
+    && commandAvailable
+    && enableExternalCamAdapters
+    && camInputPlan.status !== "blocked";
+  const fallbackReason = selectedEngine.id === "internal-mesh-cam"
+    ? "当前选择内置 Mesh CAM。"
+    : failed[0]?.detail ?? engineReadiness.summary;
+
+  return {
+    status: canAttemptExternal ? "ready-to-run" : selectedEngine.id === "internal-mesh-cam" ? "internal-fallback" : "fallback-required",
+    summary: canAttemptExternal
+      ? `${selectedEngine.name} adapter 已具备执行条件。`
+      : `外部 adapter 暂不能执行：${fallbackReason}`,
+    selectedEngine: selectedEngine.id,
+    selectedEngineName: selectedEngine.name,
+    adapterScript: scriptPath,
+    command: commandArgs ? `${commandArgs.command} ${commandArgs.args.join(" ")}` : null,
+    outputs: {
+      gcode: outputGcode,
+      report: outputReport,
+      preview: join(job.workDir, "preview.json")
+    },
+    checks,
+    canAttemptExternal,
+    willUseFallback: !canAttemptExternal,
+    fallbackEngine: canAttemptExternal ? null : "internal-mesh-cam",
+    deploymentHints: createAdapterDeploymentHints(selectedEngine.id)
+  };
+}
+
+function createPreflightCheck(id, ok, detail) {
+  return {
+    id,
+    ok,
+    detail
+  };
+}
+
+function createAdapterDeploymentHints(engineId) {
+  if (engineId === "freecad") {
+    return [
+      "Windows: 安装 FreeCAD，确认 FreeCADCmd 或 freecadcmd 在 PATH 中。",
+      "Linux: 安装 freecad/freecadcmd，优先使用 FreeCADCmd 无界面执行 adapter。",
+      "启用前设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true，并先用小模型 dry-run。"
+    ];
+  }
+  if (engineId === "blendercam") {
+    return [
+      "Windows/Linux: 安装 Blender，并安装 BlenderCAM/FabexCNC 插件。",
+      "确认 blender --version 可在服务进程 PATH 中执行。",
+      "旋转夹具/艺术 Mesh 优先走此 adapter，正式输出前仍需 CAMotics 仿真。"
+    ];
+  }
+  if (engineId === "camotics") {
+    return [
+      "安装 CAMotics，确认 camotics-cli 或 camotics 可执行。",
+      "由 Orchestrator 生成仿真项目后执行材料去除仿真。",
+      "CAMotics 是仿真层，不负责生成刀路。"
+    ];
+  }
+  return [
+    "内置 Mesh CAM fallback 可用于 V3 小闭环和试算。",
+    "生产级输出需要外部 CAM adapter 和 CAMotics 仿真共同解锁。"
+  ];
+}
+
 function createProductionGate({ toolpath, settings, selectedEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary }) {
   const blockers = [];
   const warnings = [];
@@ -947,6 +1040,7 @@ function createDeliveryManifest(job, toolpath, productionGate) {
     createDeliveryFile(job.id, "repair-plan.json", "Mesh 修复计划", "report", true, "说明是否需要封孔、降面、重网格。"),
     createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
+    createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
@@ -986,12 +1080,7 @@ function dedupeStrings(list) {
 async function runExternalCamAdapter(selectedEngine, job) {
   const jobPath = join(job.workDir, "job.json");
   const resultPath = join(job.workDir, "adapter-report.json");
-  const adapterScriptMap = {
-    freecad: join(process.cwd(), "adapters", "freecad", "freecad_cam_job.py"),
-    blendercam: join(process.cwd(), "adapters", "blendercam", "blendercam_job.py"),
-    camotics: join(process.cwd(), "adapters", "camotics", "camotics_job.js")
-  };
-  const scriptPath = adapterScriptMap[selectedEngine.id];
+  const scriptPath = getAdapterScriptPath(selectedEngine.id);
   if (!scriptPath || !existsSync(scriptPath)) {
     const report = {
       status: "adapter_missing",
@@ -1036,6 +1125,15 @@ async function runExternalCamAdapter(selectedEngine, job) {
   report.stderr = String(run.stderr ?? "").slice(-6000);
   await writeFile(resultPath, JSON.stringify(report, null, 2), "utf8");
   return report;
+}
+
+function getAdapterScriptPath(engineId) {
+  const adapterScriptMap = {
+    freecad: join(process.cwd(), "adapters", "freecad", "freecad_cam_job.py"),
+    blendercam: join(process.cwd(), "adapters", "blendercam", "blendercam_job.py"),
+    camotics: join(process.cwd(), "adapters", "camotics", "camotics_job.js")
+  };
+  return adapterScriptMap[engineId] ?? null;
 }
 
 function createAdapterCommandArgs(selectedEngine, scriptPath, jobPath, resultPath) {
