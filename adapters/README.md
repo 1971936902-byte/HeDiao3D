@@ -111,6 +111,7 @@ rotary `{ "x", "y", "z" }`, Orchestrator converts `y` to degrees with
 - `camotics/camotics_job.js`: CAMotics simulation adapter. It validates the protocol, detects `camotics-cli`/`camotics`, writes `camotics-simulation-plan.json`, and writes `camotics-project-template.json`. It can also write `camotics-result.json` back to Orchestrator. The gated `HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=true` mode only validates the Orchestrator simulation handoff; real material-removal execution remains locked unless the deployment server sets `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true` and CAMotics result extraction has been validated.
 - `opencamlib/opencamlib_job.py`: OpenCAMLib geometry-kernel adapter skeleton. It validates the protocol, detects `opencamlib`/`ocl`, writes `opencamlib-kernel-plan.json`, and writes `opencamlib-run-template.py`. It supports importing real non-synthetic `hediao3d.neutral-toolpath.v1` via `HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON=/path/to/neutral-toolpath.json`, and also supports a gated synthetic handoff for contract tests via `HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=true` plus `HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT=true`; synthetic output validates Orchestrator ingestion only and is not real CAM output.
 - For deployment, `opencamlib/opencamlib_job.py` can also call an external kernel command with `HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON='["python","/opt/hediao/opencamlib_runner.py"]'`. The command receives `job.json`, `opencamlib-kernel-plan.json` and the target `neutral-toolpath.json` path as arguments. Its output must be non-synthetic `hediao3d.neutral-toolpath.v1`; HeDiao3D then owns Y/A rotary-wrap postprocessing and safety gates.
+- `opencamlib/opencamlib_runner.py` is the deployable external-command scaffold. It validates job/plan inputs and fails closed unless `HEDIAO3D_OPENCAMLIB_RUNNER_FIXTURE_OUTPUT=true` is set for contract testing. Real OpenCAMLib drop-cutter output must replace fixture mode before production unlock.
 
 The internal Mesh CAM fallback remains the verified V3 small-loop implementation until the external engines are installed and the adapter recipes are completed.
 
@@ -148,6 +149,7 @@ external CAM output:
 ```bash
 npm run test:v3:neutral-adapter          # synthetic protocol handoff only
 npm run test:v3:real-neutral-handoff     # non-synthetic neutral + CAMotics result import
+npm run test:v3:opencamlib-runner        # external runner contract and fail-closed behavior
 ```
 
 Run the deployment validation suite on a CAM server when you want to keep each
