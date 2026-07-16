@@ -201,6 +201,35 @@ type V3OrchestratorJob = {
           status: string;
         }>;
       };
+      productionGate?: {
+        level: string;
+        allowProductionNc: boolean;
+        allowTrialNc: boolean;
+        allowAirRun: boolean;
+        summary: string;
+        blockers: string[];
+        warnings: string[];
+        checks: {
+          fitRate: number;
+          missCount: number;
+          pointCount: number;
+          estimatedMinutes: number;
+        };
+      };
+      deliveryManifest?: {
+        packageLevel: string;
+        allowProductionNc: boolean;
+        allowTrialNc: boolean;
+        allowAirRun: boolean;
+        files: Array<{
+          filename: string;
+          label: string;
+          kind: string;
+          url: string;
+          downloadable: boolean;
+          note: string;
+        }>;
+      };
       points: number;
       previewPoints: number;
       estimatedMinutes: number;
@@ -3297,6 +3326,20 @@ export function App() {
                   外部引擎：{v3Job.result.summary.engineReadiness.summary}
                   {" · "}
                   开关 {v3Job.result.summary.engineReadiness.enableExternalCamAdapters ? "已启用" : "未启用"}
+                </small>
+              )}
+              {v3Job?.result?.summary.productionGate && (
+                <small>
+                  生产门禁：{v3Job.result.summary.productionGate.summary}
+                  {" · "}
+                  空跑 {v3Job.result.summary.productionGate.allowAirRun ? "可用" : "不可用"}
+                  {" · "}
+                  试雕 {v3Job.result.summary.productionGate.allowTrialNc ? "可用" : "不可用"}
+                </small>
+              )}
+              {v3Job?.result?.summary.deliveryManifest && (
+                <small>
+                  交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
                 </small>
               )}
               {v3Job?.result && (

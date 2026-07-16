@@ -329,7 +329,7 @@ async function getOrchestratorEngines(res) {
 
 async function createOrchestratorJob(req, res) {
   const input = await readJson(req);
-  const settings = input.settings;
+  const settings = normalizeServerCamSettings(input.settings);
   const modelUrl = String(input.stlUrl ?? input.modelUrl ?? "");
   const requestedEngine = String(input.engine ?? "auto");
 
@@ -473,11 +473,27 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
   updatePipelineStage(job, "simulation", "completed", `仿真贴合 ${simulationSummary.metrics.fitRate.toFixed(1)}%，未命中 ${simulationSummary.metrics.missCount} 点。`);
-  updatePipelineStage(job, "postprocess", "completed", `已输出 ${toolpath.postProcessorName} 和 air-run.nc。`);
+  updatePipelineStage(job, "postprocess", "running", "正在生成 V3 加工包门禁和交付清单。");
+  const productionGate = createProductionGate({
+    toolpath,
+    settings,
+    selectedEngine: selected,
+    meshQuality,
+    repairPlan,
+    camInputPlan,
+    engineReadiness,
+    simulationSummary
+  });
+  const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate);
+  await writeFile(join(job.workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
+  await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
+  updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-gate.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   job.status = "completed";
   job.result = {
     engine: "internal-mesh-cam",
@@ -491,6 +507,8 @@ async function processOrchestratorJob(job, settings) {
       repairPlan,
       camInputPlan,
       engineReadiness,
+      productionGate,
+      deliveryManifest,
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
       estimatedMinutes: toolpath.estimatedMinutes,
@@ -826,6 +844,145 @@ function createEngineReadinessReport(engines, selected, settings) {
   };
 }
 
+function createProductionGate({ toolpath, settings, selectedEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary }) {
+  const blockers = [];
+  const warnings = [];
+  const requiredActions = [];
+
+  if (repairPlan.status === "repair-required") {
+    blockers.push("Mesh 质量需要修复，不能直接生成生产 NC。");
+    requiredActions.push("先执行封孔、修非流形、删除退化面或 Meshy/Blender 重网格。");
+  } else if (repairPlan.status === "review-required") {
+    warnings.push("Mesh 质量需要人工复核。");
+  }
+
+  if (!camInputPlan.gate.allowProductionNc) {
+    warnings.push(camInputPlan.gate.reason);
+    requiredActions.push("按 cam-input-plan.json 完成 CAM 输入模型清理后再解锁生产下载。");
+  }
+
+  if (!engineReadiness.externalReady) {
+    warnings.push("尚未接入可执行的外部专业 CAM adapter。");
+    requiredActions.push("安装并启用 BlenderCAM/FabexCNC 或 FreeCAD CAM adapter。");
+  }
+
+  if (simulationSummary.engine !== "camotics") {
+    warnings.push("当前不是 CAMotics 真实材料去除仿真，仅为内置旋转包裹预览。");
+    requiredActions.push("正式上机前用 CAMotics 或机床控制软件完成 NC 仿真。");
+  }
+
+  if (simulationSummary.riskLevel !== "ready") {
+    warnings.push(`仿真风险等级为 ${simulationSummary.riskLevel}。`);
+    requiredActions.push("检查未命中点、夹具方向、Z 安全高度和两端夹持余量。");
+  }
+
+  if ((toolpath.points?.length ?? 0) <= 0) {
+    blockers.push("没有生成有效刀路点。");
+  }
+
+  const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
+  if (estimatedMinutes > 240) {
+    warnings.push(`估算加工时间 ${estimatedMinutes.toFixed(1)} min 偏长，建议先调大步距或分粗/精加工验证。`);
+  }
+
+  const postProcessorName = String(toolpath.postProcessorName ?? "");
+  const expectedRotary = settings.camMode === "rotaryWrap";
+  if (expectedRotary && !/Y轴旋转包裹|A轴旋转包裹|rotary/i.test(postProcessorName)) {
+    blockers.push("当前后处理名称不像旋转包裹 NC，请检查机床轴映射。");
+  }
+
+  const allowProductionNc = blockers.length === 0
+    && warnings.length === 0
+    && camInputPlan.gate.allowProductionNc
+    && engineReadiness.externalReady
+    && simulationSummary.engine === "camotics"
+    && simulationSummary.riskLevel === "ready";
+  const allowTrialNc = blockers.length === 0;
+  const allowAirRun = (toolpath.points?.length ?? 0) > 0;
+  const level = blockers.length > 0 ? "blocked" : allowProductionNc ? "production" : "trial-only";
+
+  return {
+    level,
+    allowProductionNc,
+    allowTrialNc,
+    allowAirRun,
+    allowReports: true,
+    summary: allowProductionNc
+      ? "已通过 V3 生产门禁，可下载生产 NC。"
+      : blockers.length > 0
+        ? `禁止上机：${blockers[0]}`
+        : "仅建议离料空跑/小料试雕，暂不建议直接生产上机。",
+    machineMode: settings.camMode,
+    rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
+    selectedEngine: selectedEngine.id,
+    resultEngine: "internal-mesh-cam",
+    checks: {
+      meshVerdict: meshQuality.verdict,
+      camInputStatus: camInputPlan.status,
+      externalCamReady: engineReadiness.externalReady,
+      simulationEngine: simulationSummary.engine,
+      simulationRiskLevel: simulationSummary.riskLevel,
+      fitRate: simulationSummary.metrics.fitRate,
+      missCount: simulationSummary.metrics.missCount,
+      pointCount: toolpath.points?.length ?? 0,
+      estimatedMinutes
+    },
+    blockers,
+    warnings: dedupeStrings(warnings),
+    requiredActions: dedupeStrings(requiredActions),
+    recommendedWorkflow: [
+      "下载并查看 mesh-quality.json、repair-plan.json、cam-input-plan.json。",
+      "先运行 air-run.nc 做离料空跑，确认 X/Y旋转/Z 安全方向。",
+      "用废料或低进给做小料试雕，记录真实深度、耗时和夹具方向。",
+      "接入 BlenderCAM/FreeCAD 与 CAMotics 后，再解锁生产 NC 下载。"
+    ]
+  };
+}
+
+function createDeliveryManifest(job, toolpath, productionGate) {
+  const files = [
+    createDeliveryFile(job.id, "job.json", "任务参数快照", "report", true, "用于复现本次 Orchestrator 输入。"),
+    createDeliveryFile(job.id, "job-status.json", "任务状态和日志", "report", true, "用于追踪队列、日志和结果摘要。"),
+    createDeliveryFile(job.id, "mesh-quality.json", "Mesh 质量报告", "report", true, "上机前必须查看模型风险。"),
+    createDeliveryFile(job.id, "repair-plan.json", "Mesh 修复计划", "report", true, "说明是否需要封孔、降面、重网格。"),
+    createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
+    createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
+    createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
+    createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
+    createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
+    createDeliveryFile(job.id, "toolpath.nc", "试雕/生产 NC", "nc", productionGate.allowTrialNc, productionGate.allowProductionNc ? "已允许生产下载。" : "当前仅建议小料试雕，不建议直接生产上机。"),
+    createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。")
+  ];
+
+  return {
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    allowProductionNc: productionGate.allowProductionNc,
+    allowTrialNc: productionGate.allowTrialNc,
+    allowAirRun: productionGate.allowAirRun,
+    pointCount: toolpath.points?.length ?? 0,
+    estimatedMinutes: toolpath.estimatedMinutes,
+    files,
+    operatorNotes: productionGate.recommendedWorkflow
+  };
+}
+
+function createDeliveryFile(jobId, filename, label, kind, downloadable, note) {
+  return {
+    filename,
+    label,
+    kind,
+    url: publicArtifactUrl(jobId, filename),
+    downloadable,
+    note
+  };
+}
+
+function dedupeStrings(list) {
+  return [...new Set(list.filter(Boolean))];
+}
+
 async function runExternalCamAdapter(selectedEngine, job) {
   const jobPath = join(job.workDir, "job.json");
   const resultPath = join(job.workDir, "adapter-report.json");
@@ -1100,6 +1257,19 @@ async function importLocalMesh(req, res) {
 function isAllowedLocalModelUrl(modelUrl) {
   if (modelUrl.includes("..")) return false;
   return modelUrl.startsWith("/meshy-results/") || modelUrl.startsWith("/imported-models/");
+}
+
+function normalizeServerCamSettings(settings) {
+  if (!settings || typeof settings !== "object") return settings;
+  const normalized = { ...settings };
+  if (normalized.camMode === "rotaryWrap") {
+    if (normalized.postProcessor === "rotary-y-wrap" || normalized.postProcessor === "wrap-y") normalized.postProcessor = "wrapY";
+    if (normalized.postProcessor === "rotary-x-wrap" || normalized.postProcessor === "wrap-x") normalized.postProcessor = "wrapX";
+    if (!normalized.postProcessor || normalized.postProcessor === "generic") {
+      normalized.postProcessor = normalized.rotaryOutputAxis === "X" ? "wrapX" : normalized.rotaryOutputAxis === "Y" ? "wrapY" : "generic";
+    }
+  }
+  return normalized;
 }
 
 function localModelUrlToPath(modelUrl) {
@@ -1818,8 +1988,8 @@ function estimateTravel(points, radius) {
 
 function postProcessorName(postProcessor) {
   if (postProcessor === "generic3") return "通用三轴 G-code";
-  if (postProcessor === "wrapY") return "Y轴旋转包裹 G-code";
-  if (postProcessor === "wrapX") return "X轴旋转包裹 G-code";
+  if (postProcessor === "wrapY" || postProcessor === "rotary-y-wrap" || postProcessor === "wrap-y") return "Y轴旋转包裹 G-code";
+  if (postProcessor === "wrapX" || postProcessor === "rotary-x-wrap" || postProcessor === "wrap-x") return "X轴旋转包裹 G-code";
   if (postProcessor === "weihong") return "维宏风格 G-code";
   if (postProcessor === "syntec") return "新代风格 G-code";
   return "通用四轴 G-code";
@@ -1908,7 +2078,7 @@ function describeTool(settings) {
 
 function postStart(settings) {
   if (settings.postProcessor === "generic3") return ["(POST: GENERIC 3AXIS)", "G17", `F${fmt(settings.feedRate, 1)}`, `S${Math.round(Number(settings.spindleRpm))} M3`, `G0 Z${fmt(settings.safeZ)}`];
-  if (settings.postProcessor === "wrapY" || settings.postProcessor === "wrapX") {
+  if (settings.postProcessor === "wrapY" || settings.postProcessor === "wrapX" || settings.postProcessor === "rotary-y-wrap" || settings.postProcessor === "rotary-x-wrap" || settings.postProcessor === "wrap-y" || settings.postProcessor === "wrap-x") {
     return [
       `(POST: ROTARY WRAP ${settings.rotaryOutputAxis || (settings.postProcessor === "wrapX" ? "X" : "Y")}-AXIS)`,
       "(Rotary angle is mapped to linear axis by rotaryWrapPerRevolutionMm)",
@@ -1938,7 +2108,7 @@ function toCsv(points) {
 }
 
 function toRotaryWrapGcode(points, settings, estimatedMinutes, sourceName) {
-  const rotaryAxis = settings.rotaryOutputAxis || (settings.postProcessor === "wrapX" ? "X" : settings.postProcessor === "wrapY" ? "Y" : "A");
+  const rotaryAxis = settings.rotaryOutputAxis || (settings.postProcessor === "wrapX" || settings.postProcessor === "rotary-x-wrap" || settings.postProcessor === "wrap-x" ? "X" : settings.postProcessor === "wrapY" || settings.postProcessor === "rotary-y-wrap" || settings.postProcessor === "wrap-y" ? "Y" : "A");
   const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
   const lengthAxis = rotaryAxis === "X" ? "Y" : "X";
   const rotaryWord = (aDeg) => {
