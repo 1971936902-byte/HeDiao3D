@@ -212,6 +212,18 @@ type V3OrchestratorJob = {
           exists: boolean;
           selectedForCam?: boolean;
         }>;
+        repairedMeshQuality?: {
+          score?: number;
+          verdict?: string;
+          triangleCount?: number;
+          boundaryEdges?: number;
+          nonManifoldEdges?: number;
+          degenerateFaces?: number;
+          artifact?: string;
+          modelPath?: string;
+          modelUrl?: string | null;
+          error?: string;
+        };
       };
       camInputPlan?: {
         schema?: string;
@@ -4421,6 +4433,29 @@ export function App() {
                   {v3Job.result.summary.camInputPlan?.modelSelection?.selectedModelId === "repairedStl" ? " · 已作为CAM输入" : " · 未选中"}
                 </small>
               )}
+              {v3Job?.result?.summary.repairExecution?.repairedMeshQuality && (
+                <small className={
+                  v3Job.result.summary.repairExecution.repairedMeshQuality.error
+                    ? "v3-inline-critical"
+                    : v3Job.result.summary.repairExecution.repairedMeshQuality.verdict === "ready"
+                      ? "v3-inline-ok"
+                      : "v3-inline-warning"
+                }>
+                  修复后体检：
+                  {typeof v3Job.result.summary.repairExecution.repairedMeshQuality.score === "number"
+                    ? `${v3Job.result.summary.repairExecution.repairedMeshQuality.score.toFixed(1)}`
+                    : "-"}
+                  {" / "}
+                  {v3Job.result.summary.repairExecution.repairedMeshQuality.verdict ?? "unknown"}
+                  {" · "}
+                  边界 {v3Job.result.summary.repairExecution.repairedMeshQuality.boundaryEdges ?? "-"}
+                  {" · "}
+                  非流形 {v3Job.result.summary.repairExecution.repairedMeshQuality.nonManifoldEdges ?? "-"}
+                  {" · "}
+                  退化面 {v3Job.result.summary.repairExecution.repairedMeshQuality.degenerateFaces ?? "-"}
+                  {v3Job.result.summary.repairExecution.repairedMeshQuality.error ? ` · ${v3Job.result.summary.repairExecution.repairedMeshQuality.error}` : ""}
+                </small>
+              )}
               {v3Job?.result?.summary.camInputPlan && (
                 <small>
                   CAM输入：{v3Job.result.summary.camInputPlan.summary}
@@ -6749,6 +6784,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
   const repairExecution = summary?.repairExecution;
+  const repairedMeshQuality = repairExecution?.repairedMeshQuality;
   const camInputPlan = summary?.camInputPlan;
   const camModelSelection = camInputPlan?.modelSelection;
   const postprocessProfile = summary?.postprocessProfile;
@@ -6781,6 +6817,9 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "",
     `Mesh修复执行: ${repairExecution?.summary ?? "未生成"}`,
     `修复产物导入: ${repairExecution?.importedRepair?.imported ? `是 / ${repairExecution.importedRepair.filename ?? "repaired-model.stl"}` : "否"}`,
+    `修复后Mesh体检: ${repairedMeshQuality ? `${typeof repairedMeshQuality.score === "number" ? repairedMeshQuality.score.toFixed(1) : "-"} / ${repairedMeshQuality.verdict ?? "unknown"}` : "未生成"}`,
+    `修复后边界/非流形/退化面: ${repairedMeshQuality ? `${repairedMeshQuality.boundaryEdges ?? "-"} / ${repairedMeshQuality.nonManifoldEdges ?? "-"} / ${repairedMeshQuality.degenerateFaces ?? "-"}` : "-"}`,
+    `修复后质量报告: ${repairedMeshQuality?.artifact ?? "未生成"}`,
     `CAM输入模型: ${camModelSelection?.selectedModelId ?? camInputPlan?.selectedModelKind ?? "-"}`,
     `CAM模型角色: ${camModelSelection?.selectedModelRole ?? "-"}`,
     `CAM输入路径: ${camModelSelection?.selectedModelPath ?? camInputPlan?.selectedModelPath ?? "-"}`,
