@@ -650,6 +650,20 @@ type V3OrchestratorJob = {
         }>;
         warnings: string[];
       };
+      rotaryCalibrationSheet?: {
+        schema: string;
+        summary: string;
+        mode: string;
+        axisMapping: {
+          lengthAxis: string;
+          depthAxis: string;
+          rotaryAxis: string | null;
+          rotaryOutputMode: string;
+          rotaryWrapPerRevolutionMm: number | null;
+          rotaryDegPerLinearMm: number | null;
+        };
+        warnings: string[];
+      };
       machineAcceptanceChecklist?: {
         schema: string;
         packageLevel: string;
@@ -4677,6 +4691,17 @@ export function App() {
                   复核 {v3Job.result.summary.toolSetupSheet.warnings.length}
                 </small>
               )}
+              {v3Job?.result?.summary.rotaryCalibrationSheet && (
+                <small className={v3Job.result.summary.rotaryCalibrationSheet.warnings.length > 0 ? "v3-inline-warning" : "v3-inline-ok"}>
+                  旋转标定：{v3Job.result.summary.rotaryCalibrationSheet.axisMapping.rotaryAxis ?? "无"}
+                  {" · "}
+                  {v3Job.result.summary.rotaryCalibrationSheet.axisMapping.rotaryWrapPerRevolutionMm
+                    ? `${v3Job.result.summary.rotaryCalibrationSheet.axisMapping.rotaryWrapPerRevolutionMm.toFixed(3)}mm/圈`
+                    : "非旋转"}
+                  {" · "}
+                  复核 {v3Job.result.summary.rotaryCalibrationSheet.warnings.length}
+                </small>
+              )}
               {v3Job?.result?.summary.machineAcceptanceChecklist && (
                 <small className={v3Job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.blocksProduction) ? "v3-inline-warning" : "v3-inline-ok"}>
                   机床验收：{v3Job.result.summary.machineAcceptanceChecklist.summary}
@@ -6898,6 +6923,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const packageIndex = summary?.machiningPackageIndex;
   const packageIntegrity = summary?.packageIntegrity;
   const toolSetupSheet = summary?.toolSetupSheet;
+  const rotaryCalibrationSheet = summary?.rotaryCalibrationSheet;
   const machineAcceptanceChecklist = summary?.machineAcceptanceChecklist;
   const machineAcceptanceSummary = packageIndex?.machineAcceptance;
   const externalCamRecipe = summary?.externalCamRecipe;
@@ -6941,6 +6967,15 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `进给/转速: F${toolSetupSheet?.cutting?.feedRateMmMin ?? "-"} / S${toolSetupSheet?.cutting?.spindleRpm ?? "-"}`,
     `复核项: ${toolSetupSheet?.warnings?.length ?? 0}`,
     "刀具报告: tool-setup-sheet.json",
+    "",
+    "## 旋转夹具标定",
+    "",
+    `模式: ${rotaryCalibrationSheet?.mode ?? "-"}`,
+    `轴映射: ${rotaryCalibrationSheet?.axisMapping?.lengthAxis ?? "-"} / ${rotaryCalibrationSheet?.axisMapping?.rotaryAxis ?? "-"} / ${rotaryCalibrationSheet?.axisMapping?.depthAxis ?? "-"}`,
+    `每圈距离: ${rotaryCalibrationSheet?.axisMapping?.rotaryWrapPerRevolutionMm ?? "-"}mm`,
+    `每毫米角度: ${rotaryCalibrationSheet?.axisMapping?.rotaryDegPerLinearMm ?? "-"}deg/mm`,
+    `复核项: ${rotaryCalibrationSheet?.warnings?.length ?? 0}`,
+    "标定报告: rotary-calibration-sheet.json",
     "",
     "## 外部CAM状态",
     "",

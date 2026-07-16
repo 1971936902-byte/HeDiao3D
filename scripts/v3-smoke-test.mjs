@@ -74,6 +74,9 @@ async function main() {
   assert(job.result?.summary?.toolSetupSheet?.schema === "hediao3d.tool-setup-sheet.v1", "tool setup sheet missing");
   assert(job.result.summary.toolSetupSheet.tool.angleDeg === 25, "tool setup sheet should capture 25deg V-bit angle");
   assert(job.result.summary.toolSetupSheet.tool.flatTipMm === 0.4, "tool setup sheet should capture flat tip");
+  assert(job.result?.summary?.rotaryCalibrationSheet?.schema === "hediao3d.rotary-calibration-sheet.v1", "rotary calibration sheet missing");
+  assert(job.result.summary.rotaryCalibrationSheet.axisMapping.rotaryAxis === "Y", "rotary calibration should capture Y axis");
+  assert(job.result.summary.rotaryCalibrationSheet.axisMapping.rotaryWrapPerRevolutionMm === 100, "rotary calibration should capture wrap distance");
   assert(job.result?.summary?.nativeCamReadiness?.schema === "hediao3d.native-cam-readiness.v1", "native CAM readiness report missing");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
   assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
@@ -98,6 +101,7 @@ async function main() {
     "toolpath.nc",
     "toolpath-summary.json",
     "tool-setup-sheet.json",
+    "rotary-calibration-sheet.json",
     "machine-controller-profile.json",
     "machine-acceptance-checklist.json",
     "nc-static-analysis.json",
@@ -133,10 +137,12 @@ async function main() {
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "package-integrity.json"), "readFirst missing package integrity report");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");
   assert(createV3SmokeReadmeProbe(job).includes("CAM选择"), "V3 package readme should include CAM engine selection");
 

@@ -2094,6 +2094,15 @@ async function processOrchestratorJob(job, settings) {
     postprocessProfile
   });
   await writeFile(join(job.workDir, "tool-setup-sheet.json"), JSON.stringify(toolSetupSheet, null, 2), "utf8");
+  const rotaryCalibrationSheet = createRotaryCalibrationSheet({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    machineControllerProfile
+  });
+  await writeFile(join(job.workDir, "rotary-calibration-sheet.json"), JSON.stringify(rotaryCalibrationSheet, null, 2), "utf8");
   const machineAcceptanceChecklist = createMachineAcceptanceChecklist({
     job,
     settings,
@@ -2133,6 +2142,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-acceptance-checklist.json"));
@@ -2173,6 +2183,7 @@ async function processOrchestratorJob(job, settings) {
       productionGate,
       postprocessProfile,
       toolSetupSheet,
+      rotaryCalibrationSheet,
       camoticsInput,
       camoticsSimulationPlan,
       ncStaticAnalysis,
@@ -3523,6 +3534,91 @@ function createToolSetupSheet({ job, settings, toolpath, productionGate, postpro
   };
 }
 
+function createRotaryCalibrationSheet({ job, settings, toolpath, productionGate, postprocessProfile, machineControllerProfile }) {
+  const camMode = settings.camMode ?? "unknown";
+  const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
+  const lengthAxis = machineControllerProfile?.axisMapping?.lengthAxis ?? postprocessProfile.coordinateMapping?.lengthAxis ?? "X";
+  const depthAxis = machineControllerProfile?.axisMapping?.depthAxis ?? postprocessProfile.coordinateMapping?.depthAxis ?? "Z";
+  const wrapPerRev = camMode === "rotaryWrap"
+    ? Math.max(0.001, Number(machineControllerProfile?.rotary?.wrapPerRevolutionMm ?? postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? settings.rotaryWrapPerRevolutionMm ?? 100))
+    : null;
+  const rotaryDegPerMm = wrapPerRev ? 360 / wrapPerRev : null;
+  const warnings = [];
+  if (camMode !== "rotaryWrap") warnings.push("当前不是旋转包裹 CAM 模式，旋转夹具标定单仅作参考。");
+  if (!rotaryAxis) warnings.push("未识别旋转输出轴，请确认机床夹具接线。");
+  if (wrapPerRev && (wrapPerRev < 20 || wrapPerRev > 400)) warnings.push("每圈等效距离超出常见小型旋转夹具范围，请复核控制器脉冲参数。");
+  const testMoveMm = wrapPerRev ? Math.min(wrapPerRev / 4, 25) : null;
+  const testMoveDeg = rotaryDegPerMm && testMoveMm ? testMoveMm * rotaryDegPerMm : null;
+
+  return {
+    schema: "hediao3d.rotary-calibration-sheet.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    summary: warnings.length === 0
+      ? "旋转夹具参数已按 Y/A 包裹模式记录；上机前仍需现场标定方向和每圈距离。"
+      : `旋转夹具标定存在 ${warnings.length} 个复核项。`,
+    mode: camMode,
+    axisMapping: {
+      lengthAxis,
+      depthAxis,
+      rotaryAxis,
+      rotaryOutputMode: rotaryAxis === "A" ? "degree-axis" : rotaryAxis ? "linearized-rotary-axis" : "unknown",
+      rotaryWrapPerRevolutionMm: wrapPerRev,
+      rotaryDegPerLinearMm: rotaryDegPerMm
+    },
+    testProgramIntent: {
+      airRunFile: "air-run.nc",
+      machineFileForTrialOnly: productionGate.allowTrialNc ? "toolpath.nc" : null,
+      recommendedManualTest: rotaryAxis
+        ? `${rotaryAxis}${testMoveMm ? fmt(testMoveMm, 3) : "?"} 应约等于夹具旋转 ${testMoveDeg ? fmt(testMoveDeg, 1) : "?"} 度。`
+        : "先确认旋转夹具接到 Y 轴、A 轴或其他控制器轴。"
+    },
+    acceptanceThresholds: {
+      oneRevolutionErrorDegMax: 2,
+      quarterTurnErrorDegMax: 1,
+      backlashDegMax: 0.5,
+      lengthAxisPositionErrorMmMax: 0.1,
+      safeZMustRemainMm: Number(settings.safeZ ?? 0)
+    },
+    checklist: [
+      {
+        id: "axis-direction",
+        title: "确认旋转方向",
+        expected: "正向旋转应与预览中的展开方向一致；若佛头左右颠倒，反转旋转轴方向或 meshAxisReverse。"
+      },
+      {
+        id: "per-revolution",
+        title: "确认每圈等效距离",
+        expected: wrapPerRev ? `控制器 ${rotaryAxis ?? "旋转轴"} 移动 ${fmt(wrapPerRev, 3)}mm 时，夹具应旋转 360 度。` : "记录实际一圈所需的控制器距离。"
+      },
+      {
+        id: "backlash",
+        title: "确认反向间隙",
+        expected: "正反各走 10 度后回零，视觉误差建议小于 0.5 度。"
+      },
+      {
+        id: "hold-margin",
+        title: "确认两端夹持余量",
+        expected: `左右夹持区不应进入有效雕刻区；当前左 ${fmt(settings.leftHoldMm ?? 0, 2)}mm / 右 ${fmt(settings.rightHoldMm ?? 0, 2)}mm。`
+      }
+    ],
+    warnings,
+    operatorRecordTemplate: {
+      measuredWrapPerRevolutionMm: wrapPerRev,
+      measuredQuarterTurnMm: testMoveMm,
+      measuredQuarterTurnDeg: "",
+      backlashDeg: "",
+      directionOk: false,
+      notes: ""
+    },
+    metrics: {
+      pointCount: toolpath.points?.length ?? 0,
+      estimatedMinutes: Number(toolpath.estimatedMinutes ?? 0)
+    }
+  };
+}
+
 function createMachineAcceptanceChecklist({ job, settings, toolpath, productionGate, postprocessProfile, simulationSummary, ncStaticAnalysis, machineControllerProfile, controllerDialectReport }) {
   const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
   const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
@@ -4364,6 +4460,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("tool-setup-sheet.json"),
+        getFile("rotary-calibration-sheet.json"),
         getFile("machine-acceptance-checklist.json"),
         getFile("controller-dialect-report.json"),
         getFile("native-cam-readiness.json"),
@@ -4403,6 +4500,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
       "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
+      "阅读 rotary-calibration-sheet.json，确认旋转轴方向、每圈距离和反向间隙。",
       "按 machine-acceptance-checklist.json 完成操作员现场验收记录。",
       "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
       "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
@@ -4495,6 +4593,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "tool-setup-sheet.json", "刀具装夹与切削参数核验单", "report", true, "核验 4mm 25度平底尖刀、切深、步距、进给和主轴转速。"),
+    createDeliveryFile(job.id, "rotary-calibration-sheet.json", "旋转夹具标定单", "report", true, "核验旋转轴方向、每圈等效距离、反向间隙和夹持余量。"),
     createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
