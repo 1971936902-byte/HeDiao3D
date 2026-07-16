@@ -285,6 +285,15 @@ type V3OrchestratorJob = {
         blockers: string[];
         warnings: string[];
         requiredActions: string[];
+        simulationEvidence?: {
+          level: string;
+          productionUnlockEligible: boolean;
+          realMaterialRemovalVerified: boolean;
+          synthetic: boolean;
+          engine: string;
+          adapterStatus: string;
+          summary: string;
+        };
         checks: {
           fitRate: number;
           missCount: number;
@@ -4326,6 +4335,13 @@ export function App() {
                   空跑 {v3Job.result.summary.productionGate.allowAirRun ? "可用" : "不可用"}
                   {" · "}
                   试雕 {v3Job.result.summary.productionGate.allowTrialNc ? "可用" : "不可用"}
+                </small>
+              )}
+              {v3Job?.result?.summary.productionGate?.simulationEvidence && (
+                <small className={v3Job.result.summary.productionGate.simulationEvidence.productionUnlockEligible ? "v3-inline-ok" : v3Job.result.summary.productionGate.simulationEvidence.synthetic ? "v3-inline-warning" : "v3-inline-critical"}>
+                  仿真证据：{v3Job.result.summary.productionGate.simulationEvidence.level}
+                  {" · "}
+                  {v3Job.result.summary.productionGate.simulationEvidence.summary}
                 </small>
               )}
               {v3Job?.result?.summary.postprocessProfile && (

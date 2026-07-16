@@ -1866,6 +1866,7 @@ async function processOrchestratorJob(job, settings) {
     toolpath,
     productionGate,
     postprocessProfile,
+    simulationSummary,
     camoticsInput,
     camoticsSimulationPlan,
     ncStaticAnalysis,
@@ -2711,6 +2712,7 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
+  const simulationEvidence = createSimulationEvidence(simulationSummary);
 
   if (repairPlan.status === "repair-required") {
     blockers.push("Mesh 质量需要修复，不能直接生成生产 NC。");
@@ -2737,9 +2739,9 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
     requiredActions.push("确认 adapter-report.json；外部 CAM 未返回 completed 前不要按生产级 CAM 精度评估。");
   }
 
-  if (simulationSummary.engine !== "camotics") {
-    warnings.push("当前不是 CAMotics 真实材料去除仿真，仅为内置旋转包裹预览。");
-    requiredActions.push("正式上机前用 CAMotics 或机床控制软件完成 NC 仿真。");
+  if (!simulationEvidence.productionUnlockEligible) {
+    warnings.push(simulationEvidence.summary);
+    requiredActions.push(...simulationEvidence.requiredActions);
   }
 
   if (camoticsInput && !camoticsInput.compatibility.canRunInCamotics) {
@@ -2787,7 +2789,7 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
     && warnings.length === 0
     && camInputPlan.gate.allowProductionNc
     && engineReadiness.externalReady
-    && simulationSummary.engine === "camotics"
+    && simulationEvidence.productionUnlockEligible
     && simulationSummary.riskLevel === "ready";
   const allowTrialNc = blockers.length === 0;
   const allowAirRun = (toolpath.points?.length ?? 0) > 0;
@@ -2816,12 +2818,15 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       nativeCamReadyCount: nativeCamReadiness?.readyCount ?? 0,
       nativeCamRequiredCount: nativeCamReadiness?.requiredCount ?? 0,
       simulationEngine: simulationSummary.engine,
+      simulationEvidenceLevel: simulationEvidence.level,
+      realMaterialRemovalVerified: simulationEvidence.realMaterialRemovalVerified,
       simulationRiskLevel: simulationSummary.riskLevel,
       fitRate: simulationSummary.metrics.fitRate,
       missCount: simulationSummary.metrics.missCount,
       pointCount: toolpath.points?.length ?? 0,
       estimatedMinutes
     },
+    simulationEvidence,
     blockers,
     warnings: dedupeStrings(warnings),
     requiredActions: dedupeStrings(requiredActions),
@@ -2831,6 +2836,42 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       "用废料或低进给做小料试雕，记录真实深度、耗时和夹具方向。",
       "接入 BlenderCAM/FreeCAD 与 CAMotics 后，再解锁生产 NC 下载。"
     ]
+  };
+}
+
+function createSimulationEvidence(simulationSummary) {
+  const adapter = simulationSummary?.camoticsAdapter ?? null;
+  const adapterCompleted = adapter?.status === "completed";
+  const synthetic = Boolean(adapter?.synthetic) || simulationSummary?.engine === "camotics-synthetic";
+  const realMaterialRemovalVerified = simulationSummary?.engine === "camotics" && adapterCompleted && !synthetic;
+  const level = realMaterialRemovalVerified
+    ? "material-removal-verified"
+    : synthetic
+      ? "handoff-only"
+      : "preview-only";
+  const summary = realMaterialRemovalVerified
+    ? "CAMotics 已返回真实材料去除仿真结果，可作为生产门禁证据之一。"
+    : synthetic
+      ? "CAMotics synthetic 结果只验证 adapter 回填协议，不代表真实材料去除。"
+      : "当前只有内置旋转包裹/三轴预览摘要，不是 CAMotics 真实材料去除仿真。";
+  const requiredActions = realMaterialRemovalVerified
+    ? []
+    : synthetic
+      ? ["在 CAM 服务端安装并运行真实 CAMotics，替换 synthetic 回填结果后再申请生产 NC。"]
+      : ["正式上机前用 CAMotics 或机床控制软件完成材料去除仿真。"];
+
+  return {
+    schema: "hediao3d.simulation-evidence.v1",
+    level,
+    productionUnlockEligible: realMaterialRemovalVerified,
+    realMaterialRemovalVerified,
+    synthetic,
+    engine: simulationSummary?.engine ?? "unknown",
+    adapterStatus: adapter?.status ?? "missing",
+    resultArtifact: adapter?.resultArtifact ?? null,
+    reportArtifact: adapter?.reportArtifact ?? null,
+    summary,
+    requiredActions
   };
 }
 
@@ -3526,7 +3567,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, camoticsInput, ncStaticAnalysis, nativeCamReadiness, machineControllerProfile, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, ncStaticAnalysis, nativeCamReadiness, machineControllerProfile, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -3617,11 +3658,14 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: nativeCamReadiness.summary,
       requiredActions: nativeCamReadiness.requiredActions
     } : null,
+    simulationEvidence: productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary),
     camotics: {
       status: camoticsInput.status,
       previewFile: "camotics-preview.nc",
       compatibility: camoticsInput.compatibility,
       resultFile: fileByName.has("camotics-result.json") ? "camotics-result.json" : null,
+      evidenceLevel: productionGate.simulationEvidence?.level ?? null,
+      productionUnlockEligible: productionGate.simulationEvidence?.productionUnlockEligible ?? false,
       limitation: "CAMotics 仅用于展开三轴检查；旋转夹具真实材料去除仍需专业仿真或机床控制软件复核。"
     },
     metrics: {

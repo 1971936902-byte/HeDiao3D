@@ -122,8 +122,15 @@ async function main() {
   const simulationSummary = await getArtifactJson(job.id, "simulation-summary.json");
   assert(simulationSummary.engine === "camotics-synthetic", `simulation summary expected camotics-synthetic, got ${simulationSummary.engine}`);
   assert(simulationSummary.camoticsAdapter?.status === "completed", "simulation summary missing completed CAMotics adapter status");
+  const productionGate = await getArtifactJson(job.id, "production-gate.json");
+  assert(productionGate.allowProductionNc === false, "synthetic CAMotics handoff must not unlock production NC");
+  assert(productionGate.allowTrialNc === true, "synthetic CAMotics handoff should still allow trial NC when other blockers are clear");
+  assert(productionGate.simulationEvidence?.level === "handoff-only", `expected handoff-only simulation evidence, got ${productionGate.simulationEvidence?.level}`);
+  assert(productionGate.simulationEvidence?.productionUnlockEligible === false, "synthetic simulation evidence must not be production eligible");
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-result.json"), "package index missing camotics-result.json");
+  assert(packageIndex.simulationEvidence?.level === "handoff-only", "package index missing handoff-only simulation evidence");
+  assert(packageIndex.camotics?.productionUnlockEligible === false, "package index should keep CAMotics production unlock false for synthetic result");
 
   console.log(JSON.stringify({
     ok: true,
@@ -133,7 +140,10 @@ async function main() {
     source: toolpathSummary.source,
     neutralPoints: neutralToolpath.points.length,
     simulationEngine: simulationSummary.engine,
+    simulationEvidence: productionGate.simulationEvidence.level,
     camoticsMotionLines: camoticsResult.metrics.motionLineCount,
+    production: productionGate.allowProductionNc,
+    trial: productionGate.allowTrialNc,
     ncLevel: analysis.level,
     machineAxes: machine.axisCounts
   }, null, 2));
