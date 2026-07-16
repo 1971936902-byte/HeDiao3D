@@ -1706,6 +1706,7 @@ async function processOrchestratorJob(job, settings) {
   const repairExecution = createRepairExecutionReport(job, meshQuality, repairPlan, settings);
   await writeFile(join(job.workDir, "repair-execution.json"), JSON.stringify(repairExecution, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-execution.json"));
+  pushRepairOutputArtifacts(job, repairExecution);
   appendOrchestratorLog(job, `Mesh 修复执行状态：${repairExecution.summary}`);
   await writeJobManifest(job);
   checkOrchestratorCancellation(job);
@@ -1860,7 +1861,7 @@ async function processOrchestratorJob(job, settings) {
     resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
     productionGate
   });
-  const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate);
+  const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
     toolpath,
@@ -2238,6 +2239,13 @@ function createRepairOutputCandidates(job, sourceModelPath) {
     ...candidate,
     selectedForCam: false
   }));
+}
+
+function pushRepairOutputArtifacts(job, repairExecution) {
+  for (const output of repairExecution?.outputs ?? []) {
+    if (!output?.filename || !output.exists) continue;
+    pushUnique(job.artifacts, publicArtifactUrl(job.id, output.filename));
+  }
 }
 
 function createRepairExecutionNextSteps(status) {
@@ -3711,6 +3719,12 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("delivery-manifest.json")
       ],
       reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "native-cam-readiness.json", "postprocess-profile.json", "delivery-manifest.json"].includes(file.filename)),
+      camInputs: deliveryManifest.files
+        .filter((file) => file.kind === "model")
+        .map((file) => ({
+          ...file,
+          usage: "external-cam-input-candidate"
+        })),
       simulationOnly: [
         getFile("camotics-input.json"),
         getFile("camotics-simulation-plan.json"),
@@ -3783,7 +3797,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   };
 }
 
-function createDeliveryManifest(job, toolpath, productionGate) {
+function createDeliveryManifest(job, toolpath, productionGate, repairExecution = null) {
   const files = [
     createDeliveryFile(job.id, "job.json", "任务参数快照", "report", true, "用于复现本次 Orchestrator 输入。"),
     createDeliveryFile(job.id, "job-status.json", "任务状态和日志", "report", true, "用于追踪队列、日志和结果摘要。"),
@@ -3831,6 +3845,10 @@ function createDeliveryManifest(job, toolpath, productionGate) {
   }
   if (existsSync(join(job.workDir, "opencamlib-run-template.py"))) {
     files.push(createDeliveryFile(job.id, "opencamlib-run-template.py", "OpenCAMLib 运行模板", "report", true, "外部 OpenCAMLib adapter 生成的中性 cutter-contact 输出模板，用于服务器端二次验证。"));
+  }
+  for (const output of repairExecution?.outputs ?? []) {
+    if (!output?.filename || !output.exists) continue;
+    files.push(createDeliveryFile(job.id, output.filename, output.label ?? output.filename, "model", true, output.note ?? "Mesh 修复/重网格/CAM 降面产物，可作为外部 CAM 输入候选。"));
   }
 
   return {
