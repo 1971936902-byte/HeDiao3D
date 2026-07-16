@@ -573,7 +573,9 @@ type V3AdapterValidationSummary = {
     };
     run?: {
       status?: number | null;
+      exitCode?: number | null;
       error?: string | null;
+      durationMs?: number | null;
     };
   }>;
   apiArtifacts?: {
@@ -3800,7 +3802,7 @@ export function App() {
                   <div className="v3-adapter-list">
                     {v3AdapterValidation.adapters.map((adapter) => (
                       <span className={adapter.report?.status === "completed" || adapter.plan.generated ? "ok" : "warning"} key={adapter.id}>
-                        {adapter.name} · {adapter.report?.status ?? adapter.run?.status ?? "待验证"}
+                        {adapter.name} · {adapter.report?.status ?? adapter.run?.status ?? adapter.run?.exitCode ?? "待验证"}
                       </span>
                     ))}
                   </div>

@@ -486,11 +486,11 @@ async function runAdapterValidation(req, res) {
   summary.run = {
     exitCode: run.status,
     error: run.error?.message ?? null,
-    stdout: String(run.stdout ?? "").slice(-6000),
-    stderr: String(run.stderr ?? "").slice(-6000)
+    stdoutTail: run.status === 0 ? "" : String(run.stdout ?? "").slice(-6000),
+    stderrTail: String(run.stderr ?? "").slice(-6000)
   };
   await writeFile(summaryPath, JSON.stringify(summary, null, 2), "utf8");
-  return json(res, run.status === 0 || summary.overall?.generatedPlans > 0 ? 200 : 500, summary);
+  return json(res, run.status === 0 || summary.overall?.generatedPlans > 0 ? 200 : 500, createAdapterValidationPublicSummary(summary, validationId));
 }
 
 function getLatestAdapterValidation(res) {
@@ -514,14 +514,59 @@ function readAdapterValidationSummary(validationId) {
   if (!existsSync(summaryPath)) return null;
   try {
     const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
-    return {
-      ...summary,
-      id: validationId,
-      apiArtifacts: createAdapterValidationArtifactLinks(validationId)
-    };
+    return createAdapterValidationPublicSummary(summary, validationId);
   } catch {
     return null;
   }
+}
+
+function createAdapterValidationPublicSummary(summary, validationId) {
+  return {
+    id: validationId,
+    schema: summary.schema,
+    createdAt: summary.createdAt,
+    outputRoot: summary.outputRoot,
+    useNativeCommands: Boolean(summary.useNativeCommands),
+    timeoutMs: summary.timeoutMs,
+    overall: summary.overall ?? {
+      adapterCount: 0,
+      failed: 1,
+      generatedPlans: 0,
+      completedAdapters: 0,
+      readyForProduction: false,
+      note: "Adapter validation summary is missing overall metrics."
+    },
+    adapters: Array.isArray(summary.adapters)
+      ? summary.adapters.map((adapter) => ({
+        id: adapter.id,
+        name: adapter.name ?? adapter.id,
+        command: adapter.command ?? null,
+        commandMode: adapter.commandMode ?? null,
+        plan: {
+          generated: Boolean(adapter.plan?.generated),
+          path: adapter.plan?.metric?.planPath ?? adapter.plan?.metric?.runTemplatePath ?? null
+        },
+        report: {
+          status: adapter.report?.status ?? null,
+          error: adapter.report?.error ?? null
+        },
+        run: {
+          exitCode: adapter.run?.exitCode ?? null,
+          error: adapter.run?.error ?? null,
+          durationMs: adapter.run?.durationMs ?? null
+        },
+        nativeSignals: adapter.nativeSignals ?? null,
+        failed: Boolean(adapter.failed)
+      }))
+      : [],
+    apiArtifacts: createAdapterValidationArtifactLinks(validationId),
+    run: {
+      exitCode: summary.run?.exitCode ?? null,
+      error: summary.run?.error ?? null,
+      hasStdout: Boolean(summary.run?.stdoutTail),
+      hasStderr: Boolean(summary.run?.stderrTail)
+    }
+  };
 }
 
 function createAdapterValidationArtifactLinks(validationId) {
