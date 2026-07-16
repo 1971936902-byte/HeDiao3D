@@ -155,6 +155,19 @@ type V3OrchestratorJob = {
       error?: string | null;
       durationMs?: number;
     } | null;
+    camoticsAdapterReport?: {
+      status: string;
+      engine: string;
+      error?: string | null;
+      durationMs?: number;
+      simulationResultPath?: string;
+      outputs?: {
+        simulationResult?: string;
+      };
+      metrics?: {
+        resultPath?: string | null;
+      };
+    } | null;
     toolpath: GeneratedToolpath;
     summary: {
       meshQuality?: {
@@ -475,6 +488,17 @@ type V3OrchestratorJob = {
           requiredActions: string[];
         };
         recommendedSequence?: string[];
+        camotics?: {
+          status: string;
+          previewFile: string;
+          resultFile: string | null;
+          compatibility?: {
+            canRunInCamotics: boolean;
+            interpretation: string;
+            reason: string;
+          };
+          limitation: string;
+        };
       };
       deliveryManifest?: {
         packageLevel: string;
@@ -507,6 +531,20 @@ type V3OrchestratorJob = {
           estimatedMinutes: number;
         };
         notes: string[];
+        camoticsAdapter?: {
+          status: string;
+          error: string | null;
+          synthetic?: boolean;
+          resultArtifact: string | null;
+          reportArtifact?: string | null;
+          summary?: string | null;
+          metrics?: {
+            motionLineCount?: number;
+            zMin?: number | null;
+            zMax?: number | null;
+            estimatedMinutes?: number | null;
+          };
+        };
       };
     };
   };
@@ -4335,6 +4373,21 @@ export function App() {
                   仿真 {v3Job.result.summary.simulation.engine} / 贴合 {v3Job.result.summary.simulation.metrics.fitRate.toFixed(1)}% / 未命中 {v3Job.result.summary.simulation.metrics.missCount}
                 </small>
               )}
+              {v3Job?.result?.camoticsAdapterReport && (
+                <small className={v3Job.result.camoticsAdapterReport.status === "completed" ? "v3-inline-ok" : v3Job.result.camoticsAdapterReport.status === "skipped" ? "v3-inline-warning" : "v3-inline-critical"}>
+                  CAMotics Adapter：{v3Job.result.camoticsAdapterReport.status}
+                  {v3Job.result.camoticsAdapterReport.error ? ` · ${v3Job.result.camoticsAdapterReport.error}` : ""}
+                </small>
+              )}
+              {v3Job?.result?.summary.simulation?.camoticsAdapter && (
+                <small className={v3Job.result.summary.simulation.camoticsAdapter.synthetic ? "v3-inline-warning" : v3Job.result.summary.simulation.camoticsAdapter.status === "completed" ? "v3-inline-ok" : "v3-inline-critical"}>
+                  CAMotics结果：{v3Job.result.summary.simulation.camoticsAdapter.synthetic ? "synthetic链路验证" : "材料去除仿真"}
+                  {" · "}
+                  {v3Job.result.summary.simulation.camoticsAdapter.status}
+                  {v3Job.result.summary.simulation.camoticsAdapter.metrics?.motionLineCount ? ` · 运动行 ${v3Job.result.summary.simulation.camoticsAdapter.metrics.motionLineCount}` : ""}
+                  {v3Job.result.summary.machiningPackageIndex?.camotics?.resultFile ? ` · ${v3Job.result.summary.machiningPackageIndex.camotics.resultFile}` : ""}
+                </small>
+              )}
               {v3Job?.result?.summary.camoticsInput && (
                 <small>
                   CAMotics输入：{v3Job.result.summary.camoticsInput.status}
@@ -6489,6 +6542,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
+  const simulation = summary?.simulation;
+  const camoticsAdapter = simulation?.camoticsAdapter;
   const packageIndex = summary?.machiningPackageIndex;
   const externalCamRecipe = summary?.externalCamRecipe;
   const lines = [
@@ -6563,6 +6618,15 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `说明: ${camoticsInput?.compatibility?.reason ?? "-"}`,
     `项目模板: ${camoticsSimulationPlan?.projectTemplate?.schema ? "camotics-project-template.json" : "未生成"}`,
     `计划状态: ${camoticsSimulationPlan?.status ?? "未生成"}`,
+    "",
+    "## CAMotics 仿真结果",
+    "",
+    `仿真引擎: ${simulation?.engine ?? "未生成"}`,
+    `Adapter状态: ${camoticsAdapter?.status ?? "未运行"}`,
+    `结果类型: ${camoticsAdapter?.synthetic ? "synthetic链路验证，不代表真实材料去除" : camoticsAdapter?.status === "completed" ? "CAMotics材料去除结果" : "无结果"}`,
+    `结果文件: ${packageIndex?.camotics?.resultFile ?? camoticsAdapter?.resultArtifact ?? "-"}`,
+    `运动行数: ${camoticsAdapter?.metrics?.motionLineCount ?? "-"}`,
+    `说明: ${camoticsAdapter?.summary ?? packageIndex?.camotics?.limitation ?? "-"}`,
     "",
     "## 刀路摘要",
     "",
