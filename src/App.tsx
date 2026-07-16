@@ -14,6 +14,7 @@ import { createPackageManifest, createQualityReport, createSafetyReport, createS
 import { createZipBlob, downloadBlob, type ZipFile } from "./zipPackage";
 import { ai3dProviders, getAi3dProvider, isProviderAvailable, type Ai3dProviderId } from "./aiProviders";
 import { analyzeMaterialRemoval, type MaterialRemovalReport } from "./simulationAnalysis";
+import { isSupportedToolpathFile, parseGcodeToToolpath } from "./gcodeImport";
 import {
   applyMachineProfile,
   applyMaterialProfile,
@@ -62,6 +63,9 @@ const defaultSettings: ModelSettings = {
   toolProfileId: "ball-0.6",
   materialProfileId: "olive-core",
   machineProfileId: "desktop-4axis-generic",
+  camMode: "4axis",
+  rotaryOutputAxis: "A",
+  rotaryWrapPerRevolutionMm: 100,
   meshLengthAxis: "auto",
   meshAxisReverse: false,
   maxCutDepth: 0.16,
@@ -474,6 +478,7 @@ export function App() {
   const [generationLabel, setGenerationLabel] = useState("内置示例");
   const [aiMeshUrl, setAiMeshUrl] = useState<string | null>(null);
   const [aiMeshStlUrl, setAiMeshStlUrl] = useState<string | null>(null);
+  const [originalModelFileName, setOriginalModelFileName] = useState<string | null>(null);
   const [aiMeshStatus, setAiMeshStatus] = useState("未生成");
   const [aiProviderId, setAiProviderId] = useState<Ai3dProviderId>("meshy");
   const [isAiGenerating, setIsAiGenerating] = useState(false);
@@ -502,6 +507,15 @@ export function App() {
   });
   const canceledTaskJobIdsRef = useRef<Set<string>>(new Set());
   const processTemplateImportRef = useRef<HTMLInputElement | null>(null);
+  const toolpathImportRef = useRef<HTMLInputElement | null>(null);
+  const originalModelImportRef = useRef<HTMLInputElement | null>(null);
+  const importedModelObjectUrlRef = useRef<string | null>(null);
+
+  const releaseImportedModelObjectUrl = () => {
+    if (!importedModelObjectUrlRef.current) return;
+    URL.revokeObjectURL(importedModelObjectUrlRef.current);
+    importedModelObjectUrlRef.current = null;
+  };
 
   const activeImage = images.find((image) => image.id === activeId) ?? images[0];
   const sourceDepth = generatedDepth ?? createBlankDepthMap();
@@ -562,6 +576,7 @@ export function App() {
     return getToolpathProgram(toolpath, toolpathKind);
   }, [toolpath, toolpathKind]);
   const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
+  const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
   const workbenchTitle =
     workbenchView === "simulation" && toolpath
@@ -592,6 +607,10 @@ export function App() {
     });
   }, [toolpath]);
 
+  useEffect(() => () => {
+    releaseImportedModelObjectUrl();
+  }, []);
+
   useEffect(() => {
     window.localStorage.setItem(CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY, JSON.stringify(customProcessTemplates));
   }, [customProcessTemplates]);
@@ -615,6 +634,20 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(MACHINE_ACCEPTANCE_STORAGE_KEY, JSON.stringify(machineAcceptanceRecords));
   }, [machineAcceptanceRecords]);
+
+  useEffect(() => {
+    const machine = getMachineProfile(settings.machineProfileId);
+    if (settings.camMode === "rotaryWrap") return;
+    if (machine.axes === settings.camMode) return;
+    const compatibleMachine = machineProfiles.find((profile) => profile.axes === settings.camMode);
+    if (!compatibleMachine) return;
+    setSettings((current) => ({
+      ...current,
+      machineProfileId: compatibleMachine.id,
+      safeZ: compatibleMachine.safeZ,
+      postProcessor: current.camMode === "3axis" ? "generic3" : compatibleMachine.controller
+    }));
+  }, [settings.camMode, settings.machineProfileId]);
 
   useEffect(() => {
     if (!aiMeshStlUrl) {
@@ -982,6 +1015,31 @@ export function App() {
     applySettingsPreset(applyMachineProfile(settings, getMachineProfile(machineId)));
   };
 
+  const handleCamModeChange = (camMode: ModelSettings["camMode"]) => {
+    const currentMachine = getMachineProfile(settings.machineProfileId);
+    if (camMode === "rotaryWrap") {
+      applySettingsPreset({
+        ...settings,
+        camMode,
+        reliefAngleDeg: 360,
+        rotaryOutputAxis: settings.rotaryOutputAxis === "X" ? "X" : "Y",
+        postProcessor: settings.rotaryOutputAxis === "X" ? "wrapX" : "wrapY"
+      });
+      return;
+    }
+    const compatibleMachine =
+      currentMachine.axes === camMode
+        ? currentMachine
+        : machineProfiles.find((machine) => machine.axes === camMode) ?? currentMachine;
+    applySettingsPreset({
+      ...settings,
+      camMode,
+      machineProfileId: compatibleMachine.id,
+      safeZ: compatibleMachine.safeZ,
+      postProcessor: camMode === "3axis" ? "generic3" : compatibleMachine.controller
+    });
+  };
+
   const handleProcessTemplateChange = (templateId: string) => {
     const template = allProcessTemplates.find((item) => item.id === templateId) ?? processTemplates[0];
     const nextSettings = applyProcessTemplate(settings, template);
@@ -1068,6 +1126,128 @@ export function App() {
         status: "error",
         title: "导入自定义工艺模板失败",
         detail: error instanceof Error ? error.message : "模板 JSON 无法解析"
+      });
+    }
+  };
+
+  const handleImportToolpathFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      if (!isSupportedToolpathFile(file.name)) {
+        throw new Error("当前版本支持导入 .nc/.tap/.gcode/.ngc/.cnc/.txt/.csv。STL/OBJ 等几何模型反向导入可后续继续扩展。");
+      }
+
+      const text = await file.text();
+      const importedToolpath = parseGcodeToToolpath(text, file.name, settings);
+      const isThreeAxisImport = importedToolpath.summary.yMin != null && importedToolpath.summary.aMin === 0 && importedToolpath.summary.aMax === 0;
+      const rotaryWrapImport = readImportedRotaryWrapSettings(text);
+      const currentMachine = getMachineProfile(settings.machineProfileId);
+      const importedCamMode: ModelSettings["camMode"] = rotaryWrapImport ? "rotaryWrap" : isThreeAxisImport ? "3axis" : settings.camMode;
+      const compatibleMachine =
+        importedCamMode === "rotaryWrap"
+          ? currentMachine
+          : currentMachine.axes === importedCamMode
+          ? currentMachine
+          : machineProfiles.find((machine) => machine.axes === importedCamMode) ?? currentMachine;
+      const nextSettings: ModelSettings = {
+        ...settings,
+        camMode: importedCamMode,
+        machineProfileId: compatibleMachine.id,
+        safeZ: importedCamMode === "rotaryWrap" ? settings.safeZ : compatibleMachine.safeZ,
+        rotaryOutputAxis: rotaryWrapImport?.axis ?? settings.rotaryOutputAxis,
+        rotaryWrapPerRevolutionMm: rotaryWrapImport?.perRevMm ?? settings.rotaryWrapPerRevolutionMm,
+        postProcessor: rotaryWrapImport?.axis === "X" ? "wrapX" : rotaryWrapImport?.axis === "Y" ? "wrapY" : isThreeAxisImport ? "generic3" : settings.postProcessor
+      };
+      setSettings(nextSettings);
+      setToolpath(importedToolpath);
+      setToolpathKind("rough");
+      setIsSimulationMode(true);
+      setWorkbenchView("simulation");
+      saveSnapshot("导入刀路反向预览", nextSettings, `${file.name}，点数 ${importedToolpath.points.length}，估算 ${importedToolpath.estimatedMinutes.toFixed(1)} min。`);
+      recordTask({
+        category: "cam",
+        status: importedToolpath.summary.warnings.length > 1 ? "warning" : "ok",
+        title: "导入 NC/G-code 反向预览",
+        detail: `${file.name} 已解析 ${importedToolpath.points.length} 个运动点，${importedToolpath.postProcessorName}。`
+      });
+    } catch (error) {
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "导入刀路失败",
+        detail: error instanceof Error ? error.message : "未知错误"
+      });
+      alert(error instanceof Error ? error.message : "导入刀路失败");
+    }
+  };
+
+  const handleImportOriginalModelFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (!extension || !["stl", "obj", "glb", "gltf"].includes(extension)) {
+      const message = "当前支持导入 .stl/.obj/.glb/.gltf 原始3D模型。";
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "导入原始3D模型失败",
+        detail: message
+      });
+      alert(message);
+      return;
+    }
+
+    releaseImportedModelObjectUrl();
+    const objectUrl = URL.createObjectURL(file);
+    importedModelObjectUrlRef.current = objectUrl;
+    setAiMeshUrl(objectUrl);
+    setAiMeshStlUrl(extension === "stl" ? objectUrl : null);
+    setOriginalModelFileName(file.name);
+    setMeshQuality(null);
+    setModelSubStage("ai");
+    setWorkbenchView("model");
+    setIsSimulationMode(false);
+    setGenerationLabel(`原始3D模型：${file.name}`);
+    setAiMeshStatus(`正在上传原始3D模型到本地 CAM 缓存：${file.name}`);
+    saveSnapshot("导入原始3D模型", settings, `${file.name}，格式 ${extension.toUpperCase()}。`);
+    recordTask({
+      category: "model",
+      status: "ok",
+      title: "导入原始3D模型",
+      detail: `${file.name} 已载入右侧 3D 视图${toolpath ? "，并叠加当前刀路。" : "。"}`
+    });
+
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const response = await fetch("/api/mesh/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, dataUrl })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "模型上传到本地 CAM 缓存失败");
+      releaseImportedModelObjectUrl();
+      setAiMeshUrl(data.modelUrl);
+      setAiMeshStlUrl(data.camModelUrl);
+      setAiMeshStatus(`已导入原始3D模型：${file.name}，可直接生成 Mesh 刀路${toolpath ? "，当前 NC/G-code 已叠加显示" : ""}`);
+      recordTask({
+        category: "model",
+        status: "ok",
+        title: "原始3D模型已缓存",
+        detail: `${file.name} 已保存为 ${data.modelUrl}，可用于生成刀路。`
+      });
+    } catch (error) {
+      setAiMeshStatus(error instanceof Error ? error.message : "模型上传到本地 CAM 缓存失败；当前只能预览，不能生成刀路");
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "原始3D模型缓存失败",
+        detail: error instanceof Error ? error.message : "未知错误"
       });
     }
   };
@@ -1194,8 +1374,10 @@ export function App() {
       setImages((current) => [...current, ...loaded]);
       setActiveId(loaded[0].id);
       setGeneratedDepth(null);
+      releaseImportedModelObjectUrl();
       setAiMeshUrl(null);
       setAiMeshStlUrl(null);
+      setOriginalModelFileName(null);
       setMeshQuality(null);
       setGenerationLabel("图片已载入，待生成3D");
       setToolpath(null);
@@ -1236,6 +1418,24 @@ export function App() {
       costEstimate
     });
     downloadText("operator-note.md", content, "text/markdown");
+  };
+
+  const handleDownloadModelAsset = async (url: string, fallbackName: string) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`模型文件下载失败：${response.status}`);
+      const blob = await response.blob();
+      downloadBlob(extractDownloadFilename(url, fallbackName), blob);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "模型文件下载失败";
+      setAiMeshStatus(message);
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "模型文件下载失败",
+        detail: message
+      });
+    }
   };
 
   const handleDownloadAirRun = () => {
@@ -1406,21 +1606,39 @@ export function App() {
 
   const generateToolpathForSettings = async (baseSettings: ModelSettings, finishing: boolean) => {
     if (aiMeshUrl) {
+      if (isOriginalModelImported) {
+        setAiMeshStatus("原始3D模型仍在本地预览状态，后端 CAM 还不能读取；请等待上传到本地 CAM 缓存完成后再生成刀路。");
+        recordTask({
+          category: "cam",
+          status: "warning",
+          title: "原始模型尚未缓存",
+          detail: "浏览器 blob 模型无法被后端 CAM 采样服务直接读取；上传完成后会自动切换为 /imported-models 地址。"
+        });
+        return;
+      }
       if (!aiMeshStlUrl) {
         setAiMeshStatus("当前 Meshy 模型没有本地 STL，无法生成 Mesh 贴面刀路");
         return;
       }
 
-      const meshCamSettings = { ...baseSettings, reliefAngleDeg: 360 };
-      if (baseSettings.reliefAngleDeg !== 360) {
+      const meshCamSettings = baseSettings.camMode === "3axis" ? { ...baseSettings, reliefAngleDeg: 0 } : { ...baseSettings, reliefAngleDeg: 360 };
+      if (baseSettings.camMode !== "3axis" && baseSettings.reliefAngleDeg !== 360) {
         setSettings(meshCamSettings);
       }
       setIsToolpathGenerating(true);
-      setAiMeshStatus(finishing ? "正在生成 360° Mesh 精加工刀路" : "正在按 360° 包覆对 Meshy STL 做表面采样并生成四轴刀路");
+      setAiMeshStatus(
+        baseSettings.camMode === "3axis"
+          ? "正在按 Meshy STL 顶面投影生成三轴 X/Y/Z 刀路"
+          : baseSettings.camMode === "rotaryWrap"
+            ? `正在生成旋转包裹刀路：${baseSettings.rotaryOutputAxis}轴驱动夹具`
+          : finishing
+            ? "正在生成 360° Mesh 精加工刀路"
+            : "正在按 360° 包覆对 Meshy STL 做表面采样并生成四轴刀路"
+      );
       const jobId = startTaskJob({
         category: "cam",
-        title: finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路",
-        detail: "正在采样 STL 表面并生成四轴刀路。",
+        title: baseSettings.camMode === "3axis" ? "Mesh 三轴刀路" : baseSettings.camMode === "rotaryWrap" ? "Mesh 旋转包裹刀路" : finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路",
+        detail: baseSettings.camMode === "3axis" ? "正在顶面投影 STL 并生成三轴刀路。" : baseSettings.camMode === "rotaryWrap" ? "正在按 360° 采样 STL，并把旋转角映射到夹具接入轴。" : "正在采样 STL 表面并生成四轴刀路。",
         retryAction: finishing ? "generate-finish-toolpath" : "generate-toolpath"
       });
       try {
@@ -1438,15 +1656,15 @@ export function App() {
         appendTaskJobLog(jobId, "服务端已返回刀路，正在写入预览和报告。", 86);
         setToolpath(data);
         setToolpathKind(finishing ? "finish" : "rough");
-        setIsSimulationMode(true);
-        setWorkbenchView("simulation");
-        saveSnapshot(finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路", meshCamSettings, `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
-        setAiMeshStatus(finishing ? "Mesh 精加工刀路已生成，可下载 NC/TAP 文件" : "Mesh 360° 表面采样刀路已生成，可下载 NC/TAP 文件");
+        setIsSimulationMode(false);
+        setWorkbenchView("model");
+        saveSnapshot(baseSettings.camMode === "3axis" ? "Mesh 三轴刀路" : baseSettings.camMode === "rotaryWrap" ? "Mesh 旋转包裹刀路" : finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路", meshCamSettings, `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
+        setAiMeshStatus(baseSettings.camMode === "3axis" ? "Mesh 三轴 X/Y/Z 刀路已生成，右侧停留在原始3D模型并叠加刀路线" : baseSettings.camMode === "rotaryWrap" ? `Mesh 旋转包裹刀路已生成，右侧停留在原始3D模型并叠加刀路线，${baseSettings.rotaryOutputAxis}轴驱动夹具` : finishing ? "Mesh 精加工刀路已生成，右侧停留在原始3D模型并叠加刀路线" : "Mesh 360° 表面采样刀路已生成，右侧停留在原始3D模型并叠加刀路线");
         finishTaskJob(jobId, "done", `完成：${data.points.length} 点，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
         recordTask({
           category: "cam",
           status: data.summary.warnings.length > 0 ? "warning" : "ok",
-          title: finishing ? "生成 Mesh 精加工刀路" : "生成 Mesh 四轴刀路",
+          title: baseSettings.camMode === "3axis" ? "生成 Mesh 三轴刀路" : baseSettings.camMode === "rotaryWrap" ? "生成 Mesh 旋转包裹刀路" : finishing ? "生成 Mesh 精加工刀路" : "生成 Mesh 四轴刀路",
           detail: `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min，警告 ${data.summary.warnings.length} 条。`
         });
       } catch (error) {
@@ -1505,8 +1723,10 @@ export function App() {
           : (activeImage?.depthMap ?? images[0].depthMap);
 
     setGeneratedDepth(depth);
+    releaseImportedModelObjectUrl();
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setOriginalModelFileName(null);
     setMeshQuality(null);
     setAiMeshStatus("未生成");
     if (settings.generationMode === "multiview") {
@@ -1534,8 +1754,10 @@ export function App() {
 
   const handleDepthEdit = (depth: DepthMap) => {
     setGeneratedDepth(depth);
+    releaseImportedModelObjectUrl();
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setOriginalModelFileName(null);
     setMeshQuality(null);
     setToolpath(null);
     setIsSimulationMode(false);
@@ -1543,8 +1765,10 @@ export function App() {
   };
 
   const handleClearAiMesh = () => {
+    releaseImportedModelObjectUrl();
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setOriginalModelFileName(null);
     setMeshQuality(null);
     setAiMeshStatus("未生成");
     setGenerationLabel(generatedDepth ? "本地浮雕网格" : images.length > 0 ? "图片已载入，待生成3D" : "内置示例");
@@ -1567,8 +1791,10 @@ export function App() {
     setImages(demos);
     setActiveId(demos[0].id);
     setGeneratedDepth(null);
+    releaseImportedModelObjectUrl();
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setOriginalModelFileName(null);
     setMeshQuality(null);
     setGenerationLabel("示例图案已载入，待生成3D");
     setToolpath(null);
@@ -1602,8 +1828,10 @@ export function App() {
       setImages(loaded);
       setActiveId(loaded[0].id);
       setGeneratedDepth(null);
+      releaseImportedModelObjectUrl();
       setAiMeshUrl(null);
       setAiMeshStlUrl(null);
+      setOriginalModelFileName(null);
       setMeshQuality(null);
       setGenerationLabel("素材01已载入，待生成3D");
       setToolpath(null);
@@ -1637,8 +1865,10 @@ export function App() {
     }
 
     setIsAiGenerating(true);
+    releaseImportedModelObjectUrl();
     setAiMeshUrl(null);
     setAiMeshStlUrl(null);
+    setOriginalModelFileName(null);
     setMeshQuality(null);
     setToolpath(null);
     const selected = images.slice(0, selectedAiProvider.maxImages);
@@ -1687,6 +1917,7 @@ export function App() {
 
       setAiMeshUrl(glb);
       setAiMeshStlUrl(stl ?? null);
+      setOriginalModelFileName(null);
       setModelSubStage(stl ? "inspection" : "ai");
       setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
       setGenerationLabel(`${selectedAiProvider.name} AI 3D Mesh：${selected.length}张图片`);
@@ -1700,13 +1931,14 @@ export function App() {
         detail: `使用 ${selected.length} 张图片生成 GLB${stl ? "/STL" : ""}。`
       });
     } catch (error) {
-      setAiMeshStatus(error instanceof Error ? error.message : `${selectedAiProvider.name}生成失败`);
-      finishTaskJob(jobId, "error", error instanceof Error ? error.message : `${selectedAiProvider.name}生成失败`);
+      const message = formatRequestError(error, `${selectedAiProvider.name}生成失败`);
+      setAiMeshStatus(message);
+      finishTaskJob(jobId, "error", message);
       recordTask({
         category: "model",
         status: "error",
         title: `${selectedAiProvider.name} 生成失败`,
-        detail: error instanceof Error ? error.message : "未知错误"
+        detail: message
       });
     } finally {
       setIsAiGenerating(false);
@@ -1714,8 +1946,10 @@ export function App() {
   };
 
   const handleLoadLocalMeshyResult = () => {
+    releaseImportedModelObjectUrl();
     setAiMeshUrl("/meshy-results/material01-meshy.glb");
     setAiMeshStlUrl("/meshy-results/material01-meshy.stl");
+    setOriginalModelFileName(null);
     setModelSubStage("inspection");
     setMeshQuality(null);
     setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
@@ -1767,6 +2001,7 @@ export function App() {
       if (!repairedStl) throw new Error("Mesh 修复完成，但没有返回 STL");
 
       setAiMeshStlUrl(repairedStl);
+      setOriginalModelFileName(null);
       setMeshQuality(null);
       setToolpath(null);
       setIsSimulationMode(false);
@@ -1830,8 +2065,10 @@ export function App() {
       const remeshStl = task.local_model_urls?.stl ?? task.model_urls?.stl ?? task.output?.model_urls?.stl;
       if (!remeshGlb && !remeshStl) throw new Error("Mesh 重网格完成，但没有返回模型文件");
 
+      releaseImportedModelObjectUrl();
       if (remeshGlb) setAiMeshUrl(remeshGlb);
       if (remeshStl) setAiMeshStlUrl(remeshStl);
+      setOriginalModelFileName(null);
       setMeshQuality(null);
       setGenerationLabel("AI 3D Mesh：已重建可雕刻网格");
       setToolpath(null);
@@ -2150,15 +2387,26 @@ export function App() {
                 {isAiGenerating ? "AI生成中..." : `${selectedAiProvider.name}生成3D Mesh`}
               </button>
               <div className="ai-tool-grid">
+                <button className="demo-action original-model-action ai-tool-wide" onClick={() => originalModelImportRef.current?.click()} type="button">
+                  <UploadCloud size={17} />
+                  导入原始3D模型
+                </button>
+                <input
+                  ref={originalModelImportRef}
+                  className="hidden-file-input"
+                  type="file"
+                  accept=".stl,.obj,.glb,.gltf,model/stl,model/obj,model/gltf-binary,model/gltf+json"
+                  onChange={handleImportOriginalModelFile}
+                />
                 <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
                   <FileImage size={17} />
                   载入测试结果
                 </button>
-                <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing}>
+                <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing || isOriginalModelImported}>
                   <Sparkles size={17} />
                   {isMeshRepairing ? "修复中..." : "修复缺损"}
                 </button>
-                <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing}>
+                <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing || isOriginalModelImported}>
                   <Layers3 size={17} />
                   重建可雕刻网格
                 </button>
@@ -2166,8 +2414,14 @@ export function App() {
               <div className="ai-status">{aiMeshStatus}</div>
               {aiMeshUrl && (
                 <div className="ai-links">
-                  <a href={aiMeshUrl} target="_blank" rel="noreferrer">下载 GLB</a>
-                  {aiMeshStlUrl && <a href={aiMeshStlUrl} target="_blank" rel="noreferrer">下载 AI STL</a>}
+                  <button type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")}>
+                    {isOriginalModelImported ? "下载原始模型" : "下载 GLB"}
+                  </button>
+                  {aiMeshStlUrl && (
+                    <button type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")}>
+                      {isOriginalModelImported ? "下载 STL" : "下载 AI STL"}
+                    </button>
+                  )}
                 </div>
               )}
             </section>}
@@ -2437,7 +2691,12 @@ export function App() {
               </select>
             </label>
             <div className="profile-summary">
-              <span>刀具：{selectedTool.diameterMm.toFixed(2)}mm / 最大切深 {selectedTool.maxCutDepthMm.toFixed(2)}mm</span>
+              <span>
+                刀具：{selectedTool.diameterMm.toFixed(2)}mm
+                {selectedTool.angleDeg != null ? ` / ${selectedTool.angleDeg.toFixed(0)}°` : ""}
+                {selectedTool.flatTipMm != null ? ` / 平底 ${selectedTool.flatTipMm.toFixed(2)}mm` : ""}
+                {" / "}最大切深 {selectedTool.maxCutDepthMm.toFixed(2)}mm
+              </span>
               <span>材料：{selectedMaterial.notes}</span>
               <span>机床：{selectedMachine.notes}</span>
             </div>
@@ -2449,12 +2708,50 @@ export function App() {
             <Hammer size={18} />
             <h2>刀路参数</h2>
           </div>
-          <Control label="刀具直径" value={settings.toolDiameter} min={0.2} max={2} step={0.05} suffix="mm" onChange={(v) => updateSetting("toolDiameter", v)} />
-          <Control label="左端夹持" value={settings.leftHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("leftHoldMm", v)} />
-          <Control label="右端夹持" value={settings.rightHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("rightHoldMm", v)} />
-          <Control label="端部过渡" value={settings.endTransitionMm} min={0} max={6} step={0.1} suffix="mm" onChange={(v) => updateSetting("endTransitionMm", v)} />
+          <label className="select-row">
+            <span>CAM模式</span>
+            <select value={settings.camMode} onChange={(event) => handleCamModeChange(event.target.value as ModelSettings["camMode"])}>
+              <option value="4axis">四轴核雕 X/A/Z</option>
+              <option value="3axis">三轴浮雕 X/Y/Z</option>
+              <option value="rotaryWrap">旋转包裹 X/Z + 夹具轴</option>
+            </select>
+          </label>
+          {settings.camMode === "rotaryWrap" && (
+            <>
+              <label className="select-row">
+                <span>夹具接入轴</span>
+                <select
+                  value={settings.rotaryOutputAxis}
+                  onChange={(event) => {
+                    const axis = event.target.value as ModelSettings["rotaryOutputAxis"];
+                    setSettings((current) => normalizeSettings({
+                      ...current,
+                      rotaryOutputAxis: axis,
+                      postProcessor: axis === "X" ? "wrapX" : axis === "Y" ? "wrapY" : "generic"
+                    }));
+                    setToolpath(null);
+                    setIsSimulationMode(false);
+                    setWorkbenchView("model");
+                  }}
+                >
+                  <option value="Y">Y轴代替旋转</option>
+                  <option value="X">X轴代替旋转</option>
+                  <option value="A">真实A轴</option>
+                </select>
+              </label>
+              <Control label="每圈距离" value={settings.rotaryWrapPerRevolutionMm} min={1} max={1000} step={1} suffix="mm/圈" onChange={(v) => updateSetting("rotaryWrapPerRevolutionMm", v)} />
+            </>
+          )}
+          <Control label="刀具直径" value={settings.toolDiameter} min={0.2} max={6} step={0.05} suffix="mm" onChange={(v) => updateSetting("toolDiameter", v)} />
+          {settings.camMode !== "3axis" && (
+            <>
+              <Control label="左端夹持" value={settings.leftHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("leftHoldMm", v)} />
+              <Control label="右端夹持" value={settings.rightHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("rightHoldMm", v)} />
+              <Control label="端部过渡" value={settings.endTransitionMm} min={0} max={6} step={0.1} suffix="mm" onChange={(v) => updateSetting("endTransitionMm", v)} />
+            </>
+          )}
           <Control label="X步距" value={settings.stepoverMm} min={0.03} max={0.8} step={0.01} suffix="mm" onChange={(v) => updateSetting("stepoverMm", v)} />
-          <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" onChange={(v) => updateSetting("stepoverDeg", v)} />
+          {settings.camMode !== "3axis" && <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" onChange={(v) => updateSetting("stepoverDeg", v)} />}
           <Control label="最大单层切深" value={settings.maxCutDepth} min={0.02} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("maxCutDepth", v)} />
           <Control label="粗加工余量" value={settings.stockAllowance} min={0} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("stockAllowance", v)} />
           <Control label="进给" value={settings.feedRate} min={30} max={600} step={10} suffix="mm/min" onChange={(v) => updateSetting("feedRate", v)} />
@@ -2463,7 +2760,7 @@ export function App() {
             <span>精修策略</span>
             <select value={settings.finishingStrategy} onChange={(event) => updateSetting("finishingStrategy", event.target.value as ModelSettings["finishingStrategy"])}>
               <option value="x-scan">沿 X 扫描</option>
-              <option value="a-scan">沿 A 轴环扫</option>
+              <option value="a-scan">{settings.camMode === "3axis" ? "沿 Y 扫描" : "沿 A 轴环扫"}</option>
               <option value="cross">交叉精修</option>
             </select>
           </label>
@@ -2473,12 +2770,26 @@ export function App() {
               <option value="generic">通用四轴</option>
               <option value="weihong">维宏风格</option>
               <option value="syntec">新代风格</option>
+              <option value="generic3">通用三轴</option>
+              <option value="wrapY">Y轴旋转包裹</option>
+              <option value="wrapX">X轴旋转包裹</option>
             </select>
           </label>
           <button className="primary-action" onClick={handleGenerateToolpath} disabled={isToolpathGenerating}>
             <Hammer size={18} />
             {isToolpathGenerating ? "刀路生成中..." : "生成刀路"}
           </button>
+          <button className="demo-action" type="button" onClick={() => toolpathImportRef.current?.click()} disabled={isToolpathGenerating}>
+            <UploadCloud size={17} />
+            导入NC/G-code预览
+          </button>
+          <input
+            ref={toolpathImportRef}
+            className="hidden-file-input"
+            type="file"
+            accept=".nc,.tap,.gcode,.ngc,.cnc,.txt,.csv,text/plain,text/csv"
+            onChange={handleImportToolpathFile}
+          />
           <button className="demo-action finish-action" onClick={handleGenerateFinishingToolpath} disabled={isToolpathGenerating}>
             <Hammer size={17} />
             生成精加工刀路
@@ -3118,7 +3429,7 @@ export function App() {
           </div>
           <div className="status-pill">
             <BadgeInfo size={16} />
-            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "heatmap" && toolpath ? "正在查看包络误差热力图" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
+            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "heatmap" && toolpath ? "正在查看包络误差热力图" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : isOriginalModelImported ? "已加载原始3D模型" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
           </div>
         </header>
 
@@ -3144,16 +3455,23 @@ export function App() {
             safetyIssues={safetyIssues}
           />
         ) : viewingSimulation ? (
-          <SimulationViewer
-            points={selectedToolpathPoints}
-            previewPoints={toolpath.previewPoints ?? []}
-            settings={settings}
-            envelopeColor={toolpathColors.simulation}
-            surfaceColor={getToolpathSurfaceColor(toolpathKind)}
-          />
+          <div className="simulation-view-shell">
+            <SimulationViewer
+              points={toolpath?.points ?? selectedToolpathPoints}
+              previewPoints={toolpath.previewPoints ?? []}
+              settings={settings}
+              envelopeColor={toolpathColors.simulation}
+              surfaceColor={getToolpathSurfaceColor(toolpathKind)}
+            />
+            <div className="viewer-corner-note">
+              <strong>{settings.camMode === "3axis" ? "三轴平面仿真" : settings.camMode === "rotaryWrap" ? "旋转包裹仿真" : "四轴核胚仿真"}</strong>
+              <span>{settings.camMode === "3axis" ? "显示 X/Y/Z 平面切削结果" : "显示刀路映射到核胚后的切削包络"}</span>
+            </div>
+          </div>
         ) : aiMeshUrl ? (
           <AiMeshViewer
             modelUrl={aiMeshUrl}
+            modelName={originalModelFileName ?? aiMeshUrl}
             toolpathPoints={selectedToolpathPoints}
             previewPoints={toolpath?.previewPoints ?? []}
             toolpathColor={toolpathColors[toolpathKind]}
@@ -3169,11 +3487,11 @@ export function App() {
             <>
               <div className="metric">
                 <span>模式</span>
-                <strong>Meshy AI Mesh</strong>
+                <strong>{isOriginalModelImported ? "原始3D模型" : "Meshy AI Mesh"}</strong>
               </div>
               <div className="metric wide">
                 <span>模型</span>
-                <strong>GLB/STL真实网格</strong>
+                <strong>{isOriginalModelImported ? originalModelFileName : "GLB/STL真实网格"}</strong>
               </div>
               {toolpath && (
                 <div className="metric wide">
@@ -3181,15 +3499,15 @@ export function App() {
                   <strong>{getToolpathKindLabel(toolpathKind)}</strong>
                 </div>
               )}
-              <a className={`download ${canDownloadProduction ? "" : "disabled-link"}`} href={aiMeshUrl} target="_blank" rel="noreferrer" aria-disabled={!canDownloadProduction} title={productionDownloadTitle} onClick={(event) => { if (!canDownloadProduction) event.preventDefault(); }}>
+              <button className="download" type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")} title="下载当前 GLB 模型文件">
                 <Download size={17} />
-                下载 GLB
-              </a>
+                {isOriginalModelImported ? "下载原始模型" : "下载 GLB"}
+              </button>
               {aiMeshStlUrl && (
-                <a className={`download secondary ${canDownloadProduction ? "" : "disabled-link"}`} href={aiMeshStlUrl} target="_blank" rel="noreferrer" aria-disabled={!canDownloadProduction} title={productionDownloadTitle} onClick={(event) => { if (!canDownloadProduction) event.preventDefault(); }}>
+                <button className="download secondary" type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")} title="下载当前 STL 模型文件">
                   <Download size={17} />
-                  下载 AI STL
-                </a>
+                  {isOriginalModelImported ? "下载 STL" : "下载 AI STL"}
+                </button>
               )}
             </>
           ) : (
@@ -3281,7 +3599,7 @@ export function App() {
               <div className="metric wide">
                 <span>范围</span>
                 <strong>
-                  X {toolpath.summary.xMin.toFixed(1)}~{toolpath.summary.xMax.toFixed(1)} / A {toolpath.summary.aMin.toFixed(0)}~{toolpath.summary.aMax.toFixed(0)}
+                  {formatToolpathRange(toolpath, settings)}
                 </strong>
               </div>
               <div className={`metric wide ${toolpath.summary.warnings.length > 0 ? "warning" : "ok"}`}>
@@ -3338,7 +3656,7 @@ export function App() {
                 <Layers3 size={17} />
                 {viewingSimulation ? "返回3D视图" : "模拟雕刻"}
               </button>
-              <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={isOperatorMode && !exportGateReady} title={productionDownloadTitle}>
+              <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={!toolpath} title="下载加工参数、模型来源、校验结果和上机说明">
                 <Download size={17} />
                 加工包说明
               </button>
@@ -3404,7 +3722,7 @@ function GcodePreview({ toolpath, exportGateReady }: { toolpath: GeneratedToolpa
       <div className="gcode-summary">
         <span><strong>{lines.length.toLocaleString()}</strong> 行 G-code</span>
         <span><strong>{toolpath.summary.xMin.toFixed(1)}~{toolpath.summary.xMax.toFixed(1)}</strong> X 范围</span>
-        <span><strong>{toolpath.summary.aMin.toFixed(0)}~{toolpath.summary.aMax.toFixed(0)}</strong> A 范围</span>
+        <span><strong>{toolpath.summary.yMin != null ? `${toolpath.summary.yMin.toFixed(1)}~${toolpath.summary.yMax?.toFixed(1)}` : `${toolpath.summary.aMin.toFixed(0)}~${toolpath.summary.aMax.toFixed(0)}`}</strong> {toolpath.summary.yMin != null ? "Y 范围" : "A 范围"}</span>
         <span><strong>{exportGateReady ? "已解锁" : "待确认"}</strong> 正式导出</span>
       </div>
       <div className="gcode-preview-grid">
@@ -3516,12 +3834,41 @@ function getRolePermissionText(role: UserRole) {
   return "拥有完整项目、工艺、导出和反馈管理权限。";
 }
 
+function formatToolpathRange(toolpath: GeneratedToolpath, settings: ModelSettings) {
+  if (settings.camMode === "rotaryWrap") {
+    const axis = settings.rotaryOutputAxis ?? "Y";
+    const min = (toolpath.summary.aMin / 360) * Math.max(0.001, settings.rotaryWrapPerRevolutionMm ?? 100);
+    const max = (toolpath.summary.aMax / 360) * Math.max(0.001, settings.rotaryWrapPerRevolutionMm ?? 100);
+    return `X ${toolpath.summary.xMin.toFixed(1)}~${toolpath.summary.xMax.toFixed(1)} / ${axis} ${axis === "A" ? `${toolpath.summary.aMin.toFixed(0)}~${toolpath.summary.aMax.toFixed(0)}deg` : `${min.toFixed(1)}~${max.toFixed(1)}mm`} / Z ${toolpath.summary.zMin.toFixed(1)}~${toolpath.summary.zMax.toFixed(1)}`;
+  }
+
+  if (settings.camMode === "3axis" || toolpath.summary.yMin != null) {
+    return `X ${toolpath.summary.xMin.toFixed(1)}~${toolpath.summary.xMax.toFixed(1)} / Y ${(toolpath.summary.yMin ?? 0).toFixed(1)}~${(toolpath.summary.yMax ?? 0).toFixed(1)} / Z ${toolpath.summary.zMin.toFixed(1)}~${toolpath.summary.zMax.toFixed(1)}`;
+  }
+
+  return `X ${toolpath.summary.xMin.toFixed(1)}~${toolpath.summary.xMax.toFixed(1)} / A ${toolpath.summary.aMin.toFixed(0)}~${toolpath.summary.aMax.toFixed(0)}`;
+}
+
+function readImportedRotaryWrapSettings(source: string): { axis: ModelSettings["rotaryOutputAxis"]; perRevMm: number } | null {
+  const axisMatch = source.match(/ROTARY_WRAP_AXIS\s*=\s*([AXY])/i);
+  if (!axisMatch) return null;
+  const perRevMatch = source.match(/ROTARY_WRAP_PER_REV_MM\s*=\s*([-+]?\d*\.?\d+)/i);
+  return {
+    axis: axisMatch[1].toUpperCase() as ModelSettings["rotaryOutputAxis"],
+    perRevMm: Math.max(0.001, Number(perRevMatch?.[1] ?? 100))
+  };
+}
+
 function normalizeSettings(settings: ModelSettings): ModelSettings {
   const left = settings.blankLeftDiameterMm;
   const center = settings.blankCenterDiameterMm;
   const right = settings.blankRightDiameterMm;
   return {
     ...settings,
+    camMode: settings.camMode ?? "4axis",
+    rotaryOutputAxis: settings.rotaryOutputAxis ?? "A",
+    rotaryWrapPerRevolutionMm: Number.isFinite(settings.rotaryWrapPerRevolutionMm) ? settings.rotaryWrapPerRevolutionMm : 100,
+    postProcessor: settings.postProcessor ?? "generic",
     blankLeftMidDiameterMm: Number.isFinite(settings.blankLeftMidDiameterMm) ? settings.blankLeftMidDiameterMm : (left + center) / 2,
     blankRightMidDiameterMm: Number.isFinite(settings.blankRightMidDiameterMm) ? settings.blankRightMidDiameterMm : (right + center) / 2
   };
@@ -4054,7 +4401,7 @@ function EnvelopeHeatmapPreview({
       </div>
 
       <div className="heatmap-layout">
-        <div className="heatmap-axis y-axis">A 轴角度</div>
+        <div className="heatmap-axis y-axis">{heatmap.secondaryAxisName}</div>
         <div
           className="heatmap-grid"
           style={{ gridTemplateColumns: `repeat(${heatmap.xBins}, minmax(0, 1fr))` }}
@@ -4063,8 +4410,8 @@ function EnvelopeHeatmapPreview({
           {heatmap.cells.map((cell) => {
             const opacity = cell.total > 0 ? 0.38 + (cell.total / maxSamples) * 0.62 : 1;
             const xStart = heatmap.xLabels[cell.xIndex] ?? "";
-            const aStart = heatmap.aLabels[cell.aIndex] ?? "";
-            const title = `X ${xStart} / A ${aStart} / 样本 ${cell.total} / 未贴合 ${cell.missCount} / 贴合 ${cell.fitRate.toFixed(1)}%`;
+            const secondaryStart = heatmap.secondaryLabels[cell.aIndex] ?? "";
+            const title = `X ${xStart} / ${heatmap.secondaryShortName} ${secondaryStart} / 样本 ${cell.total} / 未贴合 ${cell.missCount} / 贴合 ${cell.fitRate.toFixed(1)}%`;
             return (
               <span
                 className={`heatmap-cell ${cell.status}`}
@@ -4109,15 +4456,23 @@ function createEnvelopeHeatmapCells(toolpath: GeneratedToolpath, settings: Model
   const xBins = 28;
   const aBins = 18;
   const halfLength = settings.lengthMm / 2;
-  const samples = toolpath.previewPoints && toolpath.previewPoints.length > 0
+  const usesThreeAxis = settings.camMode === "3axis" || toolpath.summary.yMin != null;
+  const halfWidth = settings.diameterMm / 2;
+  const samples = usesThreeAxis
+    ? toolpath.points.map((point) => ({
+      x: point.x,
+      secondary: (point.y ?? 0) + halfWidth,
+      hit: true
+    }))
+    : toolpath.previewPoints && toolpath.previewPoints.length > 0
     ? toolpath.previewPoints.map((point) => ({
       x: point.x,
-      a: normalizeAngleDeg((Math.atan2(point.y, point.z) * 180) / Math.PI),
+      secondary: normalizeAngleDeg((Math.atan2(point.y, point.z) * 180) / Math.PI),
       hit: point.hit
     }))
     : toolpath.points.map((point) => ({
       x: point.x,
-      a: normalizeAngleDeg(point.a),
+      secondary: normalizeAngleDeg(point.a),
       hit: true
     }));
   const buckets = Array.from({ length: xBins * aBins }, (_, index) => ({
@@ -4129,9 +4484,11 @@ function createEnvelopeHeatmapCells(toolpath: GeneratedToolpath, settings: Model
 
   for (const sample of samples) {
     const xRatio = THREEClamp((sample.x + halfLength) / Math.max(0.001, settings.lengthMm), 0, 0.999999);
-    const aRatio = THREEClamp(sample.a / 360, 0, 0.999999);
+    const secondaryRatio = usesThreeAxis
+      ? THREEClamp(sample.secondary / Math.max(0.001, settings.diameterMm), 0, 0.999999)
+      : THREEClamp(sample.secondary / 360, 0, 0.999999);
     const xIndex = Math.floor(xRatio * xBins);
-    const aIndex = aBins - 1 - Math.floor(aRatio * aBins);
+    const aIndex = aBins - 1 - Math.floor(secondaryRatio * aBins);
     const bucket = buckets[aIndex * xBins + xIndex];
     bucket.total += 1;
     if (!sample.hit) bucket.missCount += 1;
@@ -4156,7 +4513,11 @@ function createEnvelopeHeatmapCells(toolpath: GeneratedToolpath, settings: Model
     xBins,
     aBins,
     xLabels: Array.from({ length: xBins }, (_, index) => `${(-halfLength + (settings.lengthMm * index) / xBins).toFixed(1)}mm`),
-    aLabels: Array.from({ length: aBins }, (_, index) => `${Math.round((360 * (aBins - 1 - index)) / aBins)}deg`)
+    secondaryLabels: usesThreeAxis
+      ? Array.from({ length: aBins }, (_, index) => `${(-halfWidth + (settings.diameterMm * (aBins - 1 - index)) / aBins).toFixed(1)}mm`)
+      : Array.from({ length: aBins }, (_, index) => `${Math.round((360 * (aBins - 1 - index)) / aBins)}deg`),
+    secondaryAxisName: usesThreeAxis ? "Y 宽度方向" : "A 轴角度",
+    secondaryShortName: usesThreeAxis ? "Y" : "A"
   };
 }
 
@@ -4186,7 +4547,7 @@ function createEnvelopeHeatmapDiagnosis(
       status: riskCellRate <= 4 ? "ok" : riskCellRate <= 14 ? "warning" : "critical"
     },
     {
-      label: "最差 X/A 区域",
+      label: `最差 X/${heatmap.secondaryShortName} 区域`,
       detail: worstCell ? `${worstCellLabel}，贴合 ${worstCell.fitRate.toFixed(1)}%，未贴合 ${worstCell.missCount}/${worstCell.total}。` : "当前没有可统计采样。",
       status: !worstCell || worstCell.fitRate >= 96 ? "ok" : worstCell.fitRate >= 88 ? "warning" : "critical"
     },
@@ -4215,7 +4576,7 @@ function createEnvelopeHeatmapDiagnosis(
 }
 
 function formatHeatmapCellLabel(cell: EnvelopeHeatmapCell, heatmap: ReturnType<typeof createEnvelopeHeatmapCells>) {
-  return `X ${heatmap.xLabels[cell.xIndex] ?? "-"} / A ${heatmap.aLabels[cell.aIndex] ?? "-"}`;
+  return `X ${heatmap.xLabels[cell.xIndex] ?? "-"} / ${heatmap.secondaryShortName} ${heatmap.secondaryLabels[cell.aIndex] ?? "-"}`;
 }
 
 function createHeatmapBandStats(heatmap: ReturnType<typeof createEnvelopeHeatmapCells>) {
@@ -4232,14 +4593,16 @@ function createHeatmapBandStats(heatmap: ReturnType<typeof createEnvelopeHeatmap
     };
   }
   const xLabel = heatmap.xLabels[worstX.index] ?? "-";
-  const aLabel = heatmap.aLabels[worstA.index] ?? "-";
-  const dominant = worstX.value >= worstA.value ? `X ${xLabel}` : `A ${aLabel}`;
+  const aLabel = heatmap.secondaryLabels[worstA.index] ?? "-";
+  const dominant = worstX.value >= worstA.value ? `X ${xLabel}` : `${heatmap.secondaryShortName} ${aLabel}`;
   return {
     status,
-    detail: `${dominant} 附近存在连续严重风险格，X向 ${worstX.value} 格，A向 ${worstA.value} 格。`,
+    detail: `${dominant} 附近存在连续严重风险格，X向 ${worstX.value} 格，${heatmap.secondaryShortName}向 ${worstA.value} 格。`,
     action: worstX.value >= worstA.value
       ? "连续风险沿 X 方向集中，建议检查端部保留、模型长轴校准和 X 步距。"
-      : "连续风险沿 A 方向集中，建议检查旋转轴方向、A 步距和 Mesh 顶/底部缺损。"
+      : heatmap.secondaryShortName === "Y"
+        ? "连续风险沿 Y 方向集中，建议检查三轴模型宽度、Y 步距和 Mesh 左右侧缺损。"
+        : "连续风险沿 A 方向集中，建议检查旋转轴方向、A 步距和 Mesh 顶/底部缺损。"
   };
 }
 
@@ -4749,7 +5112,12 @@ async function pollMeshyTaskByEndpoint(endpoint: string, onStatus: (status: stri
 
 async function pollAi3dTask(endpoint: string, onStatus: (status: string) => void, label: string) {
   for (let attempt = 0; attempt < 90; attempt += 1) {
-    const response = await fetch(endpoint);
+    let response: Response;
+    try {
+      response = await fetch(endpoint);
+    } catch (error) {
+      throw new Error(formatRequestError(error, `${label}查询失败`));
+    }
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error ?? data.message ?? "Meshy任务查询失败");
@@ -4771,4 +5139,19 @@ async function pollAi3dTask(endpoint: string, onStatus: (status: string) => void
   }
 
   throw new Error(`${label}等待超时`);
+}
+
+function formatRequestError(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback;
+  const message = error.message || fallback;
+  if (/failed to fetch|load failed|networkerror/i.test(message)) {
+    return `${fallback}：无法连接本地后端 API。请确认 8787 端口服务已启动，然后刷新页面重试。`;
+  }
+  return message;
+}
+
+function extractDownloadFilename(url: string, fallbackName: string) {
+  const clean = url.split("?")[0].split("#")[0];
+  const filename = decodeURIComponent(clean.split("/").pop() || "");
+  return filename || fallbackName;
 }

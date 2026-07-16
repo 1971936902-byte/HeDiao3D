@@ -60,7 +60,8 @@ button {
 
 button:not(:disabled):hover,
 a.download:hover,
-.ai-links a:hover {
+.ai-links a:hover,
+.ai-links button:not(:disabled):hover {
   transform: translateY(-1px);
 }
 
@@ -263,6 +264,12 @@ button:disabled {
   color: #dcfff5;
   border-color: rgba(71, 209, 140, 0.28);
   background: rgba(71, 209, 140, 0.10);
+}
+
+.original-model-action {
+  color: #dffbf6;
+  border-color: rgba(25, 199, 180, 0.34);
+  background: rgba(25, 199, 180, 0.11);
 }
 
 .ai-tool-grid {
@@ -2710,13 +2717,16 @@ button:disabled {
   margin-top: 8px;
 }
 
-.ai-links a {
+.ai-links a,
+.ai-links button {
   min-height: 30px;
   padding: 0 10px;
   color: #efe8ff;
   border: 1px solid rgba(157, 123, 255, 0.28);
+  border-radius: 7px;
   background: rgba(157, 123, 255, 0.10);
   font-size: 12px;
+  cursor: pointer;
 }
 
 .download {
@@ -2839,6 +2849,43 @@ button:disabled {
   position: relative;
   width: 100%;
   min-height: 0;
+}
+
+.simulation-view-shell {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+}
+
+.simulation-view-shell .viewer {
+  height: 100%;
+}
+
+.viewer-corner-note {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  max-width: min(280px, calc(100% - 28px));
+  padding: 9px 11px;
+  border: 1px solid rgba(17, 18, 16, 0.18);
+  border-radius: 8px;
+  background: rgba(245, 241, 234, 0.88);
+  box-shadow: 0 8px 24px rgba(17, 18, 16, 0.16);
+  pointer-events: none;
+}
+
+.viewer-corner-note strong {
+  color: #18372f;
+  font-size: 13px;
+}
+
+.viewer-corner-note span {
+  color: #53635c;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .workbench-panel {

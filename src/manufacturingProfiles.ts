@@ -6,6 +6,7 @@ export type ToolProfile = {
   type: "ball" | "flat" | "taper" | "v-bit" | "micro";
   diameterMm: number;
   tipRadiusMm: number;
+  flatTipMm?: number;
   fluteLengthMm: number;
   angleDeg?: number;
   stickoutMm: number;
@@ -32,9 +33,12 @@ export type MaterialProfile = {
 export type MachineProfile = {
   id: string;
   name: string;
+  axes: "3axis" | "4axis";
   controller: "generic" | "weihong" | "syntec";
   xMin: number;
   xMax: number;
+  yMin: number;
+  yMax: number;
   zMin: number;
   zMax: number;
   aMin: number;
@@ -117,6 +121,23 @@ export const toolProfiles: ToolProfile[] = [
     notes: "用于粗加工去料，后续需要球刀精修。"
   },
   {
+    id: "vflat-4mm-25deg",
+    name: "4mm 25° 平底尖刀 - 三轴浮雕",
+    type: "v-bit",
+    diameterMm: 4,
+    tipRadiusMm: 0.2,
+    flatTipMm: 0.4,
+    fluteLengthMm: 12,
+    angleDeg: 25,
+    stickoutMm: 18,
+    recommendedRpm: 12000,
+    recommendedFeed: 450,
+    recommendedStepoverMm: 0.28,
+    maxCutDepthMm: 0.45,
+    stockAllowanceMm: 0.08,
+    notes: "4mm 刃径、25° 夹角、约 0.4mm 平底尖端；适合三轴平面浮雕、牌匾和较大核雕素材试雕，下刀需保守。"
+  },
+  {
     id: "taper-0.2",
     name: "0.2mm 锥刀 - 微细线条",
     type: "taper",
@@ -185,9 +206,12 @@ export const machineProfiles: MachineProfile[] = [
   {
     id: "desktop-4axis-generic",
     name: "桌面四轴雕刻机 - 通用",
+    axes: "4axis",
     controller: "generic",
     xMin: -45,
     xMax: 45,
+    yMin: -20,
+    yMax: 20,
     zMin: 0,
     zMax: 35,
     aMin: -9999,
@@ -201,9 +225,12 @@ export const machineProfiles: MachineProfile[] = [
   {
     id: "weihong-4axis-small",
     name: "维宏小型四轴",
+    axes: "4axis",
     controller: "weihong",
     xMin: -55,
     xMax: 55,
+    yMin: -25,
+    yMax: 25,
     zMin: 0,
     zMax: 40,
     aMin: -9999,
@@ -217,9 +244,12 @@ export const machineProfiles: MachineProfile[] = [
   {
     id: "syntec-4axis-small",
     name: "新代小型四轴",
+    axes: "4axis",
     controller: "syntec",
     xMin: -60,
     xMax: 60,
+    yMin: -30,
+    yMax: 30,
     zMin: 0,
     zMax: 45,
     aMin: -9999,
@@ -229,6 +259,25 @@ export const machineProfiles: MachineProfile[] = [
     maxRpm: 24000,
     aDirection: "normal",
     notes: "新代风格后处理，适合带完整安全段的程序。"
+  },
+  {
+    id: "desktop-3axis-generic",
+    name: "桌面三轴雕刻机 - 通用",
+    axes: "3axis",
+    controller: "generic",
+    xMin: -80,
+    xMax: 80,
+    yMin: -60,
+    yMax: 60,
+    zMin: -20,
+    zMax: 45,
+    aMin: 0,
+    aMax: 0,
+    safeZ: 12,
+    maxFeed: 1200,
+    maxRpm: 24000,
+    aDirection: "normal",
+    notes: "三轴 X/Y/Z 平面浮雕配置，不输出 A 轴；首次上机请重新确认工件原点和安全高度。"
   }
 ];
 
@@ -328,12 +377,13 @@ export function applyProcessTemplate(settings: ModelSettings, template: ProcessT
 }
 
 export function applyToolProfile(settings: ModelSettings, tool: ToolProfile): ModelSettings {
+  const material = getMaterialProfile(settings.materialProfileId);
   return {
     ...settings,
     toolProfileId: tool.id,
     toolDiameter: tool.diameterMm,
     stepoverMm: tool.recommendedStepoverMm,
-    maxCutDepth: tool.maxCutDepthMm,
+    maxCutDepth: Math.min(tool.maxCutDepthMm, material.maxCutDepthMm),
     stockAllowance: tool.stockAllowanceMm,
     feedRate: Math.min(settings.feedRate, tool.recommendedFeed),
     spindleRpm: tool.recommendedRpm
@@ -356,6 +406,11 @@ export function applyMachineProfile(settings: ModelSettings, machine: MachinePro
     machineProfileId: machine.id,
     safeZ: machine.safeZ,
     postProcessor: machine.controller
+      ? machine.axes === "3axis"
+        ? "generic3"
+        : machine.controller
+      : settings.postProcessor,
+    camMode: machine.axes === "3axis" ? settings.camMode === "rotaryWrap" ? "rotaryWrap" : "3axis" : "4axis"
   };
 }
 
@@ -405,6 +460,81 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     });
   }
 
+  if (settings.camMode === "3axis" && machine.axes !== "3axis") {
+    issues.push({
+      level: "critical",
+      title: "三轴 CAM 与机床不匹配",
+      detail: "当前 CAM 模式为三轴 X/Y/Z，但机床预设不是三轴。请选择三轴机床或切回四轴模式。"
+    });
+  }
+
+  if (settings.camMode === "4axis" && machine.axes === "3axis") {
+    issues.push({
+      level: "critical",
+      title: "四轴 CAM 与三轴机床不匹配",
+      detail: "三轴机床不能执行 A 轴旋转刀路。请选择四轴机床或切换三轴浮雕模式。"
+    });
+  }
+
+  if (settings.camMode === "rotaryWrap") {
+    if (settings.rotaryOutputAxis === "A" && machine.axes !== "4axis") {
+      issues.push({
+        level: "critical",
+        title: "真实 A 轴与三轴机床不匹配",
+        detail: "当前旋转包裹输出为 A 轴，但机床预设不是四轴。若夹具接在三轴控制器上，请选择 Y轴或 X轴代替旋转。"
+      });
+    }
+    if (settings.rotaryOutputAxis === "X") {
+      issues.push({
+        level: "warning",
+        title: "X轴代替旋转会占用长度轴",
+        detail: "X轴通常用于核雕长度方向。若夹具接在 X 轴，系统会把长度方向改用 Y 输出，请确认机床接线和工件方向。"
+      });
+    }
+    if (settings.rotaryOutputAxis !== "A" && settings.rotaryWrapPerRevolutionMm <= 0) {
+      issues.push({
+        level: "critical",
+        title: "旋转每圈距离未设置",
+        detail: "Y/X 轴代替旋转时必须设置“每圈距离 mm/圈”，用于把 A 角度换算为线性轴位移。"
+      });
+    }
+  }
+
+  if (settings.camMode === "3axis" && settings.postProcessor !== "generic3") {
+    issues.push({
+      level: "critical",
+      title: "三轴后处理不匹配",
+      detail: "三轴程序应使用“通用三轴”后处理，避免导出带 A 轴语义的程序头。"
+    });
+  }
+
+  if (settings.camMode === "4axis" && settings.postProcessor === "generic3") {
+    issues.push({
+      level: "critical",
+      title: "四轴后处理不匹配",
+      detail: "四轴核雕程序不能使用三轴后处理。"
+    });
+  }
+
+  if (settings.camMode === "rotaryWrap") {
+    const expectedPost = settings.rotaryOutputAxis === "X" ? "wrapX" : settings.rotaryOutputAxis === "Y" ? "wrapY" : "generic";
+    if (settings.postProcessor !== expectedPost) {
+      issues.push({
+        level: "critical",
+        title: "旋转包裹后处理不匹配",
+        detail: `当前夹具接入轴为 ${settings.rotaryOutputAxis}，建议后处理使用 ${expectedPost === "wrapX" ? "X轴旋转包裹" : expectedPost === "wrapY" ? "Y轴旋转包裹" : "通用四轴"}。`
+      });
+    }
+  }
+
+  if (settings.camMode === "3axis" && tool.type === "v-bit" && tool.angleDeg != null) {
+    issues.push({
+      level: "warning",
+      title: "V 型平底尖刀已启用",
+      detail: `${tool.name} 会按尖端 Z 深度输出三轴刀路，尖刀侧刃会随深度扩大实际切削宽度，正式上机前请先做浅雕验证。`
+    });
+  }
+
   if (settings.leftHoldMm < 1.5 || settings.rightHoldMm < 1.5) {
     issues.push({
       level: "warning",
@@ -449,6 +579,34 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     });
   }
 
+  if (settings.camMode === "rotaryWrap" && settings.rotaryOutputAxis !== "A") {
+    const wrapTravelMin = (toolpath.summary.aMin / 360) * settings.rotaryWrapPerRevolutionMm;
+    const wrapTravelMax = (toolpath.summary.aMax / 360) * settings.rotaryWrapPerRevolutionMm;
+    const axisMin = settings.rotaryOutputAxis === "Y" ? machine.yMin : machine.xMin;
+    const axisMax = settings.rotaryOutputAxis === "Y" ? machine.yMax : machine.xMax;
+    if (wrapTravelMin < axisMin || wrapTravelMax > axisMax) {
+      issues.push({
+        level: "critical",
+        title: `${settings.rotaryOutputAxis}轴旋转行程越界`,
+        detail: `旋转包裹换算 ${settings.rotaryOutputAxis}=${wrapTravelMin.toFixed(1)}~${wrapTravelMax.toFixed(1)}mm，机床范围 ${axisMin}~${axisMax}mm。请调整每圈距离或机床行程。`
+      });
+    }
+  }
+
+  if (
+    settings.camMode === "3axis" &&
+    (toolpath.summary.yMin == null ||
+      toolpath.summary.yMax == null ||
+      toolpath.summary.yMin < machine.yMin ||
+      toolpath.summary.yMax > machine.yMax)
+  ) {
+    issues.push({
+      level: "critical",
+      title: "Y 轴行程越界",
+      detail: `刀路 Y=${(toolpath.summary.yMin ?? 0).toFixed(1)}~${(toolpath.summary.yMax ?? 0).toFixed(1)}mm，机床范围 ${machine.yMin}~${machine.yMax}mm。`
+    });
+  }
+
   if (toolpath.summary.zMin < machine.zMin || toolpath.summary.zMax > machine.zMax) {
     issues.push({
       level: "critical",
@@ -457,11 +615,11 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     });
   }
 
-  if (settings.safeZ <= toolpath.summary.zMax) {
+  if (toolpath.summary.zMax > settings.safeZ + 0.01) {
     issues.push({
       level: "critical",
       title: "安全高度不足",
-      detail: `安全高度 ${settings.safeZ.toFixed(1)}mm 低于或接近最高刀位 ${toolpath.summary.zMax.toFixed(1)}mm。`
+      detail: `安全高度 ${settings.safeZ.toFixed(1)}mm 低于最高刀位 ${toolpath.summary.zMax.toFixed(1)}mm。`
     });
   }
 
@@ -514,6 +672,7 @@ export function validateGcodeProgram(settings: ModelSettings, toolpath: Generate
     const lineNumber = index + 1;
     const x = readAxis(trimmed, "X");
     const z = readAxis(trimmed, "Z");
+    const y = readAxis(trimmed, "Y");
     const a = readAxis(trimmed, "A");
     const feed = readAxis(trimmed, "F");
     const spindle = readAxis(trimmed, "S");
@@ -527,7 +686,15 @@ export function validateGcodeProgram(settings: ModelSettings, toolpath: Generate
       issues.push(createGcodeIssue("critical", "G-code Z 轴越界", lineNumber, trimmed, `Z=${z.toFixed(3)}mm，机床范围 ${machine.zMin}~${machine.zMax}mm。`));
     }
 
-    if (a !== null && (a < machine.aMin || a > machine.aMax)) {
+    if ((settings.camMode === "3axis" || settings.camMode === "rotaryWrap") && y !== null && (y < machine.yMin || y > machine.yMax)) {
+      issues.push(createGcodeIssue("critical", "G-code Y 轴越界", lineNumber, trimmed, `Y=${y.toFixed(3)}mm，机床范围 ${machine.yMin}~${machine.yMax}mm。`));
+    }
+
+    if (settings.camMode === "3axis" && a !== null) {
+      issues.push(createGcodeIssue("critical", "三轴程序不应包含 A 轴", lineNumber, trimmed, "当前机床为三轴模式，请重新生成三轴刀路。"));
+    }
+
+    if (settings.camMode !== "3axis" && settings.camMode !== "rotaryWrap" && a !== null && (a < machine.aMin || a > machine.aMax)) {
       issues.push(createGcodeIssue("critical", "G-code A 轴越界", lineNumber, trimmed, `A=${a.toFixed(3)}°，机床范围 ${machine.aMin}~${machine.aMax}°。`));
     }
 
@@ -539,7 +706,7 @@ export function validateGcodeProgram(settings: ModelSettings, toolpath: Generate
       issues.push(createGcodeIssue("critical", "G-code 主轴超限", lineNumber, trimmed, `S=${spindle.toFixed(0)}rpm，机床上限 ${machine.maxRpm}rpm。`));
     }
 
-    if (a !== null && previousA !== null && Math.abs(a - previousA) > 120) {
+    if (settings.camMode !== "3axis" && a !== null && previousA !== null && Math.abs(a - previousA) > 120) {
       issues.push(createGcodeIssue("warning", "A 轴角度跳变较大", lineNumber, trimmed, `上一 A=${previousA.toFixed(2)}°，当前 A=${a.toFixed(2)}°。请空跑确认旋转方向和连续性。`));
     }
     if (a !== null) previousA = a;

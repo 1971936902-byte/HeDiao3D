@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
 import type { ToolpathPoint, ToolpathPreviewPoint } from "./types";
 
@@ -11,6 +13,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 type AiMeshViewerProps = {
   modelUrl: string;
+  modelName?: string;
   toolpathPoints?: ToolpathPoint[];
   previewPoints?: ToolpathPreviewPoint[];
   toolpathColor?: number;
@@ -20,6 +23,7 @@ type AiMeshViewerProps = {
 
 export function AiMeshViewer({
   modelUrl,
+  modelName,
   toolpathPoints = [],
   previewPoints = [],
   toolpathColor = 0xd2451e,
@@ -80,16 +84,13 @@ export function AiMeshViewer({
     scene.add(mismatchLine);
     mismatchRef.current = mismatchLine;
 
-    const loader = new GLTFLoader();
-    loader.setCrossOrigin("anonymous");
-
     let loaded: THREE.Group | null = null;
     let disposed = false;
-    loader.load(
-      modelUrl,
-      (gltf) => {
+
+    loadModelObject(modelUrl, modelName)
+      .then((object) => {
         if (disposed) return;
-        loaded = normalizeModel(gltf.scene);
+        loaded = normalizeModel(object);
         prepareModelForFastRaycast(loaded);
         scene.add(loaded);
         loaded.updateMatrixWorld(true);
@@ -97,16 +98,14 @@ export function AiMeshViewer({
         modelBoundsRef.current = new THREE.Box3().setFromObject(loaded);
         setLoadState("ready");
         setModelVersion((version) => version + 1);
-      },
-      undefined,
-      (error) => {
-        console.error("GLB模型加载失败", error);
+      })
+      .catch((error) => {
+        console.error("3D模型加载失败", error);
         if (!disposed) {
           setLoadState("error");
-          setErrorText(error instanceof Error ? error.message : "模型文件无法读取");
+          setErrorText(error instanceof Error ? error.message : "模型文件无法读取，请确认是 STL/OBJ/GLB/GLTF。");
         }
-      }
-    );
+      });
 
     const resize = () => {
       const width = Math.max(1, host.clientWidth);
@@ -142,7 +141,7 @@ export function AiMeshViewer({
       renderer.dispose();
       host.removeChild(renderer.domElement);
     };
-  }, [modelUrl, toolpathColor]);
+  }, [modelUrl, modelName, toolpathColor]);
 
   useEffect(() => {
     if (!toolpathRef.current) return;
@@ -171,12 +170,80 @@ export function AiMeshViewer({
     <div className="viewer ai-viewer" ref={hostRef}>
       {loadState !== "ready" && (
         <div className={`viewer-overlay ${loadState === "error" ? "error" : ""}`}>
-          <strong>{loadState === "error" ? "Meshy 3D 模型加载失败" : "正在加载 Meshy 3D Mesh"}</strong>
-          <span>{loadState === "error" ? errorText : "GLB 文件较大时可能需要等待几秒"}</span>
+          <strong>{loadState === "error" ? "3D 模型加载失败" : "正在加载 3D Mesh"}</strong>
+          <span>{loadState === "error" ? errorText : "STL/OBJ/GLB 文件较大时可能需要等待几秒"}</span>
         </div>
       )}
     </div>
   );
+}
+
+function loadModelObject(modelUrl: string, modelName?: string): Promise<THREE.Object3D> {
+  const extension = getModelExtension(modelName ?? modelUrl);
+
+  if (extension === "stl") {
+    const loader = new STLLoader();
+    return new Promise((resolve, reject) => {
+      loader.load(
+        modelUrl,
+        (geometry) => {
+          geometry.computeVertexNormals();
+          const material = new THREE.MeshStandardMaterial({
+            color: 0xd4b783,
+            roughness: 0.58,
+            metalness: 0.02,
+            side: THREE.DoubleSide
+          });
+          resolve(new THREE.Mesh(geometry, material));
+        },
+        undefined,
+        reject
+      );
+    });
+  }
+
+  if (extension === "obj") {
+    const loader = new OBJLoader();
+    return new Promise((resolve, reject) => {
+      loader.load(
+        modelUrl,
+        (object) => {
+          object.traverse((child) => {
+            const mesh = child as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            mesh.geometry?.computeVertexNormals();
+            if (!mesh.material) {
+              mesh.material = new THREE.MeshStandardMaterial({
+                color: 0xd4b783,
+                roughness: 0.58,
+                metalness: 0.02,
+                side: THREE.DoubleSide
+              });
+            }
+          });
+          resolve(object);
+        },
+        undefined,
+        reject
+      );
+    });
+  }
+
+  if (extension === "glb" || extension === "gltf") {
+    const loader = new GLTFLoader();
+    loader.setCrossOrigin("anonymous");
+    return new Promise((resolve, reject) => {
+      loader.load(modelUrl, (gltf) => resolve(gltf.scene), undefined, reject);
+    });
+  }
+
+  return Promise.reject(new Error("不支持的模型格式，请导入 .stl/.obj/.glb/.gltf 文件。"));
+}
+
+function getModelExtension(nameOrUrl: string) {
+  const clean = nameOrUrl.split("?")[0].split("#")[0].toLowerCase();
+  const match = clean.match(/\.([a-z0-9]+)$/);
+  return match?.[1] ?? "";
 }
 
 function createDisplayedMeshProjectionGeometries(
@@ -200,8 +267,7 @@ function createDisplayedMeshProjectionGeometries(
   });
 
   if (meshes.length === 0) {
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
-    return geometry;
+    return { fit: createEmptyGeometry(), mismatch: createEmptyGeometry() };
   }
 
   const box = new THREE.Box3().setFromObject(model);
@@ -216,7 +282,15 @@ function createDisplayedMeshProjectionGeometries(
   const stride = Math.max(1, Math.ceil(previewPoints.length / 4200));
   const raycaster = new THREE.Raycaster();
   (raycaster as THREE.Raycaster & { firstHitOnly?: boolean }).firstHitOnly = true;
-  const fallbackMapper = createPreviewMapper(box, xMin, xMax, (xMin + xMax) / 2, previewPoints.reduce((max, point) => Math.max(max, Math.abs(point.z)), 0.001));
+  const fallbackMapper = createPreviewMapper(
+    box,
+    xMin,
+    xMax,
+    (xMin + xMax) / 2,
+    previewPoints.reduce((max, point) => Math.max(max, Math.abs(point.z)), 0.001),
+    meshLengthAxis,
+    meshAxisReverse
+  );
   const fitPositions: number[] = [];
   const mismatchPositions: number[] = [];
   let previous: THREE.Vector3 | null = null;

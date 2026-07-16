@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { getToolProfile } from "./manufacturingProfiles";
 import type { ModelSettings, ToolpathPoint, ToolpathPreviewPoint } from "./types";
 
 type SimulationViewerProps = {
@@ -13,7 +14,8 @@ type SimulationViewerProps = {
 
 export function SimulationViewer({ points, previewPoints = [], settings, envelopeColor = 0x00a676, surfaceColor = 0xb95a1b }: SimulationViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const usesPreviewSurface = previewPoints.length === points.length;
+  const hasThreeAxisPoints = points.some((point) => point.y != null) || settings.camMode === "3axis";
+  const usesPreviewSurface = !hasThreeAxisPoints && previewPoints.length > 0 && previewPoints.length >= points.length * 0.85;
   const geometry = useMemo(
     () => (usesPreviewSurface ? createPreviewSurfaceGeometry(points, previewPoints, settings) : createSimulatedCarvingGeometry(points, settings)),
     [points, previewPoints, settings]
@@ -26,8 +28,15 @@ export function SimulationViewer({ points, previewPoints = [], settings, envelop
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf5f1ea);
 
-    const camera = new THREE.PerspectiveCamera(38, host.clientWidth / host.clientHeight, 0.1, 1000);
-    camera.position.set(18, -30, 18);
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    const bounds = geometry.boundingBox ?? new THREE.Box3(new THREE.Vector3(-10, -10, -2), new THREE.Vector3(10, 10, 2));
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const maxAxis = Math.max(size.x, size.y, size.z, 1);
+
+    const camera = new THREE.PerspectiveCamera(38, host.clientWidth / host.clientHeight, 0.1, Math.max(1000, maxAxis * 80));
+    camera.position.set(center.x + maxAxis * 0.95, center.y - maxAxis * 1.45, center.z + maxAxis * 0.85);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -37,7 +46,7 @@ export function SimulationViewer({ points, previewPoints = [], settings, envelop
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.target.set(0, 0, 0);
+    controls.target.copy(center);
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.9));
     const key = new THREE.DirectionalLight(0xffffff, 3.2);
@@ -65,8 +74,8 @@ export function SimulationViewer({ points, previewPoints = [], settings, envelop
     wire.rotation.x = mesh.rotation.x;
     scene.add(wire);
 
-    const grid = new THREE.GridHelper(42, 14, 0x8d7b68, 0xd8cfc2);
-    grid.position.y = -13;
+    const grid = new THREE.GridHelper(Math.max(42, maxAxis * 1.4), 14, 0x8d7b68, 0xd8cfc2);
+    grid.position.set(center.x, bounds.min.y - Math.max(size.y, 1) * 0.12, center.z);
     scene.add(grid);
 
     const resize = () => {
@@ -145,8 +154,9 @@ function createPreviewSurfaceGeometry(points: ToolpathPoint[], previewPoints: To
 
 function buildPreviewRows(points: ToolpathPoint[], previewPoints: ToolpathPreviewPoint[]) {
   const rows = new Map<string, Array<ToolpathPreviewPoint & { depth: number; machineX: number }>>();
+  const count = Math.min(points.length, previewPoints.length);
 
-  for (let i = 0; i < points.length; i += 1) {
+  for (let i = 0; i < count; i += 1) {
     const key = points[i].a.toFixed(3);
     const row = rows.get(key) ?? [];
     row.push({ ...previewPoints[i], depth: points[i].depth, machineX: points[i].x });
@@ -191,6 +201,8 @@ function findHitPreviewNeighbor(points: ToolpathPreviewPoint[], start: number, d
 
 
 function createSimulatedCarvingGeometry(points: ToolpathPoint[], settings: ModelSettings) {
+  if (points.some((point) => point.y != null)) return createThreeAxisSimulatedCarvingGeometry(points, settings);
+
   const rows = buildRows(points, settings);
   const positions: number[] = [];
   const colors: number[] = [];
@@ -230,6 +242,127 @@ function createSimulatedCarvingGeometry(points: ToolpathPoint[], settings: Model
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+function createThreeAxisSimulatedCarvingGeometry(points: ToolpathPoint[], settings: ModelSettings) {
+  const rows = buildThreeAxisRows(points);
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    for (let pointIndex = 0; pointIndex < row.points.length; pointIndex += 1) {
+      const point = row.points[pointIndex];
+      const cutZ = simulateThreeAxisRemovedZ(rows, rowIndex, pointIndex, settings);
+      positions.push(point.x, point.y ?? 0, cutZ);
+      const depthShade = THREE.MathUtils.clamp(Math.abs(cutZ) / Math.max(settings.depthMm, 0.001), 0, 1);
+      colors.push(0.58 + depthShade * 0.18, 0.28 + depthShade * 0.08, 0.08);
+    }
+  }
+
+  const rowLength = rows[0]?.points.length ?? 0;
+  for (let r = 0; r < rows.length - 1; r += 1) {
+    for (let c = 0; c < rowLength - 1; c += 1) {
+      const a = r * rowLength + c;
+      const b = (r + 1) * rowLength + c;
+      const c1 = (r + 1) * rowLength + c + 1;
+      const d = r * rowLength + c + 1;
+      indices.push(a, b, d, b, c1, d);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function simulateThreeAxisRemovedZ(
+  rows: Array<{ y: number; points: ToolpathPoint[] }>,
+  rowIndex: number,
+  pointIndex: number,
+  settings: ModelSettings
+) {
+  const target = rows[rowIndex].points[pointIndex];
+  const tool = getToolProfile(settings.toolProfileId);
+  const toolRadius = Math.max(0.01, settings.toolDiameter / 2);
+  const flatRadius = tool.type === "v-bit" ? Math.max(0.01, (tool.flatTipMm ?? tool.tipRadiusMm * 2) / 2) : toolRadius;
+  const halfAngle = THREE.MathUtils.degToRad(Math.max(1, (tool.angleDeg ?? 25) / 2));
+  const xStep = estimateThreeAxisStep(rows[rowIndex].points.map((point) => point.x));
+  const yStep = estimateThreeAxisStep(rows.map((row) => row.y));
+  const xWindow = Math.max(1, Math.ceil(toolRadius / Math.max(xStep, 0.001)) + 1);
+  const yWindow = Math.max(1, Math.ceil(toolRadius / Math.max(yStep, 0.001)) + 1);
+  let removedZ = 0;
+
+  for (let r = Math.max(0, rowIndex - yWindow); r <= Math.min(rows.length - 1, rowIndex + yWindow); r += 1) {
+    const row = rows[r];
+    for (let c = Math.max(0, pointIndex - xWindow); c <= Math.min(row.points.length - 1, pointIndex + xWindow); c += 1) {
+      const cutter = row.points[c];
+      const dx = target.x - cutter.x;
+      const dy = (target.y ?? 0) - (cutter.y ?? 0);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance > toolRadius) continue;
+
+      let candidateZ = cutter.z;
+      if (tool.type === "ball") {
+        candidateZ = cutter.z + toolRadius - Math.sqrt(Math.max(0, toolRadius * toolRadius - distance * distance));
+      } else if (tool.type === "v-bit" && distance > flatRadius) {
+        candidateZ = cutter.z + (distance - flatRadius) / Math.tan(halfAngle);
+      }
+
+      removedZ = Math.min(removedZ, Math.min(0, candidateZ));
+    }
+  }
+
+  return removedZ;
+}
+
+function estimateThreeAxisStep(values: number[]) {
+  if (values.length < 2) return 0.1;
+  const sorted = [...values].sort((left, right) => left - right);
+  let total = 0;
+  let count = 0;
+  for (let i = 1; i < sorted.length; i += 1) {
+    const delta = Math.abs(sorted[i] - sorted[i - 1]);
+    if (delta > 0.0001) {
+      total += delta;
+      count += 1;
+    }
+  }
+  return count > 0 ? total / count : 0.1;
+}
+
+function buildThreeAxisRows(points: ToolpathPoint[]) {
+  const rows = new Map<string, ToolpathPoint[]>();
+  const cutPoints = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y ?? 0) && Number.isFinite(point.z) && point.z < settingsSafeCutoff(points));
+  const sourcePoints = cutPoints.length > 0 ? cutPoints : points;
+
+  for (const point of sourcePoints) {
+    const key = (point.y ?? 0).toFixed(3);
+    const row = rows.get(key) ?? [];
+    row.push(point);
+    rows.set(key, row);
+  }
+
+  return Array.from(rows.entries())
+    .map(([y, rowPoints]) => ({
+      y: Number(y),
+      points: rowPoints.sort((left, right) => left.x - right.x)
+    }))
+    .sort((left, right) => left.y - right.y);
+}
+
+function settingsSafeCutoff(points: ToolpathPoint[]) {
+  const zValues = points.map((point) => point.z).filter(Number.isFinite).sort((left, right) => left - right);
+  if (zValues.length === 0) return Number.POSITIVE_INFINITY;
+  const q90 = zValues[Math.floor(zValues.length * 0.9)] ?? zValues[zValues.length - 1];
+  const zMax = zValues[zValues.length - 1];
+  return q90 < zMax - 0.01 ? q90 + (zMax - q90) * 0.35 : zMax + 0.001;
 }
 
 function simulateRemovedRadius(

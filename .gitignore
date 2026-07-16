@@ -5,3 +5,7 @@ dist/
 *.log
 *.local
 meshy-test-result.json
+public/imported-models/
+public/import-previews/
+public/meshy-results/019f*.glb
+public/meshy-results/019f*.stl

@@ -54,17 +54,21 @@ export type ModelSettings = {
   toolProfileId: string;
   materialProfileId: string;
   machineProfileId: string;
+  camMode: "4axis" | "3axis" | "rotaryWrap";
+  rotaryOutputAxis: "A" | "Y" | "X";
+  rotaryWrapPerRevolutionMm: number;
   meshLengthAxis: "auto" | "x" | "y" | "z";
   meshAxisReverse: boolean;
   maxCutDepth: number;
   stockAllowance: number;
   finishingStrategy: "x-scan" | "a-scan" | "cross";
   generationMode: "active" | "blend" | "multiview";
-  postProcessor: "generic" | "weihong" | "syntec";
+  postProcessor: "generic" | "weihong" | "syntec" | "generic3" | "wrapY" | "wrapX";
 };
 
 export type ToolpathPoint = {
   x: number;
+  y?: number;
   a: number;
   z: number;
   depth: number;
@@ -139,6 +143,8 @@ export type MeshQualityRegion = {
 export type ToolpathSummary = {
   xMin: number;
   xMax: number;
+  yMin?: number;
+  yMax?: number;
   aMin: number;
   aMax: number;
   zMin: number;

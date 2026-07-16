@@ -38,13 +38,14 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
   if (cuttingPoints.length === 0) return null;
 
   const tool = getToolProfile(settings.toolProfileId);
+  const isThreeAxis = settings.camMode === "3axis" || cuttingPoints.some((point) => point.y != null);
   const maxDepth = cuttingPoints.reduce((max, point) => Math.max(max, point.depth), 0);
   const geometry = createToolSweepGeometry(tool, settings, maxDepth);
   const xScallop = estimateScallopHeightByTool(settings.stepoverMm, geometry);
-  const arcStepMm = (Math.PI / 180) * settings.stepoverDeg * (settings.diameterMm / 2);
-  const aScallop = estimateScallopHeightByTool(arcStepMm, geometry);
-  const maxTextureMm = Math.max(xScallop, aScallop);
-  const meanTextureMm = (xScallop + aScallop) / 2;
+  const secondaryStepMm = isThreeAxis ? settings.stepoverMm : (Math.PI / 180) * settings.stepoverDeg * (settings.diameterMm / 2);
+  const secondaryScallop = estimateScallopHeightByTool(secondaryStepMm, geometry);
+  const maxTextureMm = Math.max(xScallop, secondaryScallop);
+  const meanTextureMm = (xScallop + secondaryScallop) / 2;
   const coverageRate = estimateCoverageRate(cuttingPoints, settings);
   const restAreaRate = estimateRestAreaRate(toolpath);
   const sweptAreaRate = estimateSweptAreaRate(cuttingPoints, settings, geometry.contactWidthMm);
@@ -63,13 +64,13 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
       label: "刀痕纹理",
       value: `${(maxTextureMm * 1000).toFixed(0)} μm`,
       status: maxTextureMm <= 0.012 ? "ok" : maxTextureMm <= 0.035 ? "warning" : "critical",
-      detail: `按 ${formatToolType(tool.type)} 扫掠几何估算；X ${(xScallop * 1000).toFixed(0)}μm，A ${(aScallop * 1000).toFixed(0)}μm。`
+      detail: `按 ${formatToolType(tool.type)} 扫掠几何估算；X ${(xScallop * 1000).toFixed(0)}μm，${isThreeAxis ? "Y" : "A"} ${(secondaryScallop * 1000).toFixed(0)}μm。`
     },
     {
       label: "刀路覆盖",
       value: `${coverageRate.toFixed(1)}%`,
       status: coverageRate >= 92 ? "ok" : coverageRate >= 82 ? "warning" : "critical",
-      detail: "按可雕刻区 X/A 网格估算覆盖率，低覆盖率可能留下未加工区域。"
+      detail: `按可雕刻区 ${isThreeAxis ? "X/Y" : "X/A"} 网格估算覆盖率，低覆盖率可能留下未加工区域。`
     },
     {
       label: "扫掠覆盖",
@@ -117,7 +118,7 @@ export function analyzeMaterialRemoval(settings: ModelSettings, toolpath: Genera
   const verdict: MaterialRemovalReport["verdict"] = score >= 86 ? "ready" : score >= 68 ? "review" : "risk";
   const summary = verdict === "ready" ? "仿真指标适合进入空跑" : verdict === "review" ? "建议复核纹理和残料风险" : "存在明显仿真风险";
   const suggestions: string[] = [];
-  if (maxTextureMm > 0.035) suggestions.push("刀痕纹理偏大，建议降低 X/A 步距或改用更小球刀精修。");
+  if (maxTextureMm > 0.035) suggestions.push(`刀痕纹理偏大，建议降低 ${isThreeAxis ? "X/Y" : "X/A"} 步距或改用更小球刀精修。`);
   if (coverageRate < 92) suggestions.push("刀路覆盖不足，建议减小步距或检查夹持/过渡区是否过大。");
   if (sweptAreaRate < 88) suggestions.push("按刀具扫掠估算仍有覆盖缺口，建议减小步距或增加交叉精修。");
   if (restAreaRate === 0) suggestions.push("没有有效清残点，细节较深时建议使用清残刀路或更小刀具。");
@@ -219,9 +220,11 @@ function estimateBallScallopHeight(stepMm: number, toolRadiusMm: number) {
 function estimateSweptAreaRate(points: ToolpathPoint[], settings: ModelSettings, contactWidthMm: number) {
   const rawCoverage = estimateCoverageRate(points, settings);
   const xBoost = contactWidthMm / Math.max(settings.stepoverMm, 0.001);
-  const aArcStepMm = (Math.PI / 180) * settings.stepoverDeg * (settings.diameterMm / 2);
-  const aBoost = contactWidthMm / Math.max(aArcStepMm, 0.001);
-  const boost = clamp((xBoost + aBoost) / 2, 0.7, 1.45);
+  const secondaryStepMm = settings.camMode === "3axis" || points.some((point) => point.y != null)
+    ? settings.stepoverMm
+    : (Math.PI / 180) * settings.stepoverDeg * (settings.diameterMm / 2);
+  const secondaryBoost = contactWidthMm / Math.max(secondaryStepMm, 0.001);
+  const boost = clamp((xBoost + secondaryBoost) / 2, 0.7, 1.45);
   return Math.min(100, rawCoverage * boost);
 }
 
@@ -258,6 +261,24 @@ function formatToolType(type: ToolProfile["type"]) {
 }
 
 function estimateCoverageRate(points: ToolpathPoint[], settings: ModelSettings) {
+  if (settings.camMode === "3axis" || points.some((point) => point.y != null)) {
+    const xMin = -settings.lengthMm / 2;
+    const xMax = settings.lengthMm / 2;
+    const yMin = -settings.diameterMm / 2;
+    const yMax = settings.diameterMm / 2;
+    const xCells = Math.max(2, Math.ceil((xMax - xMin) / Math.max(settings.stepoverMm, 0.001)));
+    const yCells = Math.max(2, Math.ceil((yMax - yMin) / Math.max(settings.stepoverMm, 0.001)));
+    const visited = new Set<string>();
+
+    for (const point of points) {
+      const xi = clamp(Math.floor(((point.x - xMin) / Math.max(0.001, xMax - xMin)) * xCells), 0, xCells - 1);
+      const yi = clamp(Math.floor((((point.y ?? 0) - yMin) / Math.max(0.001, yMax - yMin)) * yCells), 0, yCells - 1);
+      visited.add(`${xi}:${yi}`);
+    }
+
+    return Math.min(100, (visited.size / Math.max(1, xCells * yCells)) * 100);
+  }
+
   const xMin = -settings.lengthMm / 2 + settings.leftHoldMm;
   const xMax = settings.lengthMm / 2 - settings.rightHoldMm;
   const aMin = settings.reliefAngleDeg >= 360 ? -180 : -settings.reliefAngleDeg / 2;

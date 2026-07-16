@@ -71,21 +71,26 @@ export function createManufacturingQualityReport(
   const items: ManufacturingQualityItem[] = [];
   const criticalCount = safetyIssues.filter((issue) => issue.level === "critical").length;
   const warningCount = safetyIssues.filter((issue) => issue.level === "warning").length;
+  const primarySafetyIssue = safetyIssues.find((issue) => issue.level === "critical") ?? safetyIssues.find((issue) => issue.level === "warning") ?? safetyIssues[0];
 
   items.push({
     label: "安全校验",
     value: criticalCount > 0 ? `${criticalCount} 个阻断项` : warningCount > 0 ? `${warningCount} 个提醒` : "通过",
     status: criticalCount > 0 ? "critical" : warningCount > 0 ? "warning" : "ok",
-    detail: safetyIssues[0]?.detail ?? "基础安全项未发现风险。"
+    detail: primarySafetyIssue?.detail ?? "基础安全项未发现风险。"
   });
 
   if (toolpath) {
     const riskWarnings = toolpath.summary.warnings.filter((warning) => !warning.startsWith("已避开端部夹持区") && !warning.startsWith("粗加工"));
+    const rangeValue =
+      settings.camMode === "3axis" || toolpath.summary.yMin != null
+        ? `X ${toolpath.summary.xMin.toFixed(1)}~${toolpath.summary.xMax.toFixed(1)} / Y ${(toolpath.summary.yMin ?? 0).toFixed(1)}~${(toolpath.summary.yMax ?? 0).toFixed(1)} / Z ${toolpath.summary.zMin.toFixed(1)}~${toolpath.summary.zMax.toFixed(1)}`
+        : `X ${toolpath.summary.xMin.toFixed(1)}~${toolpath.summary.xMax.toFixed(1)} / A ${toolpath.summary.aMin.toFixed(0)}~${toolpath.summary.aMax.toFixed(0)}`;
     items.push({
       label: "刀路范围",
-      value: `X ${toolpath.summary.xMin.toFixed(1)}~${toolpath.summary.xMax.toFixed(1)} / A ${toolpath.summary.aMin.toFixed(0)}~${toolpath.summary.aMax.toFixed(0)}`,
+      value: rangeValue,
       status: riskWarnings.length > 0 ? "warning" : "ok",
-      detail: riskWarnings[0] ?? "刀路范围正常，夹持区已避让。"
+      detail: riskWarnings[0] ?? (settings.camMode === "3axis" ? "三轴 X/Y/Z 范围正常。" : "刀路范围正常，夹持区已避让。")
     });
 
     items.push({
@@ -110,7 +115,7 @@ export function createManufacturingQualityReport(
       label: "刀路范围",
       value: "待生成",
       status: "warning",
-      detail: "生成刀路后才能检查 X/A/Z 范围。"
+      detail: settings.camMode === "3axis" ? "生成刀路后才能检查 X/Y/Z 范围。" : "生成刀路后才能检查 X/A/Z 范围。"
     });
   }
 

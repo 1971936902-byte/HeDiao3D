@@ -3,7 +3,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -14,6 +16,7 @@ loadEnv();
 
 const port = Number(process.env.API_PORT ?? 8787);
 const meshyBase = process.env.MESHY_API_BASE ?? "https://api.meshy.ai";
+const maxToolpathPreviewPoints = Number(process.env.MAX_TOOLPATH_PREVIEW_POINTS ?? 650000);
 
 const server = createServer(async (req, res) => {
   try {
@@ -35,6 +38,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/api/cam/mesh-toolpath") {
       return createMeshToolpath(req, res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/mesh/import") {
+      return importLocalMesh(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/mesh/analyze") {
@@ -210,54 +217,227 @@ async function proxyMeshyTaskWithCache(response, res, cacheKey) {
 async function createMeshToolpath(req, res) {
   const input = await readJson(req);
   const settings = input.settings;
-  const stlUrl = String(input.stlUrl ?? "");
+  const modelUrl = String(input.stlUrl ?? input.modelUrl ?? "");
 
-  if (!settings || !stlUrl.startsWith("/meshy-results/") || stlUrl.includes("..")) {
-    return json(res, 400, { error: "本地 Meshy STL 地址或刀路参数无效" });
+  if (!settings || !isAllowedLocalModelUrl(modelUrl)) {
+    return json(res, 400, { error: "本地 Mesh 模型地址或刀路参数无效" });
   }
 
-  const stlPath = join(process.cwd(), "public", stlUrl.replace(/^\//, ""));
-  if (!existsSync(stlPath)) {
-    return json(res, 404, { error: "找不到本地 Meshy STL 文件，请重新生成或载入测试结果" });
+  const modelPath = join(process.cwd(), "public", modelUrl.replace(/^\//, ""));
+  if (!existsSync(modelPath)) {
+    return json(res, 404, { error: "找不到本地 Mesh 文件，请重新生成或重新导入模型" });
   }
 
-  const file = readFileSync(stlPath);
-  const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
-  const geometry = new STLLoader().parse(buffer);
-  geometry.computeVertexNormals();
-  geometry.computeBoundsTree();
+  let geometry;
+  try {
+    geometry = await loadModelGeometry(modelPath);
+    geometry.computeVertexNormals();
+    geometry.computeBoundsTree();
 
-  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
-  const toolpath = generateMeshSurfaceToolpath(mesh, settings);
-  geometry.disposeBoundsTree();
-  geometry.dispose();
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+    const toolpath = generateMeshSurfaceToolpath(mesh, settings);
+    geometry.disposeBoundsTree();
+    geometry.dispose();
 
-  return json(res, 200, toolpath);
+    return json(res, 200, toolpath);
+  } catch (error) {
+    if (geometry) {
+      try {
+        geometry.disposeBoundsTree?.();
+        geometry.dispose?.();
+      } catch {
+        // Ignore cleanup errors so the original CAM error can be reported.
+      }
+    }
+    return json(res, 500, {
+      error: error instanceof Error ? `Mesh CAM 解析失败：${error.message}` : "Mesh CAM 解析失败"
+    });
+  }
 }
 
 async function analyzeMesh(req, res) {
   const input = await readJson(req);
-  const stlUrl = String(input.stlUrl ?? "");
+  const modelUrl = String(input.stlUrl ?? input.modelUrl ?? "");
 
-  if (!stlUrl.startsWith("/meshy-results/") || stlUrl.includes("..")) {
-    return json(res, 400, { error: "本地 Meshy STL 地址无效" });
+  if (!isAllowedLocalModelUrl(modelUrl)) {
+    return json(res, 400, { error: "本地 Mesh 模型地址无效" });
   }
 
-  const stlPath = join(process.cwd(), "public", stlUrl.replace(/^\//, ""));
-  if (!existsSync(stlPath)) {
-    return json(res, 404, { error: "找不到本地 Meshy STL 文件，请重新生成或载入测试结果" });
+  const modelPath = join(process.cwd(), "public", modelUrl.replace(/^\//, ""));
+  if (!existsSync(modelPath)) {
+    return json(res, 404, { error: "找不到本地 Mesh 文件，请重新生成或重新导入模型" });
   }
 
-  const file = readFileSync(stlPath);
+  let geometry;
+  try {
+    geometry = await loadModelGeometry(modelPath);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+
+    const report = buildMeshQualityReport(geometry);
+    geometry.dispose();
+    return json(res, 200, report);
+  } catch (error) {
+    geometry?.dispose?.();
+    return json(res, 500, {
+      error: error instanceof Error ? `Mesh 体检失败：${error.message}` : "Mesh 体检失败"
+    });
+  }
+}
+
+async function importLocalMesh(req, res) {
+  const input = await readJson(req, 90_000_000);
+  const filename = String(input.filename ?? "imported-model").replace(/[\\/:*?"<>|]/g, "_");
+  const dataUrl = String(input.dataUrl ?? "");
+  const extension = filename.split(".").pop()?.toLowerCase();
+  if (!extension || !["stl", "glb", "gltf"].includes(extension)) {
+    return json(res, 400, { error: "当前后端 CAM 支持导入 .stl/.glb/.gltf 模型" });
+  }
+  const base64 = dataUrl.includes(",") ? dataUrl.split(",").pop() : dataUrl;
+  if (!base64) return json(res, 400, { error: "模型文件内容为空" });
+
+  const dir = join(process.cwd(), "public", "imported-models");
+  await mkdir(dir, { recursive: true });
+  const safeName = `${Date.now()}-${Math.random().toString(16).slice(2)}-${filename}`;
+  const filePath = join(dir, safeName);
+  await writeFile(filePath, Buffer.from(base64, "base64"));
+  const publicUrl = `/imported-models/${safeName}`;
+  return json(res, 200, {
+    modelUrl: publicUrl,
+    camModelUrl: publicUrl,
+    format: extension,
+    message: `${filename} 已上传到本地 CAM 缓存`
+  });
+}
+
+function isAllowedLocalModelUrl(modelUrl) {
+  if (modelUrl.includes("..")) return false;
+  return modelUrl.startsWith("/meshy-results/") || modelUrl.startsWith("/imported-models/");
+}
+
+async function loadModelGeometry(modelPath) {
+  const file = readFileSync(modelPath);
   const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
-  const geometry = new STLLoader().parse(buffer);
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
+  const lower = modelPath.toLowerCase();
+  if (lower.endsWith(".stl")) return new STLLoader().parse(buffer);
+  if (lower.endsWith(".glb") || lower.endsWith(".gltf")) return loadGltfGeometry(buffer);
+  throw new Error("不支持的 Mesh 格式，当前支持 STL/GLB/GLTF");
+}
 
-  const report = buildMeshQualityReport(geometry);
-  geometry.dispose();
-  return json(res, 200, report);
+function loadGltfGeometry(buffer) {
+  return new Promise((resolve, reject) => {
+    globalThis.self ??= globalThis;
+    const loader = new GLTFLoader();
+    const geometryOnlySource = stripGltfMaterialsForCam(buffer);
+    loader.parse(geometryOnlySource, "", (gltf) => {
+      const geometries = [];
+      gltf.scene.updateMatrixWorld(true);
+      gltf.scene.traverse((child) => {
+        if (!child.isMesh || !child.geometry) return;
+        let geometry = child.geometry.clone();
+        geometry.applyMatrix4(child.matrixWorld);
+        if (geometry.index) {
+          const nonIndexed = geometry.toNonIndexed();
+          geometry.dispose();
+          geometry = nonIndexed;
+        }
+        geometries.push(geometry);
+      });
+      if (geometries.length === 0) {
+        reject(new Error("GLB 中没有可用 Mesh 几何"));
+        return;
+      }
+      const merged = mergeGeometries(geometries, false);
+      geometries.forEach((geometry) => geometry.dispose());
+      if (!merged) {
+        reject(new Error("GLB Mesh 合并失败"));
+        return;
+      }
+      resolve(merged);
+    }, reject);
+  });
+}
+
+function stripGltfMaterialsForCam(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const glbMagic = 0x46546c67;
+
+  if (bytes.byteLength >= 20 && view.getUint32(0, true) === glbMagic) {
+    const version = view.getUint32(4, true);
+    if (version !== 2) return buffer;
+
+    const chunks = [];
+    let offset = 12;
+    let jsonChunkIndex = -1;
+    while (offset + 8 <= bytes.byteLength) {
+      const length = view.getUint32(offset, true);
+      const type = view.getUint32(offset + 4, true);
+      const start = offset + 8;
+      const end = start + length;
+      if (end > bytes.byteLength) break;
+      const data = bytes.slice(start, end);
+      if (type === 0x4e4f534a) jsonChunkIndex = chunks.length;
+      chunks.push({ type, data });
+      offset = end + ((4 - (length % 4)) % 4);
+    }
+
+    if (jsonChunkIndex === -1) return buffer;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const jsonText = decoder.decode(chunks[jsonChunkIndex].data).trim();
+    const strippedJson = stripGltfMaterialJson(JSON.parse(jsonText));
+    chunks[jsonChunkIndex] = {
+      type: 0x4e4f534a,
+      data: padBytes(encoder.encode(JSON.stringify(strippedJson)), 0x20)
+    };
+
+    const totalLength = 12 + chunks.reduce((sum, chunk) => sum + 8 + chunk.data.byteLength, 0);
+    const output = new Uint8Array(totalLength);
+    const outputView = new DataView(output.buffer);
+    outputView.setUint32(0, glbMagic, true);
+    outputView.setUint32(4, 2, true);
+    outputView.setUint32(8, totalLength, true);
+    let writeOffset = 12;
+    for (const chunk of chunks) {
+      outputView.setUint32(writeOffset, chunk.data.byteLength, true);
+      outputView.setUint32(writeOffset + 4, chunk.type, true);
+      output.set(chunk.data, writeOffset + 8);
+      writeOffset += 8 + chunk.data.byteLength;
+    }
+    return output.buffer;
+  }
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const text = decoder.decode(bytes).trim();
+  return encoder.encode(JSON.stringify(stripGltfMaterialJson(JSON.parse(text)))).buffer;
+}
+
+function stripGltfMaterialJson(json) {
+  const clone = structuredClone(json);
+  delete clone.materials;
+  delete clone.textures;
+  delete clone.images;
+  delete clone.samplers;
+
+  for (const mesh of clone.meshes ?? []) {
+    for (const primitive of mesh.primitives ?? []) {
+      delete primitive.material;
+    }
+  }
+
+  return clone;
+}
+
+function padBytes(bytes, paddingByte) {
+  const padding = (4 - (bytes.byteLength % 4)) % 4;
+  if (padding === 0) return bytes;
+  const output = new Uint8Array(bytes.byteLength + padding);
+  output.set(bytes);
+  output.fill(paddingByte, bytes.byteLength);
+  return output;
 }
 
 async function proxyJson(response, res) {
@@ -276,12 +456,12 @@ function requireApiKey() {
   return process.env.MESHY_API_KEY;
 }
 
-function readJson(req) {
+function readJson(req, limit = 25_000_000) {
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 25_000_000) {
+      if (body.length > limit) {
         reject(new Error("Request body too large"));
         req.destroy();
       }
@@ -351,6 +531,10 @@ async function cacheMeshyAssets(taskId, task) {
 }
 
 function generateMeshSurfaceToolpath(mesh, settings) {
+  if (settings.camMode === "3axis") {
+    return generateMeshTopSurfaceToolpath(mesh, settings);
+  }
+
   mesh.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(mesh);
   const size = box.getSize(new THREE.Vector3());
@@ -435,7 +619,12 @@ function generateMeshSurfaceToolpath(mesh, settings) {
     warnings.push(`已避开端部夹持区：左 ${fmt(leftHold, 1)}mm / 右 ${fmt(rightHold, 1)}mm。`);
   }
 
-  warnings.push("Mesh CAM 已按模型外表面采样生成；首次实机请务必空跑并使用低进给试雕。");
+  if (settings.camMode === "rotaryWrap") {
+    const axis = settings.rotaryOutputAxis || "Y";
+    warnings.push(`Mesh CAM 已按旋转包裹生成，${axis}轴驱动夹具，${fmt(settings.rotaryWrapPerRevolutionMm ?? 100, 3)}mm/圈；首次实机请务必空跑并低进给试雕。`);
+  } else {
+    warnings.push("Mesh CAM 已按模型外表面采样生成；首次实机请务必空跑并使用低进给试雕。");
+  }
 
   const travelMm = estimateTravel(points, machineRadius);
   const estimatedMinutes = travelMm / Math.max(1, Number(settings.feedRate));
@@ -443,7 +632,7 @@ function generateMeshSurfaceToolpath(mesh, settings) {
 
   return {
     points,
-    previewPoints: previewPoints.length <= 120000 ? previewPoints : [],
+    previewPoints: limitPreviewPoints(previewPoints),
     gcode,
     tap: gcode,
     txt: gcode,
@@ -452,6 +641,89 @@ function generateMeshSurfaceToolpath(mesh, settings) {
     postProcessorName: postProcessorName(settings.postProcessor),
     summary: summarizePoints(points, warnings)
   };
+}
+
+function generateMeshTopSurfaceToolpath(mesh, settings) {
+  mesh.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(mesh);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const lengthAxis = selectLengthAxis(size, settings.meshLengthAxis);
+  const widthAxis = selectWidthAxis(size, lengthAxis);
+  const heightAxis = ["x", "y", "z"].find((axis) => axis !== lengthAxis && axis !== widthAxis) ?? "z";
+  const halfLength = Number(settings.lengthMm) / 2;
+  const halfWidth = Number(settings.diameterMm) / 2;
+  const xSteps = Math.max(2, Math.ceil(Number(settings.lengthMm) / Number(settings.stepoverMm)));
+  const ySteps = Math.max(2, Math.ceil(Number(settings.diameterMm) / Number(settings.stepoverMm)));
+  const castHeight = axisValue(size, heightAxis) * 2.2 + 1;
+  const displayScale = 3.2 / Math.max(size.x, size.y, size.z, 0.001);
+  const raycaster = new THREE.Raycaster();
+  raycaster.firstHitOnly = true;
+  const points = [];
+  const previewPoints = [];
+  const warnings = [];
+  let missCount = 0;
+
+  for (let yIndex = 0; yIndex <= ySteps; yIndex += 1) {
+    const serpentine = yIndex % 2 === 1;
+    const yRatio = yIndex / ySteps;
+    const y = -halfWidth + yRatio * Number(settings.diameterMm);
+
+    for (let xStep = 0; xStep <= xSteps; xStep += 1) {
+      const xIndex = serpentine ? xSteps - xStep : xStep;
+      const rawU = xIndex / xSteps;
+      const u = settings.meshAxisReverse ? 1 - rawU : rawU;
+      const x = -halfLength + rawU * Number(settings.lengthMm);
+      const origin = center.clone();
+      setAxisValue(origin, lengthAxis, axisValue(box.min, lengthAxis) + u * axisValue(size, lengthAxis));
+      setAxisValue(origin, widthAxis, axisValue(box.min, widthAxis) + yRatio * axisValue(size, widthAxis));
+      setAxisValue(origin, heightAxis, axisValue(box.max, heightAxis) + castHeight);
+      const direction = new THREE.Vector3();
+      setAxisValue(direction, heightAxis, -1);
+      raycaster.set(origin, direction);
+      const hit = raycaster.intersectObject(mesh, false)[0];
+
+      let z = Number(settings.safeZ);
+      let depth = 0;
+      if (hit) {
+        const heightFromTop = axisValue(box.max, heightAxis) - axisValue(hit.point, heightAxis);
+        depth = THREE.MathUtils.clamp(heightFromTop * (Number(settings.depthMm) / Math.max(axisValue(size, heightAxis), 0.001)), 0, Number(settings.depthMm));
+        z = -depth;
+        previewPoints.push(toDisplayPreviewPoint(hit, center, displayScale));
+      } else {
+        missCount += 1;
+        previewPoints.push(toDisplayMissPoint(origin, center, displayScale));
+      }
+
+      points.push({ x, y, a: 0, z, depth });
+    }
+  }
+
+  if (missCount > 0) warnings.push(`Mesh顶面采样有 ${missCount} 个点未命中，已抬到安全Z；请检查模型朝向和三轴投影范围。`);
+  if (Number(settings.stepoverMm) > Number(settings.toolDiameter) * 0.45) warnings.push("三轴步距偏大，尖刀精加工可能留下明显刀痕。");
+  warnings.push("Mesh CAM 已按三轴顶面投影生成 X/Y/Z 刀路；首次实机请务必空跑并使用低进给试雕。");
+
+  const travelMm = estimateTravel(points, 0);
+  const estimatedMinutes = travelMm / Math.max(1, Number(settings.feedRate));
+  const gcode = toGcode(points, settings, estimatedMinutes, "Meshy STL 3-axis top-surface CAM");
+
+  return {
+    points,
+    previewPoints: limitPreviewPoints(previewPoints),
+    gcode,
+    tap: gcode,
+    txt: gcode,
+    csv: toCsv(points),
+    estimatedMinutes,
+    postProcessorName: postProcessorName(settings.postProcessor),
+    summary: summarizePoints(points, warnings)
+  };
+}
+
+function limitPreviewPoints(previewPoints) {
+  if (previewPoints.length <= maxToolpathPreviewPoints) return previewPoints;
+  const stride = Math.ceil(previewPoints.length / maxToolpathPreviewPoints);
+  return previewPoints.filter((_, index) => index % stride === 0);
 }
 
 function buildMeshQualityReport(geometry) {
@@ -680,6 +952,11 @@ function selectLengthAxis(size, requestedAxis) {
   return largestAxis(size);
 }
 
+function selectWidthAxis(size, lengthAxis) {
+  const candidates = ["x", "y", "z"].filter((axis) => axis !== lengthAxis);
+  return axisValue(size, candidates[0]) >= axisValue(size, candidates[1]) ? candidates[0] : candidates[1];
+}
+
 function axisValue(vector, axis) {
   return vector[axis];
 }
@@ -698,6 +975,8 @@ function summarizePoints(points, warnings) {
   const seed = {
     xMin: Number.POSITIVE_INFINITY,
     xMax: Number.NEGATIVE_INFINITY,
+    yMin: Number.POSITIVE_INFINITY,
+    yMax: Number.NEGATIVE_INFINITY,
     aMin: Number.POSITIVE_INFINITY,
     aMax: Number.NEGATIVE_INFINITY,
     zMin: Number.POSITIVE_INFINITY,
@@ -709,6 +988,8 @@ function summarizePoints(points, warnings) {
     (acc, point) => ({
       xMin: Math.min(acc.xMin, point.x),
       xMax: Math.max(acc.xMax, point.x),
+      yMin: Math.min(acc.yMin, point.y ?? 0),
+      yMax: Math.max(acc.yMax, point.y ?? 0),
       aMin: Math.min(acc.aMin, point.a),
       aMax: Math.max(acc.aMax, point.a),
       zMin: Math.min(acc.zMin, point.z),
@@ -736,15 +1017,19 @@ function estimateTravel(points, radius) {
     const prev = points[i - 1];
     const next = points[i];
     const dx = next.x - prev.x;
+    const dy = (next.y ?? 0) - (prev.y ?? 0);
     const dz = next.z - prev.z;
     const da = ((next.a - prev.a) * Math.PI) / 180;
     const arc = Math.abs(da) * radius;
-    total += Math.sqrt(dx * dx + dz * dz + arc * arc);
+    total += Math.sqrt(dx * dx + dy * dy + dz * dz + arc * arc);
   }
   return total;
 }
 
 function postProcessorName(postProcessor) {
+  if (postProcessor === "generic3") return "通用三轴 G-code";
+  if (postProcessor === "wrapY") return "Y轴旋转包裹 G-code";
+  if (postProcessor === "wrapX") return "X轴旋转包裹 G-code";
   if (postProcessor === "weihong") return "维宏风格 G-code";
   if (postProcessor === "syntec") return "新代风格 G-code";
   return "通用四轴 G-code";
@@ -755,6 +1040,9 @@ function fmt(value, digits = 4) {
 }
 
 function toGcode(points, settings, estimatedMinutes, sourceName) {
+  if (settings.camMode === "3axis") return toThreeAxisGcode(points, settings, estimatedMinutes, sourceName);
+  if (settings.camMode === "rotaryWrap") return toRotaryWrapGcode(points, settings, estimatedMinutes, sourceName);
+
   const lines = [
     "%",
     `(Nuclear carving ${sourceName} - ${postProcessorName(settings.postProcessor)})`,
@@ -783,7 +1071,62 @@ function toGcode(points, settings, estimatedMinutes, sourceName) {
   return `${lines.join("\n")}\n`;
 }
 
+function toThreeAxisGcode(points, settings, estimatedMinutes, sourceName) {
+  const tool = describeTool(settings);
+  const lines = [
+    "%",
+    `(Nuclear carving ${sourceName} - ${postProcessorName(settings.postProcessor)})`,
+    "(Coordinate: X/Y table axes, Z spindle axis; workpiece top is Z0, cutting Z is negative)",
+    `(Length=${fmt(settings.lengthMm, 3)}mm Width=${fmt(settings.diameterMm, 3)}mm Tool=${tool.name} Diameter=${fmt(settings.toolDiameter, 3)}mm${tool.geometry})`,
+    `(Estimated=${fmt(estimatedMinutes, 2)}min)`,
+    "G21",
+    "G90",
+    "G94",
+    "(POST: GENERIC 3AXIS)",
+    `F${fmt(settings.feedRate, 1)}`,
+    `S${Math.round(Number(settings.spindleRpm))} M3`,
+    `G0 Z${fmt(settings.safeZ)}`
+  ];
+
+  if (points.length > 0) {
+    lines.push(`G0 X${fmt(points[0].x)} Y${fmt(points[0].y ?? 0)}`);
+    lines.push(`G1 Z${fmt(points[0].z)} F${fmt(Number(settings.feedRate) * 0.45, 1)}`);
+  }
+
+  for (const point of points) {
+    lines.push(`G1 X${fmt(point.x)} Y${fmt(point.y ?? 0)} Z${fmt(point.z)} F${fmt(settings.feedRate, 1)}`);
+  }
+
+  lines.push(`G0 Z${fmt(settings.safeZ)}`);
+  lines.push("M5", "M30", "%");
+  return `${lines.join("\n")}\n`;
+}
+
+function describeTool(settings) {
+  if (settings.toolProfileId === "vflat-4mm-25deg") {
+    return {
+      name: "4mm 25deg flat-tip V-bit",
+      geometry: " Type=VBIT Angle=25.0deg FlatTip=0.400mm"
+    };
+  }
+
+  return {
+    name: settings.toolProfileId ?? "custom tool",
+    geometry: ""
+  };
+}
+
 function postStart(settings) {
+  if (settings.postProcessor === "generic3") return ["(POST: GENERIC 3AXIS)", "G17", `F${fmt(settings.feedRate, 1)}`, `S${Math.round(Number(settings.spindleRpm))} M3`, `G0 Z${fmt(settings.safeZ)}`];
+  if (settings.postProcessor === "wrapY" || settings.postProcessor === "wrapX") {
+    return [
+      `(POST: ROTARY WRAP ${settings.rotaryOutputAxis || (settings.postProcessor === "wrapX" ? "X" : "Y")}-AXIS)`,
+      "(Rotary angle is mapped to linear axis by rotaryWrapPerRevolutionMm)",
+      `F${fmt(settings.feedRate, 1)}`,
+      `S${Math.round(Number(settings.spindleRpm))} M3`,
+      `G0 Z${fmt(settings.safeZ)}`
+    ];
+  }
   const shared = [`F${fmt(settings.feedRate, 1)}`, `S${Math.round(Number(settings.spindleRpm))} M3`, `G0 Z${fmt(settings.safeZ)}`];
   if (settings.postProcessor === "weihong") return ["(POST: WEIHONG STYLE)", "G17", ...shared];
   if (settings.postProcessor === "syntec") return ["(POST: SYNTEC STYLE)", "G17 G40 G49 G80", ...shared];
@@ -796,11 +1139,49 @@ function postEnd(settings) {
 }
 
 function toCsv(points) {
-  const rows = ["x_mm,a_deg,z_mm,mesh_surface_depth_mm"];
+  const hasY = points.some((point) => point.y != null);
+  const rows = [hasY ? "x_mm,y_mm,z_mm,mesh_surface_depth_mm" : "x_mm,a_deg,z_mm,mesh_surface_depth_mm"];
   for (const point of points) {
-    rows.push(`${fmt(point.x)},${fmt(point.a, 3)},${fmt(point.z)},${fmt(point.depth)}`);
+    rows.push(hasY ? `${fmt(point.x)},${fmt(point.y ?? 0)},${fmt(point.z)},${fmt(point.depth)}` : `${fmt(point.x)},${fmt(point.a, 3)},${fmt(point.z)},${fmt(point.depth)}`);
   }
   return `${rows.join("\n")}\n`;
+}
+
+function toRotaryWrapGcode(points, settings, estimatedMinutes, sourceName) {
+  const rotaryAxis = settings.rotaryOutputAxis || (settings.postProcessor === "wrapX" ? "X" : settings.postProcessor === "wrapY" ? "Y" : "A");
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const lengthAxis = rotaryAxis === "X" ? "Y" : "X";
+  const rotaryWord = (aDeg) => {
+    if (rotaryAxis === "A") return `A${fmt(aDeg, 3)}`;
+    return `${rotaryAxis}${fmt((Number(aDeg) / 360) * wrapPerRev, 4)}`;
+  };
+  const lengthWord = (x) => `${lengthAxis}${fmt(x)}`;
+  const lines = [
+    "%",
+    `(Nuclear carving rotary wrap ${sourceName} - ${postProcessorName(settings.postProcessor)})`,
+    `(Coordinate: ${lengthAxis}=length axis, ${rotaryAxis}=rotary fixture${rotaryAxis === "A" ? " angle deg" : ` linearized, ${fmt(wrapPerRev, 3)}mm per 360deg`}, Z=radial tool center)`,
+    `(ROTARY_WRAP_AXIS=${rotaryAxis} ROTARY_WRAP_PER_REV_MM=${fmt(wrapPerRev, 6)} LENGTH_AXIS=${lengthAxis})`,
+    `(Length=${fmt(settings.lengthMm, 3)}mm Diameter=${fmt(settings.diameterMm, 3)}mm ToolDiameter=${fmt(settings.toolDiameter, 3)}mm)`,
+    `(Estimated=${fmt(estimatedMinutes, 2)}min)`,
+    "G21",
+    "G90",
+    "G94",
+    ...postStart(settings)
+  ];
+
+  if (points.length > 0) {
+    lines.push(`G0 ${lengthWord(points[0].x)} ${rotaryWord(points[0].a)} Z${fmt(settings.safeZ)}`);
+    lines.push(`G1 Z${fmt(points[0].z)} F${fmt(Number(settings.feedRate) * 0.45, 1)}`);
+  }
+
+  for (const point of points) {
+    lines.push(`G1 ${lengthWord(point.x)} ${rotaryWord(point.a)} Z${fmt(point.z)} F${fmt(settings.feedRate, 1)}`);
+  }
+
+  lines.push(`G0 Z${fmt(settings.safeZ)}`);
+  lines.push(...postEnd(settings));
+  lines.push("%");
+  return `${lines.join("\n")}\n`;
 }
 
 function loadEnv() {

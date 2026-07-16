@@ -168,6 +168,10 @@ function createToolpathGeometry(points: ToolpathPoint[]): THREE.BufferGeometry {
 
   for (let i = 0; i < points.length; i += stride) {
     const point = points[i];
+    if (point.y != null) {
+      positions.push(point.x, point.y, point.z);
+      continue;
+    }
     const theta = THREE.MathUtils.degToRad(point.a);
     const radius = point.z + 0.12;
     positions.push(point.x, Math.cos(theta) * radius, Math.sin(theta) * radius);
