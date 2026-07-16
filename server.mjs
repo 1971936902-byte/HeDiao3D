@@ -2115,6 +2115,19 @@ async function processOrchestratorJob(job, settings) {
     controllerDialectReport
   });
   await writeFile(join(job.workDir, "machine-acceptance-checklist.json"), JSON.stringify(machineAcceptanceChecklist, null, 2), "utf8");
+  const operatorRunbook = createOperatorRunbookMarkdown({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    toolSetupSheet,
+    rotaryCalibrationSheet,
+    machineAcceptanceChecklist,
+    ncStaticAnalysis,
+    controllerDialectReport
+  });
+  await writeFile(join(job.workDir, "operator-runbook.md"), operatorRunbook, "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -2143,6 +2156,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-acceptance-checklist.json"));
@@ -2182,6 +2196,11 @@ async function processOrchestratorJob(job, settings) {
       adapterPreflight,
       productionGate,
       postprocessProfile,
+      operatorRunbook: {
+        schema: "hediao3d.operator-runbook.v1",
+        artifact: "operator-runbook.md",
+        summary: "操作员中文上机说明书已生成。"
+      },
       toolSetupSheet,
       rotaryCalibrationSheet,
       camoticsInput,
@@ -3619,6 +3638,90 @@ function createRotaryCalibrationSheet({ job, settings, toolpath, productionGate,
   };
 }
 
+function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist, ncStaticAnalysis, controllerDialectReport }) {
+  const lines = [
+    "# HeDiao3D V3 操作员上机说明书",
+    "",
+    `Job ID: ${job.id}`,
+    `生成时间: ${new Date().toISOString()}`,
+    `加工包级别: ${productionGate.level}`,
+    `结论: ${productionGate.summary}`,
+    "",
+    "## 先读结论",
+    "",
+    `- 允许离料空跑: ${productionGate.allowAirRun ? "是" : "否"}`,
+    `- 允许小料试雕: ${productionGate.allowTrialNc ? "是" : "否"}`,
+    `- 允许生产 NC: ${productionGate.allowProductionNc ? "是" : "否"}`,
+    productionGate.allowProductionNc
+      ? "- 当前仍需操作员完成现场验收记录后再正式加工。"
+      : "- 当前不建议直接正式加工，只允许按门禁结果做空跑或低风险试雕。",
+    "",
+    "## 文件用途",
+    "",
+    "- `air-run.nc`: 离料空跑，主轴关闭，确认行程、方向和安全高度。",
+    "- `toolpath.nc`: 试雕/生产候选文件，只有生产门禁或试雕门禁允许时才能使用。",
+    "- `camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机。",
+    "- `production-gate.json`: 生产门禁结论。",
+    "- `machine-acceptance-checklist.json`: 现场验收记录模板。",
+    "- `package-integrity.json`: 文件大小和 SHA-256 核验清单。",
+    "",
+    "## 机床与轴向",
+    "",
+    `- CAM 模式: ${postprocessProfile.camMode}`,
+    `- 长度轴: ${postprocessProfile.coordinateMapping?.lengthAxis ?? "X"}`,
+    `- 刀深轴: ${postprocessProfile.coordinateMapping?.depthAxis ?? "Z"}`,
+    `- 旋转轴: ${postprocessProfile.coordinateMapping?.rotaryAxis ?? "无"}`,
+    `- 每圈等效距离: ${rotaryCalibrationSheet.axisMapping?.rotaryWrapPerRevolutionMm ?? "-"} mm/圈`,
+    "",
+    "## 刀具确认",
+    "",
+    `- 刀具: ${toolSetupSheet.tool.name}`,
+    `- 直径: ${toolSetupSheet.tool.diameterMm} mm`,
+    `- 角度: ${toolSetupSheet.tool.angleDeg ?? "-"} deg`,
+    `- 平底: ${toolSetupSheet.tool.flatTipMm ?? "-"} mm`,
+    `- 最大单刀切深: ${toolSetupSheet.cutting.maxCutDepthMm} mm`,
+    `- 步距: ${toolSetupSheet.cutting.stepoverMm} mm / ${toolSetupSheet.cutting.stepoverDeg} deg`,
+    `- 进给/转速: F${toolSetupSheet.cutting.feedRateMmMin} / S${toolSetupSheet.cutting.spindleRpm}`,
+    ...(toolSetupSheet.warnings.length ? toolSetupSheet.warnings.map((item) => `- 复核: ${item}`) : ["- 刀具参数无额外复核项。"]),
+    "",
+    "## 上机顺序",
+    "",
+    "1. 核对 `package-integrity.json`，确认下载文件没有缺失。",
+    "2. 阅读 `production-gate.json`、`tool-setup-sheet.json`、`rotary-calibration-sheet.json`。",
+    "3. 手动低速验证旋转夹具方向和每圈等效距离。",
+    "4. 运行 `air-run.nc`，确认 X/Y或A/Z 方向、行程和安全高度。",
+    "5. 若允许试雕，使用废料或低价值核胚运行 `toolpath.nc`，进给倍率建议 30%-50%。",
+    "6. 记录试雕结果；只有生产门禁允许且现场验收通过后，才可正式加工。",
+    "",
+    "## 现场验收清单",
+    "",
+    ...(machineAcceptanceChecklist.steps ?? []).map((step) => `- [ ] ${step.title}: ${step.expectedEvidence}`),
+    "",
+    "## 风险与阻断",
+    "",
+    ...(productionGate.blockers?.length ? productionGate.blockers.map((item) => `- 阻断: ${item}`) : ["- 阻断: 无"]),
+    ...(productionGate.warnings?.length ? productionGate.warnings.slice(0, 12).map((item) => `- 复核: ${item}`) : ["- 复核: 无"]),
+    ...(ncStaticAnalysis?.criticalIssues?.length ? ncStaticAnalysis.criticalIssues.map((item) => `- NC阻断: ${item}`) : []),
+    ...(controllerDialectReport?.criticalIssues?.length ? controllerDialectReport.criticalIssues.map((item) => `- 控制器阻断: ${item}`) : []),
+    "",
+    "## 记录",
+    "",
+    "- 操作员:",
+    "- 机床编号:",
+    "- 刀具实测直径:",
+    "- 旋转每圈实测距离:",
+    "- 空跑时间:",
+    "- 试雕材料:",
+    "- 试雕结论:",
+    "- 备注:",
+    "",
+    `估算加工时间: ${fmt(toolpath.estimatedMinutes ?? 0, 1)} min`,
+    `刀路点数: ${toolpath.points?.length ?? 0}`,
+    `长度/直径: ${fmt(settings.lengthMm, 2)}mm / ${fmt(settings.diameterMm, 2)}mm`
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function createMachineAcceptanceChecklist({ job, settings, toolpath, productionGate, postprocessProfile, simulationSummary, ncStaticAnalysis, machineControllerProfile, controllerDialectReport }) {
   const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
   const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
@@ -4459,6 +4562,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("production-gate.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
+        getFile("operator-runbook.md"),
         getFile("tool-setup-sheet.json"),
         getFile("rotary-calibration-sheet.json"),
         getFile("machine-acceptance-checklist.json"),
@@ -4470,7 +4574,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("delivery-manifest.json"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -4498,6 +4602,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     },
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
+      "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
       "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
       "阅读 rotary-calibration-sheet.json，确认旋转轴方向、每圈距离和反向间隙。",
@@ -4592,6 +4697,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
+    createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
     createDeliveryFile(job.id, "tool-setup-sheet.json", "刀具装夹与切削参数核验单", "report", true, "核验 4mm 25度平底尖刀、切深、步距、进给和主轴转速。"),
     createDeliveryFile(job.id, "rotary-calibration-sheet.json", "旋转夹具标定单", "report", true, "核验旋转轴方向、每圈等效距离、反向间隙和夹持余量。"),
     createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),

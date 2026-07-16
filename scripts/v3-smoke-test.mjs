@@ -71,6 +71,7 @@ async function main() {
   assert(job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.id === "air-run"), "machine acceptance checklist missing air-run step");
   assert(job.result?.summary?.packageIntegrity?.schema === "hediao3d.package-integrity.v1", "package integrity report missing");
   assert(job.result.summary.packageIntegrity.missingDownloadableCount === 0, "package integrity should not have missing downloadable files");
+  assert(job.result?.summary?.operatorRunbook?.artifact === "operator-runbook.md", "operator runbook missing");
   assert(job.result?.summary?.toolSetupSheet?.schema === "hediao3d.tool-setup-sheet.v1", "tool setup sheet missing");
   assert(job.result.summary.toolSetupSheet.tool.angleDeg === 25, "tool setup sheet should capture 25deg V-bit angle");
   assert(job.result.summary.toolSetupSheet.tool.flatTipMm === 0.4, "tool setup sheet should capture flat tip");
@@ -102,6 +103,7 @@ async function main() {
     "toolpath-summary.json",
     "tool-setup-sheet.json",
     "rotary-calibration-sheet.json",
+    "operator-runbook.md",
     "machine-controller-profile.json",
     "machine-acceptance-checklist.json",
     "nc-static-analysis.json",
@@ -135,12 +137,17 @@ async function main() {
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "package-integrity.json"), "readFirst missing package integrity report");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
+  assert(operatorRunbook.includes("HeDiao3D V3 操作员上机说明书"), "operator runbook missing title");
+  assert(operatorRunbook.includes("camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机"), "operator runbook should forbid CAMotics preview on machine");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");
@@ -187,6 +194,13 @@ async function getArtifactJson(jobId, filename) {
   const data = await response.json().catch(() => ({}));
   assert(response.ok, `artifact ${filename} failed: ${response.status} ${data.error ?? ""}`);
   return data;
+}
+
+async function getArtifactText(jobId, filename) {
+  const response = await fetch(`${baseUrl}/api/orchestrator/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(filename)}`);
+  const text = await response.text();
+  assert(response.ok, `artifact ${filename} failed: ${response.status} ${text}`);
+  return text;
 }
 
 async function getJson(path) {

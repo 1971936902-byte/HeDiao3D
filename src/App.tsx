@@ -626,6 +626,11 @@ type V3OrchestratorJob = {
         missingDownloadableCount: number;
         totalBytes: number;
       };
+      operatorRunbook?: {
+        schema: string;
+        artifact: string;
+        summary: string;
+      };
       toolSetupSheet?: {
         schema: string;
         summary: string;
@@ -4680,6 +4685,13 @@ export function App() {
                   缺失 {v3Job.result.summary.packageIntegrity.missingDownloadableCount}
                 </small>
               )}
+              {v3Job?.result?.summary.operatorRunbook && (
+                <small className="v3-inline-ok">
+                  操作员说明：{v3Job.result.summary.operatorRunbook.artifact}
+                  {" · "}
+                  {v3Job.result.summary.operatorRunbook.summary}
+                </small>
+              )}
               {v3Job?.result?.summary.toolSetupSheet && (
                 <small className={v3Job.result.summary.toolSetupSheet.warnings.length > 0 ? "v3-inline-warning" : "v3-inline-ok"}>
                   刀具核验：{v3Job.result.summary.toolSetupSheet.tool.name}
@@ -6922,6 +6934,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
   const packageIndex = summary?.machiningPackageIndex;
   const packageIntegrity = summary?.packageIntegrity;
+  const operatorRunbook = summary?.operatorRunbook;
   const toolSetupSheet = summary?.toolSetupSheet;
   const rotaryCalibrationSheet = summary?.rotaryCalibrationSheet;
   const machineAcceptanceChecklist = summary?.machineAcceptanceChecklist;
@@ -6958,6 +6971,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `文件数: ${packageIntegrity?.downloadableCount ?? "-"}/${packageIntegrity?.fileCount ?? "-"}`,
     `缺失可下载文件: ${packageIntegrity?.missingDownloadableCount ?? "-"}`,
     "完整性报告: package-integrity.json",
+    `操作员说明书: ${operatorRunbook?.artifact ?? "operator-runbook.md"}`,
     "",
     "## 刀具核验",
     "",
