@@ -145,7 +145,7 @@ button:disabled {
 
 .workflow-nav {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   padding: 6px;
   border: 1px solid var(--line);
@@ -1775,6 +1775,125 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.deployment-mode-grid {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.deployment-mode {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 8px;
+  color: #dce8e2;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+}
+
+.deployment-mode.active {
+  border-color: rgba(25, 199, 180, 0.34);
+  border-left-color: var(--teal);
+  background: rgba(25, 199, 180, 0.08);
+}
+
+.deployment-mode strong {
+  color: #f2f8f5;
+  font-size: 14px;
+}
+
+.deployment-mode span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.deployment-toggle {
+  margin-top: 10px;
+}
+
+.deployment-readiness {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(71, 209, 140, 0.34);
+  border-radius: 8px;
+  background: rgba(71, 209, 140, 0.07);
+}
+
+.deployment-readiness.warning {
+  border-color: rgba(234, 181, 88, 0.34);
+  background: rgba(234, 181, 88, 0.08);
+}
+
+.deployment-readiness.critical {
+  border-color: rgba(255, 107, 156, 0.34);
+  background: rgba(255, 107, 156, 0.08);
+}
+
+.deployment-readiness strong {
+  color: #f2f8f5;
+  font-size: 14px;
+}
+
+.deployment-readiness span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.deployment-checklist,
+.deployment-advice {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.deployment-checklist div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.deployment-checklist div.warning {
+  border-left-color: var(--amber);
+}
+
+.deployment-checklist div.critical {
+  border-left-color: var(--rose);
+  background: rgba(255, 107, 156, 0.07);
+}
+
+.deployment-checklist span,
+.deployment-checklist small,
+.deployment-advice p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.deployment-checklist strong {
+  color: #f2f8f5;
+  font-size: 13px;
+}
+
+.deployment-advice p {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .project-summary {

@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { BadgeInfo, Box, Calculator, Camera, Clock3, Download, FileImage, Hammer, ImagePlus, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Calculator, Camera, Clock3, Cloud, Download, FileImage, Hammer, HardDrive, ImagePlus, KeyRound, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { createAirRunProgram, generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -70,7 +70,7 @@ const defaultSettings: ModelSettings = {
 };
 
 type ToolpathKind = "rough" | "finish";
-type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks" | "feedback";
+type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks" | "deployment" | "feedback";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
 type UserRole = "designer" | "process" | "operator" | "admin";
 type TaskEvent = {
@@ -159,6 +159,18 @@ type ProjectProfile = {
   role: UserRole;
 };
 
+type DeploymentMode = "local-only" | "lan-proxy" | "cloud-hybrid";
+type DeploymentProfile = {
+  mode: DeploymentMode;
+  apiKeyLocation: "server-env" | "browser-local" | "not-configured";
+  assetStorage: "browser-cache" | "lan-server" | "cloud-bucket";
+  computeTarget: "browser" | "lan-server" | "cloud-worker";
+  meshCachePath: string;
+  lanBaseUrl: string;
+  cloudBaseUrl: string;
+  allowExternalAssetLinks: boolean;
+};
+
 type ProjectArchive = {
   id: string;
   createdAt: string;
@@ -209,6 +221,7 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "process", label: "工艺", hint: "刀具/机床" },
   { id: "cam", label: "CAM", hint: "刀路/导出" },
   { id: "tasks", label: "任务", hint: "历史/版本" },
+  { id: "deployment", label: "部署", hint: "本地/云端" },
   { id: "feedback", label: "反馈", hint: "实机闭环" }
 ];
 
@@ -216,11 +229,22 @@ const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1"
 const MACHINE_FEEDBACK_STORAGE_KEY = "hediao3d.machineFeedback.v1";
 const PROJECT_PROFILE_STORAGE_KEY = "hediao3d.projectProfile.v1";
 const PROJECT_ARCHIVE_STORAGE_KEY = "hediao3d.projectArchive.v1";
+const DEPLOYMENT_PROFILE_STORAGE_KEY = "hediao3d.deploymentProfile.v1";
 const defaultProjectProfile: ProjectProfile = {
   projectName: "核雕试雕项目",
   customerName: "默认客户",
   projectCode: "HD3D-V2",
   role: "admin"
+};
+const defaultDeploymentProfile: DeploymentProfile = {
+  mode: "lan-proxy",
+  apiKeyLocation: "server-env",
+  assetStorage: "lan-server",
+  computeTarget: "lan-server",
+  meshCachePath: "./data/hediao3d-cache",
+  lanBaseUrl: "http://192.168.1.10:5174",
+  cloudBaseUrl: "",
+  allowExternalAssetLinks: false
 };
 const defaultFeedbackDraft: FeedbackDraft = {
   outcome: "success",
@@ -276,6 +300,17 @@ function loadProjectArchives(): ProjectArchive[] {
     return parsed.filter(isProjectArchive).slice(0, 30);
   } catch {
     return [];
+  }
+}
+
+function loadDeploymentProfile(): DeploymentProfile {
+  try {
+    const raw = window.localStorage.getItem(DEPLOYMENT_PROFILE_STORAGE_KEY);
+    if (!raw) return defaultDeploymentProfile;
+    const parsed = JSON.parse(raw);
+    return isDeploymentProfile(parsed) ? parsed : defaultDeploymentProfile;
+  } catch {
+    return defaultDeploymentProfile;
   }
 }
 
@@ -346,6 +381,25 @@ function isProjectArchive(value: unknown): value is ProjectArchive {
   );
 }
 
+function isDeploymentProfile(value: unknown): value is DeploymentProfile {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Partial<DeploymentProfile>;
+  return (
+    isDeploymentMode(profile.mode) &&
+    (profile.apiKeyLocation === "server-env" || profile.apiKeyLocation === "browser-local" || profile.apiKeyLocation === "not-configured") &&
+    (profile.assetStorage === "browser-cache" || profile.assetStorage === "lan-server" || profile.assetStorage === "cloud-bucket") &&
+    (profile.computeTarget === "browser" || profile.computeTarget === "lan-server" || profile.computeTarget === "cloud-worker") &&
+    typeof profile.meshCachePath === "string" &&
+    typeof profile.lanBaseUrl === "string" &&
+    typeof profile.cloudBaseUrl === "string" &&
+    typeof profile.allowExternalAssetLinks === "boolean"
+  );
+}
+
+function isDeploymentMode(mode: unknown): mode is DeploymentMode {
+  return mode === "local-only" || mode === "lan-proxy" || mode === "cloud-hybrid";
+}
+
 function isUserRole(role: unknown): role is UserRole {
   return role === "designer" || role === "process" || role === "operator" || role === "admin";
 }
@@ -381,6 +435,7 @@ export function App() {
   const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft>(defaultFeedbackDraft);
   const [projectProfile, setProjectProfile] = useState<ProjectProfile>(loadProjectProfile);
   const [projectArchives, setProjectArchives] = useState<ProjectArchive[]>(loadProjectArchives);
+  const [deploymentProfile, setDeploymentProfile] = useState<DeploymentProfile>(loadDeploymentProfile);
   const [exportGate, setExportGate] = useState<ExportGateState>({
     safetyReportReviewed: false,
     airRunVerified: false,
@@ -426,6 +481,7 @@ export function App() {
     () => createCostCalibrationReport(costEstimate, machineFeedback, selectedMachine.name, selectedTool.name),
     [costEstimate, machineFeedback, selectedMachine.name, selectedTool.name]
   );
+  const deploymentReadiness = useMemo(() => createDeploymentReadiness(deploymentProfile), [deploymentProfile]);
   const airRunProgram = useMemo(
     () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
     [settings, toolpath]
@@ -475,6 +531,10 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(PROJECT_ARCHIVE_STORAGE_KEY, JSON.stringify(projectArchives));
   }, [projectArchives]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DEPLOYMENT_PROFILE_STORAGE_KEY, JSON.stringify(deploymentProfile));
+  }, [deploymentProfile]);
 
   useEffect(() => {
     if (!aiMeshStlUrl) {
@@ -671,12 +731,25 @@ export function App() {
     setProjectProfile((current) => ({ ...current, [key]: value }));
   };
 
+  const updateDeploymentProfile = <K extends keyof DeploymentProfile>(key: K, value: DeploymentProfile[K]) => {
+    setDeploymentProfile((current) => ({ ...current, [key]: value }));
+  };
+
   const handleSaveProjectProfile = () => {
     recordTask({
       category: "process",
       status: "ok",
       title: "保存项目档案",
       detail: `${projectProfile.projectCode} / ${projectProfile.customerName} / ${formatUserRole(projectProfile.role)}`
+    });
+  };
+
+  const handleSaveDeploymentProfile = () => {
+    recordTask({
+      category: "process",
+      status: deploymentReadiness.level === "critical" ? "warning" : "ok",
+      title: "保存部署与安全方案",
+      detail: `${formatDeploymentMode(deploymentProfile.mode)} / ${formatApiKeyLocation(deploymentProfile.apiKeyLocation)} / ${formatComputeTarget(deploymentProfile.computeTarget)}`
     });
   };
 
@@ -957,6 +1030,7 @@ export function App() {
     const operatorNote = createOperatorPackageMarkdown(reportInput);
     const parameters = createPackageParameters({
       projectProfile,
+      deploymentProfile,
       settings,
       sourceLabel: generationLabel,
       aiMeshUrl,
@@ -2406,6 +2480,111 @@ export function App() {
           </>
         )}
 
+        {activeStage === "deployment" && (
+          <>
+            <section className="panel">
+              <div className="panel-title">
+                <Cloud size={18} />
+                <h2>部署模式</h2>
+              </div>
+              <p className="panel-note">定义 AI Key、客户素材、模型缓存和重计算任务放在哪里，避免把生产密钥或客户素材直接暴露到前端。</p>
+              <div className="deployment-mode-grid">
+                {(["local-only", "lan-proxy", "cloud-hybrid"] as const).map((mode) => (
+                  <button
+                    className={deploymentProfile.mode === mode ? "deployment-mode active" : "deployment-mode"}
+                    key={mode}
+                    type="button"
+                    onClick={() => updateDeploymentProfile("mode", mode)}
+                  >
+                    <strong>{formatDeploymentMode(mode)}</strong>
+                    <span>{getDeploymentModeHint(mode)}</span>
+                  </button>
+                ))}
+              </div>
+              <label className="select-row">
+                <span>API Key 存放</span>
+                <select value={deploymentProfile.apiKeyLocation} onChange={(event) => updateDeploymentProfile("apiKeyLocation", event.target.value as DeploymentProfile["apiKeyLocation"])}>
+                  <option value="server-env">后端 .env / 环境变量</option>
+                  <option value="browser-local">浏览器本地存储</option>
+                  <option value="not-configured">暂未配置</option>
+                </select>
+              </label>
+              <label className="select-row">
+                <span>素材/模型存储</span>
+                <select value={deploymentProfile.assetStorage} onChange={(event) => updateDeploymentProfile("assetStorage", event.target.value as DeploymentProfile["assetStorage"])}>
+                  <option value="browser-cache">仅浏览器缓存</option>
+                  <option value="lan-server">局域网服务器</option>
+                  <option value="cloud-bucket">云端对象存储</option>
+                </select>
+              </label>
+              <label className="select-row">
+                <span>重计算位置</span>
+                <select value={deploymentProfile.computeTarget} onChange={(event) => updateDeploymentProfile("computeTarget", event.target.value as DeploymentProfile["computeTarget"])}>
+                  <option value="browser">当前浏览器</option>
+                  <option value="lan-server">局域网服务器</option>
+                  <option value="cloud-worker">云端任务节点</option>
+                </select>
+              </label>
+              <label className="toggle-row deployment-toggle">
+                <input
+                  type="checkbox"
+                  checked={deploymentProfile.allowExternalAssetLinks}
+                  onChange={(event) => updateDeploymentProfile("allowExternalAssetLinks", event.target.checked)}
+                />
+                <span>允许加工包包含外部模型下载链接</span>
+              </label>
+              <button className="primary-action package-action" type="button" onClick={handleSaveDeploymentProfile}>
+                <Save size={17} />
+                保存部署方案
+              </button>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <KeyRound size={18} />
+                <h2>密钥与路径</h2>
+              </div>
+              <label className="field-control">
+                <span>局域网访问地址</span>
+                <input value={deploymentProfile.lanBaseUrl} onChange={(event) => updateDeploymentProfile("lanBaseUrl", event.target.value)} />
+              </label>
+              <label className="field-control">
+                <span>云端 API 地址</span>
+                <input value={deploymentProfile.cloudBaseUrl} onChange={(event) => updateDeploymentProfile("cloudBaseUrl", event.target.value)} placeholder="https://api.example.com" />
+              </label>
+              <label className="field-control">
+                <span>Mesh/刀路缓存目录</span>
+                <input value={deploymentProfile.meshCachePath} onChange={(event) => updateDeploymentProfile("meshCachePath", event.target.value)} />
+              </label>
+              <div className={`deployment-readiness ${deploymentReadiness.level}`}>
+                <strong>{deploymentReadiness.title}</strong>
+                <span>{deploymentReadiness.detail}</span>
+              </div>
+              <div className="deployment-checklist">
+                {deploymentReadiness.checks.map((check) => (
+                  <div className={check.status} key={check.label}>
+                    <span>{check.label}</span>
+                    <strong>{check.value}</strong>
+                    <small>{check.detail}</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <HardDrive size={18} />
+                <h2>落地建议</h2>
+              </div>
+              <div className="deployment-advice">
+                {deploymentReadiness.suggestions.map((suggestion) => (
+                  <p key={suggestion}>{suggestion}</p>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+
         {activeStage === "feedback" && (
           <>
             <section className="panel">
@@ -2897,6 +3076,95 @@ function getRolePermissionText(role: UserRole) {
   return "拥有完整项目、工艺、导出和反馈管理权限。";
 }
 
+function formatDeploymentMode(mode: DeploymentMode) {
+  if (mode === "local-only") return "纯本地单机";
+  if (mode === "lan-proxy") return "店内局域网";
+  return "云端混合";
+}
+
+function getDeploymentModeHint(mode: DeploymentMode) {
+  if (mode === "local-only") return "适合离线演示和轻量试算，AI Key 不应放前端。";
+  if (mode === "lan-proxy") return "推荐门店首版，前端访问局域网后端代理。";
+  return "适合多门店协作，重计算和素材归档走云端。";
+}
+
+function formatApiKeyLocation(location: DeploymentProfile["apiKeyLocation"]) {
+  if (location === "server-env") return "后端环境变量";
+  if (location === "browser-local") return "浏览器本地";
+  return "暂未配置";
+}
+
+function formatAssetStorage(storage: DeploymentProfile["assetStorage"]) {
+  if (storage === "browser-cache") return "浏览器缓存";
+  if (storage === "lan-server") return "局域网服务器";
+  return "云端对象存储";
+}
+
+function formatComputeTarget(target: DeploymentProfile["computeTarget"]) {
+  if (target === "browser") return "当前浏览器";
+  if (target === "lan-server") return "局域网服务器";
+  return "云端任务节点";
+}
+
+function createDeploymentReadiness(profile: DeploymentProfile) {
+  const checks = [
+    {
+      label: "API Key",
+      value: formatApiKeyLocation(profile.apiKeyLocation),
+      status: profile.apiKeyLocation === "server-env" ? "ok" : profile.apiKeyLocation === "not-configured" ? "critical" : "warning",
+      detail: profile.apiKeyLocation === "server-env"
+        ? "Meshy 等密钥由后端代理读取，前端和加工包不暴露密钥。"
+        : profile.apiKeyLocation === "browser-local"
+          ? "浏览器本地存储适合临时测试，不建议用于客户素材生产。"
+          : "AI 生成、修复和云端重计算会不可用。"
+    },
+    {
+      label: "素材存储",
+      value: formatAssetStorage(profile.assetStorage),
+      status: profile.assetStorage === "browser-cache" && profile.mode !== "local-only" ? "warning" : "ok",
+      detail: profile.assetStorage === "browser-cache"
+        ? "刷新或换电脑后素材追溯能力较弱。"
+        : "素材和生成模型可以随项目归档，便于复盘。"
+    },
+    {
+      label: "重计算",
+      value: formatComputeTarget(profile.computeTarget),
+      status: profile.computeTarget === "browser" && profile.mode !== "local-only" ? "warning" : "ok",
+      detail: profile.computeTarget === "browser"
+        ? "高精度仿真和批量任务可能卡住页面。"
+        : "长任务可进入后端队列，适合 Mesh 修复、CAM 和仿真。"
+    },
+    {
+      label: "访问地址",
+      value: profile.mode === "cloud-hybrid" ? profile.cloudBaseUrl || "未填写" : profile.lanBaseUrl || "未填写",
+      status: (profile.mode === "cloud-hybrid" ? profile.cloudBaseUrl : profile.lanBaseUrl) ? "ok" : "critical",
+      detail: profile.mode === "local-only" ? "单机可直接访问本机服务。" : "操作员电脑需要能稳定访问该地址。"
+    }
+  ] as Array<{ label: string; value: string; status: "ok" | "warning" | "critical"; detail: string }>;
+
+  const criticalCount = checks.filter((check) => check.status === "critical").length;
+  const warningCount = checks.filter((check) => check.status === "warning").length;
+  const suggestions: string[] = [];
+  if (profile.apiKeyLocation !== "server-env") suggestions.push("生产环境建议把 Meshy Key 放在后端 `.env`，前端只调用 `/api/*` 代理接口。");
+  if (profile.mode === "lan-proxy") suggestions.push("门店首版推荐一台 Linux/Windows 小服务器运行前端和 API 代理，操作员通过局域网访问。");
+  if (profile.mode === "cloud-hybrid") suggestions.push("云端混合需要对象存储、任务队列和访问审计；客户素材应按项目隔离。");
+  if (profile.computeTarget === "browser") suggestions.push("高精度材料去除仿真、Mesh 修复和批量 CAM 建议迁移到后端任务队列。");
+  if (!profile.allowExternalAssetLinks) suggestions.push("加工包默认不放外部模型链接，适合保护客户素材；需要跨设备复核时可临时开启。");
+  if (suggestions.length === 0) suggestions.push("当前部署策略满足生产试用基线，可继续做局域网联调和权限审计。");
+
+  return {
+    level: criticalCount > 0 ? "critical" : warningCount > 0 ? "warning" : "ok",
+    title: criticalCount > 0 ? "部署方案存在阻断项" : warningCount > 0 ? "部署方案可试用但需复核" : "部署方案适合生产试用",
+    detail: criticalCount > 0
+      ? "请先补齐 API Key、访问地址或存储策略，再交给店内多人使用。"
+      : warningCount > 0
+        ? "可以继续本机测试，但正式处理客户素材前建议迁移到后端代理和可归档存储。"
+        : "密钥、素材、任务和访问地址均有明确归属。",
+    checks,
+    suggestions
+  };
+}
+
 function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: boolean, exportGateReady: boolean) {
   if (isOperatorMode && !exportGateReady) return "操作员模式：只能下载已通过安全校验并完成正式确认的文件";
   if (exportBlocked) return "导出前安全校验存在阻断项";
@@ -2936,6 +3204,7 @@ function dataUrlToUint8Array(dataUrl: string) {
 
 function createPackageParameters(input: {
   projectProfile: ProjectProfile;
+  deploymentProfile: DeploymentProfile;
   settings: ModelSettings;
   sourceLabel: string;
   aiMeshUrl: string | null;
@@ -2954,6 +3223,7 @@ function createPackageParameters(input: {
     packageVersion: "V2",
     createdAt: new Date().toISOString(),
     project: input.projectProfile,
+    deployment: input.deploymentProfile,
     source: {
       label: input.sourceLabel,
       aiMeshUrl: input.aiMeshUrl,
