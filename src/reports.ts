@@ -18,6 +18,19 @@ export type ManufacturingReportInput = {
   materialRemoval: MaterialRemovalReport | null;
   meshQuality: MeshQualityReport | null;
   costEstimate: CostEstimate | null;
+  machineAcceptance?: {
+    machineId: string;
+    machineName: string;
+    controller: MachineProfile["controller"];
+    updatedAt: string;
+    airRun: boolean;
+    airRunAt: string | null;
+    softTrial: boolean;
+    softTrialAt: string | null;
+    formalTrial: boolean;
+    formalTrialAt: string | null;
+    notes: string;
+  } | null;
 };
 
 export function createSafetyReport(input: ManufacturingReportInput) {
@@ -31,6 +44,7 @@ export function createSafetyReport(input: ManufacturingReportInput) {
       aiMeshStlUrl: input.aiMeshStlUrl
     },
     machine: input.machine,
+    machineAcceptance: input.machineAcceptance ?? null,
     tool: input.tool,
     material: input.material,
     settings: input.settings,
@@ -60,6 +74,18 @@ export function createSafetyReportMarkdown(input: ManufacturingReportInput) {
     `- 毛坯左/中/右直径：${input.settings.blankLeftDiameterMm.toFixed(1)} / ${input.settings.blankCenterDiameterMm.toFixed(1)} / ${input.settings.blankRightDiameterMm.toFixed(1)} mm`,
     `- 左/右夹持：${input.settings.leftHoldMm.toFixed(1)} / ${input.settings.rightHoldMm.toFixed(1)} mm`,
     `- 安全高度：${input.settings.safeZ.toFixed(2)} mm`,
+    "",
+    "## 机床验收",
+    "",
+    ...(input.machineAcceptance
+      ? [
+          `- 离料空跑：${input.machineAcceptance.airRun ? `已通过（${input.machineAcceptance.airRunAt ?? "未记录时间"}）` : "未记录"}`,
+          `- 软材料试雕：${input.machineAcceptance.softTrial ? `已通过（${input.machineAcceptance.softTrialAt ?? "未记录时间"}）` : "未记录"}`,
+          `- 正式材料试雕：${input.machineAcceptance.formalTrial ? `已通过（${input.machineAcceptance.formalTrialAt ?? "未记录时间"}）` : "未记录"}`,
+          `- 最近更新：${input.machineAcceptance.updatedAt || "未记录"}`,
+          input.machineAcceptance.notes ? `- 备注：${input.machineAcceptance.notes}` : "- 备注：无"
+        ]
+      : ["- 未记录当前机床验收信息。"]),
     "",
     "## 刀路范围",
     "",

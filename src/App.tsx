@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { BadgeInfo, Box, Calculator, Camera, Clock3, Cloud, Download, FileImage, Hammer, HardDrive, ImagePlus, KeyRound, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
+import { BadgeInfo, Box, Calculator, Camera, ClipboardCheck, Clock3, Cloud, Download, FileImage, Hammer, HardDrive, ImagePlus, KeyRound, Layers3, Library, Save, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { createAirRunProgram, generateToolpath, downloadText } from "./cam";
 import { createBlankDepthMap, createDemoDepthMap, createReliefGeometry } from "./geometry";
 import { assetUrlToDepthMap, blendDepthMaps, createMultiViewDepthMap, fileToDepthMap, processDepthMap } from "./imageProcessing";
@@ -208,6 +208,21 @@ type ExportGateState = {
   fixtureConfirmed: boolean;
 };
 
+type MachineAcceptanceStep = "airRun" | "softTrial" | "formalTrial";
+type MachineAcceptanceRecord = {
+  machineId: string;
+  machineName: string;
+  controller: MachineProfile["controller"];
+  updatedAt: string;
+  airRun: boolean;
+  airRunAt: string | null;
+  softTrial: boolean;
+  softTrialAt: string | null;
+  formalTrial: boolean;
+  formalTrialAt: string | null;
+  notes: string;
+};
+
 const toolpathColors = {
   rough: 0xd2451e,
   finish: 0x8b5cf6,
@@ -230,6 +245,7 @@ const MACHINE_FEEDBACK_STORAGE_KEY = "hediao3d.machineFeedback.v1";
 const PROJECT_PROFILE_STORAGE_KEY = "hediao3d.projectProfile.v1";
 const PROJECT_ARCHIVE_STORAGE_KEY = "hediao3d.projectArchive.v1";
 const DEPLOYMENT_PROFILE_STORAGE_KEY = "hediao3d.deploymentProfile.v1";
+const MACHINE_ACCEPTANCE_STORAGE_KEY = "hediao3d.machineAcceptance.v1";
 const defaultProjectProfile: ProjectProfile = {
   projectName: "核雕试雕项目",
   customerName: "默认客户",
@@ -311,6 +327,18 @@ function loadDeploymentProfile(): DeploymentProfile {
     return isDeploymentProfile(parsed) ? parsed : defaultDeploymentProfile;
   } catch {
     return defaultDeploymentProfile;
+  }
+}
+
+function loadMachineAcceptanceRecords(): MachineAcceptanceRecord[] {
+  try {
+    const raw = window.localStorage.getItem(MACHINE_ACCEPTANCE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isMachineAcceptanceRecord).slice(0, 32);
+  } catch {
+    return [];
   }
 }
 
@@ -400,6 +428,21 @@ function isDeploymentMode(mode: unknown): mode is DeploymentMode {
   return mode === "local-only" || mode === "lan-proxy" || mode === "cloud-hybrid";
 }
 
+function isMachineAcceptanceRecord(value: unknown): value is MachineAcceptanceRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<MachineAcceptanceRecord>;
+  return (
+    typeof record.machineId === "string" &&
+    typeof record.machineName === "string" &&
+    (record.controller === "generic" || record.controller === "weihong" || record.controller === "syntec") &&
+    typeof record.updatedAt === "string" &&
+    typeof record.airRun === "boolean" &&
+    typeof record.softTrial === "boolean" &&
+    typeof record.formalTrial === "boolean" &&
+    typeof record.notes === "string"
+  );
+}
+
 function isUserRole(role: unknown): role is UserRole {
   return role === "designer" || role === "process" || role === "operator" || role === "admin";
 }
@@ -436,6 +479,7 @@ export function App() {
   const [projectProfile, setProjectProfile] = useState<ProjectProfile>(loadProjectProfile);
   const [projectArchives, setProjectArchives] = useState<ProjectArchive[]>(loadProjectArchives);
   const [deploymentProfile, setDeploymentProfile] = useState<DeploymentProfile>(loadDeploymentProfile);
+  const [machineAcceptanceRecords, setMachineAcceptanceRecords] = useState<MachineAcceptanceRecord[]>(loadMachineAcceptanceRecords);
   const [exportGate, setExportGate] = useState<ExportGateState>({
     safetyReportReviewed: false,
     airRunVerified: false,
@@ -482,6 +526,11 @@ export function App() {
     [costEstimate, machineFeedback, selectedMachine.name, selectedTool.name]
   );
   const deploymentReadiness = useMemo(() => createDeploymentReadiness(deploymentProfile), [deploymentProfile]);
+  const selectedMachineAcceptance = useMemo(
+    () => getMachineAcceptanceRecord(machineAcceptanceRecords, selectedMachine),
+    [machineAcceptanceRecords, selectedMachine]
+  );
+  const machineAcceptanceStatus = useMemo(() => createMachineAcceptanceStatus(selectedMachineAcceptance), [selectedMachineAcceptance]);
   const airRunProgram = useMemo(
     () => (toolpath ? toolpath.programs?.airRun ?? createAirRunProgram(toolpath.programs?.combined?.points ?? toolpath.points, settings, toolpath.estimatedMinutes) : null),
     [settings, toolpath]
@@ -535,6 +584,10 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(DEPLOYMENT_PROFILE_STORAGE_KEY, JSON.stringify(deploymentProfile));
   }, [deploymentProfile]);
+
+  useEffect(() => {
+    window.localStorage.setItem(MACHINE_ACCEPTANCE_STORAGE_KEY, JSON.stringify(machineAcceptanceRecords));
+  }, [machineAcceptanceRecords]);
 
   useEffect(() => {
     if (!aiMeshStlUrl) {
@@ -750,6 +803,46 @@ export function App() {
       status: deploymentReadiness.level === "critical" ? "warning" : "ok",
       title: "保存部署与安全方案",
       detail: `${formatDeploymentMode(deploymentProfile.mode)} / ${formatApiKeyLocation(deploymentProfile.apiKeyLocation)} / ${formatComputeTarget(deploymentProfile.computeTarget)}`
+    });
+  };
+
+  const updateMachineAcceptance = (step: MachineAcceptanceStep, checked: boolean) => {
+    const now = new Date().toLocaleString("zh-CN", { hour12: false });
+    setMachineAcceptanceRecords((current) => {
+      const existing = getMachineAcceptanceRecord(current, selectedMachine);
+      const next: MachineAcceptanceRecord = {
+        ...existing,
+        machineName: selectedMachine.name,
+        controller: selectedMachine.controller,
+        updatedAt: now,
+        [step]: checked,
+        [`${step}At`]: checked ? now : null
+      };
+      return [next, ...current.filter((record) => record.machineId !== selectedMachine.id)].slice(0, 32);
+    });
+    if (step === "airRun") {
+      setExportGate((current) => ({ ...current, airRunVerified: checked }));
+    }
+    recordTask({
+      category: "cam",
+      status: checked ? "ok" : "warning",
+      title: `${selectedMachine.name}：${formatMachineAcceptanceStep(step)}${checked ? "通过" : "取消"}`,
+      detail: checked ? "该验收项已记录到当前机床 Profile。" : "该验收项已从当前机床 Profile 中移除。"
+    });
+  };
+
+  const updateMachineAcceptanceNotes = (notes: string) => {
+    const now = new Date().toLocaleString("zh-CN", { hour12: false });
+    setMachineAcceptanceRecords((current) => {
+      const existing = getMachineAcceptanceRecord(current, selectedMachine);
+      const next: MachineAcceptanceRecord = {
+        ...existing,
+        machineName: selectedMachine.name,
+        controller: selectedMachine.controller,
+        updatedAt: now,
+        notes
+      };
+      return [next, ...current.filter((record) => record.machineId !== selectedMachine.id)].slice(0, 32);
     });
   };
 
@@ -983,6 +1076,7 @@ export function App() {
       tool: selectedTool,
       material: selectedMaterial,
       machine: selectedMachine,
+      machineAcceptance: selectedMachineAcceptance,
       safetyIssues,
       manufacturingQuality,
       materialRemoval,
@@ -1031,6 +1125,7 @@ export function App() {
     const parameters = createPackageParameters({
       projectProfile,
       deploymentProfile,
+      machineAcceptance: selectedMachineAcceptance,
       settings,
       sourceLabel: generationLabel,
       aiMeshUrl,
@@ -2185,6 +2280,42 @@ export function App() {
         {activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
+              <ClipboardCheck size={18} />
+              <h2>机床验收记录</h2>
+            </div>
+            <p className="panel-note">按当前机床 Profile 记录空跑、软材料试雕和正式材料试雕。首次换机床或换后处理器时，应重新验收。</p>
+            <div className={`machine-acceptance-verdict ${machineAcceptanceStatus.level}`}>
+              <strong>{machineAcceptanceStatus.title}</strong>
+              <span>{machineAcceptanceStatus.detail}</span>
+            </div>
+            <div className="machine-acceptance-list">
+              {(["airRun", "softTrial", "formalTrial"] as const).map((step) => (
+                <label className={selectedMachineAcceptance[step] ? "checked" : ""} key={step}>
+                  <input
+                    type="checkbox"
+                    checked={selectedMachineAcceptance[step]}
+                    onChange={(event) => updateMachineAcceptance(step, event.target.checked)}
+                    disabled={!toolpath && step !== "airRun"}
+                  />
+                  <span>{formatMachineAcceptanceStep(step)}</span>
+                  <small>{getMachineAcceptanceStepTime(selectedMachineAcceptance, step) ?? "未记录"}</small>
+                </label>
+              ))}
+            </div>
+            <label className="field-control machine-acceptance-notes">
+              <span>验收备注</span>
+              <textarea
+                value={selectedMachineAcceptance.notes}
+                onChange={(event) => updateMachineAcceptanceNotes(event.target.value)}
+                placeholder="例如：A轴方向已确认；软材料树脂试雕无撞刀；正式橄榄核需降低进给 10%。"
+              />
+            </label>
+          </section>
+        )}
+
+        {activeStage === "cam" && (
+          <section className="panel">
+            <div className="panel-title">
               <BadgeInfo size={18} />
               <h2>加工质量体检</h2>
             </div>
@@ -3076,6 +3207,57 @@ function getRolePermissionText(role: UserRole) {
   return "拥有完整项目、工艺、导出和反馈管理权限。";
 }
 
+function createDefaultMachineAcceptanceRecord(machine: MachineProfile): MachineAcceptanceRecord {
+  return {
+    machineId: machine.id,
+    machineName: machine.name,
+    controller: machine.controller,
+    updatedAt: "",
+    airRun: false,
+    airRunAt: null,
+    softTrial: false,
+    softTrialAt: null,
+    formalTrial: false,
+    formalTrialAt: null,
+    notes: ""
+  };
+}
+
+function getMachineAcceptanceRecord(records: MachineAcceptanceRecord[], machine: MachineProfile) {
+  const found = records.find((record) => record.machineId === machine.id);
+  return found ? { ...createDefaultMachineAcceptanceRecord(machine), ...found, machineName: machine.name, controller: machine.controller } : createDefaultMachineAcceptanceRecord(machine);
+}
+
+function formatMachineAcceptanceStep(step: MachineAcceptanceStep) {
+  if (step === "airRun") return "离料空跑";
+  if (step === "softTrial") return "软材料试雕";
+  return "正式材料试雕";
+}
+
+function getMachineAcceptanceStepTime(record: MachineAcceptanceRecord, step: MachineAcceptanceStep) {
+  if (step === "airRun") return record.airRunAt;
+  if (step === "softTrial") return record.softTrialAt;
+  return record.formalTrialAt;
+}
+
+function createMachineAcceptanceStatus(record: MachineAcceptanceRecord) {
+  const passedCount = [record.airRun, record.softTrial, record.formalTrial].filter(Boolean).length;
+  const level: "ok" | "warning" | "critical" = record.airRun ? (record.softTrial ? "ok" : "warning") : "critical";
+  return {
+    level,
+    title: record.airRun
+      ? record.softTrial
+        ? record.formalTrial
+          ? "该机床已完成完整验收"
+          : "该机床已完成试雕验收"
+        : "该机床仅完成空跑验收"
+      : "该机床尚未记录空跑验收",
+    detail: record.airRun
+      ? `已完成 ${passedCount}/3 项；${record.updatedAt ? `最近更新 ${record.updatedAt}` : "建议在正式下载前补充软材料试雕记录。"}`
+      : "首次使用当前机床或后处理器时，请先下载空跑程序并在离料状态验证 X/Z/A 方向、限位和夹具距离。"
+  };
+}
+
 function formatDeploymentMode(mode: DeploymentMode) {
   if (mode === "local-only") return "纯本地单机";
   if (mode === "lan-proxy") return "店内局域网";
@@ -3205,6 +3387,7 @@ function dataUrlToUint8Array(dataUrl: string) {
 function createPackageParameters(input: {
   projectProfile: ProjectProfile;
   deploymentProfile: DeploymentProfile;
+  machineAcceptance: MachineAcceptanceRecord;
   settings: ModelSettings;
   sourceLabel: string;
   aiMeshUrl: string | null;
@@ -3224,6 +3407,7 @@ function createPackageParameters(input: {
     createdAt: new Date().toISOString(),
     project: input.projectProfile,
     deployment: input.deploymentProfile,
+    machineAcceptance: input.machineAcceptance,
     source: {
       label: input.sourceLabel,
       aiMeshUrl: input.aiMeshUrl,
@@ -3276,6 +3460,8 @@ function createPackageChecklist(
     "- [ ] `parameters.json` 已归档",
     "- [ ] `preview/simulation-result.png` 已查看",
     "- [ ] `nc/nuclear-carving-air-run.nc` 已先空跑",
+    `- [ ] 当前机床离料空跑验收：${input.machineAcceptance?.airRun ? "已记录" : "未记录"}`,
+    `- [ ] 当前机床软材料试雕：${input.machineAcceptance?.softTrial ? "已记录" : "建议补充"}`,
     "- [ ] 正式 NC/TAP/TXT 文件已按目标机床后处理确认",
     usesAiMesh ? "- [ ] `models/model-download-links.md` 中的 GLB/STL 已单独归档" : "- [ ] `models/source.stl` 已归档",
     "",
