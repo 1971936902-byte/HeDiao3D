@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -2182,6 +2182,10 @@ function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine)
 async function writeAdapterJobSpec(job, settings, extras = {}) {
   const jobSpec = createAdapterJobSpec(job, job.modelUrl, settings, job.workDir, job.requestedEngine);
   Object.assign(jobSpec, extras);
+  if (extras.camInputPlan?.selectedModelPath) {
+    jobSpec.modelPath = extras.camInputPlan.selectedModelPath;
+    jobSpec.modelUrl = extras.camInputPlan.selectedModelUrl ?? job.modelUrl;
+  }
   await writeFile(join(job.workDir, "job.json"), JSON.stringify(jobSpec, null, 2), "utf8");
 }
 
@@ -2350,6 +2354,7 @@ function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
   const required = repairPlan.status === "repair-required";
   const suggested = repairPlan.status === "review-required" || repairPlan.recommendedActions.some((action) => action.id !== "direct-cam" && action.priority !== "low");
   const sourceModelPath = localModelUrlToPath(job.modelUrl);
+  const importedRepair = importExternalRepairArtifact(job);
   const outputCandidates = createRepairOutputCandidates(job, sourceModelPath);
   const recommendedActions = repairPlan.recommendedActions.map((action) => ({
     id: action.id,
@@ -2362,7 +2367,12 @@ function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
 
   let status = "not-needed";
   let summary = "Mesh 质量满足 V3 小闭环要求，未执行自动修复。";
-  if (required && !autoRepairEnabled) {
+  if (importedRepair.imported) {
+    status = required ? "external-repair-imported" : "external-repair-available";
+    summary = required
+      ? "检测到外部修复 STL，已纳入 CAM 输入候选；正式生产前仍需复核修复后 Mesh 质量。"
+      : "检测到外部修复 STL，可作为 CAM 输入候选；当前源模型未强制要求修复。";
+  } else if (required && !autoRepairEnabled) {
     status = "manual-required";
     summary = "Mesh 需要修复，但自动修复未启用；请先执行 Meshy 修复/重网格后再生产上机。";
   } else if (required && autoRepairEnabled && !hasMeshyKey) {
@@ -2387,6 +2397,7 @@ function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
     sourceModelPath,
     selectedModelUrl: job.modelUrl,
     selectedModelPath: sourceModelPath,
+    importedRepair,
     outputs: outputCandidates,
     outputCandidates: Object.fromEntries(outputCandidates.map((candidate) => [candidate.id, candidate.path])),
     settings: {
@@ -2464,6 +2475,38 @@ function createRepairOutputCandidates(job, sourceModelPath) {
     ...candidate,
     selectedForCam: false
   }));
+}
+
+function importExternalRepairArtifact(job) {
+  const source = process.env.ORCHESTRATOR_REPAIRED_MODEL_PATH;
+  const sourcePath = source ? join(process.cwd(), source) : null;
+  const resolvedSource = source && existsSync(source) ? source : sourcePath && existsSync(sourcePath) ? sourcePath : null;
+  const targetPath = join(job.workDir, "repaired-model.stl");
+  if (!resolvedSource) {
+    return {
+      imported: false,
+      sourcePath: source ?? null,
+      targetPath,
+      reason: source ? "configured repair artifact path does not exist" : "ORCHESTRATOR_REPAIRED_MODEL_PATH not configured"
+    };
+  }
+  try {
+    copyFileSync(resolvedSource, targetPath);
+    return {
+      imported: true,
+      sourcePath: resolvedSource,
+      targetPath,
+      filename: "repaired-model.stl",
+      url: publicArtifactUrl(job.id, "repaired-model.stl")
+    };
+  } catch (error) {
+    return {
+      imported: false,
+      sourcePath: resolvedSource,
+      targetPath,
+      reason: error instanceof Error ? error.message : "failed to copy repaired model"
+    };
+  }
 }
 
 function pushRepairOutputArtifacts(job, repairExecution) {
@@ -2586,8 +2629,8 @@ function createCamInputPlan(job, meshQuality, repairPlan, repairExecution, setti
     selectedModelKind,
     sourceModelUrl: job.modelUrl,
     sourceModelPath,
-    selectedModelUrl: status === "blocked" ? null : modelSelection.selected?.url ?? job.modelUrl,
-    selectedModelPath: status === "blocked" ? null : modelSelection.selected?.path ?? sourceModelPath,
+    selectedModelUrl: status === "blocked" ? null : modelSelection.selectedModelUrl ?? job.modelUrl,
+    selectedModelPath: status === "blocked" ? null : modelSelection.selectedModelPath ?? sourceModelPath,
     modelSelection,
     preferredExternalEngine,
     adapterModelPolicy,
@@ -3137,9 +3180,13 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   const requiredActions = [];
   const simulationEvidence = createSimulationEvidence(simulationSummary);
 
-  if (repairPlan.status === "repair-required") {
+  const repairedCamInputSelected = camInputPlan?.modelSelection?.selectedModelRole && camInputPlan.modelSelection.selectedModelRole !== "source";
+  if (repairPlan.status === "repair-required" && !repairedCamInputSelected) {
     blockers.push("Mesh 质量需要修复，不能直接生成生产 NC。");
     requiredActions.push("先执行封孔、修非流形、删除退化面或 Meshy/Blender 重网格。");
+  } else if (repairPlan.status === "repair-required" && repairedCamInputSelected) {
+    warnings.push("源 Mesh 存在修复阻断项，但 CAM 已选择修复产物；正式生产前需重新体检修复后模型。");
+    requiredActions.push("对 repaired-model.stl 重新运行 Mesh 体检/外部 CAM 仿真，确认边界边和非流形风险已消除。");
   } else if (repairPlan.status === "review-required") {
     warnings.push("Mesh 质量需要人工复核。");
   }
