@@ -375,6 +375,12 @@ type V3OrchestratorJob = {
           engine: string;
           adapterStatus: string;
           summary: string;
+          evidenceQuality?: {
+            productionEvidenceEligible: boolean;
+            status: string;
+            missing?: string[];
+            summary?: string;
+          } | null;
         };
         checks: {
           fitRate: number;
@@ -635,6 +641,12 @@ type V3OrchestratorJob = {
             zMax?: number | null;
             estimatedMinutes?: number | null;
           };
+          evidenceQuality?: {
+            productionEvidenceEligible: boolean;
+            status: string;
+            missing?: string[];
+            summary?: string;
+          } | null;
         };
       };
     };
@@ -4528,8 +4540,12 @@ export function App() {
               {v3Job?.result?.summary.productionGate?.simulationEvidence && (
                 <small className={v3Job.result.summary.productionGate.simulationEvidence.productionUnlockEligible ? "v3-inline-ok" : v3Job.result.summary.productionGate.simulationEvidence.synthetic ? "v3-inline-warning" : "v3-inline-critical"}>
                   仿真证据：{v3Job.result.summary.productionGate.simulationEvidence.level}
+                  {v3Job.result.summary.productionGate.simulationEvidence.evidenceQuality?.status ? ` / ${v3Job.result.summary.productionGate.simulationEvidence.evidenceQuality.status}` : ""}
                   {" · "}
                   {v3Job.result.summary.productionGate.simulationEvidence.summary}
+                  {v3Job.result.summary.productionGate.simulationEvidence.evidenceQuality?.missing?.length
+                    ? ` · 缺失 ${v3Job.result.summary.productionGate.simulationEvidence.evidenceQuality.missing.join(", ")}`
+                    : ""}
                 </small>
               )}
               {v3Job?.result?.summary.postprocessProfile && (
@@ -6795,6 +6811,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
   const simulation = summary?.simulation;
   const camoticsAdapter = simulation?.camoticsAdapter;
+  const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
   const packageIndex = summary?.machiningPackageIndex;
   const externalCamRecipe = summary?.externalCamRecipe;
   const camEngineSelection = summary?.camEngineSelection;
@@ -6890,6 +6907,9 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `结果类型: ${camoticsAdapter?.synthetic ? "synthetic链路验证，不代表真实材料去除" : camoticsAdapter?.status === "completed" ? "CAMotics材料去除结果" : "无结果"}`,
     `结果文件: ${packageIndex?.camotics?.resultFile ?? camoticsAdapter?.resultArtifact ?? "-"}`,
     `运动行数: ${camoticsAdapter?.metrics?.motionLineCount ?? "-"}`,
+    `证据状态: ${camoticsEvidenceQuality?.status ?? "-"}`,
+    `生产证据资格: ${camoticsEvidenceQuality?.productionEvidenceEligible ? "是" : "否"}`,
+    `证据缺失项: ${camoticsEvidenceQuality?.missing?.length ? camoticsEvidenceQuality.missing.join(", ") : "无"}`,
     `说明: ${camoticsAdapter?.summary ?? packageIndex?.camotics?.limitation ?? "-"}`,
     "",
     "## 刀路摘要",

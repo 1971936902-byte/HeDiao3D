@@ -133,11 +133,14 @@ function writeCamoticsFixture(filePath) {
       motionLineCount: 18,
       zMin: -1.2,
       zMax: 22,
+      materialRemovedMm3: 6.3,
       fitRate: 99.0,
       missCount: 0,
       estimatedMinutes: 1.1
     },
     artifacts: {
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl",
       note: "Fixture validates Orchestrator ingestion of BlenderCAM external G-code."
     }
   }, null, 2));

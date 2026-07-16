@@ -123,11 +123,14 @@ function writeCamoticsFixture(filePath) {
       motionLineCount: 12,
       zMin: -1.2,
       zMax: 22,
+      materialRemovedMm3: 5.1,
       fitRate: 99.2,
       missCount: 0,
       estimatedMinutes: 0.8
     },
     artifacts: {
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl",
       note: "Fixture validates Orchestrator ingestion of FreeCAD external G-code."
     }
   }, null, 2));

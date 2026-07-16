@@ -178,11 +178,14 @@ function writeCamoticsFixture(filePath) {
       motionLineCount: 64,
       zMin: -1.2,
       zMax: 22,
+      materialRemovedMm3: 7.2,
       fitRate: 99.3,
       missCount: 0,
       estimatedMinutes: 1.8
     },
     artifacts: {
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl",
       note: "Fixture validates repaired model selection and external adapter handoff."
     }
   }, null, 2));

@@ -178,13 +178,14 @@ function writeCamoticsFixture(filePath) {
       motionLineCount: 42,
       zMin: -1.18,
       zMax: 22,
+      materialRemovedMm3: 4.6,
       fitRate: 99.1,
       missCount: 0,
       estimatedMinutes: 1.2
     },
     artifacts: {
-      screenshot: null,
-      materialMesh: null,
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl",
       note: "Fixture represents an externally produced CAMotics result; it validates import classification, not visual simulation fidelity."
     }
   }, null, 2));

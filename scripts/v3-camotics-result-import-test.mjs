@@ -96,6 +96,8 @@ assert(result.schema === "hediao3d.camotics-result.v1", "result schema mismatch"
 assert(result.synthetic === false, "imported result must remain non-synthetic");
 assert(result.importedFrom === importedPath, "imported result should record source path");
 assert(result.metrics?.materialRemovedMm3 === 1.2, "imported metrics were not preserved");
+assert(result.evidenceQuality?.productionEvidenceEligible === true, "complete imported CAMotics evidence should be production eligible");
+assert(result.evidenceQuality?.status === "complete", `evidence quality should be complete, got ${result.evidenceQuality?.status}`);
 
 const contract = {
   schema: "hediao3d.camotics-import-contract.v1",
@@ -109,7 +111,7 @@ const contract = {
   synthetic: result.synthetic,
   riskLevel: result.riskLevel,
   materialRemovedMm3: result.metrics.materialRemovedMm3,
-  productionEvidenceEligible: result.synthetic === false && result.status === "completed"
+  productionEvidenceEligible: result.evidenceQuality.productionEvidenceEligible
 };
 copyFileSync(resultPath, contract.adapterReport);
 copyFileSync(join(workDir, "camotics-result.json"), contract.camoticsResult);

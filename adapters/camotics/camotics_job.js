@@ -266,6 +266,7 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
       error: `Imported CAMotics result failed validation: ${validationErrors.join("; ")}`
     };
   }
+  const evidenceQuality = evaluateCamoticsEvidence(imported);
   const result = {
     ...imported,
     jobId: imported.jobId ?? adapterJob.jobId ?? null,
@@ -273,6 +274,7 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
     synthetic: false,
     importedFrom: sourcePath,
     importedAt: new Date().toISOString(),
+    evidenceQuality,
     inputs: {
       ...(imported.inputs ?? {}),
       preferredGcode: imported.inputs?.preferredGcode ?? simulationPlan.inputs.preferredGcode
@@ -299,6 +301,45 @@ function validateImportedCamoticsResult(result) {
   if (!result.metrics || typeof result.metrics !== "object") errors.push("metrics object is required");
   if (!result.summary) errors.push("summary is required");
   return errors;
+}
+
+function evaluateCamoticsEvidence(result) {
+  const metrics = result?.metrics ?? {};
+  const artifacts = result?.artifacts ?? {};
+  const checks = [
+    {
+      id: "materialRemovedMm3",
+      ok: Number.isFinite(Number(metrics.materialRemovedMm3)) && Number(metrics.materialRemovedMm3) >= 0,
+      message: "metrics.materialRemovedMm3 must be a non-negative number."
+    },
+    {
+      id: "zRange",
+      ok: Number.isFinite(Number(metrics.zMin)) && Number.isFinite(Number(metrics.zMax)) && Number(metrics.zMin) <= Number(metrics.zMax),
+      message: "metrics.zMin/zMax must be finite and ordered."
+    },
+    {
+      id: "visualOrMeshArtifact",
+      ok: nonEmptyString(artifacts.screenshot) || nonEmptyString(artifacts.materialMesh),
+      message: "artifacts.screenshot or artifacts.materialMesh is required for production evidence."
+    },
+    {
+      id: "riskReady",
+      ok: result?.riskLevel === "ready",
+      message: "riskLevel must be ready."
+    }
+  ];
+  const missing = checks.filter((check) => !check.ok).map((check) => check.id);
+
+  return {
+    schema: "hediao3d.camotics-evidence-quality.v1",
+    productionEvidenceEligible: missing.length === 0,
+    status: missing.length === 0 ? "complete" : "incomplete",
+    missing,
+    checks,
+    summary: missing.length === 0
+      ? "CAMotics result includes material volume, Z range and visual/material mesh evidence."
+      : `CAMotics result imported, but evidence is incomplete: ${missing.join(", ")}.`
+  };
 }
 
 function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {
@@ -352,6 +393,14 @@ function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {
       materialMesh: null,
       note: "Real CAMotics screenshot/material mesh extraction is still a deployment validation step."
     },
+    evidenceQuality: {
+      schema: "hediao3d.camotics-evidence-quality.v1",
+      productionEvidenceEligible: false,
+      status: "synthetic",
+      missing: ["real-camotics-run"],
+      checks: [],
+      summary: "Synthetic CAMotics result is not production evidence."
+    },
     detection
   };
   const outputPath = join(dir, "camotics-result.json");
@@ -371,4 +420,8 @@ function parseWord(line, word) {
 
 function isVFlat25(s) {
   return s.toolProfileId === "vflat-4mm-25deg" || s.toolProfileId === "vbit-flat-4mm-25deg";
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
 }

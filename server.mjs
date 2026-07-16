@@ -3349,21 +3349,29 @@ function createSimulationEvidence(simulationSummary) {
   const adapter = simulationSummary?.camoticsAdapter ?? null;
   const adapterCompleted = adapter?.status === "completed";
   const synthetic = Boolean(adapter?.synthetic) || simulationSummary?.engine === "camotics-synthetic";
-  const realMaterialRemovalVerified = simulationSummary?.engine === "camotics" && adapterCompleted && !synthetic;
+  const evidenceQuality = adapter?.evidenceQuality ?? null;
+  const evidenceComplete = evidenceQuality?.productionEvidenceEligible === true;
+  const realMaterialRemovalVerified = simulationSummary?.engine === "camotics" && adapterCompleted && !synthetic && evidenceComplete;
   const level = realMaterialRemovalVerified
     ? "material-removal-verified"
     : synthetic
       ? "handoff-only"
+      : simulationSummary?.engine === "camotics" && adapterCompleted
+        ? "material-removal-incomplete"
       : "preview-only";
   const summary = realMaterialRemovalVerified
     ? "CAMotics 已返回真实材料去除仿真结果，可作为生产门禁证据之一。"
     : synthetic
       ? "CAMotics synthetic 结果只验证 adapter 回填协议，不代表真实材料去除。"
+      : simulationSummary?.engine === "camotics" && adapterCompleted
+        ? `CAMotics 已返回结果，但证据不完整：${evidenceQuality?.summary ?? "缺少材料体积、Z范围或截图/材料网格。"}`
       : "当前只有内置旋转包裹/三轴预览摘要，不是 CAMotics 真实材料去除仿真。";
   const requiredActions = realMaterialRemovalVerified
     ? []
     : synthetic
       ? ["在 CAM 服务端安装并运行真实 CAMotics，替换 synthetic 回填结果后再申请生产 NC。"]
+      : simulationSummary?.engine === "camotics" && adapterCompleted
+        ? ["补齐 CAMotics 材料去除体积、Z范围以及截图或材料网格证据后，再申请生产 NC。"]
       : ["正式上机前用 CAMotics 或机床控制软件完成材料去除仿真。"];
 
   return {
@@ -3374,6 +3382,7 @@ function createSimulationEvidence(simulationSummary) {
     synthetic,
     engine: simulationSummary?.engine ?? "unknown",
     adapterStatus: adapter?.status ?? "missing",
+    evidenceQuality,
     resultArtifact: adapter?.resultArtifact ?? null,
     reportArtifact: adapter?.reportArtifact ?? null,
     summary,
@@ -4558,7 +4567,8 @@ function mergeCamoticsSimulationResult(internalSummary, camoticsAdapterReport, j
       resultArtifact: publicArtifactUrl(job.id, "camotics-result.json"),
       reportArtifact: publicArtifactUrl(job.id, "camotics-adapter-report.json"),
       summary: camoticsResult.summary ?? null,
-      metrics: camoticsResult.metrics ?? {}
+      metrics: camoticsResult.metrics ?? {},
+      evidenceQuality: camoticsResult.evidenceQuality ?? null
     }
   };
 }
