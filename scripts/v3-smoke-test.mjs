@@ -66,6 +66,7 @@ async function main() {
   assert(job.result?.summary?.points > 0, "job result has no toolpath points");
   assert(job.result?.summary?.productionGate?.level, "production gate missing");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
+  assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
 
   const requiredArtifacts = [
     "job.json",

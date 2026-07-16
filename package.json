@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:v3": "node scripts/v3-smoke-test.mjs",
-    "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs"
+    "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
+    "test:v3:postprocess": "node scripts/v3-postprocess-regression-test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
