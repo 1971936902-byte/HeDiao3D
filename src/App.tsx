@@ -626,6 +626,30 @@ type V3OrchestratorJob = {
         missingDownloadableCount: number;
         totalBytes: number;
       };
+      toolSetupSheet?: {
+        schema: string;
+        summary: string;
+        tool: {
+          toolProfileId: string | null;
+          name: string;
+          type: string;
+          diameterMm: number;
+          angleDeg: number | null;
+          flatTipMm: number | null;
+        };
+        cutting: {
+          spindleRpm: number;
+          feedRateMmMin: number;
+          maxCutDepthMm: number;
+          stepoverMm: number;
+          stepoverDeg: number;
+        };
+        checks: Array<{
+          id: string;
+          status: string;
+        }>;
+        warnings: string[];
+      };
       machineAcceptanceChecklist?: {
         schema: string;
         packageLevel: string;
@@ -4642,6 +4666,17 @@ export function App() {
                   缺失 {v3Job.result.summary.packageIntegrity.missingDownloadableCount}
                 </small>
               )}
+              {v3Job?.result?.summary.toolSetupSheet && (
+                <small className={v3Job.result.summary.toolSetupSheet.warnings.length > 0 ? "v3-inline-warning" : "v3-inline-ok"}>
+                  刀具核验：{v3Job.result.summary.toolSetupSheet.tool.name}
+                  {" · "}
+                  切深 {v3Job.result.summary.toolSetupSheet.cutting.maxCutDepthMm.toFixed(3)}mm
+                  {" · "}
+                  步距 {v3Job.result.summary.toolSetupSheet.cutting.stepoverMm.toFixed(3)}mm
+                  {" · "}
+                  复核 {v3Job.result.summary.toolSetupSheet.warnings.length}
+                </small>
+              )}
               {v3Job?.result?.summary.machineAcceptanceChecklist && (
                 <small className={v3Job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.blocksProduction) ? "v3-inline-warning" : "v3-inline-ok"}>
                   机床验收：{v3Job.result.summary.machineAcceptanceChecklist.summary}
@@ -6862,6 +6897,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
   const packageIndex = summary?.machiningPackageIndex;
   const packageIntegrity = summary?.packageIntegrity;
+  const toolSetupSheet = summary?.toolSetupSheet;
   const machineAcceptanceChecklist = summary?.machineAcceptanceChecklist;
   const machineAcceptanceSummary = packageIndex?.machineAcceptance;
   const externalCamRecipe = summary?.externalCamRecipe;
@@ -6896,6 +6932,15 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `文件数: ${packageIntegrity?.downloadableCount ?? "-"}/${packageIntegrity?.fileCount ?? "-"}`,
     `缺失可下载文件: ${packageIntegrity?.missingDownloadableCount ?? "-"}`,
     "完整性报告: package-integrity.json",
+    "",
+    "## 刀具核验",
+    "",
+    `刀具: ${toolSetupSheet?.tool?.name ?? "-"}`,
+    `几何: D${toolSetupSheet?.tool?.diameterMm ?? "-"} / ${toolSetupSheet?.tool?.angleDeg ? `${toolSetupSheet.tool.angleDeg}deg` : "-"} / 平底 ${toolSetupSheet?.tool?.flatTipMm ?? "-"}mm`,
+    `切深/步距: ${toolSetupSheet?.cutting?.maxCutDepthMm ?? "-"}mm / ${toolSetupSheet?.cutting?.stepoverMm ?? "-"}mm`,
+    `进给/转速: F${toolSetupSheet?.cutting?.feedRateMmMin ?? "-"} / S${toolSetupSheet?.cutting?.spindleRpm ?? "-"}`,
+    `复核项: ${toolSetupSheet?.warnings?.length ?? 0}`,
+    "刀具报告: tool-setup-sheet.json",
     "",
     "## 外部CAM状态",
     "",

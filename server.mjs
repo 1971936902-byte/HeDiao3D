@@ -2086,6 +2086,14 @@ async function processOrchestratorJob(job, settings) {
     resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
     productionGate
   });
+  const toolSetupSheet = createToolSetupSheet({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile
+  });
+  await writeFile(join(job.workDir, "tool-setup-sheet.json"), JSON.stringify(toolSetupSheet, null, 2), "utf8");
   const machineAcceptanceChecklist = createMachineAcceptanceChecklist({
     job,
     settings,
@@ -2124,6 +2132,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-acceptance-checklist.json"));
@@ -2163,6 +2172,7 @@ async function processOrchestratorJob(job, settings) {
       adapterPreflight,
       productionGate,
       postprocessProfile,
+      toolSetupSheet,
       camoticsInput,
       camoticsSimulationPlan,
       ncStaticAnalysis,
@@ -3409,6 +3419,110 @@ function createSimulationEvidence(simulationSummary) {
   };
 }
 
+function createToolSetupSheet({ job, settings, toolpath, productionGate, postprocessProfile }) {
+  const tool = describeTool(settings);
+  const isVFlat25 = settings.toolProfileId === "vflat-4mm-25deg" || settings.toolProfileId === "vbit-flat-4mm-25deg";
+  const toolDiameter = Number(settings.toolDiameter ?? 0);
+  const stepoverMm = Number(settings.stepoverMm ?? 0);
+  const stepoverDeg = Number(settings.stepoverDeg ?? 0);
+  const maxCutDepth = Number(settings.maxCutDepth ?? settings.depthMm ?? 0);
+  const depthMm = Number(settings.depthMm ?? 0);
+  const feedRate = Number(settings.feedRate ?? 0);
+  const spindleRpm = Number(settings.spindleRpm ?? 0);
+  const fluteLengthMm = isVFlat25 ? 12 : null;
+  const stickoutMm = isVFlat25 ? 18 : null;
+  const warnings = [];
+  const checks = [];
+
+  checks.push({
+    id: "tool-profile",
+    status: isVFlat25 ? "ready" : "review",
+    expected: "4mm 25deg flat-tip V-bit / 平底尖刀",
+    actual: tool.name,
+    note: isVFlat25 ? "已匹配 4mm 25度平底尖刀工艺配置。" : "当前不是项目指定的 4mm 25度平底尖刀，请确认机床装刀。"
+  });
+  checks.push({
+    id: "diameter",
+    status: Math.abs(toolDiameter - 4) <= 0.05 && isVFlat25 ? "ready" : "review",
+    expected: "4.000mm",
+    actual: `${fmt(toolDiameter, 3)}mm`,
+    note: "建议用卡尺复核刀具外径；后处理和 CAM 配方按该直径计算。"
+  });
+  checks.push({
+    id: "stepover",
+    status: stepoverMm > 0 && stepoverMm <= toolDiameter * 0.12 ? "ready" : stepoverMm <= toolDiameter * 0.18 ? "review" : "critical",
+    expected: `<= ${fmt(toolDiameter * 0.12, 3)}mm`,
+    actual: `${fmt(stepoverMm, 3)}mm`,
+    note: "平底尖刀步距过大时，佛头面部和衣纹会留下明显刀痕。"
+  });
+  checks.push({
+    id: "cut-depth",
+    status: maxCutDepth <= 0.45 ? "ready" : maxCutDepth <= 0.7 ? "review" : "critical",
+    expected: "<= 0.450mm",
+    actual: `${fmt(maxCutDepth, 3)}mm`,
+    note: "核雕材料和细刀尖建议保守下刀，首次试雕可再降低 30%-50%。"
+  });
+  checks.push({
+    id: "feed-spindle",
+    status: feedRate <= 450 && spindleRpm >= 10000 ? "ready" : "review",
+    expected: "F<=450mm/min, S>=10000rpm",
+    actual: `F${fmt(feedRate, 1)} / S${Math.round(spindleRpm)}`,
+    note: "低刚性小机床建议用倍率旋钮从 30%-50% 起步。"
+  });
+
+  if (!isVFlat25) warnings.push("当前刀具不是 4mm 25度平底尖刀，真实刀痕和清根能力会与项目预期不同。");
+  if (stepoverMm > toolDiameter * 0.18) warnings.push("步距相对 4mm 尖刀偏大，精加工表面可能有明显台阶。");
+  if (maxCutDepth > 0.45) warnings.push("单刀最大切深超过 0.45mm，建议先用废料验证刀具受力和夹具刚性。");
+  if (depthMm > 0 && maxCutDepth > depthMm) warnings.push("单刀最大切深大于目标深度，请检查 maxCutDepth/depthMm 参数。");
+
+  return {
+    schema: "hediao3d.tool-setup-sheet.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    summary: warnings.length === 0
+      ? "刀具参数与 4mm 25度平底尖刀试雕配置匹配。"
+      : `刀具核验存在 ${warnings.length} 个复核项。`,
+    tool: {
+      toolProfileId: settings.toolProfileId ?? null,
+      name: tool.name,
+      type: isVFlat25 ? "v-bit-flat-tip" : "custom",
+      diameterMm: toolDiameter,
+      angleDeg: isVFlat25 ? 25 : null,
+      flatTipMm: isVFlat25 ? 0.4 : null,
+      tipRadiusMm: isVFlat25 ? 0.2 : null,
+      fluteLengthMm,
+      stickoutMm
+    },
+    cutting: {
+      spindleRpm,
+      feedRateMmMin: feedRate,
+      safeZMm: Number(settings.safeZ ?? 0),
+      maxCutDepthMm: maxCutDepth,
+      targetDepthMm: depthMm,
+      stepoverMm,
+      stepoverDeg,
+      stockAllowanceMm: Number(settings.stockAllowance ?? 0),
+      estimatedMinutes: Number(toolpath.estimatedMinutes ?? 0),
+      pointCount: toolpath.points?.length ?? 0
+    },
+    machineContext: {
+      camMode: settings.camMode,
+      postProcessorName: postprocessProfile.postProcessorName,
+      rotaryOutputAxis: postprocessProfile.machine?.rotaryOutputAxis ?? null,
+      rotaryWrapPerRevolutionMm: postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? null
+    },
+    checks,
+    warnings,
+    setupProcedure: [
+      "确认实际装刀为 4mm 25度平底尖刀，刀尖平底约 0.4mm。",
+      "测量伸出长度，尽量短装；若伸出超过 18mm，降低进给和单刀切深。",
+      "运行 air-run.nc 前确认主轴关闭、Z 安全高度和旋转夹具方向。",
+      "首次试雕使用废料或低价值核胚，并把进给倍率降到 30%-50%。"
+    ]
+  };
+}
+
 function createMachineAcceptanceChecklist({ job, settings, toolpath, productionGate, postprocessProfile, simulationSummary, ncStaticAnalysis, machineControllerProfile, controllerDialectReport }) {
   const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
   const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
@@ -4249,6 +4363,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("production-gate.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
+        getFile("tool-setup-sheet.json"),
         getFile("machine-acceptance-checklist.json"),
         getFile("controller-dialect-report.json"),
         getFile("native-cam-readiness.json"),
@@ -4287,6 +4402,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
+      "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
       "按 machine-acceptance-checklist.json 完成操作员现场验收记录。",
       "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
       "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
@@ -4378,6 +4494,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
+    createDeliveryFile(job.id, "tool-setup-sheet.json", "刀具装夹与切削参数核验单", "report", true, "核验 4mm 25度平底尖刀、切深、步距、进给和主轴转速。"),
     createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
