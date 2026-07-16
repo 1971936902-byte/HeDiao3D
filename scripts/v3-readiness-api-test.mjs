@@ -28,6 +28,12 @@ async function main() {
   const markdown = await markdownArtifact.text();
   assert(markdown.includes("V3 Readiness Report"), "readiness markdown missing heading");
 
+  const runbookArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.runbook}`);
+  assert(runbookArtifact.ok, `readiness runbook artifact failed: ${runbookArtifact.status}`);
+  const runbook = await runbookArtifact.text();
+  assert(runbook.includes("HeDiao3D V3 deployment acceptance runbook"), "readiness runbook missing heading");
+  assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
+
   console.log(JSON.stringify({
     ok: true,
     reportId: report.id,
@@ -57,6 +63,7 @@ function validateReadiness(report, label) {
   assert(Array.isArray(report.gates.nextActions), `${label} gates.nextActions missing`);
   assert(report.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(report.apiArtifacts?.markdown, `${label} missing Markdown artifact`);
+  assert(report.apiArtifacts?.runbook, `${label} missing runbook artifact`);
 }
 
 async function getJson(path) {

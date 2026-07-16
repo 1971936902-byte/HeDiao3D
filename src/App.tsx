@@ -606,6 +606,7 @@ type V3AdapterValidationSummary = {
   apiArtifacts?: {
     json?: string;
     markdown?: string;
+    runbook?: string;
   };
 };
 
@@ -4017,6 +4018,11 @@ export function App() {
                     {v3Readiness.apiArtifacts?.markdown && (
                       <a href={v3Readiness.apiArtifacts.markdown} download>
                         下载总门禁报告
+                      </a>
+                    )}
+                    {v3Readiness.apiArtifacts?.runbook && (
+                      <a href={v3Readiness.apiArtifacts.runbook} download>
+                        下载验收脚本
                       </a>
                     )}
                   </div>

@@ -112,7 +112,7 @@ curl -X POST http://127.0.0.1:8787/api/orchestrator/readiness \
 curl http://127.0.0.1:8787/api/orchestrator/readiness/latest
 ```
 
-该报告会聚合 Orchestrator 自检、Native CAM 验收、Adapter 验证和最近一次 V3 任务的 `production-gate.json`，用于判断当前部署是 `trial-only`、`blocked` 还是 `production-ready`。报告中的 `acceptancePlan` 会按顺序列出部署验收步骤、命令、证据文件和是否阻断生产。
+该报告会聚合 Orchestrator 自检、Native CAM 验收、Adapter 验证和最近一次 V3 任务的 `production-gate.json`，用于判断当前部署是 `trial-only`、`blocked` 还是 `production-ready`。报告中的 `acceptancePlan` 会按顺序列出部署验收步骤、命令、证据文件和是否阻断生产，并额外生成 `v3-acceptance-runbook.sh`，可在服务器上执行验收检查。
 
 如果只是想生成报告但不阻断部署，可以直接运行上面的命令；如果希望 CI/上线脚本在未就绪时失败，可使用：
 

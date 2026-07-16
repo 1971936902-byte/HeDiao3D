@@ -478,6 +478,7 @@ async function createV3ReadinessReport(req, res) {
   const report = await buildV3ReadinessReport(reportId, outputRoot);
   await writeFile(join(outputRoot, "v3-readiness-report.json"), JSON.stringify(report, null, 2), "utf8");
   await writeFile(join(outputRoot, "v3-readiness-report.md"), createV3ReadinessMarkdown(report), "utf8");
+  await writeFile(join(outputRoot, "v3-acceptance-runbook.sh"), createV3AcceptanceRunbookShell(report), "utf8");
   return json(res, 200, createV3ReadinessPublicSummary(report, reportId));
 }
 
@@ -757,7 +758,8 @@ function createV3ReadinessPublicSummary(report, reportId) {
 function createV3ReadinessArtifactLinks(reportId) {
   return {
     json: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.json`,
-    markdown: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.md`
+    markdown: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.md`,
+    runbook: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-acceptance-runbook.sh`
   };
 }
 
@@ -832,6 +834,82 @@ function createV3ReadinessMarkdown(report) {
     ""
   ];
   return `${lines.join("\n")}\n`;
+}
+
+function createV3AcceptanceRunbookShell(report) {
+  const lines = [
+    "#!/usr/bin/env bash",
+    "set -u",
+    "",
+    "# HeDiao3D V3 deployment acceptance runbook",
+    `# Generated: ${report.createdAt}`,
+    `# Level: ${report.level}`,
+    "",
+    "ROOT_DIR=${ROOT_DIR:-$(pwd)}",
+    "API_BASE=${API_BASE:-http://127.0.0.1:8787}",
+    "cd \"$ROOT_DIR\"",
+    "",
+    "run_step() {",
+    "  local title=\"$1\"",
+    "  local command=\"$2\"",
+    "  echo",
+    "  echo \"==> ${title}\"",
+    "  echo \"    ${command}\"",
+    "  bash -lc \"${command}\"",
+    "  local code=$?",
+    "  if [ $code -ne 0 ]; then",
+    "    echo \"!! ${title} failed with exit code ${code}\"",
+    "  fi",
+    "  return $code",
+    "}",
+    "",
+    "echo \"HeDiao3D V3 acceptance runbook\"",
+    "echo \"ROOT_DIR=${ROOT_DIR}\"",
+    "echo \"API_BASE=${API_BASE}\"",
+    "echo \"This script only runs checks; it does not enable production switches.\"",
+    "",
+    "overall=0"
+  ];
+  for (const step of report.acceptancePlan?.steps ?? []) {
+    const command = normalizeAcceptanceShellCommand(step.command);
+    lines.push(
+      "",
+      `# ${step.order}. ${step.title}`,
+      `# Status at report time: ${step.status}`,
+      `# Evidence: ${step.evidence.join(", ")}`,
+      `# Detail: ${step.detail}`,
+      `run_step ${shellQuote(step.title)} ${shellQuote(command)} || overall=1`
+    );
+  }
+  lines.push(
+    "",
+    "echo",
+    "echo \"Acceptance evidence to review:\"",
+    "echo \"- public/orchestrator-readiness/*/v3-readiness-report.json\"",
+    "echo \"- public/native-cam-readiness/*/native-cam-readiness.json\"",
+    "echo \"- public/orchestrator-adapter-validation/*/v3-external-adapter-validation.json\"",
+    "echo \"- public/orchestrator-jobs/*/production-gate.json\"",
+    "echo",
+    "if [ $overall -ne 0 ]; then",
+    "  echo \"V3 acceptance checks completed with failures. Keep production NC locked.\"",
+    "else",
+    "  echo \"V3 acceptance checks executed. Review readiness reports before enabling production NC.\"",
+    "fi",
+    "exit $overall",
+    ""
+  );
+  return lines.join("\n");
+}
+
+function normalizeAcceptanceShellCommand(command) {
+  if (!command) return "true";
+  return command
+    .replaceAll("http://127.0.0.1:8787", "${API_BASE}")
+    .replace("curl ${API_BASE}", "curl -fsS ${API_BASE}");
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
 async function runAdapterValidation(req, res) {
