@@ -99,6 +99,11 @@ async function main() {
   assert(repairExecution.status === "external-repair-imported", `repair execution should import external STL, got ${repairExecution.status}`);
   assert(repairExecution.importedRepair?.imported === true, "repair execution should record imported repair artifact");
   assert(repairExecution.outputs?.some((candidate) => candidate.id === "repairedStl" && candidate.exists), "repaired STL candidate should exist");
+  assert(repairExecution.repairedMeshQuality?.verdict === "ready", `repaired mesh should be ready, got ${repairExecution.repairedMeshQuality?.verdict}`);
+
+  const repairedQuality = await getArtifactJson(job.id, "repaired-mesh-quality.json");
+  assert(repairedQuality.verdict === "ready", `repaired mesh quality artifact should be ready, got ${repairedQuality.verdict}`);
+  assert(repairedQuality.boundaryEdges === 0, "repaired mesh should not have boundary edges");
 
   const camInputPlan = await getArtifactJson(job.id, "cam-input-plan.json");
   assert(camInputPlan.status === "review", `repaired source should enter review, got ${camInputPlan.status}`);
@@ -121,12 +126,19 @@ async function main() {
   assert(productionGate.allowProductionNc === false, "unverified repaired STL must not unlock production NC");
   assert((productionGate.warnings ?? []).some((item) => /修复产物|修复后模型|repaired/i.test(item)), "production gate should warn about repaired model verification");
 
+  const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
+  assert(packageIndex.filesByPurpose?.reports?.some((file) => file.filename === "repaired-mesh-quality.json"), "package index should include repaired mesh quality report");
+
+  const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
+  assert(deliveryManifest.files?.some((file) => file.filename === "repaired-mesh-quality.json" && file.downloadable), "delivery manifest should expose repaired mesh quality report");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
     sourceVerdict: meshQuality.verdict,
     boundaryEdges: meshQuality.boundaryEdges,
     repairStatus: repairExecution.status,
+    repairedVerdict: repairedQuality.verdict,
     selectedModel: camInputPlan.modelSelection.selectedModelId,
     resultEngine: job.result.engine,
     trial: productionGate.allowTrialNc,

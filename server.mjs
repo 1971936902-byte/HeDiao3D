@@ -1917,6 +1917,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "mesh-quality", meshQuality.verdict === "ready" ? "completed" : "review", `Mesh 评分 ${meshQuality.score.toFixed(1)}，结论 ${meshQuality.verdict}。`);
   appendOrchestratorLog(job, `Mesh 体检完成：评分 ${meshQuality.score.toFixed(1)}，${repairPlan.statusText}`);
   const repairExecution = createRepairExecutionReport(job, meshQuality, repairPlan, settings);
+  await attachRepairedMeshQuality(job, repairExecution);
   await writeFile(join(job.workDir, "repair-execution.json"), JSON.stringify(repairExecution, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-execution.json"));
   pushRepairOutputArtifacts(job, repairExecution);
@@ -2067,6 +2068,7 @@ async function processOrchestratorJob(job, settings) {
     resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
     meshQuality,
     repairPlan,
+    repairExecution,
     camInputPlan,
     engineReadiness,
     nativeCamReadiness,
@@ -2240,9 +2242,15 @@ function checkOrchestratorCancellation(job) {
 }
 
 async function createMeshQualityArtifact(job) {
+  const meshQuality = await createMeshQualityReportForPath(localModelUrlToPath(job.modelUrl));
+  await writeFile(join(job.workDir, "mesh-quality.json"), JSON.stringify(meshQuality, null, 2), "utf8");
+  return meshQuality;
+}
+
+async function createMeshQualityReportForPath(modelPath) {
   let geometry;
   try {
-    geometry = await loadModelGeometry(localModelUrlToPath(job.modelUrl));
+    geometry = await loadModelGeometry(modelPath);
     if (geometry.index) {
       const nonIndexed = geometry.toNonIndexed();
       geometry.dispose();
@@ -2251,9 +2259,7 @@ async function createMeshQualityArtifact(job) {
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     geometry.computeVertexNormals();
-    const meshQuality = buildMeshQualityReport(geometry);
-    await writeFile(join(job.workDir, "mesh-quality.json"), JSON.stringify(meshQuality, null, 2), "utf8");
-    return meshQuality;
+    return buildMeshQualityReport(geometry);
   } finally {
     geometry?.dispose?.();
   }
@@ -2509,7 +2515,32 @@ function importExternalRepairArtifact(job) {
   }
 }
 
+async function attachRepairedMeshQuality(job, repairExecution) {
+  const repaired = repairExecution?.outputs?.find((output) => output.id === "repairedStl" && output.exists);
+  if (!repaired?.path) return;
+  try {
+    const quality = await createMeshQualityReportForPath(repaired.path);
+    repairExecution.repairedMeshQuality = {
+      ...quality,
+      artifact: publicArtifactUrl(job.id, "repaired-mesh-quality.json"),
+      modelPath: repaired.path,
+      modelUrl: repaired.url ?? null
+    };
+    await writeFile(join(job.workDir, "repaired-mesh-quality.json"), JSON.stringify(repairExecution.repairedMeshQuality, null, 2), "utf8");
+  } catch (error) {
+    repairExecution.repairedMeshQuality = {
+      error: error instanceof Error ? error.message : "failed to inspect repaired mesh",
+      artifact: null,
+      modelPath: repaired.path,
+      modelUrl: repaired.url ?? null
+    };
+  }
+}
+
 function pushRepairOutputArtifacts(job, repairExecution) {
+  if (repairExecution?.repairedMeshQuality?.artifact) {
+    pushUnique(job.artifacts, repairExecution.repairedMeshQuality.artifact);
+  }
   for (const output of repairExecution?.outputs ?? []) {
     if (!output?.filename || !output.exists) continue;
     pushUnique(job.artifacts, publicArtifactUrl(job.id, output.filename));
@@ -3174,7 +3205,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, ncStaticAnalysis, controllerDialectReport }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, ncStaticAnalysis, controllerDialectReport }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -3185,8 +3216,13 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
     blockers.push("Mesh 质量需要修复，不能直接生成生产 NC。");
     requiredActions.push("先执行封孔、修非流形、删除退化面或 Meshy/Blender 重网格。");
   } else if (repairPlan.status === "repair-required" && repairedCamInputSelected) {
-    warnings.push("源 Mesh 存在修复阻断项，但 CAM 已选择修复产物；正式生产前需重新体检修复后模型。");
-    requiredActions.push("对 repaired-model.stl 重新运行 Mesh 体检/外部 CAM 仿真，确认边界边和非流形风险已消除。");
+    const repairedQuality = repairExecution?.repairedMeshQuality;
+    if (repairedQuality?.verdict === "ready") {
+      warnings.push("源 Mesh 存在修复阻断项；修复产物 Mesh 体检已通过，但生产前仍需真实外部 CAM 和材料去除仿真。");
+    } else {
+      warnings.push("源 Mesh 存在修复阻断项，CAM 已选择修复产物；修复后模型尚未通过 ready 体检。");
+      requiredActions.push("查看 repaired-mesh-quality.json，确认边界边、非流形和退化面风险已消除。");
+    }
   } else if (repairPlan.status === "review-required") {
     warnings.push("Mesh 质量需要人工复核。");
   }
@@ -4168,6 +4204,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "mesh-quality.json", "Mesh 质量报告", "report", true, "上机前必须查看模型风险。"),
     createDeliveryFile(job.id, "repair-plan.json", "Mesh 修复计划", "report", true, "说明是否需要封孔、降面、重网格。"),
     createDeliveryFile(job.id, "repair-execution.json", "Mesh 修复执行记录", "report", true, "说明是否自动修复、为何跳过以及下一步修复动作。"),
+    createDeliveryFile(job.id, "repaired-mesh-quality.json", "修复后 Mesh 质量报告", "report", existsSync(join(job.workDir, "repaired-mesh-quality.json")), "当存在修复产物时，复核 repaired-model.stl 的封闭性、非流形和退化面。"),
     createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
     createDeliveryFile(job.id, "cam-engine-selection.json", "CAM 引擎选择报告", "report", true, "说明当前为何选择 FreeCAD/BlenderCAM/OpenCAMLib 或降级到内置 fallback。"),
     createDeliveryFile(job.id, "external-cam-recipe.json", "外部CAM作业配方", "report", true, "统一描述 FreeCAD/BlenderCAM/OpenCAMLib 所需模型、毛坯、刀具、工序、后处理和仿真要求。"),
