@@ -1711,7 +1711,7 @@ async function processOrchestratorJob(job, settings) {
   checkOrchestratorCancellation(job);
 
   updatePipelineStage(job, "cam-input", "running", "正在准备外部 CAM 输入模型和预处理策略。");
-  const camInputPlan = createCamInputPlan(job, meshQuality, repairPlan, settings);
+  const camInputPlan = createCamInputPlan(job, meshQuality, repairPlan, repairExecution, settings);
   await writeFile(join(job.workDir, "cam-input-plan.json"), JSON.stringify(camInputPlan, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-input-plan.json"));
   updatePipelineStage(job, "cam-input", camInputPlan.status === "blocked" ? "review" : "completed", camInputPlan.summary);
@@ -2124,6 +2124,7 @@ function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
   const required = repairPlan.status === "repair-required";
   const suggested = repairPlan.status === "review-required" || repairPlan.recommendedActions.some((action) => action.id !== "direct-cam" && action.priority !== "low");
   const sourceModelPath = localModelUrlToPath(job.modelUrl);
+  const outputCandidates = createRepairOutputCandidates(job, sourceModelPath);
   const recommendedActions = repairPlan.recommendedActions.map((action) => ({
     id: action.id,
     label: action.label,
@@ -2160,11 +2161,8 @@ function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
     sourceModelPath,
     selectedModelUrl: job.modelUrl,
     selectedModelPath: sourceModelPath,
-    outputCandidates: {
-      repairedStl: join(job.workDir, "repaired-model.stl"),
-      remeshedGlb: join(job.workDir, "remeshed-model.glb"),
-      camDecimatedStl: join(job.workDir, "cam-decimated-model.stl")
-    },
+    outputs: outputCandidates,
+    outputCandidates: Object.fromEntries(outputCandidates.map((candidate) => [candidate.id, candidate.path])),
     settings: {
       camMode: settings.camMode,
       rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
@@ -2183,6 +2181,63 @@ function createRepairExecutionReport(job, meshQuality, repairPlan, settings) {
     recommendedActions,
     nextSteps: createRepairExecutionNextSteps(status)
   };
+}
+
+function createRepairOutputCandidates(job, sourceModelPath) {
+  const candidates = [
+    {
+      id: "source",
+      role: "source",
+      label: "原始导入模型",
+      filename: null,
+      path: sourceModelPath,
+      url: job.modelUrl,
+      exists: existsSync(sourceModelPath),
+      priority: 0,
+      productionEligible: true,
+      note: "未执行自动修复时的默认 CAM 输入。"
+    },
+    {
+      id: "repairedStl",
+      role: "mesh-heal",
+      label: "封孔/修非流形后的 STL",
+      filename: "repaired-model.stl",
+      path: join(job.workDir, "repaired-model.stl"),
+      url: publicArtifactUrl(job.id, "repaired-model.stl"),
+      exists: existsSync(join(job.workDir, "repaired-model.stl")),
+      priority: 30,
+      productionEligible: true,
+      note: "用于边界边、非流形边修复后的外部 CAM 输入。"
+    },
+    {
+      id: "remeshedGlb",
+      role: "remesh",
+      label: "重网格后的 GLB",
+      filename: "remeshed-model.glb",
+      path: join(job.workDir, "remeshed-model.glb"),
+      url: publicArtifactUrl(job.id, "remeshed-model.glb"),
+      exists: existsSync(join(job.workDir, "remeshed-model.glb")),
+      priority: 20,
+      productionEligible: true,
+      note: "用于 Meshy/Blender 重网格后的高质量曲面输入。"
+    },
+    {
+      id: "camDecimatedStl",
+      role: "cam-decimation",
+      label: "CAM 降面 STL",
+      filename: "cam-decimated-model.stl",
+      path: join(job.workDir, "cam-decimated-model.stl"),
+      url: publicArtifactUrl(job.id, "cam-decimated-model.stl"),
+      exists: existsSync(join(job.workDir, "cam-decimated-model.stl")),
+      priority: 10,
+      productionEligible: true,
+      note: "用于高面数模型的外部 CAM 加速输入。"
+    }
+  ];
+  return candidates.map((candidate) => ({
+    ...candidate,
+    selectedForCam: false
+  }));
 }
 
 function createRepairExecutionNextSteps(status) {
@@ -2220,13 +2275,14 @@ function createRepairExecutionNextSteps(status) {
   ];
 }
 
-function createCamInputPlan(job, meshQuality, repairPlan, settings) {
+function createCamInputPlan(job, meshQuality, repairPlan, repairExecution, settings) {
   const needsRepair = repairPlan.status === "repair-required";
   const needsReview = repairPlan.status === "review-required";
   const highPoly = meshQuality.triangleCount > 180000;
   const veryHighPoly = meshQuality.triangleCount > 500000;
   const thinOrOpen = meshQuality.boundaryEdges > 0 || meshQuality.nonManifoldEdges > 0;
   const sourceModelPath = localModelUrlToPath(job.modelUrl);
+  const modelSelection = createCamInputModelSelection(job, repairPlan, repairExecution, sourceModelPath);
   const preferredExternalEngine = settings.camMode === "3axis" ? "freecad" : "blendercam";
   const adapterModelPolicy = settings.camMode === "rotaryWrap"
     ? "unwrap-rotary-surface-heightfield"
@@ -2272,9 +2328,15 @@ function createCamInputPlan(job, meshQuality, repairPlan, settings) {
     });
   }
 
-  const status = needsRepair ? "blocked" : needsReview || highPoly ? "review" : "ready";
+  const status = modelSelection.blockingReason
+    ? "blocked"
+    : needsReview || highPoly || (needsRepair && modelSelection.selectedModelRole !== "source")
+      ? "review"
+      : "ready";
   const selectedModelKind = status === "blocked"
     ? "requires-repaired-model"
+    : modelSelection.selectedModelRole && modelSelection.selectedModelRole !== "source"
+      ? `repaired-${modelSelection.selectedModelRole}`
     : highPoly
       ? "source-model-with-decimation-recommended"
       : "source-model";
@@ -2285,13 +2347,15 @@ function createCamInputPlan(job, meshQuality, repairPlan, settings) {
       : "当前模型可作为 CAM 输入进入小闭环。";
 
   return {
+    schema: "hediao3d.cam-input-plan.v1",
     status,
     summary,
     selectedModelKind,
     sourceModelUrl: job.modelUrl,
     sourceModelPath,
-    selectedModelUrl: status === "blocked" ? null : job.modelUrl,
-    selectedModelPath: status === "blocked" ? null : sourceModelPath,
+    selectedModelUrl: status === "blocked" ? null : modelSelection.selected?.url ?? job.modelUrl,
+    selectedModelPath: status === "blocked" ? null : modelSelection.selected?.path ?? sourceModelPath,
+    modelSelection,
     preferredExternalEngine,
     adapterModelPolicy,
     camMode: settings.camMode,
@@ -2301,8 +2365,50 @@ function createCamInputPlan(job, meshQuality, repairPlan, settings) {
       allowInternalFallback: true,
       allowExternalCamTrial: status !== "blocked",
       allowProductionNc: status === "ready",
-      reason: summary
+      reason: modelSelection.blockingReason ?? summary
     }
+  };
+}
+
+function createCamInputModelSelection(job, repairPlan, repairExecution, sourceModelPath) {
+  const candidates = Array.isArray(repairExecution?.outputs) && repairExecution.outputs.length > 0
+    ? repairExecution.outputs
+    : createRepairOutputCandidates(job, sourceModelPath);
+  const sorted = candidates
+    .map((candidate) => ({ ...candidate, selectedForCam: false }))
+    .sort((a, b) => {
+      if (a.exists !== b.exists) return a.exists ? -1 : 1;
+      return Number(b.priority ?? 0) - Number(a.priority ?? 0);
+    });
+  const repairedCandidate = sorted.find((candidate) => candidate.exists && candidate.role !== "source") ?? null;
+  const sourceCandidate = sorted.find((candidate) => candidate.role === "source") ?? sorted.find((candidate) => candidate.exists) ?? null;
+  const selected = repairedCandidate ?? sourceCandidate;
+  const blockedByMissingRepair = repairPlan.status === "repair-required" && !repairedCandidate;
+  const blockingReason = blockedByMissingRepair
+    ? "模型存在生产级 Mesh 阻断项，且没有可用的修复/重网格 CAM 输入模型。"
+    : null;
+  const selectionReason = repairedCandidate
+    ? `选择 ${repairedCandidate.label} 作为外部 CAM 输入。`
+    : sourceCandidate
+      ? "未发现修复产物，选择原始模型作为试算 CAM 输入。"
+      : "未找到可用 CAM 输入模型。";
+  const selectedCandidates = sorted.map((candidate) => ({
+    ...candidate,
+    selectedForCam: Boolean(selected && candidate.id === selected.id)
+  }));
+
+  return {
+    schema: "hediao3d.cam-input-model-selection.v1",
+    status: blockedByMissingRepair ? "blocked-missing-repair-output" : selected ? "selected" : "blocked-missing-model",
+    selectedModelId: selected?.id ?? null,
+    selectedModelUrl: selected?.url ?? null,
+    selectedModelPath: selected?.path ?? null,
+    selectedModelRole: selected?.role ?? null,
+    repairExecutionStatus: repairExecution?.status ?? null,
+    repairRequired: repairPlan.status === "repair-required",
+    blockingReason,
+    selectionReason,
+    candidates: selectedCandidates
   };
 }
 
@@ -2353,7 +2459,9 @@ function createExternalCamRecipe({ job, settings, camInputPlan, meshQuality, rep
         nonManifoldEdges: meshQuality.nonManifoldEdges,
         degenerateFaces: meshQuality.degenerateFaces
       },
-      repairStatus: repairPlan.status
+      repairStatus: repairPlan.status,
+      modelSelection: camInputPlan.modelSelection ?? null,
+      preprocessing: camInputPlan.preprocessing ?? []
     },
     stock: {
       type: rotaryMode ? "rotary-olive-core-unwrapped-stock" : "rectangular-relief-stock",

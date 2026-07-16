@@ -70,6 +70,9 @@ async function main() {
   assert(job.result?.summary?.nativeCamReadiness?.schema === "hediao3d.native-cam-readiness.v1", "native CAM readiness report missing");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
   assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
+  assert(job.result?.summary?.camInputPlan?.schema === "hediao3d.cam-input-plan.v1", "CAM input plan schema missing");
+  assert(job.result?.summary?.camInputPlan?.modelSelection?.schema === "hediao3d.cam-input-model-selection.v1", "CAM input model selection missing");
+  assert(job.result?.summary?.camInputPlan?.modelSelection?.selectedModelId, "CAM input model selection did not select a model");
 
   const requiredArtifacts = [
     "job.json",
@@ -106,6 +109,12 @@ async function main() {
     assert(bytes.byteLength > 0, `artifact ${filename} is empty`);
   }
 
+  const camInputPlan = await getArtifactJson(job.id, "cam-input-plan.json");
+  assert(camInputPlan.modelSelection?.selectedModelPath === camInputPlan.selectedModelPath, "CAM input selected path mismatch");
+  assert(camInputPlan.modelSelection?.candidates?.some((candidate) => candidate.selectedForCam), "CAM input model candidates missing selectedForCam");
+  const externalCamRecipe = await getArtifactJson(job.id, "external-cam-recipe.json");
+  assert(externalCamRecipe.model?.modelSelection?.selectedModelPath === camInputPlan.selectedModelPath, "external CAM recipe did not receive selected CAM input model");
+
   const list = await getJson("/api/orchestrator/jobs");
   assert(Array.isArray(list.jobs), "job list missing jobs[]");
   assert(list.jobs.some((item) => item.id === job.id), "completed job missing from history list");
@@ -129,6 +138,13 @@ async function waitForJob(jobId, startedAt) {
     await sleep(1000);
   }
   throw new Error(`job ${jobId} timed out after ${timeoutMs}ms`);
+}
+
+async function getArtifactJson(jobId, filename) {
+  const response = await fetch(`${baseUrl}/api/orchestrator/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(filename)}`);
+  const data = await response.json().catch(() => ({}));
+  assert(response.ok, `artifact ${filename} failed: ${response.status} ${data.error ?? ""}`);
+  return data;
 }
 
 async function getJson(path) {
