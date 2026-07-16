@@ -574,6 +574,12 @@ type V3OrchestratorJob = {
           rotaryWrapPerRevolutionMm: number | null;
           intendedMachine?: string | null;
         };
+        machineAcceptance?: {
+          summary: string;
+          requiredStepCount: number;
+          blockedStepCount: number;
+          artifact: string;
+        } | null;
         gates?: {
           allowProductionNc: boolean;
           allowTrialNc: boolean;
@@ -610,6 +616,21 @@ type V3OrchestratorJob = {
           downloadable: boolean;
           note: string;
         }>;
+      };
+      machineAcceptanceChecklist?: {
+        schema: string;
+        packageLevel: string;
+        summary: string;
+        steps: Array<{
+          id: string;
+          title: string;
+          required: boolean;
+          status: string;
+          file: string | null;
+          expectedEvidence: string;
+          blocksProduction: boolean;
+        }>;
+        unresolvedRisks: string[];
       };
       points: number;
       previewPoints: number;
@@ -4603,6 +4624,15 @@ export function App() {
                   交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
                 </small>
               )}
+              {v3Job?.result?.summary.machineAcceptanceChecklist && (
+                <small className={v3Job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.blocksProduction) ? "v3-inline-warning" : "v3-inline-ok"}>
+                  机床验收：{v3Job.result.summary.machineAcceptanceChecklist.summary}
+                  {" · "}
+                  步骤 {v3Job.result.summary.machineAcceptanceChecklist.steps.length}
+                  {" · "}
+                  阻断 {v3Job.result.summary.machineAcceptanceChecklist.steps.filter((step) => step.blocksProduction).length}
+                </small>
+              )}
               {v3Job?.result && (
                 <small>
                   引擎 {v3Job.result.engine} / 点数 {v3Job.result.summary.points} / 预览点 {v3Job.result.summary.previewPoints} / {v3Job.result.summary.estimatedMinutes.toFixed(1)} min
@@ -6813,6 +6843,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsAdapter = simulation?.camoticsAdapter;
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
   const packageIndex = summary?.machiningPackageIndex;
+  const machineAcceptanceChecklist = summary?.machineAcceptanceChecklist;
+  const machineAcceptanceSummary = packageIndex?.machineAcceptance;
   const externalCamRecipe = summary?.externalCamRecipe;
   const camEngineSelection = summary?.camEngineSelection;
   const lines = [
@@ -6829,6 +6861,14 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `允许生产NC: ${gate?.allowProductionNc ? "是" : "否"}`,
     `允许试雕NC: ${gate?.allowTrialNc ? "是" : "否"}`,
     `允许离料空跑: ${gate?.allowAirRun ? "是" : "否"}`,
+    "",
+    "## 机床验收",
+    "",
+    `状态: ${machineAcceptanceChecklist?.summary ?? machineAcceptanceSummary?.summary ?? "未生成"}`,
+    `验收清单: ${machineAcceptanceSummary?.artifact ?? "machine-acceptance-checklist.json"}`,
+    `必需步骤: ${machineAcceptanceSummary?.requiredStepCount ?? machineAcceptanceChecklist?.steps?.filter((step) => step.required).length ?? 0}`,
+    `阻断步骤: ${machineAcceptanceSummary?.blockedStepCount ?? machineAcceptanceChecklist?.steps?.filter((step) => step.blocksProduction).length ?? 0}`,
+    ...(machineAcceptanceChecklist?.unresolvedRisks?.length ? machineAcceptanceChecklist.unresolvedRisks.slice(0, 5).map((risk) => `未解决风险: ${risk}`) : ["未解决风险: 无"]),
     "",
     "## 外部CAM状态",
     "",

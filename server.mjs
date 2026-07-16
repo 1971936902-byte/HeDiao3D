@@ -2086,6 +2086,18 @@ async function processOrchestratorJob(job, settings) {
     resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
     productionGate
   });
+  const machineAcceptanceChecklist = createMachineAcceptanceChecklist({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    simulationSummary,
+    ncStaticAnalysis,
+    machineControllerProfile,
+    controllerDialectReport
+  });
+  await writeFile(join(job.workDir, "machine-acceptance-checklist.json"), JSON.stringify(machineAcceptanceChecklist, null, 2), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -2099,6 +2111,7 @@ async function processOrchestratorJob(job, settings) {
     nativeCamReadiness,
     camEngineSelection,
     machineControllerProfile,
+    machineAcceptanceChecklist,
     controllerDialectReport,
     deliveryManifest
   });
@@ -2111,6 +2124,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-acceptance-checklist.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "nc-static-analysis.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "controller-dialect-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
@@ -2150,6 +2164,7 @@ async function processOrchestratorJob(job, settings) {
       camoticsSimulationPlan,
       ncStaticAnalysis,
       machineControllerProfile,
+      machineAcceptanceChecklist,
       controllerDialectReport,
       machiningPackageIndex,
       deliveryManifest,
@@ -3390,6 +3405,125 @@ function createSimulationEvidence(simulationSummary) {
   };
 }
 
+function createMachineAcceptanceChecklist({ job, settings, toolpath, productionGate, postprocessProfile, simulationSummary, ncStaticAnalysis, machineControllerProfile, controllerDialectReport }) {
+  const estimatedMinutes = Number(toolpath.estimatedMinutes ?? 0);
+  const rotaryAxis = machineControllerProfile?.axisMapping?.rotaryAxis ?? postprocessProfile.coordinateMapping?.rotaryAxis ?? settings.rotaryOutputAxis ?? null;
+  const lengthAxis = machineControllerProfile?.axisMapping?.lengthAxis ?? postprocessProfile.coordinateMapping?.lengthAxis ?? "X";
+  const depthAxis = machineControllerProfile?.axisMapping?.depthAxis ?? postprocessProfile.coordinateMapping?.depthAxis ?? "Z";
+  const trialAllowed = productionGate.allowTrialNc;
+  const productionAllowed = productionGate.allowProductionNc;
+  const airRunAllowed = productionGate.allowAirRun;
+  const unresolvedRisks = dedupeStrings([
+    ...(productionGate.blockers ?? []),
+    ...(productionGate.warnings ?? []),
+    ...(ncStaticAnalysis?.warningIssues ?? []),
+    ...(controllerDialectReport?.warningIssues ?? [])
+  ]).slice(0, 12);
+  const steps = [
+    {
+      id: "read-package",
+      title: "阅读加工包和门禁报告",
+      required: true,
+      status: "required",
+      file: "machining-package-index.json",
+      expectedEvidence: "操作员确认 production-gate.json、machine-controller-profile.json、postprocess-profile.json 均与当前机床一致。",
+      blocksProduction: true
+    },
+    {
+      id: "camotics-preview",
+      title: "执行 CAMotics/展开预览复核",
+      required: true,
+      status: productionGate.simulationEvidence?.productionUnlockEligible ? "passed-by-evidence" : "required",
+      file: "camotics-preview.nc",
+      expectedEvidence: "确认展开刀路没有越界、Z 最小值和材料去除结果可接受；camotics-preview.nc 不可上机。",
+      blocksProduction: !productionGate.simulationEvidence?.productionUnlockEligible
+    },
+    {
+      id: "air-run",
+      title: "离料空跑",
+      required: true,
+      status: airRunAllowed ? "ready" : "blocked",
+      file: "air-run.nc",
+      expectedEvidence: `主轴关闭，${depthAxis} 保持安全高度，确认 ${lengthAxis}/${rotaryAxis ?? "旋转夹具"}/${depthAxis} 方向和行程无碰撞。`,
+      blocksProduction: !airRunAllowed
+    },
+    {
+      id: "soft-material-trial",
+      title: "软材料或废料低进给试雕",
+      required: true,
+      status: trialAllowed ? "ready" : "blocked",
+      file: trialAllowed ? "toolpath.nc" : null,
+      expectedEvidence: "记录实际切深、夹具旋转方向、刀痕、耗时和异常停机情况；首刀建议降低进给倍率。",
+      blocksProduction: !trialAllowed
+    },
+    {
+      id: "formal-trial",
+      title: "正式核胚试雕确认",
+      required: productionAllowed,
+      status: productionAllowed ? "ready" : "locked",
+      file: productionAllowed ? "toolpath.nc" : null,
+      expectedEvidence: "仅在外部 CAM、真实材料去除仿真、NC 静态分析和控制器方言均通过后执行。",
+      blocksProduction: !productionAllowed
+    }
+  ];
+
+  return {
+    schema: "hediao3d.machine-acceptance-checklist.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    summary: productionAllowed
+      ? "生产门禁已通过；仍需操作员按清单完成机床现场验收。"
+      : trialAllowed
+        ? "当前允许离料空跑和小料试雕；生产 NC 仍锁定。"
+        : airRunAllowed
+          ? "当前仅允许离料空跑；试雕和生产 NC 未解锁。"
+          : "当前仅可查看报告，不建议上机。",
+    machine: {
+      profileId: machineControllerProfile?.id ?? null,
+      name: machineControllerProfile?.name ?? null,
+      controllerClass: machineControllerProfile?.controllerClass ?? null,
+      lengthAxis,
+      depthAxis,
+      rotaryAxis,
+      rotaryWrapPerRevolutionMm: machineControllerProfile?.rotary?.wrapPerRevolutionMm ?? postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? null
+    },
+    programs: {
+      airRun: airRunAllowed ? "air-run.nc" : null,
+      trial: trialAllowed ? "toolpath.nc" : null,
+      production: productionAllowed ? "toolpath.nc" : null,
+      simulationOnly: "camotics-preview.nc"
+    },
+    gates: {
+      allowAirRun: airRunAllowed,
+      allowTrialNc: trialAllowed,
+      allowProductionNc: productionAllowed,
+      simulationEvidenceLevel: productionGate.simulationEvidence?.level ?? null,
+      ncStaticAnalysisLevel: ncStaticAnalysis?.level ?? null,
+      controllerDialectLevel: controllerDialectReport?.level ?? null
+    },
+    metrics: {
+      pointCount: toolpath.points?.length ?? 0,
+      estimatedMinutes,
+      fitRate: simulationSummary?.metrics?.fitRate ?? null,
+      missCount: simulationSummary?.metrics?.missCount ?? null
+    },
+    steps,
+    unresolvedRisks,
+    operatorRecordTemplate: {
+      operator: "",
+      machineSerial: "",
+      fixtureType: "三轴控制器 + 旋转轴夹具",
+      materialBatch: "",
+      toolMeasuredDiameterMm: settings.toolDiameter ?? null,
+      airRunAt: "",
+      softTrialAt: "",
+      formalTrialAt: "",
+      notes: ""
+    }
+  };
+}
+
 function createPostprocessProfile({ job, settings, toolpath, selectedEngine, resultEngine, productionGate }) {
   const postProcessor = settings.postProcessor ?? "generic";
   const rotaryAxis = settings.camMode === "rotaryWrap"
@@ -4082,7 +4216,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -4111,6 +4245,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("production-gate.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
+        getFile("machine-acceptance-checklist.json"),
         getFile("controller-dialect-report.json"),
         getFile("native-cam-readiness.json"),
         getFile("cam-engine-selection.json"),
@@ -4147,6 +4282,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
+      "按 machine-acceptance-checklist.json 完成操作员现场验收记录。",
       "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
       "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
       "运行 air-run.nc 做离料空跑，确认夹具旋转方向、行程和 Z 安全高度。",
@@ -4173,6 +4309,12 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: controllerDialectReport?.summary ?? null,
       dialect: controllerDialectReport?.dialect?.name ?? null
     },
+    machineAcceptance: machineAcceptanceChecklist ? {
+      summary: machineAcceptanceChecklist.summary,
+      requiredStepCount: machineAcceptanceChecklist.steps?.filter((step) => step.required).length ?? 0,
+      blockedStepCount: machineAcceptanceChecklist.steps?.filter((step) => step.status === "blocked" || step.status === "locked").length ?? 0,
+      artifact: "machine-acceptance-checklist.json"
+    } : null,
     nativeCamReadiness: nativeCamReadiness ? {
       level: nativeCamReadiness.level,
       readyCount: nativeCamReadiness.readyCount,
@@ -4231,6 +4373,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
+    createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),

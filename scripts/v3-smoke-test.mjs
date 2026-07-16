@@ -67,6 +67,8 @@ async function main() {
   assert(job.result?.summary?.productionGate?.level, "production gate missing");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   assert(job.result?.summary?.machineControllerProfile?.rotary?.outputAxis === "Y", "machine controller profile should use Y rotary output");
+  assert(job.result?.summary?.machineAcceptanceChecklist?.schema === "hediao3d.machine-acceptance-checklist.v1", "machine acceptance checklist missing");
+  assert(job.result.summary.machineAcceptanceChecklist.steps.some((step) => step.id === "air-run"), "machine acceptance checklist missing air-run step");
   assert(job.result?.summary?.nativeCamReadiness?.schema === "hediao3d.native-cam-readiness.v1", "native CAM readiness report missing");
   assert(job.result?.summary?.ncStaticAnalysis?.level === "ready", `NC static analysis not ready: ${job.result?.summary?.ncStaticAnalysis?.summary ?? "missing"}`);
   assert(job.result?.summary?.controllerDialectReport?.level === "ready", `controller dialect report not ready: ${job.result?.summary?.controllerDialectReport?.summary ?? "missing"}`);
@@ -91,6 +93,7 @@ async function main() {
     "toolpath.nc",
     "toolpath-summary.json",
     "machine-controller-profile.json",
+    "machine-acceptance-checklist.json",
     "nc-static-analysis.json",
     "controller-dialect-report.json",
     "simulation-summary.json",
@@ -120,6 +123,8 @@ async function main() {
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
+  assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(createV3SmokeReadmeProbe(job).includes("CAM选择"), "V3 package readme should include CAM engine selection");
 
   const list = await getJson("/api/orchestrator/jobs");
