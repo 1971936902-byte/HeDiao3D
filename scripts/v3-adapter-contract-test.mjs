@@ -1,0 +1,105 @@
+#!/usr/bin/env node
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const workDir = mkdtempSync(join(tmpdir(), "hediao3d-adapter-contract-"));
+
+const adapters = [
+  {
+    id: "freecad",
+    command: process.env.PYTHON ?? "python",
+    args: ["adapters/freecad/freecad_cam_job.py"]
+  },
+  {
+    id: "blendercam",
+    command: process.env.PYTHON ?? "python",
+    args: ["adapters/blendercam/blendercam_job.py"]
+  },
+  {
+    id: "opencamlib",
+    command: process.env.PYTHON ?? "python",
+    args: ["adapters/opencamlib/opencamlib_job.py"]
+  },
+  {
+    id: "camotics",
+    command: process.execPath,
+    args: ["adapters/camotics/camotics_job.js"]
+  }
+];
+
+try {
+  mkdirSync(join(workDir, "outputs"), { recursive: true });
+  const job = {
+    jobId: "adapter-contract-test",
+    engine: "contract",
+    modelPath: join(workDir, "sample.glb"),
+    workDir,
+    settings: {
+      camMode: "rotaryWrap",
+      lengthMm: 38,
+      diameterMm: 15,
+      rotaryOutputAxis: "Y",
+      rotaryWrapPerRevolutionMm: 100,
+      toolProfileId: "vflat-4mm-25deg",
+      toolDiameter: 4
+    },
+    outputs: {
+      gcode: join(workDir, "outputs", "toolpath.nc"),
+      report: join(workDir, "outputs", "adapter-report.json"),
+      preview: join(workDir, "outputs", "preview.json")
+    }
+  };
+  writeFileSync(job.modelPath, "placeholder model path for adapter contract test");
+
+  const results = [];
+  for (const adapter of adapters) {
+    const jobPath = join(workDir, `${adapter.id}-job.json`);
+    const resultPath = join(workDir, `${adapter.id}-report.json`);
+    writeFileSync(jobPath, JSON.stringify({ ...job, engine: adapter.id, outputs: { ...job.outputs, report: resultPath } }, null, 2));
+
+    const run = spawnSync(adapter.command, [...adapter.args, jobPath, resultPath], {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 30000
+    });
+    assert(run.status === 0, `${adapter.id} exited ${run.status}: ${run.stderr || run.stdout}`);
+
+    const report = JSON.parse(readFileSync(resultPath, "utf8"));
+    validateReport(adapter.id, report);
+    results.push({
+      id: adapter.id,
+      status: report.status,
+      protocolVersion: report.protocolVersion,
+      warningCount: report.warnings?.length ?? 0
+    });
+  }
+
+  console.log(JSON.stringify({ ok: true, adapters: results }, null, 2));
+} finally {
+  rmSync(workDir, { recursive: true, force: true });
+}
+
+function validateReport(engineId, report) {
+  const allowedStatuses = new Set(["completed", "adapter_not_ready", "adapter_missing", "failed", "invalid_report", "completed_without_report"]);
+  assert(report && typeof report === "object", `${engineId} report is not an object`);
+  assert(report.protocolVersion === "hediao3d.adapter.v1", `${engineId} missing protocolVersion`);
+  assert(report.engine === engineId, `${engineId} report engine mismatch: ${report.engine}`);
+  assert(report.jobId === "adapter-contract-test", `${engineId} missing jobId`);
+  assert(allowedStatuses.has(report.status), `${engineId} unsupported status ${report.status}`);
+  assert(Array.isArray(report.warnings), `${engineId} warnings must be an array`);
+  assert(report.metrics && typeof report.metrics === "object", `${engineId} metrics must be an object`);
+  if (report.status === "completed") {
+    assert(report.gcodePath || report.outputs?.gcode, `${engineId} completed report must include gcode path`);
+  } else {
+    assert(typeof report.error === "string" && report.error.length > 0, `${engineId} non-completed report must include an error`);
+  }
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}

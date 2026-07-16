@@ -41,7 +41,9 @@ def main() -> int:
     if missing:
         result = {
             "status": "failed",
+            "protocolVersion": "hediao3d.adapter.v1",
             "engine": "opencamlib",
+            "jobId": job.get("jobId"),
             "error": f"Missing adapter job keys: {', '.join(missing)}",
             "warnings": [],
             "metrics": detection,
@@ -49,7 +51,9 @@ def main() -> int:
     else:
         result = {
             "status": "adapter_not_ready",
+            "protocolVersion": "hediao3d.adapter.v1",
             "engine": "opencamlib",
+            "jobId": job.get("jobId"),
             "error": "OpenCAMLib adapter is scaffolded but not enabled for production cutter-contact output.",
             "warnings": [
                 "Install OpenCAMLib/ocl on the Linux CAM server, then implement drop-cutter or waterline sampling recipes.",

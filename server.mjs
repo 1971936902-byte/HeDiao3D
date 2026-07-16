@@ -1563,8 +1563,48 @@ async function runExternalCamAdapter(selectedEngine, job) {
   report.durationMs = Date.now() - startedAt;
   report.stdout = String(run.stdout ?? "").slice(-6000);
   report.stderr = String(run.stderr ?? "").slice(-6000);
+  report.validation = validateAdapterReport(report, selectedEngine, job);
+  if (!report.validation.ok && report.status === "completed") {
+    report.status = "invalid_report";
+    report.error = report.validation.errors[0] ?? "adapter completed but report did not pass Orchestrator validation";
+  }
   await writeFile(resultPath, JSON.stringify(report, null, 2), "utf8");
   return report;
+}
+
+function validateAdapterReport(report, selectedEngine, job) {
+  const allowedStatuses = new Set(["completed", "adapter_not_ready", "adapter_missing", "failed", "invalid_report", "completed_without_report"]);
+  const errors = [];
+  const warnings = [];
+
+  if (!report || typeof report !== "object") {
+    return { ok: false, errors: ["adapter report is not an object"], warnings };
+  }
+
+  if (!allowedStatuses.has(String(report.status))) {
+    errors.push(`unsupported adapter status: ${String(report.status)}`);
+  }
+
+  if (report.engine && report.engine !== selectedEngine.id) {
+    warnings.push(`adapter engine ${report.engine} differs from selected engine ${selectedEngine.id}`);
+  }
+
+  if (report.status === "completed") {
+    const gcodePath = report.gcodePath ?? report.outputs?.gcode ?? join(job.workDir, "toolpath.nc");
+    if (!gcodePath || !existsSync(gcodePath)) {
+      errors.push("completed adapter report did not write a G-code file");
+    } else {
+      const size = statSync(gcodePath).size;
+      if (size <= 0) errors.push("completed adapter G-code file is empty");
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    checkedAt: new Date().toISOString()
+  };
 }
 
 function getAdapterScriptPath(engineId) {

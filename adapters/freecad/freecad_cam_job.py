@@ -29,7 +29,9 @@ def main() -> int:
     if missing:
         result = {
             "status": "failed",
+            "protocolVersion": "hediao3d.adapter.v1",
             "engine": "freecad",
+            "jobId": job.get("jobId"),
             "error": f"Missing adapter job keys: {', '.join(missing)}",
             "warnings": [],
             "metrics": {}
@@ -37,7 +39,9 @@ def main() -> int:
     else:
         result = {
             "status": "adapter_not_ready",
+            "protocolVersion": "hediao3d.adapter.v1",
             "engine": "freecad",
+            "jobId": job.get("jobId"),
             "error": "FreeCAD Path Workbench adapter is scaffolded but not enabled for production toolpath output.",
             "warnings": [
                 "Install FreeCAD on the server, then implement model import, stock setup, tool controller, Path operation and post-processing recipe."

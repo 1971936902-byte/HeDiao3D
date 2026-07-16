@@ -29,7 +29,9 @@ def main() -> int:
     job = json.loads(job_path.read_text(encoding="utf-8"))
     result = {
         "status": "adapter_not_ready",
+        "protocolVersion": "hediao3d.adapter.v1",
         "engine": "blendercam",
+        "jobId": job.get("jobId"),
         "error": "BlenderCAM/FabexCNC adapter is scaffolded but not enabled for production toolpath output.",
         "warnings": [
             "Install Blender and BlenderCAM/FabexCNC, then implement mesh import, operation setup and G-code export."

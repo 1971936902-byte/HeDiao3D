@@ -12,7 +12,9 @@ if (!jobPath || !resultPath) {
 const job = JSON.parse(readFileSync(jobPath, "utf8"));
 const result = {
   status: "adapter_not_ready",
+  protocolVersion: "hediao3d.adapter.v1",
   engine: "camotics",
+  jobId: job.jobId ?? null,
   error: "CAMotics adapter is scaffolded but not enabled for material-removal output.",
   warnings: [
     "Install CAMotics on the server, then implement project generation, CLI execution and screenshot/mesh artifact extraction."
