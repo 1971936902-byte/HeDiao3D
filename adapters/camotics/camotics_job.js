@@ -61,6 +61,8 @@ const result = missing.length > 0
       metrics: {
         gcodePath: job.outputs?.gcode ?? null,
         resultPath: attempt.resultPath ?? null,
+        imported: Boolean(attempt.imported),
+        synthetic: Boolean(attempt.synthetic),
         camMode: settings.camMode ?? null,
         recipe: recipeSummary,
         camotics: camoticsDetection,
@@ -208,6 +210,8 @@ function attemptCamoticsExecution(adapterJob, simulationPlan, detection) {
       error: "CAMotics simulation plan generated, but experimental CLI execution is disabled. Set HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true only after validating the deployment server."
     };
   }
+  const imported = tryImportCamoticsResult(adapterJob, simulationPlan, detection);
+  if (imported) return imported;
   if (String(process.env.HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT ?? "").toLowerCase() === "true") {
     return writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection);
   }
@@ -233,6 +237,68 @@ function attemptCamoticsExecution(adapterJob, simulationPlan, detection) {
     status: "adapter_not_ready",
     error: "CAMotics command detected, but material-removal result extraction is still locked pending server validation."
   };
+}
+
+function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
+  const sourcePath = process.env.HEDIAO3D_CAMOTICS_RESULT_JSON;
+  if (!sourcePath) return null;
+  const dir = adapterJob.workDir ?? dirname(resultPath);
+  const outputPath = join(dir, "camotics-result.json");
+  if (!existsSync(sourcePath)) {
+    return {
+      status: "adapter_not_ready",
+      error: `HEDIAO3D_CAMOTICS_RESULT_JSON does not exist: ${sourcePath}`
+    };
+  }
+  let imported;
+  try {
+    imported = JSON.parse(readFileSync(sourcePath, "utf8"));
+  } catch {
+    return {
+      status: "adapter_not_ready",
+      error: `HEDIAO3D_CAMOTICS_RESULT_JSON is not valid JSON: ${sourcePath}`
+    };
+  }
+  const validationErrors = validateImportedCamoticsResult(imported);
+  if (validationErrors.length > 0) {
+    return {
+      status: "adapter_not_ready",
+      error: `Imported CAMotics result failed validation: ${validationErrors.join("; ")}`
+    };
+  }
+  const result = {
+    ...imported,
+    jobId: imported.jobId ?? adapterJob.jobId ?? null,
+    engine,
+    synthetic: false,
+    importedFrom: sourcePath,
+    importedAt: new Date().toISOString(),
+    inputs: {
+      ...(imported.inputs ?? {}),
+      preferredGcode: imported.inputs?.preferredGcode ?? simulationPlan.inputs.preferredGcode
+    },
+    detection
+  };
+  writeFileSync(outputPath, JSON.stringify(result, null, 2));
+  return {
+    status: "completed",
+    error: null,
+    resultPath: outputPath,
+    synthetic: false,
+    imported: true,
+    sourcePath
+  };
+}
+
+function validateImportedCamoticsResult(result) {
+  const errors = [];
+  if (!result || typeof result !== "object") return ["result is not an object"];
+  if (result.schema !== "hediao3d.camotics-result.v1") errors.push("schema must be hediao3d.camotics-result.v1");
+  if (result.status !== "completed") errors.push("status must be completed");
+  if (result.synthetic === true) errors.push("synthetic result cannot be imported as real CAMotics evidence");
+  if (!result.metrics || typeof result.metrics !== "object") errors.push("metrics object is required");
+  if (!result.summary) errors.push("summary is required");
+  return errors;
 }
 
 function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {
