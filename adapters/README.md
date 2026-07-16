@@ -49,3 +49,5 @@ V3 Orchestrator calls external CAM/simulation engines through small adapter scri
 - `opencamlib/opencamlib_job.py`: OpenCAMLib placeholder for drop-cutter, waterline and cutter-contact geometry calculations. OpenCAMLib is a geometry kernel rather than a full CAM application, so final NC output should still pass through HeDiao3D postprocessing.
 
 The internal Mesh CAM fallback remains the verified V3 small-loop implementation until the external engines are installed and the adapter recipes are completed.
+
+When an adapter returns `"status": "completed"` and writes a non-empty G-code file to `outputs.gcode` or `gcodePath`, the Orchestrator ingests that file as the job toolpath, parses G0/G1 motion points for preview/reporting, and then continues through the shared simulation summary, production gate and delivery manifest pipeline. If the adapter is missing, not ready, fails, or does not write G-code, the job falls back to the internal Mesh CAM baseline.

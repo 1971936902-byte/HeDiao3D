@@ -427,6 +427,62 @@ function createDiagnosticsRecommendedActions(checks, engines) {
   return actions;
 }
 
+function createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine) {
+  if (!adapterReport || adapterReport.status !== "completed") return null;
+  const candidatePath = adapterReport.gcodePath
+    ?? adapterReport.outputs?.gcode
+    ?? join(job.workDir, "toolpath.nc");
+  if (!candidatePath || !existsSync(candidatePath)) return null;
+
+  const gcode = readFileSync(candidatePath, "utf8");
+  if (!gcode.trim()) return null;
+  const points = parseGcodeMotionPoints(gcode, settings);
+  const warnings = [
+    `${selectedEngine.name} adapter 输出已由 Orchestrator 摄取。`,
+    "外部 CAM G-code 已进入统一交付链路；正式上机前仍需 CAMotics/机床控制器复核。"
+  ];
+  if (points.length === 0) warnings.push("外部 G-code 未解析到 G0/G1 运动点，无法生成可靠 3D 预览。");
+  const estimatedMinutes = Number(adapterReport.metrics?.estimatedMinutes ?? adapterReport.estimatedMinutes ?? estimateTravel(points, Number(settings.diameterMm) / 2) / Math.max(1, Number(settings.feedRate)));
+
+  return {
+    points,
+    previewPoints: limitToolpathPreviewPoints(points.map((point) => ({ ...point, hit: true }))),
+    gcode,
+    tap: gcode,
+    txt: gcode,
+    csv: toCsv(points),
+    estimatedMinutes,
+    postProcessorName: `${selectedEngine.name} adapter G-code`,
+    summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
+  };
+}
+
+function parseGcodeMotionPoints(gcode, settings) {
+  const points = [];
+  const current = { x: 0, y: 0, a: 0, z: Number(settings.safeZ ?? 0), depth: 0 };
+  const safeZ = Number(settings.safeZ ?? 0);
+  for (const rawLine of gcode.split(/\r?\n/)) {
+    const line = rawLine.replace(/\([^)]*\)/g, "").trim().toUpperCase();
+    if (!line || !/(?:\bG0?0\b|\bG0?1\b)/.test(line)) continue;
+    const x = parseGcodeWord(line, "X");
+    const y = parseGcodeWord(line, "Y");
+    const a = parseGcodeWord(line, "A");
+    const z = parseGcodeWord(line, "Z");
+    if (Number.isFinite(x)) current.x = x;
+    if (Number.isFinite(y)) current.y = y;
+    if (Number.isFinite(a)) current.a = a;
+    if (Number.isFinite(z)) current.z = z;
+    current.depth = Math.max(0, safeZ - current.z);
+    points.push({ ...current });
+  }
+  return points;
+}
+
+function parseGcodeWord(line, word) {
+  const match = line.match(new RegExp(`${word}\\s*(-?\\d+(?:\\.\\d+)?)`));
+  return match ? Number(match[1]) : NaN;
+}
+
 async function createOrchestratorJob(req, res) {
   const input = await readJson(req);
   const settings = normalizeServerCamSettings(input.settings);
@@ -601,9 +657,14 @@ async function processOrchestratorJob(job, settings) {
     updatePipelineStage(job, "external-cam", "skipped", "未检测到可执行外部 CAM，进入内置 fallback。");
   }
 
-  updatePipelineStage(job, "toolpath", "running", "正在生成内置 Mesh CAM fallback 刀路。");
-  appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
-  const toolpath = await generateToolpathFromLocalModel(job.modelUrl, settings);
+  updatePipelineStage(job, "toolpath", "running", adapterReport?.status === "completed" ? "正在摄取外部 CAM adapter 刀路。" : "正在生成内置 Mesh CAM fallback 刀路。");
+  const externalToolpath = createToolpathFromAdapterReport(adapterReport, job, settings, selected);
+  if (externalToolpath) {
+    appendOrchestratorLog(job, `${selected.name} adapter 已返回可用 G-code，进入 Orchestrator 统一仿真和交付。`);
+  } else {
+    appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
+  }
+  const toolpath = externalToolpath ?? await generateToolpathFromLocalModel(job.modelUrl, settings);
   checkOrchestratorCancellation(job);
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
   updatePipelineStage(job, "toolpath", "completed", `生成 ${toolpath.points.length} 个刀路点。`);
@@ -611,8 +672,9 @@ async function processOrchestratorJob(job, settings) {
   const simulationSummary = createSimulationSummary(toolpath, settings, selected);
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
   await writeFile(join(job.workDir, "toolpath-summary.json"), JSON.stringify({
-    engine: "internal-mesh-cam",
+    engine: externalToolpath ? selected.id : "internal-mesh-cam",
     fallbackFrom: selected.id,
+    source: externalToolpath ? "external-adapter" : "internal-fallback",
     points: toolpath.points.length,
     previewPoints: toolpath.previewPoints?.length ?? 0,
     estimatedMinutes: toolpath.estimatedMinutes,
@@ -627,6 +689,7 @@ async function processOrchestratorJob(job, settings) {
     toolpath,
     settings,
     selectedEngine: selected,
+    resultEngine: externalToolpath ? selected.id : "internal-mesh-cam",
     meshQuality,
     repairPlan,
     camInputPlan,
@@ -647,7 +710,7 @@ async function processOrchestratorJob(job, settings) {
   job.currentStage = "completed";
   job.progress = 100;
   job.result = {
-    engine: "internal-mesh-cam",
+    engine: externalToolpath ? selected.id : "internal-mesh-cam",
     fallbackFrom: selected.id,
     externalAvailable: selected.available,
     adapterReady: selected.adapterReady,
@@ -1203,7 +1266,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, camInputPlan, engineReadiness, simulationSummary }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -1274,7 +1337,7 @@ function createProductionGate({ toolpath, settings, selectedEngine, meshQuality,
     machineMode: settings.camMode,
     rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
     selectedEngine: selectedEngine.id,
-    resultEngine: "internal-mesh-cam",
+    resultEngine: resultEngine ?? "internal-mesh-cam",
     checks: {
       meshVerdict: meshQuality.verdict,
       camInputStatus: camInputPlan.status,
