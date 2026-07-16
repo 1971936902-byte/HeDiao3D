@@ -1479,7 +1479,7 @@ button:disabled {
 
 .heatmap-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1601,6 +1601,42 @@ button:disabled {
 .heatmap-suggestions {
   display: grid;
   gap: 7px;
+}
+
+.heatmap-risk-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.heatmap-risk-list div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.heatmap-risk-list div.warning {
+  border-left-color: var(--amber);
+}
+
+.heatmap-risk-list div.critical {
+  border-left-color: var(--rose);
+  background: rgba(255, 107, 156, 0.06);
+}
+
+.heatmap-risk-list strong {
+  color: #f2f8f5;
+  font-size: 12px;
+}
+
+.heatmap-risk-list span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .heatmap-suggestions p {

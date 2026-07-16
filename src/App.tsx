@@ -509,6 +509,10 @@ export function App() {
   const geometry = useMemo(() => createReliefGeometry(processedDepth, settings), [processedDepth, settings]);
   const isMultiviewGenerated = generationLabel.startsWith("本地360°环绕浮雕");
   const envelopeQuality = useMemo(() => (toolpath ? analyzeEnvelopeQuality(toolpath, settings) : null), [toolpath, settings]);
+  const envelopeHeatmapDiagnosis = useMemo(
+    () => (toolpath && envelopeQuality ? createEnvelopeHeatmapDiagnosis(toolpath, settings, envelopeQuality) : null),
+    [toolpath, settings, envelopeQuality]
+  );
   const selectedTool = useMemo(() => getToolProfile(settings.toolProfileId), [settings.toolProfileId]);
   const selectedMaterial = useMemo(() => getMaterialProfile(settings.materialProfileId), [settings.materialProfileId]);
   const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
@@ -1233,6 +1237,7 @@ export function App() {
       meshQuality,
       costEstimate,
       envelopeQuality,
+      envelopeHeatmapDiagnosis,
       exportGate,
       safetyGateStatus
     });
@@ -3020,7 +3025,7 @@ export function App() {
         {workbenchView === "gcode" && toolpath ? (
           <GcodePreview toolpath={toolpath} exportGateReady={exportGateReady} />
         ) : workbenchView === "heatmap" && toolpath && envelopeQuality ? (
-          <EnvelopeHeatmapPreview toolpath={toolpath} settings={settings} envelopeQuality={envelopeQuality} />
+          <EnvelopeHeatmapPreview toolpath={toolpath} settings={settings} envelopeQuality={envelopeQuality} heatmapDiagnosis={envelopeHeatmapDiagnosis} />
         ) : workbenchView === "report" && toolpath ? (
           <WorkbenchReportSummary
             exportBlocked={exportBlocked}
@@ -3683,6 +3688,7 @@ function createPackageParameters(input: {
   meshQuality: MeshQualityReport | null;
   costEstimate: CostEstimate | null;
   envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality> | null;
+  envelopeHeatmapDiagnosis: ReturnType<typeof createEnvelopeHeatmapDiagnosis> | null;
   exportGate: ExportGateState;
   safetyGateStatus: SafetyGateStatus;
 }) {
@@ -3724,7 +3730,8 @@ function createPackageParameters(input: {
       manufacturing: input.manufacturingQuality,
       materialRemoval: input.materialRemoval,
       mesh: input.meshQuality,
-      envelope: input.envelopeQuality
+      envelope: input.envelopeQuality,
+      envelopeHeatmap: input.envelopeHeatmapDiagnosis
     },
     costEstimate: input.costEstimate
   };
@@ -3792,13 +3799,15 @@ type EnvelopeHeatmapCell = {
 function EnvelopeHeatmapPreview({
   toolpath,
   settings,
-  envelopeQuality
+  envelopeQuality,
+  heatmapDiagnosis
 }: {
   toolpath: GeneratedToolpath;
   settings: ModelSettings;
   envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality>;
+  heatmapDiagnosis: ReturnType<typeof createEnvelopeHeatmapDiagnosis> | null;
 }) {
-  const heatmap = createEnvelopeHeatmapCells(toolpath, settings);
+  const heatmap = heatmapDiagnosis?.heatmap ?? createEnvelopeHeatmapCells(toolpath, settings);
   const maxSamples = Math.max(1, ...heatmap.cells.map((cell) => cell.total));
   const sourceLabel = toolpath.previewPoints && toolpath.previewPoints.length > 0 ? "Mesh 表面采样" : "刀路覆盖估算";
 
@@ -3830,6 +3839,18 @@ function EnvelopeHeatmapPreview({
           <span>连续贴合</span>
           <strong>{envelopeQuality.continuityRate.toFixed(1)}%</strong>
         </div>
+        {heatmapDiagnosis && (
+          <>
+            <div>
+              <span>风险格占比</span>
+              <strong>{heatmapDiagnosis.riskCellRate.toFixed(1)}%</strong>
+            </div>
+            <div>
+              <span>最差区域</span>
+              <strong>{heatmapDiagnosis.worstCellLabel}</strong>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="heatmap-layout">
@@ -3864,8 +3885,19 @@ function EnvelopeHeatmapPreview({
         <span><i className="empty" />无采样</span>
       </div>
 
+      {heatmapDiagnosis && (
+        <div className="heatmap-risk-list">
+          {heatmapDiagnosis.riskItems.map((item) => (
+            <div className={item.status} key={item.label}>
+              <strong>{item.label}</strong>
+              <span>{item.detail}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="heatmap-suggestions">
-        {envelopeQuality.diagnosis.suggestions.map((suggestion) => (
+        {(heatmapDiagnosis?.suggestions ?? envelopeQuality.diagnosis.suggestions).map((suggestion) => (
           <p key={suggestion}>{suggestion}</p>
         ))}
       </div>
@@ -3925,6 +3957,89 @@ function createEnvelopeHeatmapCells(toolpath: GeneratedToolpath, settings: Model
     aBins,
     xLabels: Array.from({ length: xBins }, (_, index) => `${(-halfLength + (settings.lengthMm * index) / xBins).toFixed(1)}mm`),
     aLabels: Array.from({ length: aBins }, (_, index) => `${Math.round((360 * (aBins - 1 - index)) / aBins)}deg`)
+  };
+}
+
+function createEnvelopeHeatmapDiagnosis(
+  toolpath: GeneratedToolpath,
+  settings: ModelSettings,
+  envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality>
+) {
+  const heatmap = createEnvelopeHeatmapCells(toolpath, settings);
+  const sampledCells = heatmap.cells.filter((cell) => cell.total > 0);
+  const riskCells = sampledCells.filter((cell) => cell.status === "warning" || cell.status === "critical");
+  const criticalCells = sampledCells.filter((cell) => cell.status === "critical");
+  const worstCell = sampledCells.reduce<EnvelopeHeatmapCell | null>((worst, cell) => {
+    if (!worst) return cell;
+    if (cell.fitRate < worst.fitRate) return cell;
+    if (cell.fitRate === worst.fitRate && cell.missCount > worst.missCount) return cell;
+    return worst;
+  }, null);
+  const riskCellRate = sampledCells.length > 0 ? (riskCells.length / sampledCells.length) * 100 : 0;
+  const criticalCellRate = sampledCells.length > 0 ? (criticalCells.length / sampledCells.length) * 100 : 0;
+  const worstCellLabel = worstCell ? formatHeatmapCellLabel(worstCell, heatmap) : "无采样";
+  const bandStats = createHeatmapBandStats(heatmap);
+  const riskItems = [
+    {
+      label: "风险格占比",
+      detail: `风险格 ${riskCells.length}/${sampledCells.length}，严重风险格 ${criticalCells.length}。`,
+      status: riskCellRate <= 4 ? "ok" : riskCellRate <= 14 ? "warning" : "critical"
+    },
+    {
+      label: "最差 X/A 区域",
+      detail: worstCell ? `${worstCellLabel}，贴合 ${worstCell.fitRate.toFixed(1)}%，未贴合 ${worstCell.missCount}/${worstCell.total}。` : "当前没有可统计采样。",
+      status: !worstCell || worstCell.fitRate >= 96 ? "ok" : worstCell.fitRate >= 88 ? "warning" : "critical"
+    },
+    {
+      label: "连续风险带",
+      detail: bandStats.detail,
+      status: bandStats.status
+    }
+  ] as Array<{ label: string; detail: string; status: "ok" | "warning" | "critical" }>;
+
+  const suggestions = [...envelopeQuality.diagnosis.suggestions];
+  if (criticalCellRate > 8) suggestions.unshift("热力图显示严重未贴合区域较多，建议先修复 Mesh/校准长轴，再重新生成刀路。");
+  else if (riskCellRate > 10) suggestions.unshift("热力图存在成片风险格，建议降低步距并重新检查夹持端部过渡。");
+  if (bandStats.status !== "ok") suggestions.push(bandStats.action);
+  if (worstCell && worstCell.xIndex <= 3) suggestions.push("最差区域靠近左端，优先检查左夹持保留、端部过渡和 Mesh 左端是否缺面。");
+  if (worstCell && worstCell.xIndex >= heatmap.xBins - 4) suggestions.push("最差区域靠近右端，优先检查右夹持保留、端部过渡和 Mesh 右端是否缺面。");
+
+  return {
+    heatmap,
+    riskCellRate,
+    criticalCellRate,
+    worstCellLabel,
+    riskItems,
+    suggestions: Array.from(new Set(suggestions))
+  };
+}
+
+function formatHeatmapCellLabel(cell: EnvelopeHeatmapCell, heatmap: ReturnType<typeof createEnvelopeHeatmapCells>) {
+  return `X ${heatmap.xLabels[cell.xIndex] ?? "-"} / A ${heatmap.aLabels[cell.aIndex] ?? "-"}`;
+}
+
+function createHeatmapBandStats(heatmap: ReturnType<typeof createEnvelopeHeatmapCells>) {
+  const xRisk = Array.from({ length: heatmap.xBins }, (_, xIndex) => heatmap.cells.filter((cell) => cell.xIndex === xIndex && cell.status === "critical").length);
+  const aRisk = Array.from({ length: heatmap.aBins }, (_, aIndex) => heatmap.cells.filter((cell) => cell.aIndex === aIndex && cell.status === "critical").length);
+  const worstX = xRisk.reduce((best, value, index) => (value > best.value ? { index, value } : best), { index: 0, value: 0 });
+  const worstA = aRisk.reduce((best, value, index) => (value > best.value ? { index, value } : best), { index: 0, value: 0 });
+  const status: "ok" | "warning" | "critical" = worstX.value >= 4 || worstA.value >= 4 ? "critical" : worstX.value >= 2 || worstA.value >= 2 ? "warning" : "ok";
+  if (status === "ok") {
+    return {
+      status,
+      detail: "未发现连续严重风险带。",
+      action: "热力图未发现连续风险带，可继续做模拟雕刻和空跑验证。"
+    };
+  }
+  const xLabel = heatmap.xLabels[worstX.index] ?? "-";
+  const aLabel = heatmap.aLabels[worstA.index] ?? "-";
+  const dominant = worstX.value >= worstA.value ? `X ${xLabel}` : `A ${aLabel}`;
+  return {
+    status,
+    detail: `${dominant} 附近存在连续严重风险格，X向 ${worstX.value} 格，A向 ${worstA.value} 格。`,
+    action: worstX.value >= worstA.value
+      ? "连续风险沿 X 方向集中，建议检查端部保留、模型长轴校准和 X 步距。"
+      : "连续风险沿 A 方向集中，建议检查旋转轴方向、A 步距和 Mesh 顶/底部缺损。"
   };
 }
 
