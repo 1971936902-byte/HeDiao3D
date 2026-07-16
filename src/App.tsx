@@ -195,11 +195,44 @@ type V3OrchestratorJob = {
         autoRepairEnabled: boolean;
         repairRequired: boolean;
         repairSuggested: boolean;
+        outputs?: Array<{
+          id: string;
+          role: string;
+          label: string;
+          path: string;
+          url: string | null;
+          exists: boolean;
+          selectedForCam?: boolean;
+        }>;
       };
       camInputPlan?: {
+        schema?: string;
         status: string;
         summary: string;
         selectedModelKind: string;
+        selectedModelUrl?: string | null;
+        selectedModelPath?: string | null;
+        modelSelection?: {
+          schema: string;
+          status: string;
+          selectedModelId: string | null;
+          selectedModelUrl: string | null;
+          selectedModelPath: string | null;
+          selectedModelRole: string | null;
+          repairExecutionStatus: string | null;
+          repairRequired: boolean;
+          blockingReason: string | null;
+          selectionReason: string;
+          candidates: Array<{
+            id: string;
+            role: string;
+            label: string;
+            path: string;
+            url: string | null;
+            exists: boolean;
+            selectedForCam: boolean;
+          }>;
+        };
         preferredExternalEngine: string;
         adapterModelPolicy: string;
         gate: {
@@ -246,6 +279,12 @@ type V3OrchestratorJob = {
           selectedModelKind: string;
           adapterModelPolicy: string;
           repairStatus: string;
+          modelSelection?: {
+            selectedModelId: string | null;
+            selectedModelRole: string | null;
+            selectionReason: string;
+            blockingReason: string | null;
+          } | null;
         };
         operations?: Array<{
           id: string;
@@ -4293,7 +4332,18 @@ export function App() {
                 <small>
                   CAM输入：{v3Job.result.summary.camInputPlan.summary}
                   {" · "}
+                  模型 {v3Job.result.summary.camInputPlan.modelSelection?.selectedModelId ?? v3Job.result.summary.camInputPlan.selectedModelKind}
+                  {v3Job.result.summary.camInputPlan.modelSelection?.selectedModelRole ? `/${v3Job.result.summary.camInputPlan.modelSelection.selectedModelRole}` : ""}
+                  {" · "}
                   {v3Job.result.summary.camInputPlan.gate.allowProductionNc ? "允许生产NC" : "仅建议试算/空跑"}
+                </small>
+              )}
+              {v3Job?.result?.summary.camInputPlan?.modelSelection && (
+                <small className={v3Job.result.summary.camInputPlan.modelSelection.blockingReason ? "v3-inline-critical" : v3Job.result.summary.camInputPlan.modelSelection.repairRequired ? "v3-inline-warning" : "v3-inline-ok"}>
+                  CAM模型选择：{v3Job.result.summary.camInputPlan.modelSelection.selectionReason}
+                  {" · "}
+                  候选 {v3Job.result.summary.camInputPlan.modelSelection.candidates.filter((candidate) => candidate.exists).length}/{v3Job.result.summary.camInputPlan.modelSelection.candidates.length}
+                  {v3Job.result.summary.camInputPlan.modelSelection.blockingReason ? ` · ${v3Job.result.summary.camInputPlan.modelSelection.blockingReason}` : ""}
                 </small>
               )}
               {v3Job?.result?.summary.engineReadiness && (
@@ -6578,6 +6628,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
   const repairExecution = summary?.repairExecution;
+  const camInputPlan = summary?.camInputPlan;
+  const camModelSelection = camInputPlan?.modelSelection;
   const postprocessProfile = summary?.postprocessProfile;
   const machineControllerProfile = summary?.machineControllerProfile;
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
@@ -6606,6 +6658,11 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "## 外部CAM状态",
     "",
     `Mesh修复执行: ${repairExecution?.summary ?? "未生成"}`,
+    `CAM输入模型: ${camModelSelection?.selectedModelId ?? camInputPlan?.selectedModelKind ?? "-"}`,
+    `CAM模型角色: ${camModelSelection?.selectedModelRole ?? "-"}`,
+    `CAM模型选择: ${camModelSelection?.selectionReason ?? camInputPlan?.summary ?? "-"}`,
+    `CAM模型阻断: ${camModelSelection?.blockingReason ?? "无"}`,
+    `CAM候选模型: ${camModelSelection?.candidates?.filter((candidate) => candidate.exists).length ?? 0}/${camModelSelection?.candidates?.length ?? repairExecution?.outputs?.length ?? 0}`,
     `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
     `Adapter预检: ${preflight?.summary ?? "未生成"}`,
     "",

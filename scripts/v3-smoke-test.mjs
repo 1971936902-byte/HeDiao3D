@@ -114,6 +114,7 @@ async function main() {
   assert(camInputPlan.modelSelection?.candidates?.some((candidate) => candidate.selectedForCam), "CAM input model candidates missing selectedForCam");
   const externalCamRecipe = await getArtifactJson(job.id, "external-cam-recipe.json");
   assert(externalCamRecipe.model?.modelSelection?.selectedModelPath === camInputPlan.selectedModelPath, "external CAM recipe did not receive selected CAM input model");
+  assert(createV3SmokeReadmeProbe(job).includes("CAM输入模型"), "V3 package readme should include CAM input model selection");
 
   const list = await getJson("/api/orchestrator/jobs");
   assert(Array.isArray(list.jobs), "job list missing jobs[]");
@@ -129,6 +130,16 @@ async function main() {
     points: job.result.summary.points,
     elapsedMs: Date.now() - startedAt
   }, null, 2));
+}
+
+function createV3SmokeReadmeProbe(job) {
+  const camInputPlan = job.result?.summary?.camInputPlan;
+  const selection = camInputPlan?.modelSelection;
+  return [
+    `CAM输入模型: ${selection?.selectedModelId ?? camInputPlan?.selectedModelKind ?? "-"}`,
+    `CAM模型角色: ${selection?.selectedModelRole ?? "-"}`,
+    `CAM模型选择: ${selection?.selectionReason ?? camInputPlan?.summary ?? "-"}`
+  ].join("\n");
 }
 
 async function waitForJob(jobId, startedAt) {
