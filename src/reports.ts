@@ -31,6 +31,17 @@ export type ManufacturingReportInput = {
     formalTrialAt: string | null;
     notes: string;
   } | null;
+  exportGate?: {
+    safetyReportReviewed: boolean;
+    airRunVerified: boolean;
+    fixtureConfirmed: boolean;
+  };
+  safetyGate?: {
+    level: string;
+    title: string;
+    detail: string;
+    productionUnlocked: boolean;
+  };
 };
 
 export function createSafetyReport(input: ManufacturingReportInput) {
@@ -45,6 +56,8 @@ export function createSafetyReport(input: ManufacturingReportInput) {
     },
     machine: input.machine,
     machineAcceptance: input.machineAcceptance ?? null,
+    exportGate: input.exportGate ?? null,
+    safetyGate: input.safetyGate ?? null,
     tool: input.tool,
     material: input.material,
     settings: input.settings,
@@ -64,6 +77,8 @@ export function createSafetyReportMarkdown(input: ManufacturingReportInput) {
     `结论：${report.verdict === "blocked" ? "禁止直接上机" : "可进入离料空跑验证"}`,
     `阻断项：${criticalCount}`,
     `提醒项：${warningCount}`,
+    input.safetyGate ? `安全闸口：${input.safetyGate.title}` : "安全闸口：未记录",
+    input.safetyGate ? `正式文件：${input.safetyGate.productionUnlocked ? "已解锁" : "锁定"}` : "正式文件：未记录",
     "",
     "## 机床与工艺",
     "",

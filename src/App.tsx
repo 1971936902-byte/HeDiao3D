@@ -210,6 +210,13 @@ type ExportGateState = {
   fixtureConfirmed: boolean;
 };
 
+type SafetyGateStatus = {
+  level: "blocked" | "repair" | "air-run" | "trial";
+  title: string;
+  detail: string;
+  canDownloadProduction: boolean;
+};
+
 type MachineAcceptanceStep = "airRun" | "softTrial" | "formalTrial";
 type MachineAcceptanceRecord = {
   machineId: string;
@@ -509,7 +516,8 @@ export function App() {
   );
   const safetyIssues = useMemo(() => [...validateManufacturingSetup(settings, toolpath), ...validateGcodeProgram(settings, toolpath)], [settings, toolpath]);
   const exportBlocked = hasCriticalIssue(safetyIssues);
-  const exportGateReady = Boolean(toolpath && !exportBlocked && exportGate.safetyReportReviewed && exportGate.airRunVerified && exportGate.fixtureConfirmed);
+  const safetyGateStatus = useMemo(() => createSafetyGateStatus(toolpath, safetyIssues, exportGate), [toolpath, safetyIssues, exportGate]);
+  const exportGateReady = safetyGateStatus.canDownloadProduction;
   const isOperatorMode = projectProfile.role === "operator";
   const canDownloadProduction = !isOperatorMode || exportGateReady;
   const productionDownloadTitle = getProductionDownloadTitle(isOperatorMode, exportBlocked, exportGateReady);
@@ -1159,7 +1167,15 @@ export function App() {
       manufacturingQuality,
       materialRemoval,
       meshQuality,
-      costEstimate
+      costEstimate,
+      machineAcceptance: selectedMachineAcceptance,
+      exportGate,
+      safetyGate: {
+        level: safetyGateStatus.level,
+        title: safetyGateStatus.title,
+        detail: safetyGateStatus.detail,
+        productionUnlocked: safetyGateStatus.canDownloadProduction
+      }
     };
   };
 
@@ -1184,9 +1200,11 @@ export function App() {
       materialRemoval,
       meshQuality,
       costEstimate,
-      envelopeQuality
+      envelopeQuality,
+      exportGate,
+      safetyGateStatus
     });
-    const checklist = createPackageChecklist(reportInput, Boolean(exportGateReady), Boolean(aiMeshUrl));
+    const checklist = createPackageChecklist(reportInput, Boolean(exportGateReady), Boolean(aiMeshUrl), safetyGateStatus);
     const previewPng = captureWorkbenchPreviewPng();
     const files: ZipFile[] = [
       { name: "manifest.json", content: JSON.stringify(createPackageManifest(reportInput), null, 2), mime: "application/json" },
@@ -2275,9 +2293,9 @@ export function App() {
               <ShieldCheck size={18} />
               <h2>导出前安全校验</h2>
             </div>
-            <div className={`safety-verdict ${exportBlocked ? "blocked" : toolpath ? "ready" : "review"}`}>
-              <strong>{exportBlocked ? "禁止直接上机" : toolpath ? "可进入离料空跑验证" : "等待生成刀路"}</strong>
-              <span>{exportBlocked ? "存在 critical 阻断项，正式下载/上机前必须修复。" : toolpath ? "未发现阻断项，仍需离料空跑确认方向和夹持。" : "生成刀路后会输出独立安全报告。"}</span>
+            <div className={`safety-verdict ${safetyGateStatus.level}`}>
+              <strong>{safetyGateStatus.title}</strong>
+              <span>{safetyGateStatus.detail}</span>
             </div>
             <div className="safety-list">
               {safetyIssues.map((issue, index) => (
@@ -2296,9 +2314,9 @@ export function App() {
                 下载安全报告 JSON
               </button>
             </div>
-            <div className={`export-gate ${exportGateReady ? "ready" : exportBlocked ? "blocked" : "review"}`}>
-              <strong>{exportGateReady ? "正式加工文件已解锁" : exportBlocked ? "正式加工文件锁定" : "正式加工文件待确认"}</strong>
-              <span>{exportGateReady ? "可下载 ZIP/NC/TAP/TXT 正式文件；上机前仍建议先空跑。" : exportBlocked ? "存在阻断项，只允许下载报告和空跑文件。" : "下载正式文件前，请完成安全报告、离料空跑和夹持确认。"}</span>
+            <div className={`export-gate ${safetyGateStatus.level}`}>
+              <strong>{exportGateReady ? "正式加工文件已解锁" : "正式加工文件锁定"}</strong>
+              <span>{exportGateReady ? "ZIP/NC/TAP/TXT 已允许下载；首次仍建议软材料或降进给试雕。" : safetyGateStatus.detail}</span>
             </div>
             <div className="export-gate-list">
               <label className={exportGate.safetyReportReviewed ? "checked" : ""}>
@@ -3483,6 +3501,45 @@ function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: bool
   return "下载已确认文件";
 }
 
+function createSafetyGateStatus(toolpath: GeneratedToolpath | null, safetyIssues: SafetyIssue[], exportGate: ExportGateState): SafetyGateStatus {
+  const criticalCount = safetyIssues.filter((issue) => issue.level === "critical").length;
+  const warningCount = safetyIssues.filter((issue) => issue.level === "warning").length;
+  if (!toolpath || criticalCount > 0) {
+    return {
+      level: "blocked",
+      title: "禁止上机",
+      detail: !toolpath ? "尚未生成刀路，只允许调整参数和查看预检查提示。" : `存在 ${criticalCount} 个 critical 阻断项，只允许下载报告和离料空跑文件。`,
+      canDownloadProduction: false
+    };
+  }
+
+  const checkedCount = [exportGate.safetyReportReviewed, exportGate.airRunVerified, exportGate.fixtureConfirmed].filter(Boolean).length;
+  if (checkedCount === 3) {
+    return {
+      level: "trial",
+      title: "可试雕",
+      detail: warningCount > 0 ? `已完成三项闸口确认，但仍有 ${warningCount} 个提醒；建议先软材料或降进给试雕。` : "安全报告、离料空跑和夹持确认已完成，可下载正式加工文件。",
+      canDownloadProduction: true
+    };
+  }
+
+  if (warningCount > 0) {
+    return {
+      level: "repair",
+      title: "建议修复",
+      detail: `当前有 ${warningCount} 个提醒，正式文件继续锁定；修复参数或完成三项确认后再试雕。`,
+      canDownloadProduction: false
+    };
+  }
+
+  return {
+    level: "air-run",
+    title: "可空跑",
+    detail: "未发现阻断项。请先下载安全报告、完成离料空跑，并确认夹持区和刀具装夹。",
+    canDownloadProduction: false
+  };
+}
+
 function captureWorkbenchPreviewPng() {
   const canvas = document.querySelector<HTMLCanvasElement>(".workbench .viewer canvas");
   if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
@@ -3530,6 +3587,8 @@ function createPackageParameters(input: {
   meshQuality: MeshQualityReport | null;
   costEstimate: CostEstimate | null;
   envelopeQuality: ReturnType<typeof analyzeEnvelopeQuality> | null;
+  exportGate: ExportGateState;
+  safetyGateStatus: SafetyGateStatus;
 }) {
   return {
     packageVersion: "V2",
@@ -3537,6 +3596,13 @@ function createPackageParameters(input: {
     project: input.projectProfile,
     deployment: input.deploymentProfile,
     machineAcceptance: input.machineAcceptance,
+    exportGate: {
+      ...input.exportGate,
+      level: input.safetyGateStatus.level,
+      title: input.safetyGateStatus.title,
+      detail: input.safetyGateStatus.detail,
+      productionUnlocked: input.safetyGateStatus.canDownloadProduction
+    },
     source: {
       label: input.sourceLabel,
       aiMeshUrl: input.aiMeshUrl,
@@ -3571,7 +3637,8 @@ function createPackageParameters(input: {
 function createPackageChecklist(
   input: Parameters<typeof createOperatorPackageMarkdown>[0],
   exportGateReady: boolean,
-  usesAiMesh: boolean
+  usesAiMesh: boolean,
+  safetyGateStatus: SafetyGateStatus
 ) {
   const criticalCount = input.safetyIssues.filter((issue) => issue.level === "critical").length;
   const warningCount = input.safetyIssues.filter((issue) => issue.level === "warning").length;
@@ -3580,6 +3647,7 @@ function createPackageChecklist(
     "",
     `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
     `正式导出状态：${exportGateReady ? "已完成确认" : "未完成确认"}`,
+    `安全闸口等级：${safetyGateStatus.title}`,
     `风险项：阻断 ${criticalCount} / 提醒 ${warningCount}`,
     "",
     "## 必查文件",

@@ -32,6 +32,17 @@ type ExportPackageInput = {
     formalTrialAt: string | null;
     notes: string;
   } | null;
+  exportGate?: {
+    safetyReportReviewed: boolean;
+    airRunVerified: boolean;
+    fixtureConfirmed: boolean;
+  };
+  safetyGate?: {
+    level: string;
+    title: string;
+    detail: string;
+    productionUnlocked: boolean;
+  };
 };
 
 export function createOperatorPackageMarkdown(input: ExportPackageInput) {
@@ -89,6 +100,19 @@ export function createOperatorPackageMarkdown(input: ExportPackageInput) {
           input.machineAcceptance.notes ? `- 备注：${input.machineAcceptance.notes}` : "- 备注：无"
         ]
       : ["- 未记录当前机床验收信息。"]),
+    "",
+    "## 2.2 正式导出闸口",
+    "",
+    ...(input.safetyGate
+      ? [
+          `- 安全等级：${input.safetyGate.title}`,
+          `- 正式文件：${input.safetyGate.productionUnlocked ? "已解锁" : "锁定"}`,
+          `- 说明：${input.safetyGate.detail}`,
+          `- 安全报告：${input.exportGate?.safetyReportReviewed ? "已确认" : "未确认"}`,
+          `- 离料空跑：${input.exportGate?.airRunVerified ? "已确认" : "未确认"}`,
+          `- 夹持确认：${input.exportGate?.fixtureConfirmed ? "已确认" : "未确认"}`
+        ]
+      : ["- 未记录导出闸口状态。"]),
     "",
     "## 3. 刀路摘要",
     "",
