@@ -146,6 +146,19 @@ type V3OrchestratorJob = {
       estimatedMinutes: number;
       postProcessorName: string;
       warnings: string[];
+      simulation?: {
+        engine: string;
+        mode: string;
+        riskLevel: string;
+        metrics: {
+          missCount: number;
+          fitRate: number;
+          coverageRate: number;
+          maxDepth: number;
+          estimatedMinutes: number;
+        };
+        notes: string[];
+      };
     };
   };
   error: string | null;
@@ -3187,6 +3200,11 @@ export function App() {
               {v3Job?.result && (
                 <small>
                   引擎 {v3Job.result.engine} / 点数 {v3Job.result.summary.points} / 预览点 {v3Job.result.summary.previewPoints} / {v3Job.result.summary.estimatedMinutes.toFixed(1)} min
+                </small>
+              )}
+              {v3Job?.result?.summary.simulation && (
+                <small>
+                  仿真 {v3Job.result.summary.simulation.engine} / 贴合 {v3Job.result.summary.simulation.metrics.fitRate.toFixed(1)}% / 未命中 {v3Job.result.summary.simulation.metrics.missCount}
                 </small>
               )}
             </div>

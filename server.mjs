@@ -416,6 +416,8 @@ async function processOrchestratorJob(job, settings) {
   appendOrchestratorLog(job, `${selected.name} 当前不可直接执行或 adapter 未完成，使用内置 Mesh CAM fallback 完成闭环。`);
   const toolpath = await generateToolpathFromLocalModel(job.modelUrl, settings);
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+  const simulationSummary = createSimulationSummary(toolpath, settings, selected);
+  const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
   await writeFile(join(job.workDir, "toolpath-summary.json"), JSON.stringify({
     engine: "internal-mesh-cam",
     fallbackFrom: selected.id,
@@ -425,8 +427,12 @@ async function processOrchestratorJob(job, settings) {
     postProcessorName: toolpath.postProcessorName,
     warnings: toolpath.summary?.warnings ?? []
   }, null, 2), "utf8");
+  await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+  await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
   job.status = "completed";
   job.result = {
     engine: "internal-mesh-cam",
@@ -438,10 +444,11 @@ async function processOrchestratorJob(job, settings) {
       points: toolpath.points.length,
       previewPoints: toolpath.previewPoints?.length ?? 0,
       estimatedMinutes: toolpath.estimatedMinutes,
-      postProcessorName: toolpath.postProcessorName,
-      warnings: toolpath.summary?.warnings ?? []
-    }
-  };
+        postProcessorName: toolpath.postProcessorName,
+        warnings: toolpath.summary?.warnings ?? [],
+        simulation: simulationSummary
+      }
+    };
   appendOrchestratorLog(job, `闭环完成：${toolpath.points.length} 点，后处理 ${toolpath.postProcessorName}。`);
 }
 
@@ -459,6 +466,59 @@ function createAdapterJobSpec(job, modelUrl, settings, workDir, requestedEngine)
       preview: join(workDir, "preview.json")
     }
   };
+}
+
+function createSimulationSummary(toolpath, settings, selectedEngine) {
+  const points = toolpath.points ?? [];
+  const previewPoints = toolpath.previewPoints ?? [];
+  const safeZ = Number(settings.safeZ ?? 0);
+  const safeMoveCount = points.filter((point) => Number(point.z) >= safeZ * 0.92).length;
+  const missCount = previewPoints.filter((point) => point.hit === false).length;
+  const cuttingCount = Math.max(0, points.length - safeMoveCount);
+  const coverageRate = points.length > 0 ? (cuttingCount / points.length) * 100 : 0;
+  const fitRate = previewPoints.length > 0 ? ((previewPoints.length - missCount) / previewPoints.length) * 100 : 100;
+  const maxDepth = points.reduce((max, point) => Math.max(max, Number(point.depth ?? 0)), 0);
+  const zValues = points.map((point) => Number(point.z)).filter(Number.isFinite);
+  const zMin = zValues.length ? Math.min(...zValues) : 0;
+  const zMax = zValues.length ? Math.max(...zValues) : 0;
+  const riskLevel = missCount > points.length * 0.08 || fitRate < 92 ? "review" : coverageRate < 82 ? "review" : "ready";
+
+  return {
+    engine: selectedEngine.id === "camotics" && selectedEngine.available ? "camotics-adapter-slot" : "internal-rotary-preview",
+    mode: settings.camMode === "rotaryWrap" ? "rotary-wrap-airrun-preview" : settings.camMode === "3axis" ? "three-axis-preview" : "four-axis-preview",
+    status: "completed",
+    riskLevel,
+    metrics: {
+      points: points.length,
+      previewPoints: previewPoints.length,
+      safeMoveCount,
+      cuttingCount,
+      missCount,
+      fitRate,
+      coverageRate,
+      maxDepth,
+      zMin,
+      zMax,
+      estimatedMinutes: toolpath.estimatedMinutes
+    },
+    notes: [
+      selectedEngine.id === "camotics" && selectedEngine.available
+        ? "CAMotics adapter slot detected; current V3 still writes internal preview summary until adapter is enabled."
+        : "CAMotics 未启用，当前使用自研旋转包裹/三轴预览摘要作为仿真层小闭环。",
+      "air-run.nc 已将切削 Z 替换为安全高度，用于离料空跑验证轴向、夹具方向和行程。"
+    ]
+  };
+}
+
+function createServerAirRunGcode(points, settings, estimatedMinutes, sourceName) {
+  const safePoints = points.map((point) => ({
+    ...point,
+    z: Number(settings.safeZ),
+    depth: 0
+  }));
+  return toGcode(safePoints, { ...settings, spindleRpm: 0 }, estimatedMinutes, sourceName)
+    .replace(/S\d+\s+M3/g, "M5")
+    .replace(/\(Nuclear carving /, "(AIR RUN ONLY - Nuclear carving ");
 }
 
 function publicArtifactUrl(jobId, filename) {
