@@ -13,6 +13,7 @@
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
     "test:v3:neutral-adapter": "node scripts/v3-neutral-adapter-orchestrator-test.mjs",
     "test:v3:real-neutral-handoff": "node scripts/v3-real-neutral-handoff-test.mjs",
+    "test:v3:closed-neutral-handoff": "node scripts/v3-closed-neutral-handoff-test.mjs",
     "test:v3:opencamlib-runner": "node scripts/v3-opencamlib-runner-contract-test.mjs",
     "test:v3:neutral-import": "node scripts/v3-opencamlib-neutral-import-test.mjs",
     "test:v3:camotics-import": "node scripts/v3-camotics-result-import-test.mjs",
