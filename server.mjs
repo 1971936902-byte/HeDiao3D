@@ -583,6 +583,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   } else if (externalHandoff.status !== "completed" || externalHandoff.simulationStatus !== "completed") {
     warnings.push(`外部 handoff 验证未完成：${externalHandoff.status} / ${externalHandoff.simulationStatus ?? "unknown"}。`);
     nextActions.push("查看最近 handoff job 的 adapter-report.json、camotics-adapter-report.json 和 simulation-summary.json。");
+  } else if (externalHandoff.syntheticSimulation) {
+    warnings.push("最近外部 handoff 使用 synthetic CAMotics 结果，只能证明协议链路，不能证明材料去除效果。");
+    nextActions.push("运行 npm run test:v3:real-neutral-handoff，验证非 synthetic neutral 刀路和 CAMotics 结果回填。");
   }
 
   if (!neutralImport) {
@@ -695,6 +698,22 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 5,
+      id: "external-real-neutral-handoff",
+      title: "非 Synthetic Neutral + CAMotics 回填",
+      status: !externalHandoff
+        ? "pending"
+        : externalHandoff.status === "completed" && externalHandoff.simulationStatus === "completed" && !externalHandoff.syntheticSimulation
+          ? "done"
+          : "pending",
+      command: "npm run test:v3:real-neutral-handoff",
+      evidence: ["adapter-report.json", "neutral-toolpath.json", "camotics-result.json", "simulation-summary.json", "production-gate.json"],
+      detail: externalHandoff
+        ? `${externalHandoff.id} / syntheticSimulation=${externalHandoff.syntheticSimulation} / ${externalHandoff.simulationEngine ?? "unknown"}`
+        : "尚未验证非 synthetic neutral 刀路和 CAMotics 结果回填。",
+      blocksProduction: !externalHandoff || externalHandoff.status !== "completed" || externalHandoff.simulationStatus !== "completed" || externalHandoff.syntheticSimulation
+    }),
+    createAcceptanceStep({
+      order: 6,
       id: "opencamlib-neutral-import",
       title: "OpenCAMLib Neutral 导入契约",
       status: !neutralImport
@@ -710,7 +729,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !neutralImport || !neutralImport.ok || !neutralImport.postprocessEligible
     }),
     createAcceptanceStep({
-      order: 6,
+      order: 7,
       id: "camotics-result-import",
       title: "CAMotics 真实结果导入契约",
       status: !camoticsImport
@@ -726,7 +745,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible
     }),
     createAcceptanceStep({
-      order: 7,
+      order: 8,
       id: "v3-small-loop",
       title: "V3 小闭环加工包",
       status: !latestJob
@@ -744,7 +763,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestJob || latestJob.status !== "completed" || !latestJob.allowTrialNc || !latestJob.allowAirRun
     }),
     createAcceptanceStep({
-      order: 8,
+      order: 9,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",

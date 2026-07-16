@@ -27,8 +27,9 @@ async function main() {
   assert(full.diagnostics, "full readiness artifact missing diagnostics");
   assert(full.gates, "full readiness artifact missing gates");
   assert(full.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", "full readiness artifact missing acceptance plan");
-  assert(full.acceptancePlan.steps.length >= 8, "acceptance plan should include deployment steps");
+  assert(full.acceptancePlan.steps.length >= 9, "acceptance plan should include deployment steps");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-neutral-handoff"), "acceptance plan missing external handoff step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "external-real-neutral-handoff"), "acceptance plan missing real neutral handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-neutral-import"), "acceptance plan missing OpenCAMLib neutral import step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-result-import"), "acceptance plan missing CAMotics import step");
 
@@ -43,6 +44,7 @@ async function main() {
   assert(runbook.includes("HeDiao3D V3 deployment acceptance runbook"), "readiness runbook missing heading");
   assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
   assert(runbook.includes("npm run test:v3:neutral-adapter"), "readiness runbook missing neutral handoff command");
+  assert(runbook.includes("npm run test:v3:real-neutral-handoff"), "readiness runbook missing real neutral handoff command");
   assert(runbook.includes("npm run test:v3:neutral-import"), "readiness runbook missing neutral import command");
   assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");

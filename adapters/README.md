@@ -141,6 +141,14 @@ Run the adapter protocol test before enabling external CAM execution:
 npm run test:v3:adapters
 ```
 
+Run the Orchestrator neutral handoff checks when validating OpenCAMLib-style
+external CAM output:
+
+```bash
+npm run test:v3:neutral-adapter          # synthetic protocol handoff only
+npm run test:v3:real-neutral-handoff     # non-synthetic neutral + CAMotics result import
+```
+
 Run the deployment validation suite on a CAM server when you want to keep each
 adapter's generated plan artifacts and inspect native-tool readiness:
 
