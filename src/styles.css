@@ -1903,6 +1903,32 @@ button:disabled {
   border-left-color: var(--green);
 }
 
+.v3-diagnostics {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v3-diagnostics.ok {
+  border-left-color: var(--green);
+}
+
+.v3-diagnostics.critical {
+  border-left-color: var(--rose);
+}
+
+.v3-diagnostics span,
+.v3-diagnostics small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .v3-engine div {
   display: flex;
   justify-content: space-between;

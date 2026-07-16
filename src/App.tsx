@@ -300,6 +300,23 @@ type V3JobSummary = {
   allowAirRun: boolean;
 };
 
+type V3Diagnostics = {
+  level: "ok" | "warning" | "critical";
+  summary: string;
+  queue: {
+    queued: number;
+    running: number;
+    concurrency: number;
+  };
+  checks: Array<{
+    id: string;
+    level: "ok" | "warning" | "critical";
+    value: string | number | boolean;
+    detail: string;
+  }>;
+  recommendedActions: string[];
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -680,6 +697,7 @@ export function App() {
   const [v3Engines, setV3Engines] = useState<V3EngineStatus[]>([]);
   const [v3Job, setV3Job] = useState<V3OrchestratorJob | null>(null);
   const [v3JobHistory, setV3JobHistory] = useState<V3JobSummary[]>([]);
+  const [v3Diagnostics, setV3Diagnostics] = useState<V3Diagnostics | null>(null);
   const [isV3JobRunning, setIsV3JobRunning] = useState(false);
   const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
@@ -900,10 +918,22 @@ export function App() {
         setV3Status(error instanceof Error ? error.message : "V3 Orchestrator 引擎探测失败");
       });
     refreshV3JobHistory();
+    refreshV3Diagnostics();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const refreshV3Diagnostics = async () => {
+    try {
+      const response = await fetch("/api/orchestrator/diagnostics");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "V3 环境自检失败");
+      setV3Diagnostics(data as V3Diagnostics);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "V3 环境自检失败");
+    }
+  };
 
   const refreshV3JobHistory = async () => {
     try {
@@ -3434,6 +3464,19 @@ export function App() {
                 </div>
               ))}
             </div>
+            {v3Diagnostics && (
+              <div className={`v3-diagnostics ${v3Diagnostics.level}`}>
+                <div className="v3-history-heading">
+                  <strong>环境自检：{v3Diagnostics.level}</strong>
+                  <button type="button" onClick={refreshV3Diagnostics}>刷新</button>
+                </div>
+                <span>{v3Diagnostics.summary}</span>
+                <small>队列 {v3Diagnostics.queue.queued} / 运行 {v3Diagnostics.queue.running} / 并发 {v3Diagnostics.queue.concurrency}</small>
+                {v3Diagnostics.recommendedActions.slice(0, 2).map((action) => (
+                  <small key={action}>{action}</small>
+                ))}
+              </div>
+            )}
             <div className="v3-status-card">
               <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
               <span>{v3Status}</span>

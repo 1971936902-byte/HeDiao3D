@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -49,6 +49,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && req.url === "/api/orchestrator/engines") {
       return getOrchestratorEngines(res);
+    }
+
+    if (req.method === "GET" && req.url === "/api/orchestrator/diagnostics") {
+      return getOrchestratorDiagnostics(res);
     }
 
     if (req.method === "GET" && req.url === "/api/orchestrator/jobs") {
@@ -339,6 +343,88 @@ async function getOrchestratorEngines(res) {
       postprocess: "HeDiao3D post processors for 4-axis, 3-axis and Y/X rotary-wrap NC"
     }
   });
+}
+
+async function getOrchestratorDiagnostics(res) {
+  const engines = detectCamEngines();
+  const checks = [
+    createDiagnosticCheck("api-port", "ok", `API_PORT=${port}`, "本地 API 端口可读取。"),
+    createDiagnosticCheck("meshy-key", process.env.MESHY_API_KEY ? "ok" : "warning", process.env.MESHY_API_KEY ? "已配置" : "未配置", "未配置时不能调用 Meshy 生成/修复。"),
+    createDiagnosticCheck("external-adapters", enableExternalCamAdapters ? "ok" : "warning", enableExternalCamAdapters ? "已启用" : "未启用", "未启用时不会执行 FreeCAD/BlenderCAM/OpenCAMLib adapter。"),
+    createDiagnosticCheck("auto-mesh-repair", String(process.env.ORCHESTRATOR_AUTO_MESH_REPAIR ?? "").toLowerCase() === "true" ? "ok" : "warning", String(process.env.ORCHESTRATOR_AUTO_MESH_REPAIR ?? "false"), "未启用时 Orchestrator 只记录修复计划，不自动改模型。"),
+    createDiagnosticCheck("concurrency", maxOrchestratorConcurrency >= 1 ? "ok" : "critical", String(maxOrchestratorConcurrency), "并发数必须大于等于 1。"),
+    await createWritableDirectoryCheck("orchestrator-jobs", join(process.cwd(), "public", "orchestrator-jobs")),
+    await createWritableDirectoryCheck("imported-models", join(process.cwd(), "public", "imported-models")),
+    await createWritableDirectoryCheck("meshy-results", join(process.cwd(), "public", "meshy-results"))
+  ];
+
+  const externalEngines = engines.filter((engine) => engine.id !== "internal-mesh-cam");
+  const availableExternal = externalEngines.filter((engine) => engine.available);
+  checks.push(createDiagnosticCheck(
+    "external-engine-detection",
+    availableExternal.length > 0 ? "ok" : "warning",
+    availableExternal.length > 0 ? availableExternal.map((engine) => engine.name).join("、") : "未检测到外部 CAM/仿真引擎",
+    "生产级 CAM 需要安装 BlenderCAM/FabexCNC、FreeCAD CAM、CAMotics 或 OpenCAMLib。"
+  ));
+
+  const critical = checks.filter((check) => check.level === "critical").length;
+  const warning = checks.filter((check) => check.level === "warning").length;
+  const level = critical > 0 ? "critical" : warning > 0 ? "warning" : "ok";
+
+  return json(res, 200, {
+    level,
+    summary: level === "ok" ? "V3 Orchestrator 环境可用。" : level === "warning" ? "V3 Orchestrator 可运行，但仍缺少生产级外部 CAM/仿真配置。" : "V3 Orchestrator 存在阻断项。",
+    platform: {
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      cwd: process.cwd()
+    },
+    queue: {
+      queued: orchestratorQueue.length,
+      running: orchestratorRunning,
+      concurrency: maxOrchestratorConcurrency
+    },
+    env: {
+      API_PORT: port,
+      MESHY_API_BASE: meshyBase,
+      MAX_TOOLPATH_PREVIEW_POINTS: maxToolpathPreviewPoints,
+      ORCHESTRATOR_CONCURRENCY: maxOrchestratorConcurrency,
+      ENABLE_EXTERNAL_CAM_ADAPTERS: enableExternalCamAdapters,
+      ORCHESTRATOR_AUTO_MESH_REPAIR: String(process.env.ORCHESTRATOR_AUTO_MESH_REPAIR ?? "").toLowerCase() === "true",
+      MESHY_API_KEY: Boolean(process.env.MESHY_API_KEY)
+    },
+    engines,
+    checks,
+    recommendedActions: createDiagnosticsRecommendedActions(checks, engines)
+  });
+}
+
+function createDiagnosticCheck(id, level, value, detail) {
+  return { id, level, value, detail };
+}
+
+async function createWritableDirectoryCheck(id, directory) {
+  try {
+    await mkdir(directory, { recursive: true });
+    const probe = join(directory, `.hediao3d-write-test-${process.pid}-${Date.now()}.tmp`);
+    await writeFile(probe, "ok", "utf8");
+    await rm(probe, { force: true });
+    return createDiagnosticCheck(id, "ok", directory, "目录存在且可写。");
+  } catch (error) {
+    return createDiagnosticCheck(id, "critical", directory, error instanceof Error ? error.message : "目录不可写。");
+  }
+}
+
+function createDiagnosticsRecommendedActions(checks, engines) {
+  const actions = [];
+  if (checks.some((check) => check.id === "meshy-key" && check.level !== "ok")) actions.push("配置 MESHY_API_KEY，启用 Meshy 多图建模和模型修复。");
+  if (checks.some((check) => check.id === "external-adapters" && check.level !== "ok")) actions.push("生产环境确认外部 CAM adapter 后，设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true。");
+  if (!engines.some((engine) => engine.id === "blendercam" && engine.available)) actions.push("旋转夹具/艺术 Mesh 场景优先安装 Blender + BlenderCAM/FabexCNC。");
+  if (!engines.some((engine) => engine.id === "camotics" && engine.available)) actions.push("安装 CAMotics，用于正式 NC 下载前的材料去除仿真。");
+  if (!engines.some((engine) => engine.id === "opencamlib" && engine.available)) actions.push("在 Linux CAM 服务端安装 OpenCAMLib/ocl，用于后续 drop-cutter 和水线算法。");
+  if (actions.length === 0) actions.push("环境自检通过，可继续运行 V3 小闭环和外部 CAM adapter 试算。");
+  return actions;
 }
 
 async function createOrchestratorJob(req, res) {
