@@ -609,6 +609,40 @@ type V3AdapterValidationSummary = {
   };
 };
 
+type V3NativeCamReadinessSummary = {
+  id: string;
+  schema: string;
+  createdAt: string;
+  host?: {
+    platform?: string;
+    arch?: string;
+    hostname?: string;
+    node?: string;
+  } | null;
+  summary: {
+    readyCount: number;
+    requiredCount: number;
+    level: string;
+    text: string;
+    blockers: string[];
+    nextActions: string[];
+  };
+  checks: Array<{
+    id: string;
+    name: string;
+    role: string;
+    level: string;
+    ready: boolean;
+    command: string | null;
+    version: string | null;
+    missing: string[];
+  }>;
+  apiArtifacts?: {
+    json?: string;
+    markdown?: string;
+  };
+};
+
 type TaskSnapshot = {
   id: string;
   label: string;
@@ -991,9 +1025,11 @@ export function App() {
   const [v3JobHistory, setV3JobHistory] = useState<V3JobSummary[]>([]);
   const [v3Diagnostics, setV3Diagnostics] = useState<V3Diagnostics | null>(null);
   const [v3AdapterValidation, setV3AdapterValidation] = useState<V3AdapterValidationSummary | null>(null);
+  const [v3NativeCamReadiness, setV3NativeCamReadiness] = useState<V3NativeCamReadinessSummary | null>(null);
   const [isV3JobRunning, setIsV3JobRunning] = useState(false);
   const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
   const [isV3AdapterValidating, setIsV3AdapterValidating] = useState(false);
+  const [isV3NativeCamChecking, setIsV3NativeCamChecking] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -1214,6 +1250,7 @@ export function App() {
     refreshV3JobHistory();
     refreshV3Diagnostics();
     refreshV3AdapterValidation();
+    refreshV3NativeCamReadiness();
     return () => {
       cancelled = true;
     };
@@ -1269,6 +1306,37 @@ export function App() {
       setV3Status(error instanceof Error ? error.message : "Adapter 验证失败");
     } finally {
       setIsV3AdapterValidating(false);
+    }
+  };
+
+  const refreshV3NativeCamReadiness = async () => {
+    try {
+      const response = await fetch("/api/orchestrator/native-cam/latest");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Native CAM 验收记录加载失败");
+      setV3NativeCamReadiness(data.latest ?? null);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "Native CAM 验收记录加载失败");
+    }
+  };
+
+  const handleRunV3NativeCamReadiness = async (strict = false) => {
+    try {
+      setIsV3NativeCamChecking(true);
+      setV3Status(strict ? "正在执行 Native CAM 严格验收" : "正在执行 Native CAM 环境验收");
+      const response = await fetch("/api/orchestrator/native-cam", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strict })
+      });
+      const data = await response.json() as V3NativeCamReadinessSummary & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Native CAM 环境验收失败");
+      setV3NativeCamReadiness(data);
+      setV3Status(`Native CAM 验收完成：${data.summary.readyCount}/${data.summary.requiredCount}，${data.summary.level}`);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "Native CAM 环境验收失败");
+    } finally {
+      setIsV3NativeCamChecking(false);
     }
   };
 
@@ -3803,6 +3871,57 @@ export function App() {
                 ))}
               </div>
             )}
+            <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
+              <div className="v3-history-heading">
+                <strong>Native CAM 环境验收</strong>
+                <button type="button" onClick={refreshV3NativeCamReadiness}>刷新</button>
+              </div>
+              {v3NativeCamReadiness ? (
+                <>
+                  <span>
+                    {v3NativeCamReadiness.summary.readyCount}/{v3NativeCamReadiness.summary.requiredCount}
+                    {" · "}
+                    {v3NativeCamReadiness.summary.level}
+                    {v3NativeCamReadiness.host?.platform ? ` · ${v3NativeCamReadiness.host.platform}/${v3NativeCamReadiness.host.arch ?? "unknown"}` : ""}
+                  </span>
+                  <small>{v3NativeCamReadiness.summary.text}</small>
+                  <div className="v3-adapter-list">
+                    {v3NativeCamReadiness.checks.map((check) => (
+                      <span className={check.ready ? "ok" : "warning"} key={check.id}>
+                        {check.name} · {check.level}
+                      </span>
+                    ))}
+                  </div>
+                  {v3NativeCamReadiness.summary.blockers[0] && (
+                    <small>阻断项：{v3NativeCamReadiness.summary.blockers[0]}</small>
+                  )}
+                  <div className="v3-artifact-list compact">
+                    {v3NativeCamReadiness.apiArtifacts?.json && (
+                      <a href={v3NativeCamReadiness.apiArtifacts.json} download>
+                        下载验收JSON
+                      </a>
+                    )}
+                    {v3NativeCamReadiness.apiArtifacts?.markdown && (
+                      <a href={v3NativeCamReadiness.apiArtifacts.markdown} download>
+                        下载验收报告
+                      </a>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <small>还没有 Native CAM 环境验收记录；Linux CAM 服务器部署后建议先跑此检查。</small>
+              )}
+              <div className="v3-action-row">
+                <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(false)} disabled={isV3NativeCamChecking} type="button">
+                  <HardDrive size={17} />
+                  {isV3NativeCamChecking ? "验收中..." : "验收Native CAM"}
+                </button>
+                <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(true)} disabled={isV3NativeCamChecking} type="button">
+                  <ShieldCheck size={17} />
+                  严格验收
+                </button>
+              </div>
+            </div>
             <div className={`v3-diagnostics ${v3AdapterValidation?.overall.failed ? "warning" : "ok"}`}>
               <div className="v3-history-heading">
                 <strong>外部 Adapter 验证</strong>

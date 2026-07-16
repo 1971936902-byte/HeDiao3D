@@ -63,6 +63,14 @@ const server = createServer(async (req, res) => {
       return runAdapterValidation(req, res);
     }
 
+    if (req.method === "GET" && req.url === "/api/orchestrator/native-cam/latest") {
+      return getLatestNativeCamReadiness(res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/orchestrator/native-cam") {
+      return runNativeCamReadinessCheck(req, res);
+    }
+
     if (req.method === "GET" && req.url === "/api/orchestrator/jobs") {
       return listOrchestratorJobs(res);
     }
@@ -97,6 +105,11 @@ const server = createServer(async (req, res) => {
     const adapterValidationArtifactMatch = req.url?.match(/^\/api\/orchestrator\/adapter-validation\/([^/?#/]+)\/([^/?#/]+)$/);
     if (req.method === "GET" && adapterValidationArtifactMatch) {
       return getAdapterValidationArtifact(adapterValidationArtifactMatch[1], adapterValidationArtifactMatch[2], res);
+    }
+
+    const nativeCamArtifactMatch = req.url?.match(/^\/api\/orchestrator\/native-cam\/([^/?#/]+)\/([^/?#/]+)$/);
+    if (req.method === "GET" && nativeCamArtifactMatch) {
+      return getNativeCamReadinessArtifact(nativeCamArtifactMatch[1], nativeCamArtifactMatch[2], res);
     }
 
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
@@ -621,6 +634,147 @@ function getAdapterValidationArtifact(validationId, filename, res) {
   }
   const filePath = join(process.cwd(), "public", "orchestrator-adapter-validation", safeId, safeFilename);
   if (!existsSync(filePath)) return json(res, 404, { error: "找不到 adapter validation 产物" });
+  const content = readFileSync(filePath);
+  res.writeHead(200, {
+    "Content-Type": artifactContentType(safeFilename),
+    "Content-Length": content.length,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(content);
+}
+
+async function runNativeCamReadinessCheck(req, res) {
+  const input = await readJson(req, 100_000).catch(() => ({}));
+  const checkId = `native-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+  const outputRoot = join(process.cwd(), "public", "native-cam-readiness", checkId);
+  await mkdir(outputRoot, { recursive: true });
+  const strict = Boolean(input.strict);
+  const timeoutMs = Number(input.timeoutMs ?? process.env.V3_NATIVE_CAM_CHECK_TIMEOUT_MS ?? 60000);
+  const args = ["scripts/v3-linux-native-cam-check.mjs"];
+  if (strict) args.push("--strict");
+  const run = spawnSync(process.execPath, args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: timeoutMs + 5000,
+    env: {
+      ...process.env,
+      V3_NATIVE_CAM_CHECK_DIR: outputRoot
+    }
+  });
+  const reportPath = join(outputRoot, "native-cam-readiness.json");
+  let report = null;
+  if (existsSync(reportPath)) {
+    report = JSON.parse(readFileSync(reportPath, "utf8"));
+  } else {
+    report = {
+      schema: "hediao3d.linux-native-cam-check.v1",
+      createdAt: new Date().toISOString(),
+      outputRoot,
+      summary: {
+        readyCount: 0,
+        requiredCount: 4,
+        level: "missing",
+        summary: "Native CAM check script did not write a report.",
+        blockers: ["Native CAM check report missing."],
+        nextActions: ["查看服务器日志并重新运行 Native CAM 环境验收。"]
+      },
+      checks: []
+    };
+  }
+  report.id = checkId;
+  report.apiArtifacts = createNativeCamReadinessArtifactLinks(checkId);
+  report.run = {
+    exitCode: run.status,
+    error: run.error?.message ?? null,
+    stdoutTail: run.status === 0 ? "" : String(run.stdout ?? "").slice(-4000),
+    stderrTail: String(run.stderr ?? "").slice(-4000)
+  };
+  await writeFile(reportPath, JSON.stringify(report, null, 2), "utf8");
+  return json(res, run.status === 0 || report.summary ? 200 : 500, createNativeCamReadinessPublicSummary(report, checkId));
+}
+
+function getLatestNativeCamReadiness(res) {
+  const root = join(process.cwd(), "public", "native-cam-readiness");
+  if (!existsSync(root)) return json(res, 200, { latest: null, checks: [] });
+  const checks = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readNativeCamReadinessSummary(entry.name))
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())
+    .slice(0, 12);
+  return json(res, 200, {
+    latest: checks[0] ?? null,
+    checks
+  });
+}
+
+function readNativeCamReadinessSummary(checkId) {
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(checkId)) return null;
+  const reportPath = join(process.cwd(), "public", "native-cam-readiness", checkId, "native-cam-readiness.json");
+  if (!existsSync(reportPath)) return null;
+  try {
+    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    return createNativeCamReadinessPublicSummary(report, checkId);
+  } catch {
+    return null;
+  }
+}
+
+function createNativeCamReadinessPublicSummary(report, checkId) {
+  const summary = report.summary ?? {};
+  return {
+    id: checkId,
+    schema: report.schema,
+    createdAt: report.createdAt,
+    outputRoot: report.outputRoot,
+    host: report.host ?? null,
+    summary: {
+      readyCount: Number(summary.readyCount ?? 0),
+      requiredCount: Number(summary.requiredCount ?? 0),
+      level: summary.level ?? "missing",
+      text: summary.summary ?? "Native CAM readiness summary missing.",
+      blockers: Array.isArray(summary.blockers) ? summary.blockers.slice(0, 8) : [],
+      nextActions: Array.isArray(summary.nextActions) ? summary.nextActions.slice(0, 8) : []
+    },
+    checks: Array.isArray(report.checks)
+      ? report.checks.map((check) => ({
+        id: check.id,
+        name: check.name,
+        role: check.role,
+        level: check.level,
+        ready: Boolean(check.ready),
+        command: check.command ?? null,
+        version: check.version ?? null,
+        missing: Array.isArray(check.missing) ? check.missing.slice(0, 4) : []
+      }))
+      : [],
+    apiArtifacts: createNativeCamReadinessArtifactLinks(checkId),
+    run: {
+      exitCode: report.run?.exitCode ?? null,
+      error: report.run?.error ?? null,
+      hasStdout: Boolean(report.run?.stdoutTail),
+      hasStderr: Boolean(report.run?.stderrTail)
+    }
+  };
+}
+
+function createNativeCamReadinessArtifactLinks(checkId) {
+  return {
+    json: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-readiness.json`,
+    markdown: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-readiness.md`
+  };
+}
+
+function getNativeCamReadinessArtifact(checkId, filename, res) {
+  const safeId = decodeURIComponent(checkId);
+  const safeFilename = decodeURIComponent(filename);
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(safeId) || !/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return json(res, 400, { error: "非法 native CAM readiness 路径" });
+  }
+  const filePath = join(process.cwd(), "public", "native-cam-readiness", safeId, safeFilename);
+  if (!existsSync(filePath)) return json(res, 404, { error: "找不到 native CAM readiness 产物" });
   const content = readFileSync(filePath);
   res.writeHead(200, {
     "Content-Type": artifactContentType(safeFilename),

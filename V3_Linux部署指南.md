@@ -94,6 +94,15 @@ public/native-cam-readiness/<timestamp>/
   native-cam-readiness.md
 ```
 
+部署 API 启动后，也可以在前端 V3 面板点击“验收Native CAM”，或直接调用：
+
+```bash
+curl http://127.0.0.1:8787/api/orchestrator/native-cam/latest
+curl -X POST http://127.0.0.1:8787/api/orchestrator/native-cam \
+  -H 'Content-Type: application/json' \
+  -d '{"strict":false}'
+```
+
 如果只是想生成报告但不阻断部署，可以直接运行上面的命令；如果希望 CI/上线脚本在未就绪时失败，可使用：
 
 ```bash
