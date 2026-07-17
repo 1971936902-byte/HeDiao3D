@@ -14,6 +14,11 @@ async function main() {
   assert(run.productionGuardrails?.schema === "hediao3d.external-adapter-production-guardrails.v1", "POST summary missing production guardrails");
   assert(run.productionGuardrails.readyForProduction === false, "adapter validation guardrails must not mark production ready");
   assert(run.productionGuardrails.requiredCount >= 4, "adapter validation guardrails missing required checks");
+  assert(run.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", "POST summary missing handoff classification audit");
+  assert(run.handoffClassificationAudit.readyForProduction === false, "handoff audit must not mark production ready");
+  assert(run.handoffClassificationAudit.adapters?.length === 4, `expected 4 audited adapters, got ${run.handoffClassificationAudit.adapters?.length}`);
+  assert(run.handoffClassificationAudit.productionCandidateCount === 0, "safe-default validation must not report production candidates");
+  assert(run.handoffClassificationAudit.unsafeCount === 4, `safe-default validation should mark all adapters unsafe, got ${run.handoffClassificationAudit.unsafeCount}`);
 
   const latest = await getJson("/api/orchestrator/adapter-validation/latest");
   assert(latest.latest, "latest validation missing");
@@ -28,6 +33,8 @@ async function main() {
   assert(Array.isArray(artifact.adapters), "full validation artifact missing adapters");
   assert(artifact.adapters.some((adapter) => adapter.workDir), "full artifact should keep detailed adapter data");
   assert(artifact.nativeReadiness?.schema === "hediao3d.native-cam-readiness.v1", "full artifact missing native readiness report");
+  assert(artifact.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", "full artifact missing handoff classification audit");
+  assert(artifact.handoffClassificationAudit.adapters?.every((adapter) => typeof adapter.classification === "string"), "full artifact audit adapters missing classifications");
   assert(artifact.productionGuardrails?.required?.some((item) => item.id === "camotics-input-identity"), "full artifact missing CAMotics input identity guardrail");
   assert(artifact.productionGuardrails?.required?.some((item) => item.evidence?.includes("rotary-calibration-airrun.nc")), "full artifact missing rotary calibration evidence guardrail");
 
@@ -51,6 +58,8 @@ function validatePublicSummary(summary, label) {
   assert(Array.isArray(summary.nativeReadiness.adapters), `${label} nativeReadiness missing adapters[]`);
   assert(summary.productionGuardrails?.schema === "hediao3d.external-adapter-production-guardrails.v1", `${label} missing productionGuardrails`);
   assert(summary.productionGuardrails.readyForProduction === false, `${label} guardrails should not be production ready`);
+  assert(summary.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", `${label} missing handoffClassificationAudit`);
+  assert(summary.handoffClassificationAudit.readyForProduction === false, `${label} handoff audit should not be production ready`);
   assert(!("workDir" in summary), `${label} leaked full validation workDir`);
   for (const adapter of summary.adapters) {
     assert(adapter.id, `${label} adapter missing id`);

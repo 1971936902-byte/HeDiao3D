@@ -1889,6 +1889,33 @@ function createAdapterValidationPublicSummary(summary, validationId) {
       note: "Adapter validation summary is missing overall metrics."
     },
     nativeReadiness: createPublicNativeReadiness(summary.nativeReadiness),
+    handoffClassificationAudit: summary.handoffClassificationAudit ? {
+      schema: summary.handoffClassificationAudit.schema,
+      readyForProduction: Boolean(summary.handoffClassificationAudit.readyForProduction),
+      productionCandidateCount: Number(summary.handoffClassificationAudit.productionCandidateCount ?? 0),
+      unsafeCount: Number(summary.handoffClassificationAudit.unsafeCount ?? 0),
+      missingCount: Number(summary.handoffClassificationAudit.missingCount ?? 0),
+      fixtureCount: Number(summary.handoffClassificationAudit.fixtureCount ?? 0),
+      syntheticCount: Number(summary.handoffClassificationAudit.syntheticCount ?? 0),
+      previewScaffoldCount: Number(summary.handoffClassificationAudit.previewScaffoldCount ?? 0),
+      notGeneratedCount: Number(summary.handoffClassificationAudit.notGeneratedCount ?? 0),
+      summary: summary.handoffClassificationAudit.summary ?? "",
+      nextActions: Array.isArray(summary.handoffClassificationAudit.nextActions) ? summary.handoffClassificationAudit.nextActions.slice(0, 6) : [],
+      adapters: Array.isArray(summary.handoffClassificationAudit.adapters)
+        ? summary.handoffClassificationAudit.adapters.slice(0, 8).map((adapter) => ({
+          id: adapter.id,
+          classification: adapter.classification ?? "missing",
+          outputKind: adapter.outputKind ?? null,
+          productionCandidate: Boolean(adapter.productionCandidate),
+          fixture: Boolean(adapter.fixture),
+          synthetic: Boolean(adapter.synthetic),
+          previewScaffold: Boolean(adapter.previewScaffold),
+          notGenerated: Boolean(adapter.notGenerated),
+          unsafe: Boolean(adapter.unsafe),
+          generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand)
+        }))
+        : []
+    } : null,
     adapters: Array.isArray(summary.adapters)
       ? summary.adapters.map((adapter) => ({
         id: adapter.id,
@@ -1909,6 +1936,8 @@ function createAdapterValidationPublicSummary(summary, validationId) {
           durationMs: adapter.run?.durationMs ?? null
         },
         nativeSignals: adapter.nativeSignals ?? null,
+        handoffClassification: adapter.handoffEvidence?.classification ?? "missing",
+        productionCandidate: Boolean(adapter.handoffEvidence?.productionCandidate),
         failed: Boolean(adapter.failed)
       }))
       : [],

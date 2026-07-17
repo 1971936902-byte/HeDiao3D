@@ -79,6 +79,7 @@ const summary = {
     HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: process.env.HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN ?? null
   },
   nativeReadiness: createNativeReadiness(results),
+  handoffClassificationAudit: createHandoffClassificationAudit(results),
   productionGuardrails: createProductionGuardrails(results),
   adapters: results
 };
@@ -372,6 +373,7 @@ function summarize(results) {
 }
 
 function createProductionGuardrails(results) {
+  const audit = createHandoffClassificationAudit(results);
   const required = [
     {
       id: "disable-fixtures",
@@ -409,6 +411,12 @@ function createProductionGuardrails(results) {
     schema: "hediao3d.external-adapter-production-guardrails.v1",
     readyForProduction: false,
     summary: "Adapter 验证只证明计划和接口契约；生产仍需真实外部 CAM、匹配 G-code 的 CAMotics 材料去除结果和现场验收。",
+    handoffClassificationAudit: {
+      productionCandidateCount: audit.productionCandidateCount,
+      unsafeCount: audit.unsafeCount,
+      missingCount: audit.missingCount,
+      summary: audit.summary
+    },
     adapterStatuses,
     handoffClassifications,
     required,
@@ -418,6 +426,69 @@ function createProductionGuardrails(results) {
       "运行 npm run test:v3:camotics-import，确认 CAMotics 结果与当前 camotics-preview.nc 哈希匹配。",
       "完成 rotary-calibration-airrun.nc、air-run.nc、机床验收和试雕反馈回填后再重新生成 V3 readiness。"
     ]
+  };
+}
+
+function createHandoffClassificationAudit(results) {
+  const adapters = results.map((item) => {
+    const evidence = item.handoffEvidence ?? {};
+    const classification = evidence.classification ?? "missing";
+    const fixture = Boolean(evidence.fixture) || classification === "fixture-contract";
+    const synthetic = Boolean(evidence.synthetic) || classification === "synthetic-contract";
+    const previewScaffold = Boolean(evidence.previewScaffold) || /preview|scaffold/i.test(classification);
+    const productionCandidate = Boolean(evidence.productionCandidate) && classification === "production-candidate" && !fixture && !synthetic && !previewScaffold;
+    const missing = classification === "missing";
+    const notGenerated = classification === "not-generated";
+    const unsafe = !productionCandidate;
+    return {
+      id: item.id,
+      status: item.report?.status ?? item.run?.status ?? "missing",
+      outputKind: evidence.outputKind ?? (item.id === "opencamlib" ? "neutral-toolpath" : "gcode"),
+      classification,
+      productionCandidate,
+      fixture,
+      synthetic,
+      previewScaffold,
+      missing,
+      notGenerated,
+      unsafe,
+      generatedByExternalCommand: Boolean(evidence.generatedByExternalCommand)
+    };
+  });
+  const productionCandidateCount = adapters.filter((adapter) => adapter.productionCandidate).length;
+  const unsafeCount = adapters.filter((adapter) => adapter.unsafe).length;
+  const missingCount = adapters.filter((adapter) => adapter.missing).length;
+  const fixtureCount = adapters.filter((adapter) => adapter.fixture).length;
+  const syntheticCount = adapters.filter((adapter) => adapter.synthetic).length;
+  const previewScaffoldCount = adapters.filter((adapter) => adapter.previewScaffold).length;
+  const notGeneratedCount = adapters.filter((adapter) => adapter.notGenerated).length;
+  const blockers = [
+    ...(missingCount ? [`${missingCount} 个 adapter 缺少 handoff evidence。`] : []),
+    ...(notGeneratedCount ? [`${notGeneratedCount} 个 adapter 尚未生成外部 handoff 输出。`] : []),
+    ...(fixtureCount ? [`${fixtureCount} 个 adapter 输出为 fixture-contract。`] : []),
+    ...(syntheticCount ? [`${syntheticCount} 个 adapter 输出为 synthetic-contract。`] : []),
+    ...(previewScaffoldCount ? [`${previewScaffoldCount} 个 adapter 输出为 preview/scaffold。`] : [])
+  ];
+  return {
+    schema: "hediao3d.adapter-handoff-classification-audit.v1",
+    readyForProduction: false,
+    productionCandidateCount,
+    unsafeCount,
+    missingCount,
+    fixtureCount,
+    syntheticCount,
+    previewScaffoldCount,
+    notGeneratedCount,
+    summary: productionCandidateCount > 0 && unsafeCount === 0
+      ? "Adapter 输出分类看起来可进入下一步生产证据链，但仍需 CAMotics、空跑和机床验收。"
+      : `Adapter 输出分类未达到生产候选：productionCandidate=${productionCandidateCount}，unsafe=${unsafeCount}，missing=${missingCount}。`,
+    blockers,
+    nextActions: [
+      "确认每个 adapter-report.json 都包含 hediao3d.adapter-handoff-evidence.v1。",
+      "关闭 fixture/synthetic/preview scaffold 输出后重新运行外部 adapter validation。",
+      "只有 production-candidate 输出才允许进入后续 CAMotics 材料去除和机床验收链路。"
+    ],
+    adapters
   };
 }
 
@@ -504,6 +575,7 @@ function createMarkdown(summary) {
     `- Completed external outputs: ${summary.overall.completedAdapters}`,
     `- Production ready: ${summary.overall.readyForProduction ? "yes" : "no"}`,
     `- Native readiness: ${summary.nativeReadiness.readyCount}/${summary.nativeReadiness.requiredCount} (${summary.nativeReadiness.level})`,
+    `- Handoff audit: productionCandidate=${summary.handoffClassificationAudit.productionCandidateCount}, unsafe=${summary.handoffClassificationAudit.unsafeCount}, missing=${summary.handoffClassificationAudit.missingCount}`,
     `- Guardrails: ${summary.productionGuardrails.required.length} required / production ready ${summary.productionGuardrails.readyForProduction ? "yes" : "no"}`,
     "",
     "## Environment switches",
@@ -519,6 +591,16 @@ function createMarkdown(summary) {
     "",
     "Next actions:",
     ...summary.nativeReadiness.nextActions.map((item) => `- ${item}`),
+    "",
+    "## Handoff classification audit",
+    "",
+    summary.handoffClassificationAudit.summary,
+    "",
+    "Adapters:",
+    ...summary.handoffClassificationAudit.adapters.map((adapter) => `- ${adapter.id}: ${adapter.classification} / productionCandidate=${adapter.productionCandidate} / unsafe=${adapter.unsafe}`),
+    "",
+    "Audit next actions:",
+    ...summary.handoffClassificationAudit.nextActions.map((item) => `- ${item}`),
     "",
     "## Production guardrails",
     "",
