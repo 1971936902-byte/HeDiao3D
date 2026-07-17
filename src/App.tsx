@@ -154,6 +154,19 @@ type V3OrchestratorJob = {
       engine: string;
       error?: string | null;
       durationMs?: number;
+      metrics?: {
+        neutralToolpath?: {
+          status?: string;
+          path?: string | null;
+          cutterEnvelopeReportPath?: string | null;
+          synthetic?: boolean;
+          fixture?: boolean;
+          heightfieldPreview?: boolean;
+          previewScaffold?: boolean;
+          pointCount?: number | null;
+          generatedByExternalCommand?: boolean;
+        };
+      };
     } | null;
     camoticsAdapterReport?: {
       status: string;
@@ -5844,6 +5857,17 @@ export function App() {
                   {v3Job.result.summary.neutralToolpathImportValidation.summary}
                 </small>
               )}
+              {findV3DeliveryFile(v3Job, "opencamlib-cutter-envelope-report.json") && (
+                <small className="v3-inline-warning">
+                  OpenCAMLib包络：preview审计报告
+                  {" · "}
+                  {v3Job?.result?.adapterReport?.metrics?.neutralToolpath?.cutterEnvelopeReportPath ? "已绑定runner输出" : "已列入加工包"}
+                  {v3Job?.result?.adapterReport?.metrics?.neutralToolpath?.pointCount
+                    ? ` · ${v3Job.result.adapterReport.metrics.neutralToolpath.pointCount}点`
+                    : ""}
+                  {v3Job?.result?.adapterReport?.metrics?.neutralToolpath?.previewScaffold ? " · 不解锁生产" : ""}
+                </small>
+              )}
               {v3Job?.result?.summary.rotaryWrapPreviewReport && (
                 <div className={`v3-rotary-preview-card ${v3Job.result.summary.rotaryWrapPreviewReport.level}`}>
                   <div>
@@ -7164,6 +7188,10 @@ function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
   return `${status}${simulation}${synthetic}${points}`;
 }
 
+function findV3DeliveryFile(job: V3OrchestratorJob | null, filename: string) {
+  return job?.result?.summary.deliveryManifest?.files.find((file) => file.filename === filename) ?? null;
+}
+
 function createV3DownloadIntegrityEvidence(job: V3OrchestratorJob) {
   const files = job.result?.summary.packageIntegrity?.files ?? [];
   const keyFiles = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc", "camotics-preview.nc"];
@@ -7324,6 +7352,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "machining-package-index.json") return "加工包索引";
   if (filename === "cam-handoff-evidence.md") return "CAM交接证据";
   if (filename === "open-source-cam-execution-plan.json") return "开源CAM执行计划";
+  if (filename === "opencamlib-cutter-envelope-report.json") return "OpenCAMLib包络报告";
   return filename;
 }
 
@@ -8423,6 +8452,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const externalCamRecipe = summary?.externalCamRecipe;
   const camEngineSelection = summary?.camEngineSelection;
   const camServerConfig = summary?.camServerConfig;
+  const cutterEnvelopeReportFile = manifest?.files.find((file) => file.filename === "opencamlib-cutter-envelope-report.json");
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -8451,6 +8481,10 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",
     `外部摄取源: ${camHandoffQuality?.sourceSnapshot ? `${camHandoffQuality.sourceSnapshot.kind} / ${camHandoffQuality.sourceSnapshot.sha256.slice(0, 12)}` : "无"}`,
+    `OpenCAMLib包络报告: ${cutterEnvelopeReportFile ? "opencamlib-cutter-envelope-report.json / preview审计证据" : "未生成"}`,
+    cutterEnvelopeReportFile
+      ? "OpenCAMLib包络边界: 该报告记录STL高度场刀具半径包络、命中率和深度统计，但仍是preview scaffold，不能单独解锁生产NC。"
+      : "OpenCAMLib包络边界: 未生成包络审计报告，真实生产仍需外部CAM候选、CAMotics材料去除仿真和机床验收。",
     "",
     "## 机床验收",
     "",
