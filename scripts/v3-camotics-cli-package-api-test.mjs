@@ -113,6 +113,18 @@ async function main() {
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.sha256), "package integrity missing result validator hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.sha256), "package integrity missing operator checklist hash");
 
+  const linuxPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-linux-package`);
+  assert(linuxPackage.bytes[0] === 0x50 && linuxPackage.bytes[1] === 0x4b, "CAMotics Linux package should be a ZIP file");
+  assert((linuxPackage.contentType ?? "").includes("application/zip"), "CAMotics Linux package should use application/zip content type");
+  const linuxZipNames = listZipFilenames(linuxPackage.bytes);
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/README-CAMOTICS.md"), "CAMotics Linux package missing README");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/camotics-linux-package-manifest.json"), "CAMotics Linux package missing manifest");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/inputs/camotics-preview.nc"), "CAMotics Linux package missing preview NC");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-linux-run.sh"), "CAMotics Linux package missing run script");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-validate.js"), "CAMotics Linux package missing result validator");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-linux-operator-checklist.md"), "CAMotics Linux package missing operator checklist");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-template.json"), "CAMotics Linux package missing result template");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
@@ -251,6 +263,16 @@ async function getText(path) {
   return text;
 }
 
+async function getBinary(path) {
+  const response = await fetch(`${baseUrl}${path}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) throw new Error(buffer.toString("utf8") || `${response.status} ${path}`);
+  return {
+    bytes: buffer,
+    contentType: response.headers.get("content-type")
+  };
+}
+
 async function postJson(path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
@@ -260,6 +282,27 @@ async function postJson(path, body) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? `${response.status} ${path}`);
   return data;
+}
+
+function listZipFilenames(bytes) {
+  const names = [];
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = bytes.readUInt32LE(offset);
+    if (signature === 0x04034b50) {
+      const compressedSize = bytes.readUInt32LE(offset + 18);
+      const fileNameLength = bytes.readUInt16LE(offset + 26);
+      const extraLength = bytes.readUInt16LE(offset + 28);
+      const nameStart = offset + 30;
+      const nameEnd = nameStart + fileNameLength;
+      names.push(bytes.subarray(nameStart, nameEnd).toString("utf8"));
+      offset = nameEnd + extraLength + compressedSize;
+      continue;
+    }
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    offset += 1;
+  }
+  return names;
 }
 
 function assert(condition, message) {

@@ -823,6 +823,7 @@ type V3OrchestratorJob = {
             artifact: string;
             resultTemplate: string | null;
             linuxRunScript: string | null;
+            operatorChecklist?: string | null;
             report: string | null;
           } | null;
           compatibility?: {
@@ -840,6 +841,7 @@ type V3OrchestratorJob = {
         resultTemplate: string;
         linuxRunScript: string;
         resultValidator?: string | null;
+        operatorChecklist?: string | null;
         report: string;
         productionUnlockEligible: boolean;
         preferredGcodeSha256: string | null;
@@ -3603,6 +3605,44 @@ export function App() {
     }
   };
 
+  const handleDownloadV3CamoticsLinuxPackage = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再下载 CAMotics Linux 仿真包。");
+      return;
+    }
+
+    setIsV3PackageDownloading(true);
+    setV3Status("正在打包 CAMotics Linux 仿真包");
+    try {
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-linux-package`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? `CAMotics Linux 仿真包下载失败：${response.status}`);
+      }
+      const blob = await response.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-camotics-linux-${stamp}.zip`, blob);
+      setV3Status("CAMotics Linux 仿真包已由 Orchestrator 打包");
+      recordTask({
+        category: "cam",
+        status: "ok",
+        title: "下载 CAMotics Linux 仿真包",
+        detail: "包含预览 NC、运行脚本、校验器、操作清单和结果回填模板；不会解锁生产 NC。"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "CAMotics Linux 仿真包下载失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "warning",
+        title: "CAMotics Linux 仿真包下载失败",
+        detail: message
+      });
+    } finally {
+      setIsV3PackageDownloading(false);
+    }
+  };
+
   const handleDownloadAirRun = () => {
     if (!airRunProgram) return;
     downloadText(airRunProgram.filename, airRunProgram.gcode);
@@ -5873,7 +5913,7 @@ export function App() {
                       <small key={action}>{action}</small>
                     ))}
                   </div>
-                  {!V3_TRIAL_FOCUSED_UI && <div className="v3-camotics-import">
+                  <div className="v3-camotics-import">
                     <div>
                       <strong>CAMotics 真实仿真闭环</strong>
                       <small>先生成 Linux 准备包，在 CAM 服务器执行材料去除仿真，再回填 camotics-result.json、截图或材料去除 STL。</small>
@@ -5886,6 +5926,15 @@ export function App() {
                     >
                       <Download size={17} />
                       {isV3CamoticsPackagePreparing ? "生成中..." : "生成仿真准备包"}
+                    </button>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handleDownloadV3CamoticsLinuxPackage}
+                      disabled={!v3Job?.id || !v3Job.result?.summary.camoticsCliPackage || isV3PackageDownloading}
+                    >
+                      <Download size={17} />
+                      {isV3PackageDownloading ? "打包中..." : "下载Linux仿真包"}
                     </button>
                     {v3Job.result.summary.camoticsCliPackage && (
                       <div className="v3-camotics-package-links">
@@ -5900,6 +5949,7 @@ export function App() {
                           v3Job.result.summary.camoticsCliPackage.resultTemplate,
                           v3Job.result.summary.camoticsCliPackage.linuxRunScript,
                           v3Job.result.summary.camoticsCliPackage.resultValidator,
+                          v3Job.result.summary.camoticsCliPackage.operatorChecklist,
                           v3Job.result.summary.camoticsCliPackage.report
                         ].filter((filename): filename is string => Boolean(filename)).map((filename) => (
                           <a
@@ -5949,7 +5999,7 @@ export function App() {
                       <UploadCloud size={17} />
                       {isV3CamoticsImporting ? "回填中..." : "回填CAMotics结果"}
                     </button>
-                  </div>}
+                  </div>
                   <div className="v3-action-row">
                     <button className="demo-action package-action" type="button" onClick={() => setActiveStage("feedback")}>
                       <ClipboardCheck size={17} />
@@ -8062,6 +8112,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "camotics-result-template.json") return "结果回填模板";
   if (filename === "camotics-linux-run.sh") return "Linux运行脚本";
   if (filename === "camotics-result-validate.js") return "结果校验脚本";
+  if (filename === "camotics-linux-operator-checklist.md") return "Linux操作清单";
   if (filename === "camotics-cli-package-report.json") return "运行包报告";
   if (filename === "safe-trial-execution-plan.json") return "安全试雕执行计划";
   if (filename === "operator-download-checklist.md") return "下载核验清单";

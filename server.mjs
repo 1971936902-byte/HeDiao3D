@@ -133,6 +133,11 @@ const server = createServer(async (req, res) => {
       return createOrchestratorCamoticsCliPackage(orchestratorCamoticsCliPackageMatch[1], res);
     }
 
+    const orchestratorCamoticsLinuxPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/camotics-linux-package$/);
+    if (req.method === "GET" && orchestratorCamoticsLinuxPackageMatch) {
+      return getOrchestratorCamoticsLinuxPackage(orchestratorCamoticsLinuxPackageMatch[1], res);
+    }
+
     const orchestratorTrialPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/trial-package$/);
     if (req.method === "GET" && orchestratorTrialPackageMatch) {
       return getOrchestratorTrialPackage(orchestratorTrialPackageMatch[1], res);
@@ -11257,6 +11262,92 @@ function getOrchestratorTrialPackage(jobId, res) {
   res.end(zip);
 }
 
+function getOrchestratorCamoticsLinuxPackage(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
+    return json(res, 400, { error: "非法 job 路径" });
+  }
+  const workDir = join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  const deliveryManifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
+  const packageIntegrity = readJsonFileSafe(join(workDir, "package-integrity.json"));
+  const runPackage = readJsonFileSafe(join(workDir, "camotics-cli-run-package.json"));
+  if (!deliveryManifest?.files?.length) {
+    return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
+  }
+  if (!runPackage) {
+    return json(res, 409, {
+      error: "缺少 CAMotics Linux 运行包，请先生成仿真准备包",
+      nextActions: [
+        "调用 POST /api/orchestrator/jobs/:jobId/camotics-cli-package。",
+        "确认 camotics-cli-run-package.json、camotics-result-template.json、camotics-result-validate.js 和 camotics-linux-operator-checklist.md 均存在。"
+      ]
+    });
+  }
+
+  const criticalFilenames = [
+    "camotics-preview.nc",
+    "camotics-project-template.json",
+    "camotics-simulation-plan.json",
+    "camotics-cli-execution-plan.json",
+    "camotics-cli-run-package.json",
+    "camotics-result-template.json",
+    "camotics-linux-run.sh",
+    "camotics-result-validate.js",
+    "camotics-linux-operator-checklist.md"
+  ];
+  const optionalFilenames = [
+    "camotics-input.json",
+    "camotics-run.md",
+    "camotics-cli-package-report.json",
+    "toolpath.nc",
+    "air-run.nc",
+    "rotary-calibration-airrun.nc",
+    "rotary-wrap-preview-report.json",
+    "postprocess-trace-report.json",
+    "machine-controller-profile.json",
+    "package-integrity.json"
+  ];
+  const missingCritical = criticalFilenames.filter((filename) => !existsSync(join(workDir, filename)));
+  if (missingCritical.length > 0) {
+    return json(res, 409, {
+      error: "CAMotics Linux 仿真包存在缺失文件，请重新生成仿真准备包",
+      missing: missingCritical
+    });
+  }
+
+  const packageFiles = [
+    ...criticalFilenames.map((filename) => createCamoticsLinuxPackageFile(workDir, filename, true)),
+    ...optionalFilenames
+      .filter((filename) => existsSync(join(workDir, filename)))
+      .map((filename) => createCamoticsLinuxPackageFile(workDir, filename, false))
+  ];
+  const packageManifest = createCamoticsLinuxPackageManifest(safeJobId, runPackage, deliveryManifest, packageIntegrity, packageFiles);
+  const files = packageFiles.map((file) => ({
+    name: `hediao3d-v3-camotics/${file.folder}/${file.filename}`,
+    content: readFileSync(join(workDir, file.filename))
+  }));
+  files.push({
+    name: "hediao3d-v3-camotics/camotics-linux-package-manifest.json",
+    content: JSON.stringify(packageManifest, null, 2)
+  });
+  files.push({
+    name: "hediao3d-v3-camotics/README-CAMOTICS.md",
+    content: createCamoticsLinuxPackageReadme(packageManifest)
+  });
+
+  const zip = createServerZipBuffer(files);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `hediao3d-v3-${safeJobId.slice(0, 8)}-camotics-linux-${stamp}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
 function getOrchestratorProductionPackage(jobId, res) {
   const safeJobId = decodeURIComponent(jobId);
   if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
@@ -11382,6 +11473,58 @@ function isProductionPackageDeliveryFile(file) {
     || file.kind === "model";
 }
 
+function createCamoticsLinuxPackageFile(workDir, filename, required) {
+  const filePath = join(workDir, filename);
+  const stat = statSync(filePath);
+  const sha256 = createHash("sha256").update(readFileSync(filePath)).digest("hex");
+  const simulationInputs = new Set([
+    "camotics-preview.nc",
+    "camotics-project-template.json",
+    "camotics-simulation-plan.json",
+    "camotics-cli-execution-plan.json",
+    "camotics-input.json",
+    "camotics-run.md"
+  ]);
+  const runTools = new Set([
+    "camotics-cli-run-package.json",
+    "camotics-result-template.json",
+    "camotics-linux-run.sh",
+    "camotics-result-validate.js",
+    "camotics-linux-operator-checklist.md",
+    "camotics-cli-package-report.json"
+  ]);
+  const references = new Set([
+    "toolpath.nc",
+    "air-run.nc",
+    "rotary-calibration-airrun.nc",
+    "rotary-wrap-preview-report.json",
+    "postprocess-trace-report.json",
+    "machine-controller-profile.json",
+    "package-integrity.json"
+  ]);
+  const folder = simulationInputs.has(filename)
+    ? "inputs"
+    : runTools.has(filename)
+      ? "run"
+      : references.has(filename)
+        ? "references"
+        : "extra";
+  return {
+    filename,
+    folder,
+    required,
+    sizeBytes: stat.size,
+    sha256,
+    machineUse: {
+      allowedOnMachine: false,
+      class: filename === "camotics-preview.nc" ? "simulation-only-never-machine" : "linux-camotics-reference",
+      summary: filename === "camotics-preview.nc"
+        ? "展开三轴仿真 NC，禁止上机。"
+        : "Linux CAMotics 仿真/回填参考文件，不是机床加工交付文件。"
+    }
+  };
+}
+
 function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
   return {
     schema: "hediao3d.v3-safe-trial-package.v1",
@@ -11468,6 +11611,58 @@ function createProductionPackageManifest(jobId, deliveryManifest, productionGate
   };
 }
 
+function createCamoticsLinuxPackageManifest(jobId, runPackage, deliveryManifest, packageIntegrity, files) {
+  const byName = new Map((packageIntegrity?.files ?? []).map((file) => [file.filename, file]));
+  return {
+    schema: "hediao3d.v3-camotics-linux-package.v1",
+    jobId,
+    createdAt: new Date().toISOString(),
+    sourceManifest: "delivery-manifest.json",
+    sourcePackageIntegrity: packageIntegrity?.schema ? "package-integrity.json" : null,
+    packageLevel: deliveryManifest.packageLevel ?? "unknown",
+    allowProductionNc: Boolean(deliveryManifest.allowProductionNc),
+    policy: {
+      productionUseAllowed: false,
+      machineUseAllowed: false,
+      purpose: "在 Linux CAM 服务器运行真实 CAMotics/等效材料去除仿真，并生成可回填证据。",
+      machineModel: "三轴控制器 + Y轴旋转夹具",
+      forbiddenOnMachine: files.map((file) => file.filename),
+      requiredLocalValidation: "camotics-result-local-validation.json"
+    },
+    runPackage: {
+      status: runPackage?.status ?? "unknown",
+      preferredGcode: runPackage?.preferredGcodeIdentity?.filename ?? null,
+      preferredGcodeSha256: runPackage?.preferredGcodeIdentity?.sha256 ?? null,
+      motionProfile: runPackage?.preferredGcodeIdentity?.motionProfile ?? null,
+      expectedOutputs: runPackage?.expectedOutputs ?? null,
+      safetyLocks: runPackage?.safetyLocks ?? null
+    },
+    files: files.map((file) => ({
+      ...file,
+      matchesPackageIntegrity: byName.has(file.filename)
+        ? byName.get(file.filename)?.sha256 === file.sha256
+        : null
+    })),
+    requiredSequence: [
+      "解压本包到 Linux CAM 服务器工作目录。",
+      "阅读 run/camotics-linux-operator-checklist.md。",
+      "核验 inputs/camotics-preview.nc 的 SHA-256 与 manifest 中 preferredGcodeSha256 一致。",
+      "运行 run/camotics-linux-run.sh，或用 CAMotics/等效仿真打开 inputs/camotics-preview.nc。",
+      "按 run/camotics-result-template.json 填写真实 camotics-result.json，并导出截图或材料去除 STL。",
+      "运行 node run/camotics-result-validate.js camotics-result.json，生成 camotics-result-local-validation.json。",
+      "将 camotics-result.json、camotics-result-local-validation.json 和截图/STL 回填到 HeDiao3D 当前 job。"
+    ],
+    importBack: {
+      apiEndpoint: `/api/orchestrator/jobs/${jobId}/camotics-result`,
+      requiredArtifacts: [
+        "camotics-result.json",
+        "camotics-result-local-validation.json",
+        "camotics-preview.png 或 camotics-material-removal.stl"
+      ]
+    }
+  };
+}
+
 function createSafeTrialPackageReadme(packageManifest) {
   const included = packageManifest.files.map((file) => `- ${file.filename}: ${file.label} / ${file.machineUse?.summary ?? file.note}`).join("\n");
   return [
@@ -11524,6 +11719,39 @@ function createProductionPackageReadme(packageManifest) {
     "## 门禁摘要",
     "",
     packageManifest.productionGate.summary ?? "production-gate.json 未提供摘要。"
+  ].join("\n");
+}
+
+function createCamoticsLinuxPackageReadme(packageManifest) {
+  const included = packageManifest.files
+    .map((file) => `- ${file.folder}/${file.filename}: ${file.machineUse?.summary ?? "Linux CAMotics 文件"} / sha256=${file.sha256}`)
+    .join("\n");
+  return [
+    "# HeDiao3D V3 CAMotics Linux 仿真包",
+    "",
+    `Job ID: ${packageManifest.jobId}`,
+    `包级别: ${packageManifest.packageLevel}`,
+    `首选仿真 NC: ${packageManifest.runPackage.preferredGcode ?? "missing"}`,
+    `首选 NC SHA-256: ${packageManifest.runPackage.preferredGcodeSha256 ?? "missing"}`,
+    "",
+    "## 使用边界",
+    "",
+    "- 本包只用于 Linux CAM 服务器上的 CAMotics/等效材料去除仿真。",
+    "- 本包内所有 NC 和脚本都不是正式上机加工文件。",
+    "- `inputs/camotics-preview.nc` 是展开三轴仿真文件，禁止上机。",
+    "- 正式生产 NC 下载仍由 `production-evidence-dossier.json` 和 `productionReadinessAudit` 锁定。",
+    "",
+    "## 执行顺序",
+    "",
+    ...packageManifest.requiredSequence.map((item, index) => `${index + 1}. ${item}`),
+    "",
+    "## 回填接口",
+    "",
+    `- ${packageManifest.importBack.apiEndpoint}`,
+    "",
+    "## 文件清单",
+    "",
+    included || "- 无文件。"
   ].join("\n");
 }
 
