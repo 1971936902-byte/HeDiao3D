@@ -1472,6 +1472,7 @@ export function App() {
   const [isV3AdapterValidating, setIsV3AdapterValidating] = useState(false);
   const [isV3NativeCamChecking, setIsV3NativeCamChecking] = useState(false);
   const [isV3ReadinessChecking, setIsV3ReadinessChecking] = useState(false);
+  const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -2067,6 +2068,69 @@ export function App() {
       };
       return [next, ...current.filter((record) => record.machineId !== selectedMachine.id)].slice(0, 32);
     });
+  };
+
+  const syncV3MachineAcceptance = async () => {
+    if (!v3Job?.id) {
+      setV3Status("机床验收已保存在本地；当前没有 V3 任务可同步。");
+      return;
+    }
+    setIsV3MachineAcceptanceSyncing(true);
+    try {
+      const simulationEligible = Boolean(v3Job.result?.summary.productionGate?.simulationEvidence?.productionUnlockEligible);
+      const outcome: MachineFeedback["outcome"] = selectedMachineAcceptance.airRun && selectedMachineAcceptance.softTrial
+        ? "success"
+        : selectedMachineAcceptance.airRun
+          ? "review"
+          : "failed";
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/machine-acceptance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: `machine-acceptance-${selectedMachine.id}-${Date.now()}`,
+          source: "frontend-machine-acceptance",
+          outcome,
+          operator: projectProfile.customerName || projectProfile.projectName || "frontend-operator",
+          machineSerial: selectedMachine.id,
+          fixtureType: settings.camMode === "rotaryWrap" ? `三轴控制器 + ${settings.rotaryOutputAxis ?? "Y"}轴旋转夹具` : selectedMachine.name,
+          materialBatch: selectedMaterial.name,
+          programName: "toolpath.nc",
+          airRunOk: selectedMachineAcceptance.airRun,
+          softTrialOk: selectedMachineAcceptance.softTrial,
+          formalTrialOk: selectedMachineAcceptance.formalTrial,
+          steps: [
+            { id: "read-package", passed: true, evidenceNote: "前端 V3 面板已查看加工包和门禁状态。" },
+            { id: "camotics-preview", passed: simulationEligible, evidenceNote: simulationEligible ? "V3 仿真证据已满足生产解锁条件。" : "当前仿真证据仍需 CAMotics/等效材料去除复核。" },
+            { id: "air-run", passed: selectedMachineAcceptance.airRun, evidenceNote: selectedMachineAcceptance.airRunAt ?? selectedMachineAcceptance.notes },
+            { id: "soft-material-trial", passed: selectedMachineAcceptance.softTrial, evidenceNote: selectedMachineAcceptance.softTrialAt ?? selectedMachineAcceptance.notes },
+            { id: "formal-trial", passed: selectedMachineAcceptance.formalTrial, evidenceNote: selectedMachineAcceptance.formalTrialAt ?? selectedMachineAcceptance.notes }
+          ],
+          notes: selectedMachineAcceptance.notes,
+          attachments: []
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "机床验收同步失败");
+      setV3Status(`机床验收已同步到 V3 任务：${data.log?.recordCount ?? 1} 条记录`);
+      recordTask({
+        category: "cam",
+        status: data.record?.allRequiredPassed ? "ok" : data.record?.outcome === "failed" ? "error" : "warning",
+        title: "同步 V3 机床验收",
+        detail: data.record?.allRequiredPassed ? "必需验收项已通过并进入生产证据链。" : "验收记录已进入证据链，但仍有必需项待复核。"
+      });
+      await handleLoadV3Job(v3Job.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "机床验收同步失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "同步 V3 机床验收失败",
+        detail: message
+      });
+    } finally {
+      setIsV3MachineAcceptanceSyncing(false);
+    }
   };
 
   const handleArchiveProject = () => {
@@ -4206,6 +4270,16 @@ export function App() {
                 placeholder="例如：A轴方向已确认；软材料树脂试雕无撞刀；正式橄榄核需降低进给 10%。"
               />
             </label>
+            <button
+              className="demo-action package-action"
+              type="button"
+              onClick={syncV3MachineAcceptance}
+              disabled={!v3Job?.id || isV3MachineAcceptanceSyncing}
+            >
+              <ClipboardCheck size={17} />
+              {isV3MachineAcceptanceSyncing ? "同步中..." : "同步到V3证据链"}
+            </button>
+            {!v3Job?.id && <small className="panel-hint">生成 V3 加工包后，可把当前机床验收同步为生产证据。</small>}
           </section>
         )}
 
