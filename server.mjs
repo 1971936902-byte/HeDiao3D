@@ -2037,6 +2037,16 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "native-cam-readiness.json"), JSON.stringify(nativeCamReadiness, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "native-cam-readiness.json"));
   appendOrchestratorLog(job, `Native CAM 预检：${nativeCamReadiness.summary}`);
+  const camServerConfig = createCamServerConfigReport({
+    job,
+    settings,
+    engines,
+    selectedEngine: selected,
+    nativeCamReadiness,
+    engineReadiness
+  });
+  await writeFile(join(job.workDir, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
   const externalCamRecipe = createExternalCamRecipe({
     job,
     settings,
@@ -2048,7 +2058,7 @@ async function processOrchestratorJob(job, settings) {
   });
   await writeFile(join(job.workDir, "external-cam-recipe.json"), JSON.stringify(externalCamRecipe, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "external-cam-recipe.json"));
-  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution, engineReadiness, externalCamRecipe });
+  await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution, engineReadiness, externalCamRecipe, camServerConfig });
   const adapterPreflight = createAdapterPreflightReport(selected, job, settings, camInputPlan, engineReadiness);
   await writeFile(join(job.workDir, "adapter-preflight.json"), JSON.stringify(adapterPreflight, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "adapter-preflight.json"));
@@ -2267,6 +2277,7 @@ async function processOrchestratorJob(job, settings) {
     camoticsInput,
     camoticsSimulationPlan,
     camHandoffQuality,
+    camServerConfig,
     productionEvidenceDossier,
     ncStaticAnalysis,
     nativeCamReadiness,
@@ -2291,6 +2302,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
@@ -2327,6 +2339,7 @@ async function processOrchestratorJob(job, settings) {
       engineReadiness,
       camEngineSelection,
       nativeCamReadiness,
+      camServerConfig,
       externalCamRecipe,
       adapterPreflight,
       productionGate,
@@ -3292,6 +3305,149 @@ function createNativeCamReadinessReport(engines, selected, settings, engineReadi
     requiredActions: createNativeCamRequiredActions(adapters),
     adapters
   };
+}
+
+function createCamServerConfigReport({ job, settings, engines, selectedEngine, nativeCamReadiness, engineReadiness }) {
+  const engineById = new Map(engines.map((engine) => [engine.id, engine]));
+  const adapterConfigs = ["freecad", "blendercam", "opencamlib", "camotics"].map((engineId) => {
+    const engine = engineById.get(engineId);
+    return createCamServerAdapterConfig(engineId, engine, settings);
+  });
+  const missingRequired = adapterConfigs
+    .filter((config) => config.requiredForCurrentMode && config.status !== "ready")
+    .map((config) => `${config.name}: ${config.status}`);
+  const environment = {
+    ENABLE_EXTERNAL_CAM_ADAPTERS: {
+      current: enableExternalCamAdapters ? "true" : "false",
+      requiredForExecution: true,
+      recommendation: "外部 CAM 小模型验收通过后设为 true；未验证前保持 false。"
+    },
+    API_PORT: {
+      current: String(port),
+      recommendation: "生产服务器建议固定端口并由反向代理转发。"
+    },
+    MAX_TOOLPATH_PREVIEW_POINTS: {
+      current: String(maxToolpathPreviewPoints),
+      recommendation: "大模型可提高该值，但前端预览和浏览器内存会增加。"
+    }
+  };
+  return {
+    schema: "hediao3d.cam-server-config.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    camMode: settings.camMode,
+    selectedEngine: selectedEngine.id,
+    selectedEngineName: selectedEngine.name,
+    externalReady: engineReadiness.externalReady,
+    nativeCamLevel: nativeCamReadiness.level,
+    status: missingRequired.length === 0 && enableExternalCamAdapters ? "ready-to-attempt-external-cam" : missingRequired.length === 0 ? "installed-but-adapters-disabled" : "missing-native-dependencies",
+    environment,
+    adapters: adapterConfigs,
+    missingRequired,
+    recommendedSetupOrder: [
+      "先安装 FreeCAD/Blender/CAMotics/OpenCAMLib，并确认命令可被服务进程 PATH 找到。",
+      "运行 npm run test:v3:native-cam 验证 native-cam-readiness.json。",
+      "运行 npm run test:v3:external-adapters 验证 adapter 计划和命令配置。",
+      "小模型跑通后再设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true。",
+      "生产前必须跑 CAMotics 或等效机床仿真，并回填 production-evidence-dossier.json。"
+    ],
+    linuxEnvExample: createCamServerLinuxEnvExample(adapterConfigs),
+    notes: [
+      "fixture/synthetic 开关只允许用于合约测试，不允许作为生产证据。",
+      "HeDiao3D 仍负责最终三轴控制器 + Y/A 旋转夹具后处理，外部 CAM 应优先输出中立刀位点或可审计 G-code。",
+      "本配置清单不会保存密钥，只记录本地 CAM 命令和环境变量名称。"
+    ]
+  };
+}
+
+function createCamServerAdapterConfig(engineId, engine, settings) {
+  const requiredForCurrentMode = settings.camMode === "3axis"
+    ? ["freecad", "camotics"].includes(engineId)
+    : ["blendercam", "opencamlib", "camotics"].includes(engineId);
+  const commandEnv = {
+    freecad: "HEDIAO3D_FREECAD_EXTERNAL_COMMAND",
+    blendercam: "HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND",
+    opencamlib: "HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND",
+    camotics: "HEDIAO3D_CAMOTICS_COMMAND"
+  }[engineId];
+  const commandJsonEnv = {
+    freecad: "HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON",
+    blendercam: "HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND_JSON",
+    opencamlib: "HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON",
+    camotics: null
+  }[engineId];
+  const experimentalEnv = {
+    freecad: "HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT",
+    blendercam: "HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT",
+    opencamlib: "HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT",
+    camotics: "HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN"
+  }[engineId];
+  const timeoutEnv = {
+    freecad: "HEDIAO3D_FREECAD_EXTERNAL_TIMEOUT_SEC",
+    blendercam: "HEDIAO3D_BLENDERCAM_EXTERNAL_TIMEOUT_SEC",
+    opencamlib: "HEDIAO3D_OPENCAMLIB_EXTERNAL_TIMEOUT_SEC",
+    camotics: null
+  }[engineId];
+  const fixtureEnv = {
+    freecad: "HEDIAO3D_FREECAD_RUNNER_FIXTURE_OUTPUT",
+    blendercam: "HEDIAO3D_BLENDERCAM_RUNNER_FIXTURE_OUTPUT",
+    opencamlib: "HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT",
+    camotics: "HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT"
+  }[engineId];
+  const status = engine?.available && engine?.adapterReady ? "ready" : engine?.available ? "command-detected-adapter-locked" : "missing-command";
+  return {
+    id: engineId,
+    name: engine?.name ?? engineDisplayName(engineId),
+    requiredForCurrentMode,
+    status,
+    detectedCommand: engine?.command ?? null,
+    version: engine?.version ?? null,
+    adapterReady: Boolean(engine?.adapterReady),
+    env: {
+      command: commandEnv,
+      commandJson: commandJsonEnv,
+      experimentalOutput: experimentalEnv,
+      timeoutSec: timeoutEnv,
+      fixtureOrSynthetic: fixtureEnv
+    },
+    commandTemplate: createCamServerCommandTemplate(engineId),
+    validationCommand: createCamServerValidationCommand(engineId),
+    productionPolicy: fixtureEnv
+      ? `${fixtureEnv} 必须关闭；真实生产证据要求 ${experimentalEnv}=true 且输出非 synthetic/fixture。`
+      : `真实生产证据要求 ${experimentalEnv}=true 且 adapter 返回 completed。`
+  };
+}
+
+function createCamServerCommandTemplate(engineId) {
+  if (engineId === "freecad") return "python adapters/freecad/freecad_runner.py <job.json> <freecad-cam-plan.json> <toolpath.nc>";
+  if (engineId === "blendercam") return "blender --background --python adapters/blendercam/blendercam_runner.py -- <job.json> <blendercam-cam-plan.json> <toolpath.nc>";
+  if (engineId === "opencamlib") return "python adapters/opencamlib/opencamlib_runner.py <job.json> <opencamlib-kernel-plan.json> <neutral-toolpath.json>";
+  if (engineId === "camotics") return "camotics-cli <camotics-project-template.json>";
+  return "";
+}
+
+function createCamServerValidationCommand(engineId) {
+  if (engineId === "freecad") return "npm run test:v3:freecad-external-handoff";
+  if (engineId === "blendercam") return "npm run test:v3:blendercam-external-handoff";
+  if (engineId === "opencamlib") return "npm run test:v3:closed-neutral-handoff";
+  if (engineId === "camotics") return "npm run test:v3:camotics-import";
+  return "npm run test:v3:external-adapters";
+}
+
+function createCamServerLinuxEnvExample(adapterConfigs) {
+  const lines = [
+    "ENABLE_EXTERNAL_CAM_ADAPTERS=false",
+    "# After native validation, set ENABLE_EXTERNAL_CAM_ADAPTERS=true",
+    "HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=false",
+    "HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=false",
+    "HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=false",
+    "HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false"
+  ];
+  for (const config of adapterConfigs) {
+    if (config.env.command) lines.push(`# ${config.env.command}="${config.commandTemplate}"`);
+    if (config.env.timeoutSec) lines.push(`${config.env.timeoutSec}=240`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function engineDisplayName(id) {
@@ -5169,7 +5325,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camHandoffQuality, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -5208,6 +5364,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("machine-acceptance-checklist.json"),
         getFile("controller-dialect-report.json"),
         getFile("native-cam-readiness.json"),
+        getFile("cam-server-config.json"),
         getFile("cam-engine-selection.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
@@ -5306,6 +5463,13 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: nativeCamReadiness.summary,
       requiredActions: nativeCamReadiness.requiredActions
     } : null,
+    camServerConfig: camServerConfig ? {
+      status: camServerConfig.status,
+      selectedEngine: camServerConfig.selectedEngine,
+      nativeCamLevel: camServerConfig.nativeCamLevel,
+      missingRequired: camServerConfig.missingRequired,
+      artifact: "cam-server-config.json"
+    } : null,
     camEngineSelection: camEngineSelection ? {
       selectedEngine: camEngineSelection.selectedEngine,
       selectedEngineName: camEngineSelection.selectedEngineName,
@@ -5345,6 +5509,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "external-cam-recipe.json", "外部CAM作业配方", "report", true, "统一描述 FreeCAD/BlenderCAM/OpenCAMLib 所需模型、毛坯、刀具、工序、后处理和仿真要求。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
+    createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),

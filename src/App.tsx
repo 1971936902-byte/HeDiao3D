@@ -308,6 +308,14 @@ type V3OrchestratorJob = {
         summary: string;
         requiredActions?: string[];
       };
+      camServerConfig?: {
+        schema: string;
+        status: string;
+        selectedEngine: string;
+        selectedEngineName: string;
+        nativeCamLevel: string;
+        missingRequired: string[];
+      };
       externalCamRecipe?: {
         status: string;
         engine: {
@@ -4683,6 +4691,15 @@ export function App() {
                   {v3Job.result.summary.nativeCamReadiness.summary}
                 </small>
               )}
+              {v3Job?.result?.summary.camServerConfig && (
+                <small className={v3Job.result.summary.camServerConfig.status === "ready-to-attempt-external-cam" ? "v3-inline-ok" : v3Job.result.summary.camServerConfig.status === "missing-native-dependencies" ? "v3-inline-critical" : "v3-inline-warning"}>
+                  CAM服务器配置：{v3Job.result.summary.camServerConfig.status}
+                  {" · "}
+                  {v3Job.result.summary.camServerConfig.selectedEngineName}
+                  {" · "}
+                  缺失 {v3Job.result.summary.camServerConfig.missingRequired.length}
+                </small>
+              )}
               {v3Job?.result?.summary.externalCamRecipe && (
                 <small>
                   外部CAM配方：{v3Job.result.summary.externalCamRecipe.status}
@@ -7102,6 +7119,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const machineAcceptanceSummary = packageIndex?.machineAcceptance;
   const externalCamRecipe = summary?.externalCamRecipe;
   const camEngineSelection = summary?.camEngineSelection;
+  const camServerConfig = summary?.camServerConfig;
   const lines = [
     "# HeDiao3D V3 加工包",
     "",
@@ -7175,6 +7193,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `引擎诊断: ${engineReadiness?.summary ?? "未生成"}`,
     `CAM选择: ${camEngineSelection?.selectedEngineName ?? "-"} / ${camEngineSelection?.fallbackUsed ? "fallback" : "external-attempt"}`,
     `选择原因: ${camEngineSelection?.fallbackReason ?? "-"}`,
+    `CAM服务器配置: ${camServerConfig?.status ?? "未生成"} / ${camServerConfig?.selectedEngineName ?? "-"} / 缺失 ${camServerConfig?.missingRequired?.length ?? "-"}`,
+    "CAM服务器配置报告: cam-server-config.json",
     `Adapter预检: ${preflight?.summary ?? "未生成"}`,
     "",
     "## 外部CAM配方",

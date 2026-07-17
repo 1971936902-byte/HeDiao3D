@@ -95,6 +95,8 @@ async function main() {
   assert(job.result?.summary?.camInputPlan?.modelSelection?.selectedModelId, "CAM input model selection did not select a model");
   assert(job.result?.summary?.camEngineSelection?.schema === "hediao3d.cam-engine-selection.v1", "CAM engine selection report missing");
   assert(job.result?.summary?.camEngineSelection?.selectedEngineName, "CAM engine selection missing selected engine name");
+  assert(job.result?.summary?.camServerConfig?.schema === "hediao3d.cam-server-config.v1", "CAM server config report missing");
+  assert(job.result.summary.camServerConfig.selectedEngineName, "CAM server config missing selected engine name");
 
   const requiredArtifacts = [
     "job.json",
@@ -105,6 +107,7 @@ async function main() {
     "cam-input-plan.json",
     "cam-engine-selection.json",
     "external-cam-recipe.json",
+    "cam-server-config.json",
     "engine-diagnostics.json",
     "native-cam-readiness.json",
     "adapter-preflight.json",
@@ -146,15 +149,20 @@ async function main() {
   assert(camInputPlan.modelSelection?.candidates?.some((candidate) => candidate.selectedForCam), "CAM input model candidates missing selectedForCam");
   const externalCamRecipe = await getArtifactJson(job.id, "external-cam-recipe.json");
   assert(externalCamRecipe.model?.modelSelection?.selectedModelPath === camInputPlan.selectedModelPath, "external CAM recipe did not receive selected CAM input model");
+  const camServerConfig = await getArtifactJson(job.id, "cam-server-config.json");
+  assert(camServerConfig.schema === "hediao3d.cam-server-config.v1", "CAM server config artifact schema mismatch");
+  assert(camServerConfig.adapters?.some((adapter) => adapter.id === camServerConfig.selectedEngine), "CAM server config missing selected adapter details");
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
+  assert(packageIndex.camServerConfig?.artifact === "cam-server-config.json", "package index missing CAM server config artifact");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "trial-feedback-template.json"), "readFirst missing trial feedback template");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-evidence-dossier.json"), "readFirst missing production evidence dossier");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-handoff-quality.json"), "readFirst missing CAM handoff quality report");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-server-config.json"), "readFirst missing CAM server config report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
@@ -167,6 +175,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-template.json" && file.sha256), "package integrity missing trial feedback template hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-handoff-quality.json" && file.sha256), "package integrity missing CAM handoff quality hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "cam-server-config.json" && file.sha256), "package integrity missing CAM server config hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-evidence-dossier.json" && file.sha256), "package integrity missing production evidence dossier hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
