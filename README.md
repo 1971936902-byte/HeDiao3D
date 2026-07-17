@@ -89,6 +89,7 @@ V3 Orchestrator 分支的部署请参考：
 - `.env.example`
 - `V3_Linux部署指南.md`
 - `V3架构与小闭环验证.md`
+- `V3目标进度与剩余任务.md`
 
 ### V3 本地启动
 
