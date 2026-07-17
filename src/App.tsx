@@ -7966,6 +7966,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
+  const camoticsCliPackage = summary?.camoticsCliPackage;
   const simulation = summary?.simulation;
   const camoticsAdapter = simulation?.camoticsAdapter;
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
@@ -8113,6 +8114,19 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `说明: ${camoticsInput?.compatibility?.reason ?? "-"}`,
     `项目模板: ${camoticsSimulationPlan?.projectTemplate?.schema ? "camotics-project-template.json" : "未生成"}`,
     `计划状态: ${camoticsSimulationPlan?.status ?? "未生成"}`,
+    "",
+    "## CAMotics Linux 准备包",
+    "",
+    `状态: ${camoticsCliPackage?.status ?? packageIndex?.camotics?.cliRunPackage?.artifact ?? "未生成"}`,
+    `运行包: ${camoticsCliPackage?.artifact ?? packageIndex?.camotics?.cliRunPackage?.artifact ?? "未生成"}`,
+    `结果模板: ${camoticsCliPackage?.resultTemplate ?? packageIndex?.camotics?.cliRunPackage?.resultTemplate ?? "未生成"}`,
+    `Linux脚本: ${camoticsCliPackage?.linuxRunScript ?? packageIndex?.camotics?.cliRunPackage?.linuxRunScript ?? "未生成"}`,
+    `准备包报告: ${camoticsCliPackage?.report ?? packageIndex?.camotics?.cliRunPackage?.report ?? "未生成"}`,
+    `预览NC哈希: ${camoticsCliPackage?.preferredGcodeSha256 ?? "-"}`,
+    `运动画像: ${camoticsCliPackage?.motionProfile ? `${camoticsCliPackage.motionProfile.motionLineCount} 行 / Z ${camoticsCliPackage.motionProfile.zMin ?? "-"} 到 ${camoticsCliPackage.motionProfile.zMax ?? "-"}` : "-"}`,
+    `生产解锁: ${camoticsCliPackage?.productionUnlockEligible ? "异常：准备包不应直接解锁生产" : "否，准备包只用于真实材料去除仿真准备"}`,
+    "操作顺序: 下载 camotics-cli-run-package.json、camotics-linux-run.sh 和 camotics-result-template.json 到 Linux CAM 服务器；执行/复核 CAMotics 后填写真实 camotics-result.json，再回填到 V3 面板。",
+    "注意: camotics-preview.nc 仅用于展开三轴仿真，禁止上机；toolpath.nc 仍受 production-gate.json 控制。",
     "",
     "## CAMotics 仿真结果",
     "",
