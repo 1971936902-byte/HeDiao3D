@@ -231,8 +231,14 @@ const contract = {
   riskLevel: result.riskLevel,
   materialRemovedMm3: result.metrics.materialRemovedMm3,
   productionEvidenceEligible: result.evidenceQuality.productionEvidenceEligible,
+  inputIdentityStatus: result.evidenceQuality.inputIdentity?.status ?? "missing",
+  cliRunPackageBindingStatus: result.evidenceQuality.inputIdentity?.cliRunPackage?.status ?? "not-required",
+  motionConsistencyStatus: result.evidenceQuality.motionConsistency?.status ?? "missing",
+  evidenceQualityStatus: result.evidenceQuality.status ?? "unknown",
   artifactEvidence: result.artifactEvidence
 };
+assert(contract.inputIdentityStatus === "matched", "camotics import contract should expose matched input identity");
+assert(contract.motionConsistencyStatus === "matched", "camotics import contract should expose matched motion consistency");
 copyFileSync(resultPath, contract.adapterReport);
 copyFileSync(completeResultPath, contract.camoticsResult);
 copyFileSync(join(workDir, "camotics-preview.png"), join(outputRoot, "camotics-preview.png"));

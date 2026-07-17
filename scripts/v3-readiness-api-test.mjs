@@ -63,6 +63,9 @@ async function main() {
   assert(adapterStep?.status === "blocked", `adapter validation step should be blocked when handoff audit is unsafe, got ${adapterStep?.status}`);
   assert(/unsafe=/.test(adapterStep.detail), "adapter validation step detail should include unsafe handoff count");
   assert(/contactBound=/.test(adapterStep.detail), "adapter validation step detail should include contact binding count");
+  const camoticsStep = full.acceptancePlan.steps.find((step) => step.id === "camotics-result-import");
+  assert(camoticsStep?.detail && /input=/.test(camoticsStep.detail), "camotics import step detail should include input identity status");
+  assert(camoticsStep?.detail && /motion=/.test(camoticsStep.detail), "camotics import step detail should include motion consistency status");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
@@ -189,6 +192,7 @@ function validateReadiness(report, label) {
   if (report.camoticsImport) {
     assert(report.camoticsImport.schema === "hediao3d.camotics-import-contract.v1", `${label} camoticsImport schema mismatch`);
     assert(typeof report.camoticsImport.productionEvidenceEligible === "boolean", `${label} camoticsImport eligibility missing`);
+    assert(typeof report.camoticsImport.inputIdentityStatus === "string", `${label} camoticsImport input identity status missing`);
   }
   assert(Object.hasOwn(report, "latestTrialFeedback"), `${label} missing latestTrialFeedback field`);
   if (report.latestTrialFeedback) {

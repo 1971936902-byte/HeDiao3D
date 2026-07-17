@@ -750,6 +750,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     if (productionCamEvidence.required) blockers.push(message);
     else warnings.push(message);
     nextActions.push("查看 camotics-import-contract.json、camotics-adapter-report.json 和 camotics-result.json。");
+  } else if (camoticsImport.inputIdentityStatus !== "matched") {
+    blockers.push(`CAMotics 导入契约已标记生产证据，但输入哈希绑定状态为 ${camoticsImport.inputIdentityStatus}。`);
+    nextActions.push("查看 camotics-result.json 的 evidenceQuality.inputIdentity，确认 preferredGcodeSha256 与当前 camotics-preview.nc 匹配。");
   }
 
   if (!latestJob) {
@@ -1081,9 +1084,9 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       command: "npm run test:v3:camotics-import",
       evidence: ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
       detail: camoticsImport
-        ? `${camoticsImport.status} / synthetic=${camoticsImport.synthetic} / risk=${camoticsImport.riskLevel ?? "unknown"}`
+        ? `${camoticsImport.status} / synthetic=${camoticsImport.synthetic} / risk=${camoticsImport.riskLevel ?? "unknown"} / input=${camoticsImport.inputIdentityStatus ?? "missing"} / cli=${camoticsImport.cliRunPackageBindingStatus ?? "not-required"} / motion=${camoticsImport.motionConsistencyStatus ?? "missing"}`
         : "尚未验证真实 CAMotics 结果导入契约。",
-      blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible
+      blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible || camoticsImport.inputIdentityStatus !== "matched"
     }),
     createAcceptanceStep({
       order: 12,
@@ -1576,6 +1579,10 @@ function createCamoticsImportContractPublicSummary(report, contractId) {
     riskLevel: report.riskLevel ?? null,
     materialRemovedMm3: report.materialRemovedMm3 ?? null,
     productionEvidenceEligible: Boolean(report.productionEvidenceEligible),
+    inputIdentityStatus: report.inputIdentityStatus ?? report.evidenceQuality?.inputIdentity?.status ?? "missing",
+    cliRunPackageBindingStatus: report.cliRunPackageBindingStatus ?? report.evidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "not-required",
+    motionConsistencyStatus: report.motionConsistencyStatus ?? report.evidenceQuality?.motionConsistency?.status ?? "missing",
+    evidenceQualityStatus: report.evidenceQualityStatus ?? report.evidenceQuality?.status ?? null,
     adapterReport: report.adapterReport ?? null,
     camoticsResult: report.camoticsResult ?? null,
     outputRoot: report.outputRoot ?? null

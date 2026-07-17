@@ -1492,6 +1492,10 @@ type V3ReadinessSummary = {
     riskLevel: string | null;
     materialRemovedMm3: number | null;
     productionEvidenceEligible: boolean;
+    inputIdentityStatus?: string | null;
+    cliRunPackageBindingStatus?: string | null;
+    motionConsistencyStatus?: string | null;
+    evidenceQualityStatus?: string | null;
     adapterReport: string | null;
     camoticsResult: string | null;
     outputRoot: string | null;
@@ -5216,9 +5220,10 @@ export function App() {
                     {v3Readiness.postprocessHandoffReadiness?.sourceBindingStatus ? ` · sourceBinding ${v3Readiness.postprocessHandoffReadiness.sourceBindingStatus}` : ""}
                     {v3Readiness.postprocessHandoffReadiness?.nextActions[0] ? ` · ${v3Readiness.postprocessHandoffReadiness.nextActions[0]}` : ""}
                   </small>
-                  <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                  <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible && v3Readiness.camoticsImport.inputIdentityStatus === "matched" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     CAMotics导入：{v3Readiness.camoticsImport ? `${v3Readiness.camoticsImport.status ?? "-"} · ${v3Readiness.camoticsImport.synthetic ? "synthetic" : "真实结果"}` : "未验证"}
                     {v3Readiness.camoticsImport?.riskLevel ? ` · ${v3Readiness.camoticsImport.riskLevel}` : ""}
+                    {v3Readiness.camoticsImport ? ` · input ${v3Readiness.camoticsImport.inputIdentityStatus ?? "missing"} · cli ${v3Readiness.camoticsImport.cliRunPackageBindingStatus ?? "not-required"} · motion ${v3Readiness.camoticsImport.motionConsistencyStatus ?? "missing"}` : ""}
                   </small>
                   <small className={v3Readiness.latestTrialFeedback ? v3Readiness.latestTrialFeedback.latestOutcome === "success" ? "v3-inline-ok" : v3Readiness.latestTrialFeedback.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     最新试雕反馈：{v3Readiness.latestTrialFeedback ? `${v3Readiness.latestTrialFeedback.recordCount} 条 · ${v3Readiness.latestTrialFeedback.latestOutcome ?? "-"}` : "未回填"}
