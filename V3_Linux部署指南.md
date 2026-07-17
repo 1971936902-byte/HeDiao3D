@@ -95,9 +95,20 @@ npm run test:v3:camotics-import
 public/native-cam-readiness/<timestamp>/
   native-cam-readiness.json
   native-cam-readiness.md
+  native-cam-server-bootstrap.sh
+  native-cam-env.template
+  native-cam-acceptance-checklist.md
+  native-cam-server-package.json
 ```
 
 `native-cam-readiness.json` 的 `summary.integrationStrategy` 会同时输出开源 CAM 接入策略，说明 FreeCAD、OpenCAMLib、CAMotics、BlenderCAM/FabexCNC 在 V3 中各自负责什么、如何交接到 Orchestrator、以及哪些 fixture/synthetic/preview 结果不能作为生产证据。
+
+同目录下的 Native CAM 服务端准备包用于迁移到 Linux 服务器：
+
+- `native-cam-server-bootstrap.sh`：安装/探测辅助脚本，默认 `DRY_RUN=1`，只打印命令；人工复核后才可用 `DRY_RUN=0` 执行。
+- `native-cam-env.template`：外部 CAM adapter 环境变量模板，默认关闭生产输出和所有 synthetic/fixture 开关。
+- `native-cam-acceptance-checklist.md`：服务器安装、adapter 验证、小模型试算、CAMotics 回填和生产边界清单。
+- `native-cam-server-package.json`：准备包机器可读清单，供前端或部署脚本展示。
 
 部署 API 启动后，也可以在前端 V3 面板点击“验收Native CAM”，或直接调用：
 

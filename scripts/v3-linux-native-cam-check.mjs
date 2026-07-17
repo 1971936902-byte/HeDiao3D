@@ -43,6 +43,7 @@ const report = {
   summary,
   checks
 };
+report.artifacts = writeNativeCamServerPackageArtifacts(report);
 
 writeFileSync(join(outputRoot, "native-cam-readiness.json"), JSON.stringify(report, null, 2));
 writeFileSync(join(outputRoot, "native-cam-readiness.md"), createMarkdown(report));
@@ -339,6 +340,193 @@ function createCapabilityMatrix(checks) {
     outputFormats: check.capabilities.outputFormats,
     productionGate: check.capabilities.productionGate
   }));
+}
+
+function writeNativeCamServerPackageArtifacts(report) {
+  const artifacts = {
+    schema: "hediao3d.native-cam-server-package.v1",
+    createdAt: report.createdAt,
+    files: [
+      {
+        filename: "native-cam-server-bootstrap.sh",
+        role: "linux-bootstrap-script",
+        description: "Linux CAM 服务端安装/探测辅助脚本。默认 DRY_RUN=1，只打印命令；设置 DRY_RUN=0 才会执行安装命令。"
+      },
+      {
+        filename: "native-cam-env.template",
+        role: "environment-template",
+        description: "HeDiao3D V3 外部 CAM adapter 环境变量模板。"
+      },
+      {
+        filename: "native-cam-acceptance-checklist.md",
+        role: "operator-checklist",
+        description: "Linux CAM 服务器从安装、adapter 验证到小模型试算的验收清单。"
+      }
+    ],
+    commands: [
+      "bash native-cam-server-bootstrap.sh",
+      "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
+      "cp native-cam-env.template .env.cam",
+      "npm run test:v3:native-cam",
+      "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters"
+    ],
+    productionBoundary: report.summary.integrationStrategy.productionBoundary
+  };
+  writeFileSync(join(outputRoot, "native-cam-server-bootstrap.sh"), createNativeCamBootstrapShell(report), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "native-cam-env.template"), createNativeCamEnvTemplate(report), "utf8");
+  writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
+  writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
+  return artifacts;
+}
+
+function createNativeCamBootstrapShell(report) {
+  const missingIds = report.checks.filter((check) => !check.ready).map((check) => check.id);
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+# HeDiao3D V3 Native CAM server bootstrap helper.
+# Default is DRY_RUN=1 so this script prints commands without changing the server.
+# Review every command before running: DRY_RUN=0 bash native-cam-server-bootstrap.sh
+
+DRY_RUN="\${DRY_RUN:-1}"
+SUDO="\${SUDO:-sudo}"
+APT_PACKAGES=()
+
+if [[ " ${missingIds.join(" ")} " == *" freecad "* ]]; then
+  APT_PACKAGES+=(freecad)
+fi
+if [[ " ${missingIds.join(" ")} " == *" blendercam "* ]]; then
+  APT_PACKAGES+=(blender)
+fi
+if [[ " ${missingIds.join(" ")} " == *" camotics "* ]]; then
+  APT_PACKAGES+=(camotics)
+fi
+if [[ " ${missingIds.join(" ")} " == *" opencamlib "* ]]; then
+  APT_PACKAGES+=(python3 python3-pip python3-venv)
+fi
+
+run() {
+  echo "+ $*"
+  if [[ "$DRY_RUN" == "0" ]]; then
+    "$@"
+  fi
+}
+
+echo "[HeDiao3D] Native CAM bootstrap"
+echo "[HeDiao3D] DRY_RUN=$DRY_RUN"
+echo "[HeDiao3D] Missing engines at package time: ${missingIds.join(", ") || "none"}"
+
+if command -v apt-get >/dev/null 2>&1 && [[ "\${#APT_PACKAGES[@]}" -gt 0 ]]; then
+  run $SUDO apt-get update
+  run $SUDO apt-get install -y "\${APT_PACKAGES[@]}"
+else
+  echo "[HeDiao3D] apt-get not available or no apt packages selected. Install missing engines manually for this distro."
+fi
+
+if [[ " ${missingIds.join(" ")} " == *" opencamlib "* ]]; then
+  echo "[HeDiao3D] OpenCAMLib packaging differs by distro/Python. Try one of these after reviewing:"
+  echo "+ python3 -m pip install --user opencamlib"
+  echo "+ python3 -m pip install --user ocl"
+  if [[ "$DRY_RUN" == "0" ]]; then
+    python3 -m pip install --user opencamlib || python3 -m pip install --user ocl || true
+  fi
+fi
+
+echo "[HeDiao3D] Version probes:"
+for cmd in FreeCADCmd freecadcmd blender camotics-cli camotics python3; do
+  if command -v "$cmd" >/dev/null 2>&1; then
+    echo "--- $cmd"
+    "$cmd" --version 2>&1 | head -n 3 || true
+  fi
+done
+
+echo "[HeDiao3D] OpenCAMLib module probe:"
+python3 - <<'PY' || true
+import importlib.util
+print("opencamlib=", bool(importlib.util.find_spec("opencamlib")))
+print("ocl=", bool(importlib.util.find_spec("ocl")))
+PY
+
+echo "[HeDiao3D] Next commands:"
+echo "npm run test:v3:native-cam"
+echo "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters"
+`;
+}
+
+function createNativeCamEnvTemplate(report) {
+  return `# HeDiao3D V3 Native CAM environment template
+# Generated: ${report.createdAt}
+# Copy into your deployment .env only after reviewing every line.
+
+ENABLE_EXTERNAL_CAM_ADAPTERS=false
+
+# Keep experimental outputs disabled until native-cam readiness, adapter validation,
+# CAMotics material-removal evidence, air-run, trial feedback and machine acceptance pass.
+HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT=false
+HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT=false
+HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT=false
+HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
+
+# External command examples. Prefer *_COMMAND_JSON to avoid shell quoting issues.
+# HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON=["python","/opt/HeDiao3D/adapters/freecad/freecad_runner.py"]
+# HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND_JSON=["blender","--background","--python","/opt/HeDiao3D/adapters/blendercam/blendercam_runner.py","--"]
+# HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON=["python3","/opt/HeDiao3D/adapters/opencamlib/opencamlib_runner.py"]
+
+HEDIAO3D_FREECAD_EXTERNAL_TIMEOUT_SEC=240
+HEDIAO3D_BLENDERCAM_EXTERNAL_TIMEOUT_SEC=240
+HEDIAO3D_OPENCAMLIB_EXTERNAL_TIMEOUT_SEC=240
+
+# Fixture/synthetic switches are only for contract tests. They must stay false for production evidence.
+HEDIAO3D_FREECAD_RUNNER_FIXTURE_OUTPUT=false
+HEDIAO3D_BLENDERCAM_RUNNER_FIXTURE_OUTPUT=false
+HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT=false
+HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW=false
+HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=false
+
+# Real external result imports, if produced by validated wrappers:
+# HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON=/absolute/path/to/neutral-toolpath.json
+# HEDIAO3D_CAMOTICS_RESULT_JSON=/absolute/path/to/camotics-result.json
+`;
+}
+
+function createNativeCamAcceptanceChecklist(report) {
+  const rows = report.checks.map((check) => `- [ ] ${check.name}: ${check.ready ? "已探测到，但仍需小模型验证" : check.missing.join("; ")}`);
+  return `# HeDiao3D V3 Native CAM Server Acceptance Checklist
+
+Generated: ${report.createdAt}
+
+## 1. Native Engine Install
+
+${rows.join("\n")}
+
+## 2. Required Commands
+
+- [ ] \`npm run test:v3:native-cam\`
+- [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
+- [ ] \`npm run test:v3:freecad-external-handoff\` for 3-axis/regular-solid route
+- [ ] \`npm run test:v3:closed-neutral-handoff\` for OpenCAMLib neutral route
+- [ ] \`npm run test:v3:camotics-import\`
+- [ ] \`npm run test:v3:readiness-api\`
+
+## 3. Production Boundary
+
+${report.summary.integrationStrategy.productionBoundary.map((item) => `- ${item}`).join("\n")}
+
+## 4. Evidence To Keep
+
+- [ ] \`native-cam-readiness.json\`
+- [ ] \`v3-external-adapter-validation.json\`
+- [ ] \`adapter-report.json\`
+- [ ] \`freecad-cam-plan.json\` or \`opencamlib-kernel-plan.json\`
+- [ ] \`neutral-toolpath.json\` or externally generated G-code source snapshot
+- [ ] \`camotics-result.json\` with non-synthetic flag and matching input hash
+- [ ] \`production-gate.json\`
+- [ ] \`machine-acceptance-record.json\`
+
+## 5. Final Rule
+
+Do not enable production NC downloads merely because this checklist exists. Production release requires the V3 readiness report to prove non-synthetic CAM, real material-removal evidence, air-run, trial feedback and machine acceptance.
+`;
 }
 
 function findWorkingCommand(commands, args) {

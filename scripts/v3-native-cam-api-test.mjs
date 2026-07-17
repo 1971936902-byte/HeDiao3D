@@ -16,6 +16,9 @@ async function main() {
   assert(run.summary.integrationStrategy.productionBoundary?.some((item) => item.includes("三轴控制器+Y轴旋转夹具")), "integration strategy should preserve rotary fixture production boundary");
   assert(run.summary.capabilityMatrix.some((item) => item.id === "opencamlib" && item.supportedWorkflows?.includes("drop-cutter")), "OpenCAMLib capability matrix should expose drop-cutter workflow");
   assert(run.summary.capabilityMatrix.some((item) => item.id === "camotics" && item.category === "simulation"), "CAMotics capability matrix should mark simulation role");
+  assert(run.apiArtifacts?.bootstrap?.endsWith("native-cam-server-bootstrap.sh"), "native CAM summary should expose bootstrap artifact");
+  assert(run.apiArtifacts?.envTemplate?.endsWith("native-cam-env.template"), "native CAM summary should expose env template artifact");
+  assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-acceptance-checklist.md"), "native CAM summary should expose server package files");
   assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
   assert(run.checks.some((check) => check.id === "opencamlib" && check.capabilities?.outputFormats?.includes("neutral-toolpath")), "OpenCAMLib public check should expose neutral toolpath capability");
 
@@ -34,6 +37,8 @@ async function main() {
   assert(Array.isArray(artifact.checks), "full native CAM artifact missing checks[]");
   assert(artifact.summary?.capabilityMatrix?.some((item) => item.id === "blendercam" && item.supportedWorkflows.includes("artistic-relief")), "full artifact should include BlenderCAM capability matrix");
   assert(artifact.summary?.integrationStrategy?.rolloutStages?.some((item) => item.includes("Linux CAM 服务器")), "full artifact should include rollout stages");
+  assert(artifact.artifacts?.schema === "hediao3d.native-cam-server-package.v1", "full artifact should include native CAM server package manifest");
+  assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-server-bootstrap.sh"), "full artifact should include bootstrap package entry");
   assert(artifact.checks.some((check) => check.id === "camotics" && check.capabilities?.notEnoughFor?.includes("刀路生成")), "full artifact should state CAMotics does not generate toolpaths");
 
   const markdownResponse = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
@@ -41,6 +46,17 @@ async function main() {
   const markdown = await markdownResponse.text();
   assert(markdown.includes("Linux Native CAM Readiness"), "native CAM markdown missing heading");
   assert(markdown.includes("Integration Strategy"), "native CAM markdown missing integration strategy");
+
+  const bootstrap = await fetchText(latest.latest.apiArtifacts.bootstrap);
+  assert(bootstrap.includes("DRY_RUN"), "native CAM bootstrap should be dry-run guarded");
+  assert(bootstrap.includes("npm run test:v3:native-cam"), "native CAM bootstrap should include validation command");
+  const envTemplate = await fetchText(latest.latest.apiArtifacts.envTemplate);
+  assert(envTemplate.includes("ENABLE_EXTERNAL_CAM_ADAPTERS=false"), "native CAM env template should keep adapters disabled by default");
+  assert(envTemplate.includes("HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=false"), "native CAM env template should forbid synthetic CAMotics by default");
+  const checklist = await fetchText(latest.latest.apiArtifacts.checklist);
+  assert(checklist.includes("Production Boundary"), "native CAM checklist should include production boundary");
+  const packageManifest = await getJson(latest.latest.apiArtifacts.packageManifest);
+  assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");
 
   console.log(JSON.stringify({
     ok: true,
@@ -60,6 +76,11 @@ function validateSummary(summary, label) {
   assert(Array.isArray(summary.checks), `${label} missing checks[]`);
   assert(summary.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(summary.apiArtifacts?.markdown, `${label} missing Markdown artifact`);
+  assert(summary.apiArtifacts?.bootstrap, `${label} missing bootstrap artifact`);
+  assert(summary.apiArtifacts?.envTemplate, `${label} missing env template artifact`);
+  assert(summary.apiArtifacts?.checklist, `${label} missing checklist artifact`);
+  assert(summary.apiArtifacts?.packageManifest, `${label} missing package manifest artifact`);
+  assert(summary.packageArtifacts?.schema === "hediao3d.native-cam-server-package.v1", `${label} missing packageArtifacts summary`);
   const firstCheck = summary.checks[0] ?? {};
   assert(!("outputRoot" in firstCheck), `${label} leaked detailed check outputRoot`);
 }
@@ -69,6 +90,13 @@ async function getJson(path) {
   const data = await response.json().catch(() => ({}));
   assert(response.ok, `${path} failed: ${response.status} ${data.error ?? ""}`);
   return data;
+}
+
+async function fetchText(path) {
+  const response = await fetch(`${baseUrl}${path}`);
+  const text = await response.text();
+  assert(response.ok, `${path} failed: ${response.status}`);
+  return text;
 }
 
 async function postJson(path, body) {

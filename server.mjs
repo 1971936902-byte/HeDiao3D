@@ -2044,6 +2044,18 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
       }))
       : [],
     apiArtifacts: createNativeCamReadinessArtifactLinks(checkId),
+    packageArtifacts: report.artifacts ? {
+      schema: report.artifacts.schema ?? null,
+      files: Array.isArray(report.artifacts.files)
+        ? report.artifacts.files.slice(0, 8).map((file) => ({
+          filename: file.filename,
+          role: file.role,
+          description: file.description,
+          url: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/${encodeURIComponent(file.filename)}`
+        }))
+        : [],
+      commands: Array.isArray(report.artifacts.commands) ? report.artifacts.commands.slice(0, 8) : []
+    } : null,
     run: {
       exitCode: report.run?.exitCode ?? null,
       error: report.run?.error ?? null,
@@ -2056,7 +2068,11 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
 function createNativeCamReadinessArtifactLinks(checkId) {
   return {
     json: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-readiness.json`,
-    markdown: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-readiness.md`
+    markdown: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-readiness.md`,
+    bootstrap: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-bootstrap.sh`,
+    envTemplate: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-env.template`,
+    checklist: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-acceptance-checklist.md`,
+    packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`
   };
 }
 
