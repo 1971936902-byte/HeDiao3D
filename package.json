@@ -10,6 +10,7 @@
     "dev:all": "start powershell -NoExit -Command npm run api && vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test:v3:small-loop-acceptance": "node scripts/v3-small-loop-acceptance.mjs",
     "test:v3": "node scripts/v3-smoke-test.mjs",
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
     "test:v3:neutral-adapter": "node scripts/v3-neutral-adapter-orchestrator-test.mjs",

@@ -10,6 +10,8 @@ public/import-previews/
 public/orchestrator-jobs/
 public/orchestrator-adapter-validation/
 public/orchestrator-readiness/
+public/orchestrator-machine-acceptance/
+public/orchestrator-trial-feedback/
 public/native-cam-readiness/
 public/meshy-results/019f*.glb
 public/meshy-results/019f*.stl
