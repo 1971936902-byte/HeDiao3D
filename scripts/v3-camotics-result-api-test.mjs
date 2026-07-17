@@ -87,9 +87,11 @@ async function main() {
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "evidence dossier should expose matched CAMotics input identity");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsCliRunPackageBindingStatus === "matched", "evidence dossier should expose matched CAMotics CLI package binding");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsMotionConsistencyStatus === "matched", "evidence dossier should expose matched CAMotics motion consistency");
+  assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "evidence dossier should expose matched CAMotics machine context");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.inputIdentityStatus === "matched", "package index should expose CAMotics input identity");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.cliRunPackageBindingStatus === "matched", "package index should expose CAMotics CLI package binding");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.motionConsistencyStatus === "matched", "package index should expose CAMotics motion consistency");
+  assert(reloaded.result.summary.machiningPackageIndex?.camotics?.machineContextStatus === "matched", "package index should expose CAMotics machine context");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result.json" && file.exists), "delivery manifest should expose camotics result");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.exists), "delivery manifest should expose local validation report");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");

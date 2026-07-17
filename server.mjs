@@ -788,6 +788,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   } else if (camoticsEvidence.inputIdentityStatus !== "matched") {
     blockers.push(`CAMotics 材料去除证据已标记可用，但输入哈希绑定状态为 ${camoticsEvidence.inputIdentityStatus}。`);
     nextActions.push("查看 camotics-result.json 的 evidenceQuality.inputIdentity，确认 preferredGcodeSha256 与当前 camotics-preview.nc 匹配。");
+  } else if (camoticsEvidence.machineContextStatus !== "matched") {
+    blockers.push(`CAMotics 材料去除证据已标记可用，但机床上下文状态为 ${camoticsEvidence.machineContextStatus ?? "missing"}。`);
+    nextActions.push("查看 camotics-result.json 的 evidenceQuality.machineContext，确认 ROTARY_WRAP_AXIS、ROTARY_WRAP_PER_REV_MM 和 LENGTH_AXIS 与当前机床一致。");
   }
 
   if (!latestJob) {
@@ -1126,9 +1129,9 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
         ? ["production-evidence-dossier.json", "camotics-result.json", "camotics-result-local-validation.json"]
         : ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
       detail: camoticsEvidence && camoticsEvidence.source !== "missing"
-        ? `${camoticsEvidence.status} / source=${camoticsEvidence.source} / synthetic=${camoticsEvidence.synthetic} / risk=${camoticsEvidence.riskLevel ?? "unknown"} / input=${camoticsEvidence.inputIdentityStatus ?? "missing"} / cli=${camoticsEvidence.cliRunPackageBindingStatus ?? "not-required"} / motion=${camoticsEvidence.motionConsistencyStatus ?? "missing"}`
-        : "尚未验证真实 CAMotics 结果导入契约 / input=missing / cli=not-required / motion=missing。",
-      blocksProduction: !camoticsEvidence || !camoticsEvidence.ok || !camoticsEvidence.productionEvidenceEligible || camoticsEvidence.inputIdentityStatus !== "matched"
+        ? `${camoticsEvidence.status} / source=${camoticsEvidence.source} / synthetic=${camoticsEvidence.synthetic} / risk=${camoticsEvidence.riskLevel ?? "unknown"} / input=${camoticsEvidence.inputIdentityStatus ?? "missing"} / cli=${camoticsEvidence.cliRunPackageBindingStatus ?? "not-required"} / motion=${camoticsEvidence.motionConsistencyStatus ?? "missing"} / machine=${camoticsEvidence.machineContextStatus ?? "missing"}`
+        : "尚未验证真实 CAMotics 结果导入契约 / input=missing / cli=not-required / motion=missing / machine=missing。",
+      blocksProduction: !camoticsEvidence || !camoticsEvidence.ok || !camoticsEvidence.productionEvidenceEligible || camoticsEvidence.inputIdentityStatus !== "matched" || camoticsEvidence.machineContextStatus !== "matched"
     }),
     createAcceptanceStep({
       order: 12,
@@ -1382,6 +1385,7 @@ function createProductionEvidenceCrossChecksFromArtifacts(workDir) {
     camoticsInputIdentityStatus: camoticsEvidence?.inputIdentity?.status ?? "missing",
     camoticsCliRunPackageBindingStatus: camoticsEvidence?.inputIdentity?.cliRunPackage?.status ?? "missing",
     camoticsMotionConsistencyStatus: camoticsEvidence?.motionConsistency?.status ?? "missing",
+    camoticsMachineContextStatus: camoticsEvidence?.machineContext?.status ?? "missing",
     camoticsArtifactEvidenceStatus: camoticsEvidence?.status ?? "missing",
     ncStaticReady: ncStatic?.level === "ready",
     controllerDialectReady: controllerDialect?.level === "ready",
@@ -1407,6 +1411,7 @@ function createProductionEvidenceCrossChecksSummary(crossChecks) {
     camoticsInputIdentityStatus: crossChecks.camoticsInputIdentityStatus ?? "missing",
     camoticsCliRunPackageBindingStatus: crossChecks.camoticsCliRunPackageBindingStatus ?? "missing",
     camoticsMotionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
+    camoticsMachineContextStatus: crossChecks.camoticsMachineContextStatus ?? "missing",
     camoticsArtifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
     ncStaticReady: Boolean(crossChecks.ncStaticReady),
     controllerDialectReady: Boolean(crossChecks.controllerDialectReady),
@@ -1808,6 +1813,7 @@ function createCamoticsImportContractPublicSummary(report, contractId) {
     inputIdentityStatus: report.inputIdentityStatus ?? report.evidenceQuality?.inputIdentity?.status ?? "missing",
     cliRunPackageBindingStatus: report.cliRunPackageBindingStatus ?? report.evidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "not-required",
     motionConsistencyStatus: report.motionConsistencyStatus ?? report.evidenceQuality?.motionConsistency?.status ?? "missing",
+    machineContextStatus: report.machineContextStatus ?? report.evidenceQuality?.machineContext?.status ?? "missing",
     evidenceQualityStatus: report.evidenceQualityStatus ?? report.evidenceQuality?.status ?? null,
     adapterReport: report.adapterReport ?? null,
     camoticsResult: report.camoticsResult ?? null,
@@ -1839,6 +1845,7 @@ function createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier
       inputIdentityStatus: camoticsImport.inputIdentityStatus ?? "missing",
       cliRunPackageBindingStatus: camoticsImport.cliRunPackageBindingStatus ?? "not-required",
       motionConsistencyStatus: camoticsImport.motionConsistencyStatus ?? "missing",
+      machineContextStatus: camoticsImport.machineContextStatus ?? "missing",
       artifactEvidenceStatus: camoticsImport.evidenceQualityStatus ?? "unknown",
       summary: camoticsImport.productionEvidenceEligible
         ? "CAMotics 全局导入契约已达到材料去除证据标准。"
@@ -1861,6 +1868,7 @@ function createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier
     inputIdentityStatus: "missing",
     cliRunPackageBindingStatus: "missing",
     motionConsistencyStatus: "missing",
+    machineContextStatus: "missing",
     artifactEvidenceStatus: "missing",
     summary: "尚未找到 CAMotics 全局导入契约或最新 job 材料去除证据。"
   };
@@ -1874,8 +1882,9 @@ function createReadinessCamoticsEvidenceFromLatestJob(latestEvidenceDossier) {
   const inputMatched = crossChecks.camoticsInputIdentityStatus === "matched";
   const cliMatched = ["matched", "not-required"].includes(crossChecks.camoticsCliRunPackageBindingStatus);
   const motionMatched = crossChecks.camoticsMotionConsistencyStatus === "matched";
+  const machineMatched = crossChecks.camoticsMachineContextStatus === "matched";
   const artifactComplete = ["complete", "ready", "matched"].includes(crossChecks.camoticsArtifactEvidenceStatus);
-  const eligible = verified && inputMatched && cliMatched && motionMatched && artifactComplete;
+  const eligible = verified && inputMatched && cliMatched && motionMatched && machineMatched && artifactComplete;
   return {
     schema: "hediao3d.readiness-camotics-evidence.v1",
     source: "latest-job-evidence-dossier",
@@ -1890,10 +1899,11 @@ function createReadinessCamoticsEvidenceFromLatestJob(latestEvidenceDossier) {
     inputIdentityStatus: crossChecks.camoticsInputIdentityStatus ?? "missing",
     cliRunPackageBindingStatus: crossChecks.camoticsCliRunPackageBindingStatus ?? "missing",
     motionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
+    machineContextStatus: crossChecks.camoticsMachineContextStatus ?? "missing",
     artifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
     summary: eligible
       ? `最新 job ${latestEvidenceDossier.jobId} 的 production-evidence-dossier 已包含可用 CAMotics 材料去除证据。`
-      : `最新 job ${latestEvidenceDossier.jobId ?? "unknown"} 的 CAMotics 证据仍需复核：verified=${verified} / input=${crossChecks.camoticsInputIdentityStatus ?? "missing"} / cli=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"} / motion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"} / artifacts=${crossChecks.camoticsArtifactEvidenceStatus ?? "missing"}。`
+      : `最新 job ${latestEvidenceDossier.jobId ?? "unknown"} 的 CAMotics 证据仍需复核：verified=${verified} / input=${crossChecks.camoticsInputIdentityStatus ?? "missing"} / cli=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"} / motion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"} / machine=${crossChecks.camoticsMachineContextStatus ?? "missing"} / artifacts=${crossChecks.camoticsArtifactEvidenceStatus ?? "missing"}。`
   };
 }
 
@@ -2124,7 +2134,7 @@ function createV3ReadinessMarkdown(report) {
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
     `- Postprocess handoff: ${report.postprocessHandoffReadiness ? `${report.postprocessHandoffReadiness.status} / required=${report.postprocessHandoffReadiness.required} / source=${report.postprocessHandoffReadiness.source}` : "missing"}`,
     `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
-    `- CAMotics readiness evidence: ${report.readinessCamoticsEvidence ? `${report.readinessCamoticsEvidence.status} / source=${report.readinessCamoticsEvidence.source} / eligible=${report.readinessCamoticsEvidence.productionEvidenceEligible} / input=${report.readinessCamoticsEvidence.inputIdentityStatus} / motion=${report.readinessCamoticsEvidence.motionConsistencyStatus}` : "missing"}`,
+    `- CAMotics readiness evidence: ${report.readinessCamoticsEvidence ? `${report.readinessCamoticsEvidence.status} / source=${report.readinessCamoticsEvidence.source} / eligible=${report.readinessCamoticsEvidence.productionEvidenceEligible} / input=${report.readinessCamoticsEvidence.inputIdentityStatus} / motion=${report.readinessCamoticsEvidence.motionConsistencyStatus} / machine=${report.readinessCamoticsEvidence.machineContextStatus}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
     `- Latest trial feedback: ${report.latestTrialFeedback ? `${report.latestTrialFeedback.recordCount} records / ${report.latestTrialFeedback.latestOutcome ?? "unknown"}` : "missing"}`,
     `- Latest machine acceptance: ${report.latestMachineAcceptance ? `${report.latestMachineAcceptance.recordCount} records / ${report.latestMachineAcceptance.latestOutcome ?? "unknown"} / required=${report.latestMachineAcceptance.latestAllRequiredPassed ? "pass" : "review"}` : "missing"}`,
@@ -7379,7 +7389,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       status: simulationEvidence?.productionUnlockEligible ? "pass" : "review",
       evidence: ["simulation-summary.json", "camotics-result.json", "camotics-adapter-report.json"],
       summary: simulationEvidence
-        ? `${simulationEvidence.summary} / input=${camoticsIdentity.inputIdentityStatus} / cli=${camoticsIdentity.cliRunPackageBindingStatus} / motion=${camoticsIdentity.motionConsistencyStatus} / artifacts=${camoticsIdentity.artifactEvidenceStatus}`
+        ? `${simulationEvidence.summary} / input=${camoticsIdentity.inputIdentityStatus} / cli=${camoticsIdentity.cliRunPackageBindingStatus} / motion=${camoticsIdentity.motionConsistencyStatus} / machine=${camoticsIdentity.machineContextStatus} / artifacts=${camoticsIdentity.artifactEvidenceStatus}`
         : "未生成仿真证据。"
     },
     {
@@ -7476,6 +7486,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camoticsInputIdentityStatus: camoticsIdentity.inputIdentityStatus,
       camoticsCliRunPackageBindingStatus: camoticsIdentity.cliRunPackageBindingStatus,
       camoticsMotionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
+      camoticsMachineContextStatus: camoticsIdentity.machineContextStatus,
       camoticsArtifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       camHandoffReady: camHandoffQuality?.level === "ready",
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
@@ -7666,6 +7677,7 @@ function summarizeCamoticsEvidenceIdentity(simulationEvidence) {
     inputIdentityStatus: evidenceQuality?.inputIdentity?.status ?? "missing",
     cliRunPackageBindingStatus: evidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "not-required",
     motionConsistencyStatus: evidenceQuality?.motionConsistency?.status ?? "missing",
+    machineContextStatus: evidenceQuality?.machineContext?.status ?? "missing",
     artifactEvidenceStatus: evidenceQuality?.artifactEvidence?.complete === true || evidenceQuality?.artifactEvidenceComplete === true
       ? "complete"
       : Array.isArray(evidenceQuality?.missing) && evidenceQuality.missing.some((item) => /screenshot|material|artifact|截图|网格/i.test(String(item)))
@@ -9411,6 +9423,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       inputIdentityStatus: camoticsIdentity.inputIdentityStatus,
       cliRunPackageBindingStatus: camoticsIdentity.cliRunPackageBindingStatus,
       motionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
+      machineContextStatus: camoticsIdentity.machineContextStatus,
       artifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       productionUnlockEligible: productionGate.simulationEvidence?.productionUnlockEligible ?? false,
       limitation: "CAMotics 仅用于展开三轴检查；旋转夹具真实材料去除仍需专业仿真或机床控制软件复核。"

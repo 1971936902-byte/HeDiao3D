@@ -92,6 +92,7 @@ async function main() {
   assert(dossier.crossChecks?.camoticsInputIdentityStatus === "matched", "CAMotics input identity should be matched");
   assert(dossier.crossChecks?.camoticsCliRunPackageBindingStatus === "matched", "CAMotics CLI package binding should be matched");
   assert(dossier.crossChecks?.camoticsMotionConsistencyStatus === "matched", "CAMotics motion consistency should be matched");
+  assert(dossier.crossChecks?.camoticsMachineContextStatus === "matched", "CAMotics machine context should be matched");
   assert(dossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "production package must remain locked without field acceptance and real external handoff");
   assert(dossier.status !== "production-evidence-complete", "dossier must remain incomplete before field evidence");
 
@@ -101,6 +102,7 @@ async function main() {
 
   const packageIndex = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/machining-package-index.json`);
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "package index should expose refreshed CAMotics cross-checks");
+  assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "package index should expose refreshed CAMotics machine context");
   assert(packageIndex.productionEvidenceDossier.crossChecks.productionReadinessAudit?.allowProductionPackage === false, "package index must keep production package locked");
 
   const lockedProductionPackage = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
@@ -113,6 +115,7 @@ async function main() {
   assert(readiness.readinessCamoticsEvidence?.source === "latest-job-evidence-dossier", `readiness should use latest job CAMotics evidence, got ${readiness.readinessCamoticsEvidence?.source}`);
   assert(readiness.readinessCamoticsEvidence.productionEvidenceEligible === true, "readiness should mark latest job CAMotics evidence eligible");
   assert(readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched", "readiness CAMotics evidence should preserve matched input identity");
+  assert(readiness.readinessCamoticsEvidence.machineContextStatus === "matched", "readiness CAMotics evidence should preserve matched machine context");
   assert(readiness.latestEvidenceDossier?.jobId === job.id, "readiness should point to the refreshed closed-loop job");
   assert(readiness.latestEvidenceDossier.crossChecks?.realMaterialRemovalVerified === true, "readiness should expose verified material-removal evidence through latest job dossier");
   assert(readiness.latestEvidenceDossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "readiness must keep production locked until field evidence passes");

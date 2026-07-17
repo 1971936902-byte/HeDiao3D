@@ -71,6 +71,7 @@ async function main() {
   const camoticsStep = full.acceptancePlan.steps.find((step) => step.id === "camotics-result-import");
   assert(camoticsStep?.detail && /input=/.test(camoticsStep.detail), "camotics import step detail should include input identity status");
   assert(camoticsStep?.detail && /motion=/.test(camoticsStep.detail), "camotics import step detail should include motion consistency status");
+  assert(camoticsStep?.detail && /machine=/.test(camoticsStep.detail), "camotics import step detail should include machine context status");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);

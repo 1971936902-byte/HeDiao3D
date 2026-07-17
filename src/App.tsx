@@ -424,6 +424,10 @@ type V3OrchestratorJob = {
             status: string;
             missing?: string[];
             summary?: string;
+            machineContext?: {
+              status: string;
+              message?: string | null;
+            };
           } | null;
         };
         checks: {
@@ -864,6 +868,11 @@ type V3OrchestratorJob = {
             interpretation: string;
             reason: string;
           };
+          inputIdentityStatus?: string | null;
+          cliRunPackageBindingStatus?: string | null;
+          motionConsistencyStatus?: string | null;
+          machineContextStatus?: string | null;
+          artifactEvidenceStatus?: string | null;
           limitation: string;
         };
       };
@@ -1116,6 +1125,10 @@ type V3OrchestratorJob = {
                 packageStatus?: string | null;
                 message?: string | null;
               };
+            };
+            machineContext?: {
+              status: string;
+              message?: string | null;
             };
           } | null;
         };
@@ -1565,6 +1578,7 @@ type V3ReadinessSummary = {
     inputIdentityStatus?: string | null;
     cliRunPackageBindingStatus?: string | null;
     motionConsistencyStatus?: string | null;
+    machineContextStatus?: string | null;
     evidenceQualityStatus?: string | null;
     adapterReport: string | null;
     camoticsResult: string | null;
@@ -1584,6 +1598,7 @@ type V3ReadinessSummary = {
     inputIdentityStatus: string;
     cliRunPackageBindingStatus: string;
     motionConsistencyStatus: string;
+    machineContextStatus: string;
     artifactEvidenceStatus: string;
     summary: string;
   } | null;
@@ -5749,14 +5764,14 @@ export function App() {
                     {v3Readiness.postprocessHandoffReadiness?.sourceBindingStatus ? ` · sourceBinding ${v3Readiness.postprocessHandoffReadiness.sourceBindingStatus}` : ""}
                     {v3Readiness.postprocessHandoffReadiness?.nextActions[0] ? ` · ${v3Readiness.postprocessHandoffReadiness.nextActions[0]}` : ""}
                   </small>
-                  <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible && v3Readiness.camoticsImport.inputIdentityStatus === "matched" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                  <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible && v3Readiness.camoticsImport.inputIdentityStatus === "matched" && v3Readiness.camoticsImport.machineContextStatus === "matched" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     CAMotics导入：{v3Readiness.camoticsImport ? `${v3Readiness.camoticsImport.status ?? "-"} · ${v3Readiness.camoticsImport.synthetic ? "synthetic" : "真实结果"}` : "未验证"}
                     {v3Readiness.camoticsImport?.riskLevel ? ` · ${v3Readiness.camoticsImport.riskLevel}` : ""}
-                    {v3Readiness.camoticsImport ? ` · input ${v3Readiness.camoticsImport.inputIdentityStatus ?? "missing"} · cli ${v3Readiness.camoticsImport.cliRunPackageBindingStatus ?? "not-required"} · motion ${v3Readiness.camoticsImport.motionConsistencyStatus ?? "missing"}` : ""}
+                    {v3Readiness.camoticsImport ? ` · input ${v3Readiness.camoticsImport.inputIdentityStatus ?? "missing"} · cli ${v3Readiness.camoticsImport.cliRunPackageBindingStatus ?? "not-required"} · motion ${v3Readiness.camoticsImport.motionConsistencyStatus ?? "missing"} · machine ${v3Readiness.camoticsImport.machineContextStatus ?? "missing"}` : ""}
                   </small>
-                  <small className={v3Readiness.readinessCamoticsEvidence ? v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible && v3Readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                  <small className={v3Readiness.readinessCamoticsEvidence ? v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible && v3Readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched" && v3Readiness.readinessCamoticsEvidence.machineContextStatus === "matched" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     材料去除证据：{v3Readiness.readinessCamoticsEvidence ? `${v3Readiness.readinessCamoticsEvidence.status ?? "-"} · ${formatReadinessCamoticsSource(v3Readiness.readinessCamoticsEvidence.source)}` : "未验证"}
-                    {v3Readiness.readinessCamoticsEvidence ? ` · eligible ${v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible ? "yes" : "no"} · input ${v3Readiness.readinessCamoticsEvidence.inputIdentityStatus} · cli ${v3Readiness.readinessCamoticsEvidence.cliRunPackageBindingStatus} · motion ${v3Readiness.readinessCamoticsEvidence.motionConsistencyStatus}` : ""}
+                    {v3Readiness.readinessCamoticsEvidence ? ` · eligible ${v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible ? "yes" : "no"} · input ${v3Readiness.readinessCamoticsEvidence.inputIdentityStatus} · cli ${v3Readiness.readinessCamoticsEvidence.cliRunPackageBindingStatus} · motion ${v3Readiness.readinessCamoticsEvidence.motionConsistencyStatus} · machine ${v3Readiness.readinessCamoticsEvidence.machineContextStatus}` : ""}
                     {v3Readiness.readinessCamoticsEvidence?.jobId ? ` · job ${v3Readiness.readinessCamoticsEvidence.jobId.slice(0, 8)}` : ""}
                   </small>
                   </>}
@@ -6913,6 +6928,7 @@ export function App() {
                   {" · "}
                   {v3Job.result.summary.simulation.camoticsAdapter.status}
                   {v3Job.result.summary.simulation.camoticsAdapter.metrics?.motionLineCount ? ` · 运动行 ${v3Job.result.summary.simulation.camoticsAdapter.metrics.motionLineCount}` : ""}
+                  {v3Job.result.summary.machiningPackageIndex?.camotics?.machineContextStatus ? ` · machine ${v3Job.result.summary.machiningPackageIndex.camotics.machineContextStatus}` : ""}
                   {v3Job.result.summary.machiningPackageIndex?.camotics?.resultFile ? ` · ${v3Job.result.summary.machiningPackageIndex.camotics.resultFile}` : ""}
                 </small>
               )}
@@ -9764,6 +9780,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `生产证据资格: ${camoticsEvidenceQuality?.productionEvidenceEligible ? "是" : "否"}`,
     `运行包绑定: ${camoticsEvidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "-"} / ${camoticsEvidenceQuality?.inputIdentity?.cliRunPackage?.required ? "必需" : "未要求"}`,
     `运行包哈希: ${camoticsEvidenceQuality?.inputIdentity?.cliRunPackage?.expectedSha256 ? `${camoticsEvidenceQuality.inputIdentity.cliRunPackage.expectedSha256.slice(0, 12)}...` : "-"}`,
+    `机床上下文: ${camoticsEvidenceQuality?.machineContext?.status ?? packageIndex?.camotics?.machineContextStatus ?? "-"} / X长度-Y旋转展开-Z刀深`,
     `证据缺失项: ${camoticsEvidenceQuality?.missing?.length ? camoticsEvidenceQuality.missing.join(", ") : "无"}`,
     `说明: ${camoticsAdapter?.summary ?? packageIndex?.camotics?.limitation ?? "-"}`,
     "",
