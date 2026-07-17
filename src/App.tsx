@@ -1342,6 +1342,17 @@ type V3ReadinessSummary = {
     neutralToolpath: string | null;
     outputRoot: string | null;
   } | null;
+  postprocessHandoffReadiness: {
+    schema: string;
+    status: "ready" | "review" | "pending" | "blocked" | string;
+    summary: string;
+    required: boolean;
+    source: string;
+    productionCamEvidence: string;
+    neutralImportId: string | null;
+    pointCount: number;
+    nextActions: string[];
+  } | null;
   camoticsImport: {
     id: string;
     schema: string;
@@ -5067,6 +5078,11 @@ export function App() {
                   <small className={v3Readiness.neutralImport ? v3Readiness.neutralImport.postprocessEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     Neutral导入：{v3Readiness.neutralImport ? `${v3Readiness.neutralImport.status ?? "-"} · ${v3Readiness.neutralImport.imported ? "真实导入" : "未导入"}` : "未验证"}
                     {v3Readiness.neutralImport?.pointCount ? ` · ${v3Readiness.neutralImport.pointCount}点` : ""}
+                  </small>
+                  <small className={v3Readiness.postprocessHandoffReadiness ? v3Readiness.postprocessHandoffReadiness.status === "ready" ? "v3-inline-ok" : v3Readiness.postprocessHandoffReadiness.status === "blocked" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
+                    后处理交接：{v3Readiness.postprocessHandoffReadiness ? `${v3Readiness.postprocessHandoffReadiness.status} · ${v3Readiness.postprocessHandoffReadiness.required ? "生产必需" : "待验证"} · ${v3Readiness.postprocessHandoffReadiness.source}` : "未验证"}
+                    {v3Readiness.postprocessHandoffReadiness?.pointCount ? ` · ${v3Readiness.postprocessHandoffReadiness.pointCount}点` : ""}
+                    {v3Readiness.postprocessHandoffReadiness?.nextActions[0] ? ` · ${v3Readiness.postprocessHandoffReadiness.nextActions[0]}` : ""}
                   </small>
                   <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     CAMotics导入：{v3Readiness.camoticsImport ? `${v3Readiness.camoticsImport.status ?? "-"} · ${v3Readiness.camoticsImport.synthetic ? "synthetic" : "真实结果"}` : "未验证"}
