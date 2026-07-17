@@ -7821,6 +7821,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       reviewCount: productionEvidenceDossier.reviewCount,
       blockedCount: productionEvidenceDossier.blockedCount,
       summary: productionEvidenceDossier.summary,
+      crossChecks: productionEvidenceDossier.crossChecks ?? null,
       artifact: "production-evidence-dossier.json"
     } : null,
     controllerDialect: {

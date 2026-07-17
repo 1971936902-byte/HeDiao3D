@@ -7133,6 +7133,18 @@ function createProductionCrossCheckTiles(crossChecks: NonNullable<NonNullable<Ta
   ];
 }
 
+function createProductionCrossCheckReadmeLines(crossChecks: NonNullable<NonNullable<TaskJob["result"]>["summary"]["productionEvidenceDossier"]>["crossChecks"]) {
+  const tiles = createProductionCrossCheckTiles(crossChecks);
+  if (tiles.length === 0) {
+    return [
+      "- CAM交接: 未生成交叉校验，不能作为生产放行证据。",
+      "- CAMotics输入: 未生成输入身份校验，真实材料去除结果不可绑定当前NC。",
+      "- 机床验收: 未生成验收绑定，禁止直接上机生产。"
+    ];
+  }
+  return tiles.map((item) => `- ${item.label}: ${item.value} / ${item.detail}`);
+}
+
 function calculateAverageActualMinutes(feedback: MachineFeedback[]) {
   const values = feedback.map((item) => item.actualMinutes).filter((value): value is number => typeof value === "number" && value > 0);
   if (values.length === 0) return "-";
@@ -8706,6 +8718,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const gate = summary?.productionGate;
   const productionUnlockMatrix = summary?.productionUnlockMatrix;
   const productionEvidenceDossier = summary?.productionEvidenceDossier;
+  const productionCrossChecks = productionEvidenceDossier?.crossChecks;
   const manifest = summary?.deliveryManifest;
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
@@ -8757,6 +8770,11 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "矩阵报告: production-unlock-matrix.json",
     `证据档案: ${productionEvidenceDossier?.status ?? "未生成"} / 通过 ${productionEvidenceDossier?.passedCount ?? "-"} / 复核 ${productionEvidenceDossier?.reviewCount ?? "-"} / 阻断 ${productionEvidenceDossier?.blockedCount ?? "-"}`,
     "证据档案报告: production-evidence-dossier.json",
+    "",
+    "### 生产交叉校验",
+    "",
+    ...createProductionCrossCheckReadmeLines(productionCrossChecks),
+    "",
     `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     "CAM交接报告: cam-handoff-quality.json",
     "CAM交接证据: cam-handoff-evidence.md",

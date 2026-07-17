@@ -171,6 +171,9 @@ async function main() {
 
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.postprocessTrace?.level === "ready", "package index should expose postprocess trace summary");
+  assert(packageIndex.productionEvidenceDossier?.crossChecks, "package index should expose production evidence cross checks");
+  assert(packageIndex.productionEvidenceDossier.crossChecks.ncStaticReady === true, "package index cross checks should mark NC static analysis ready");
+  assert(packageIndex.productionEvidenceDossier.crossChecks.controllerDialectReady === true, "package index cross checks should mark controller dialect ready");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "postprocess-trace-report.json"), "readFirst should include postprocess trace report");
 
   const manifest = await getArtifactJson(job.id, "delivery-manifest.json");
