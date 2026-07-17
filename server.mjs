@@ -3039,6 +3039,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     ncStaticAnalysis,
     camHandoffQuality,
+    neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
     controllerDialectReport,
     toolSetupSheet,
     rotaryCalibrationSheet
@@ -3060,6 +3061,7 @@ async function processOrchestratorJob(job, settings) {
     productionGate,
     productionUnlockMatrix,
     camHandoffQuality,
+    neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
     simulationSummary,
     ncStaticAnalysis,
     controllerDialectReport,
@@ -5683,8 +5685,13 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
   return `${lines.join("\n")}\n`;
 }
 
-function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
+function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, neutralToolpathImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
   const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
+  const neutralToolpathHandoff = Boolean(
+    neutralToolpathImportValidation
+    || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
+    || existsSync(join(job.workDir, "neutral-toolpath.json"))
+  );
   const rows = [
     {
       id: "mesh-quality",
@@ -5726,6 +5733,16 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
       summary: camHandoffQuality?.summary ?? "未生成 CAM handoff 质量报告。",
       requiredForProduction: true
     },
+    ...(neutralToolpathHandoff ? [{
+      id: "neutral-toolpath-import-validation",
+      label: "Neutral刀位点导入校验",
+      status: neutralToolpathImportValidation?.postprocessEligible
+        ? neutralToolpathImportValidation.status === "ready" ? "pass" : "review"
+        : "block",
+      evidence: "neutral-toolpath-import-validation.json",
+      summary: neutralToolpathImportValidation?.summary ?? "检测到 neutral-toolpath，但缺少导入校验报告，不能作为生产证据。",
+      requiredForProduction: true
+    }] : []),
     {
       id: "simulation-evidence",
       label: "材料去除仿真证据",
@@ -5795,6 +5812,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   const productionGate = readJsonFile(join(job.workDir, "production-gate.json"));
   const productionUnlockMatrix = readJsonFile(join(job.workDir, "production-unlock-matrix.json"));
   const camHandoffQuality = readJsonFile(join(job.workDir, "cam-handoff-quality.json"));
+  const neutralToolpathImportValidation = readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json"));
   const simulationSummary = readJsonFile(join(job.workDir, "simulation-summary.json"));
   const ncStaticAnalysis = readJsonFile(join(job.workDir, "nc-static-analysis.json"));
   const controllerDialectReport = readJsonFile(join(job.workDir, "controller-dialect-report.json"));
@@ -5805,6 +5823,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
     productionGate,
     productionUnlockMatrix,
     camHandoffQuality,
+    neutralToolpathImportValidation,
     simulationSummary,
     ncStaticAnalysis,
     controllerDialectReport,
@@ -5815,9 +5834,15 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   });
 }
 
-function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, simulationSummary, ncStaticAnalysis, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, simulationSummary, ncStaticAnalysis, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
+  const hasNeutralToolpathImport = Boolean(
+    neutralToolpathImportValidation
+    || unlockRows.some((row) => row.id === "neutral-toolpath-import-validation")
+    || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
+    || existsSync(join(job.workDir, "neutral-toolpath.json"))
+  );
   const machineAcceptancePassed = machineAcceptanceLog?.recordCount > 0
     && machineAcceptanceLog.latestOutcome === "success"
     && machineAcceptanceLog.latestAllRequiredPassed === true;
@@ -5843,6 +5868,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       evidence: ["cam-handoff-quality.json", "adapter-report.json", "neutral-toolpath.json"],
       summary: camHandoffQuality?.summary ?? "未生成 CAM handoff 质量报告。"
     },
+    ...(hasNeutralToolpathImport ? [{
+      id: "neutral-toolpath-import-validation",
+      label: "Neutral刀位点导入校验",
+      status: neutralToolpathImportValidation?.postprocessEligible
+        ? neutralToolpathImportValidation.status === "ready" ? "pass" : "review"
+        : "block",
+      evidence: ["neutral-toolpath-import-validation.json", "neutral-toolpath.json", "imported-neutral-toolpath.json"],
+      summary: neutralToolpathImportValidation?.summary ?? "检测到 neutral-toolpath，但缺少导入校验报告。"
+    }] : []),
     {
       id: "material-removal-simulation",
       label: "材料去除仿真",
@@ -8948,6 +8982,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     simulationSummary,
     ncStaticAnalysis,
     camHandoffQuality,
+    neutralToolpathImportValidation: readJsonFile(join(workDir, "neutral-toolpath-import-validation.json")),
     controllerDialectReport,
     toolSetupSheet,
     rotaryCalibrationSheet

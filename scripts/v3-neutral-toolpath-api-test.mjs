@@ -108,6 +108,8 @@ async function main() {
   assert(summary.camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff should snapshot neutral toolpath");
   assert(summary.neutralToolpathImportValidation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "reloaded job should expose neutral import validation");
   assert(summary.neutralToolpathImportValidation.postprocessEligible === true, "reloaded neutral validation should be eligible");
+  assert(summary.productionUnlockMatrix?.rows?.some((row) => row.id === "neutral-toolpath-import-validation" && row.status === "pass"), "unlock matrix should include passing neutral import validation row");
+  assert(summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "neutral-toolpath-import-validation" && item.status === "pass"), "evidence dossier should include passing neutral import validation item");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.exists), "delivery manifest should include neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "imported-neutral-toolpath.json" && file.exists), "delivery manifest should include imported-neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.exists), "delivery manifest should include neutral import validation");
