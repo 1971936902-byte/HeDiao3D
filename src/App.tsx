@@ -976,6 +976,14 @@ type V3ReadinessSummary = {
     readyCount: number;
     requiredCount: number;
   } | null;
+  camServerConfig: {
+    schema: string;
+    status: string;
+    selectedEngine: string;
+    selectedEngineName: string;
+    nativeCamLevel: string;
+    missingRequired: string[];
+  } | null;
   adapterValidation: {
     failed: number;
     generatedPlans: number;
@@ -1040,6 +1048,7 @@ type V3ReadinessSummary = {
     json?: string;
     markdown?: string;
     runbook?: string;
+    camServerConfig?: string;
   };
 };
 
@@ -4384,6 +4393,15 @@ export function App() {
                   {v3Readiness.nativeCam && (
                     <small>Native CAM {v3Readiness.nativeCam.readyCount}/{v3Readiness.nativeCam.requiredCount} · {v3Readiness.nativeCam.level}</small>
                   )}
+                  {v3Readiness.camServerConfig && (
+                    <small className={v3Readiness.camServerConfig.status === "ready-to-attempt-external-cam" ? "v3-inline-ok" : v3Readiness.camServerConfig.status === "missing-native-dependencies" ? "v3-inline-critical" : "v3-inline-warning"}>
+                      CAM服务器配置：{v3Readiness.camServerConfig.status}
+                      {" · "}
+                      {v3Readiness.camServerConfig.selectedEngineName}
+                      {" · "}
+                      缺失 {v3Readiness.camServerConfig.missingRequired.length}
+                    </small>
+                  )}
                   {v3Readiness.adapterValidation && (
                     <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
                   )}
@@ -4447,6 +4465,11 @@ export function App() {
                     {v3Readiness.apiArtifacts?.runbook && (
                       <a href={v3Readiness.apiArtifacts.runbook} download>
                         下载验收脚本
+                      </a>
+                    )}
+                    {v3Readiness.apiArtifacts?.camServerConfig && (
+                      <a href={v3Readiness.apiArtifacts.camServerConfig} download>
+                        下载CAM服务器配置
                       </a>
                     )}
                   </div>

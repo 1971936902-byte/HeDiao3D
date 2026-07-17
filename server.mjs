@@ -517,8 +517,10 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
   const latestJob = getLatestOrchestratorJobSummary();
   const latestEvidenceDossier = getLatestProductionEvidenceDossierSummary();
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
+  const camServerConfig = createDeploymentCamServerConfigReport(reportId);
+  await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -530,6 +532,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     acceptancePlan,
     diagnostics,
     nativeCam,
+    camServerConfig,
     adapterValidation,
     runbookResult,
     externalHandoff,
@@ -542,7 +545,29 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   };
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
+function createDeploymentCamServerConfigReport(reportId) {
+  const settings = normalizeServerCamSettings({
+    camMode: "rotaryWrap",
+    rotaryOutputAxis: "Y",
+    postProcessor: "wrapY",
+    rotaryWrapPerRevolutionMm: 100,
+    machineProfileId: "desktop-rotary-y-wrap"
+  });
+  const engines = detectCamEngines();
+  const selected = selectCamEngine(engines, "auto", settings);
+  const engineReadiness = createEngineReadinessReport(engines, selected, settings);
+  const nativeCamReadiness = createNativeCamReadinessReport(engines, selected, settings, engineReadiness);
+  return createCamServerConfigReport({
+    job: { id: reportId },
+    settings,
+    engines,
+    selectedEngine: selected,
+    nativeCamReadiness,
+    engineReadiness
+  });
+}
+
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -553,6 +578,17 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     warnings.push(diagnostics.summary);
   }
   nextActions.push(...(diagnostics.recommendedActions ?? []));
+
+  if (!camServerConfig) {
+    warnings.push("尚未生成 CAM 服务器配置矩阵。");
+    nextActions.push("重新生成 V3 总门禁，下载 cam-server-config.json 作为 Linux CAM 服务端部署清单。");
+  } else if (camServerConfig.status === "missing-native-dependencies") {
+    warnings.push(`CAM 服务器缺少 Native 依赖：${camServerConfig.missingRequired.join("；") || "未知"}`);
+    nextActions.push("按 cam-server-config.json 配置 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 命令和环境变量。");
+  } else if (camServerConfig.status === "installed-but-adapters-disabled") {
+    warnings.push("CAM Native 依赖已具备，但 ENABLE_EXTERNAL_CAM_ADAPTERS 尚未启用。");
+    nextActions.push("完成小模型外部 CAM 验收后设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true。");
+  }
 
   if (!nativeCam) {
     warnings.push("尚未运行 Native CAM 环境验收。");
@@ -663,7 +699,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -696,6 +732,24 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 3,
+      id: "cam-server-config",
+      title: "CAM 服务器配置矩阵",
+      status: !camServerConfig
+        ? "pending"
+        : camServerConfig.status === "ready-to-attempt-external-cam"
+          ? "done"
+          : camServerConfig.status === "installed-but-adapters-disabled"
+            ? "pending"
+            : "pending",
+      command: "npm run test:v3:native-cam && V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      evidence: ["cam-server-config.json", "native-cam-readiness.json", "v3-external-adapter-validation.json"],
+      detail: camServerConfig
+        ? `${camServerConfig.status} / ${camServerConfig.selectedEngineName} / missing=${camServerConfig.missingRequired.length}`
+        : "尚未生成 CAM 服务器配置矩阵。",
+      blocksProduction: !camServerConfig || camServerConfig.status !== "ready-to-attempt-external-cam"
+    }),
+    createAcceptanceStep({
+      order: 4,
       id: "adapter-validation",
       title: "外部 CAM Adapter 验证",
       status: !adapterValidation
@@ -713,7 +767,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !adapterValidation || adapterValidation.overall.failed > 0 || adapterValidation.overall.completedAdapters === 0
     }),
     createAcceptanceStep({
-      order: 4,
+      order: 5,
       id: "external-neutral-handoff",
       title: "外部 CAM Handoff 小闭环",
       status: !externalHandoff
@@ -729,7 +783,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !externalHandoff || externalHandoff.status !== "completed" || externalHandoff.simulationStatus !== "completed"
     }),
     createAcceptanceStep({
-      order: 5,
+      order: 6,
       id: "external-real-neutral-handoff",
       title: "非 Synthetic Neutral + CAMotics 回填",
       status: !externalHandoff
@@ -745,7 +799,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !externalHandoff || externalHandoff.status !== "completed" || externalHandoff.simulationStatus !== "completed" || externalHandoff.syntheticSimulation
     }),
     createAcceptanceStep({
-      order: 6,
+      order: 7,
       id: "freecad-external-gcode-handoff",
       title: "FreeCAD External G-code Handoff",
       status: createEngineHandoffStatus(externalCamHandoffs, "freecad"),
@@ -755,7 +809,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: false
     }),
     createAcceptanceStep({
-      order: 7,
+      order: 8,
       id: "blendercam-external-gcode-handoff",
       title: "BlenderCAM External G-code Handoff",
       status: createEngineHandoffStatus(externalCamHandoffs, "blendercam"),
@@ -765,7 +819,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: false
     }),
     createAcceptanceStep({
-      order: 8,
+      order: 9,
       id: "opencamlib-external-neutral-handoff",
       title: "OpenCAMLib External Neutral Handoff",
       status: createEngineHandoffStatus(externalCamHandoffs, "opencamlib"),
@@ -775,7 +829,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: false
     }),
     createAcceptanceStep({
-      order: 9,
+      order: 10,
       id: "opencamlib-neutral-import",
       title: "OpenCAMLib Neutral 导入契约",
       status: !neutralImport
@@ -791,7 +845,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !neutralImport || !neutralImport.ok || !neutralImport.postprocessEligible
     }),
     createAcceptanceStep({
-      order: 10,
+      order: 11,
       id: "camotics-result-import",
       title: "CAMotics 真实结果导入契约",
       status: !camoticsImport
@@ -807,7 +861,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible
     }),
     createAcceptanceStep({
-      order: 11,
+      order: 12,
       id: "v3-small-loop",
       title: "V3 小闭环加工包",
       status: !latestJob
@@ -825,7 +879,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestJob || latestJob.status !== "completed" || !latestJob.allowTrialNc || !latestJob.allowAirRun
     }),
     createAcceptanceStep({
-      order: 12,
+      order: 13,
       id: "production-evidence-dossier",
       title: "生产证据档案",
       status: !latestEvidenceDossier
@@ -843,7 +897,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestEvidenceDossier || latestEvidenceDossier.status !== "production-evidence-complete"
     }),
     createAcceptanceStep({
-      order: 13,
+      order: 14,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -1178,6 +1232,14 @@ function createV3ReadinessPublicSummary(report, reportId) {
       readyCount: report.nativeCam.summary.readyCount,
       requiredCount: report.nativeCam.summary.requiredCount
     } : null,
+    camServerConfig: report.camServerConfig ? {
+      schema: report.camServerConfig.schema,
+      status: report.camServerConfig.status,
+      selectedEngine: report.camServerConfig.selectedEngine,
+      selectedEngineName: report.camServerConfig.selectedEngineName,
+      nativeCamLevel: report.camServerConfig.nativeCamLevel,
+      missingRequired: report.camServerConfig.missingRequired ?? []
+    } : null,
     adapterValidation: report.adapterValidation ? {
       failed: report.adapterValidation.overall.failed,
       generatedPlans: report.adapterValidation.overall.generatedPlans,
@@ -1199,7 +1261,8 @@ function createV3ReadinessArtifactLinks(reportId) {
   return {
     json: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.json`,
     markdown: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.md`,
-    runbook: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-acceptance-runbook.sh`
+    runbook: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-acceptance-runbook.sh`,
+    camServerConfig: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/cam-server-config.json`
   };
 }
 
@@ -1269,6 +1332,7 @@ function createV3ReadinessMarkdown(report) {
     "",
     `- Diagnostics: ${report.diagnostics?.level ?? "unknown"} / ${report.diagnostics?.summary ?? ""}`,
     `- Native CAM: ${report.nativeCam ? `${report.nativeCam.summary.readyCount}/${report.nativeCam.summary.requiredCount} ${report.nativeCam.summary.level}` : "missing"}`,
+    `- CAM server config: ${report.camServerConfig ? `${report.camServerConfig.status} / ${report.camServerConfig.selectedEngineName} / missing=${report.camServerConfig.missingRequired.length}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / ${report.runbookResult.stepCount} steps` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
@@ -1379,6 +1443,7 @@ function createV3AcceptanceRunbookShell(report) {
     "echo \"Acceptance evidence to review:\"",
     "echo \"- ${RESULT_JSON}\"",
     "echo \"- public/orchestrator-readiness/*/v3-readiness-report.json\"",
+    "echo \"- public/orchestrator-readiness/*/cam-server-config.json\"",
     "echo \"- public/native-cam-readiness/*/native-cam-readiness.json\"",
     "echo \"- public/orchestrator-adapter-validation/*/v3-external-adapter-validation.json\"",
     "echo \"- public/orchestrator-jobs/*/production-gate.json\"",

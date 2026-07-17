@@ -26,8 +26,11 @@ async function main() {
   assert(full.schema === "hediao3d.v3-readiness-report.v1", "full readiness artifact schema mismatch");
   assert(full.diagnostics, "full readiness artifact missing diagnostics");
   assert(full.gates, "full readiness artifact missing gates");
+  assert(full.camServerConfig?.schema === "hediao3d.cam-server-config.v1", "full readiness artifact missing CAM server config");
+  assert(full.camServerConfig.adapters?.some((adapter) => adapter.id === full.camServerConfig.selectedEngine), "CAM server config missing selected adapter");
   assert(full.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", "full readiness artifact missing acceptance plan");
   assert(full.acceptancePlan.steps.length >= 9, "acceptance plan should include deployment steps");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "cam-server-config"), "acceptance plan missing CAM server config step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-neutral-handoff"), "acceptance plan missing external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-real-neutral-handoff"), "acceptance plan missing real neutral handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "freecad-external-gcode-handoff"), "acceptance plan missing FreeCAD external handoff step");
@@ -45,13 +48,22 @@ async function main() {
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
   const markdown = await markdownArtifact.text();
   assert(markdown.includes("V3 Readiness Report"), "readiness markdown missing heading");
+  assert(markdown.includes("CAM server config"), "readiness markdown missing CAM server config summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
+
+  const camServerConfigArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.camServerConfig}`);
+  assert(camServerConfigArtifact.ok, `CAM server config artifact failed: ${camServerConfigArtifact.status}`);
+  const camServerConfig = await camServerConfigArtifact.json();
+  assert(camServerConfig.schema === "hediao3d.cam-server-config.v1", "CAM server config artifact schema mismatch");
+  assert(camServerConfig.environment?.ENABLE_EXTERNAL_CAM_ADAPTERS, "CAM server config missing external adapter env");
 
   const runbookArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.runbook}`);
   assert(runbookArtifact.ok, `readiness runbook artifact failed: ${runbookArtifact.status}`);
   const runbook = await runbookArtifact.text();
   assert(runbook.includes("HeDiao3D V3 deployment acceptance runbook"), "readiness runbook missing heading");
   assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
+  assert(runbook.includes("cam-server-config.json"), "readiness runbook missing CAM server config evidence");
+  assert(runbook.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters"), "readiness runbook missing CAM server config native adapter command");
   assert(runbook.includes("npm run test:v3:neutral-adapter"), "readiness runbook missing neutral handoff command");
   assert(runbook.includes("npm run test:v3:real-neutral-handoff"), "readiness runbook missing real neutral handoff command");
   assert(runbook.includes("npm run test:v3:freecad-external-handoff"), "readiness runbook missing FreeCAD external handoff command");
@@ -93,6 +105,13 @@ function validateReadiness(report, label) {
   assert(report.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(report.apiArtifacts?.markdown, `${label} missing Markdown artifact`);
   assert(report.apiArtifacts?.runbook, `${label} missing runbook artifact`);
+  assert(report.apiArtifacts?.camServerConfig, `${label} missing CAM server config artifact`);
+  assert(Object.hasOwn(report, "camServerConfig"), `${label} missing camServerConfig field`);
+  if (report.camServerConfig) {
+    assert(report.camServerConfig.schema === "hediao3d.cam-server-config.v1", `${label} camServerConfig schema mismatch`);
+    assert(Array.isArray(report.camServerConfig.missingRequired), `${label} camServerConfig missing required list`);
+    assert(report.acceptancePlan.steps.some((step) => step.id === "cam-server-config"), `${label} acceptance plan missing CAM server config step`);
+  }
   assert(Object.hasOwn(report, "runbookResult"), `${label} missing runbookResult field`);
   if (report.runbookResult) validateRunbookResult(report.runbookResult, `${label} runbookResult`);
   assert(Object.hasOwn(report, "externalHandoff"), `${label} missing externalHandoff field`);
