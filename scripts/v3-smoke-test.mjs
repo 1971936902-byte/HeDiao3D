@@ -244,6 +244,10 @@ async function main() {
   assert(safeTrialZipNames.some((name) => name.endsWith("/rotary-calibration-airrun.nc")), "safe trial package zip missing rotary calibration air-run");
   assert(!safeTrialZipNames.some((name) => name.endsWith("/camotics-preview.nc")), "safe trial package zip must exclude camotics-preview.nc");
   assert(safeTrialZipNames.some((name) => name.endsWith("/toolpath.nc")) === deliveryManifest.allowTrialNc, "safe trial package zip should include toolpath.nc only when trial NC is allowed");
+  const lockedProductionPackage = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
+  assert(lockedProductionPackage.error === "V3 正式生产包未解锁", "production package should be locked for trial-only jobs");
+  assert(lockedProductionPackage.allowProductionNc === false, "locked production package response should keep allowProductionNc=false");
+  assert(lockedProductionPackage.summary, "locked production package response should explain gate summary");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
   const operatorDownloadChecklist = await getArtifactText(job.id, "operator-download-checklist.md");
@@ -341,6 +345,13 @@ async function getBinary(path) {
     bytes,
     contentType: response.headers.get("content-type")
   };
+}
+
+async function getJsonAllowingStatus(path, expectedStatus) {
+  const response = await fetch(`${baseUrl}${path}`);
+  const data = await response.json().catch(() => ({}));
+  assert(response.status === expectedStatus, `expected ${expectedStatus} for ${path}, got ${response.status}: ${data.error ?? ""}`);
+  return data;
 }
 
 function isSafeTrialPackageFile(file, allowTrialNc) {

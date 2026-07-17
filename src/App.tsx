@@ -3458,40 +3458,30 @@ export function App() {
     }
 
     setIsV3PackageDownloading(true);
-    setV3Status("正在打包 V3 加工包");
+    setV3Status("正在请求 V3 正式生产包");
     try {
-      const files: ZipFile[] = [];
-      const downloadableFiles = manifest.files.filter((file) => file.downloadable);
-      for (const file of downloadableFiles) {
-        const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/artifacts/${encodeURIComponent(file.filename)}`);
-        if (!response.ok) throw new Error(`${file.filename} 下载失败：${response.status}`);
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        files.push({
-          name: `hediao3d-v3/${file.kind}/${file.filename}`,
-          content: bytes
-        });
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/production-package`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.summary ?? data.error ?? `V3 正式生产包未解锁：${response.status}`);
       }
-      files.push({
-        name: "hediao3d-v3/README-V3.md",
-        content: createV3PackageReadme(v3Job),
-        mime: "text/markdown"
-      });
+      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-${manifest.packageLevel}-${stamp}.zip`, createZipBlob(files));
-      setV3Status(`V3 加工包已打包：${downloadableFiles.length} 个产物`);
+      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-production-${stamp}.zip`, blob);
+      setV3Status("V3 正式生产包已由 Orchestrator 打包");
       recordTask({
         category: "cam",
-        status: manifest.allowProductionNc ? "ok" : "warning",
-        title: "下载 V3 加工包",
-        detail: manifest.allowProductionNc ? "生产 NC 已包含在加工包中。" : "当前加工包为试算/空跑级别，正式上机前仍需外部 CAM 和仿真验证。"
+        status: "ok",
+        title: "下载 V3 正式生产包",
+        detail: "后端生产门禁已放行，正式生产包由 Orchestrator 统一生成。"
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "V3 加工包下载失败";
+      const message = error instanceof Error ? error.message : "V3 正式生产包下载失败";
       setV3Status(message);
       recordTask({
         category: "cam",
-        status: "error",
-        title: "V3 加工包下载失败",
+        status: "warning",
+        title: "V3 正式生产包未解锁",
         detail: message
       });
     } finally {

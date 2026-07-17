@@ -138,6 +138,11 @@ const server = createServer(async (req, res) => {
       return getOrchestratorTrialPackage(orchestratorTrialPackageMatch[1], res);
     }
 
+    const orchestratorProductionPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/production-package$/);
+    if (req.method === "GET" && orchestratorProductionPackageMatch) {
+      return getOrchestratorProductionPackage(orchestratorProductionPackageMatch[1], res);
+    }
+
     const orchestratorNeutralToolpathMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/neutral-toolpath$/);
     if (req.method === "POST" && orchestratorNeutralToolpathMatch) {
       return importOrchestratorNeutralToolpath(req, orchestratorNeutralToolpathMatch[1], res);
@@ -10535,6 +10540,68 @@ function getOrchestratorTrialPackage(jobId, res) {
   res.end(zip);
 }
 
+function getOrchestratorProductionPackage(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
+    return json(res, 400, { error: "非法 job 路径" });
+  }
+  const workDir = join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  const manifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
+  const productionGate = readJsonFileSafe(join(workDir, "production-gate.json"));
+  if (!manifest?.files?.length) {
+    return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
+  }
+  if (!manifest.allowProductionNc || productionGate?.allowProductionNc !== true) {
+    return json(res, 423, {
+      error: "V3 正式生产包未解锁",
+      packageLevel: manifest.packageLevel ?? productionGate?.level ?? "unknown",
+      allowTrialNc: Boolean(manifest.allowTrialNc),
+      allowProductionNc: false,
+      summary: productionGate?.summary ?? "当前缺少 production-gate.json 或生产门禁未放行。",
+      blockers: productionGate?.blockers ?? [],
+      warnings: productionGate?.warnings ?? [],
+      nextActions: productionGate?.recommendedWorkflow ?? [
+        "完成真实外部 CAM 输出、非 synthetic CAMotics/等效材料去除仿真、空跑、试雕反馈和机床验收后重新生成。"
+      ]
+    });
+  }
+
+  const productionFiles = manifest.files.filter(isProductionPackageDeliveryFile);
+  const missing = productionFiles.filter((file) => !existsSync(join(workDir, file.filename)));
+  if (missing.length > 0) {
+    return json(res, 409, {
+      error: "正式生产包存在缺失文件，请重新运行 V3 小闭环",
+      missing: missing.map((file) => file.filename)
+    });
+  }
+
+  const packageManifest = createProductionPackageManifest(safeJobId, manifest, productionGate, productionFiles);
+  const files = productionFiles.map((file) => ({
+    name: `hediao3d-v3-production/${file.kind}/${file.filename}`,
+    content: readFileSync(join(workDir, file.filename))
+  }));
+  files.push({
+    name: "hediao3d-v3-production/production-package-manifest.json",
+    content: JSON.stringify(packageManifest, null, 2)
+  });
+  files.push({
+    name: "hediao3d-v3-production/README-PRODUCTION.md",
+    content: createProductionPackageReadme(packageManifest)
+  });
+
+  const zip = createServerZipBuffer(files);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `hediao3d-v3-${safeJobId.slice(0, 8)}-production-${stamp}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
 function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
   if (!file?.downloadable) return false;
   if (file.filename === "toolpath.nc") return Boolean(allowTrialNc);
@@ -10566,6 +10633,16 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "camotics-cli-execution-plan.json",
     "simulation-summary.json"
   ]).has(file.filename);
+}
+
+function isProductionPackageDeliveryFile(file) {
+  if (!file?.downloadable || !file.exists) return false;
+  if (file.machineUse?.class === "simulation-only-never-machine") return false;
+  if (file.filename === "camotics-preview.nc") return false;
+  return file.filename === "toolpath.nc"
+    || file.machineUse?.class === "air-run-no-cut"
+    || file.kind === "report"
+    || file.kind === "model";
 }
 
 function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
@@ -10608,6 +10685,52 @@ function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
   };
 }
 
+function createProductionPackageManifest(jobId, deliveryManifest, productionGate, files) {
+  return {
+    schema: "hediao3d.v3-production-package.v1",
+    jobId,
+    createdAt: new Date().toISOString(),
+    sourceManifest: "delivery-manifest.json",
+    packageLevel: deliveryManifest.packageLevel ?? productionGate?.level ?? "unknown",
+    allowTrialNc: Boolean(deliveryManifest.allowTrialNc),
+    allowProductionNc: true,
+    policy: {
+      productionGateRequired: true,
+      productionUseAllowed: true,
+      toolpathNcIncluded: files.some((file) => file.filename === "toolpath.nc"),
+      camoticsPreviewNcIncluded: false,
+      machineModel: "三轴控制器 + Y轴旋转夹具",
+      axisMapping: "X=长度方向，Y=旋转夹具，Z=刀深/安全高度",
+      forbiddenOnMachineExcluded: true
+    },
+    productionGate: {
+      level: productionGate?.level ?? null,
+      summary: productionGate?.summary ?? null,
+      blockers: productionGate?.blockers ?? [],
+      warnings: productionGate?.warnings ?? []
+    },
+    files: files.map((file) => ({
+      filename: file.filename,
+      label: file.label,
+      kind: file.kind,
+      machineUse: file.machineUse,
+      note: file.note
+    })),
+    excludedByPolicy: (deliveryManifest.files ?? [])
+      .filter((file) => file.filename === "camotics-preview.nc" || file.machineUse?.class === "simulation-only-never-machine")
+      .map((file) => ({
+        filename: file.filename,
+        reason: "simulation-only-never-machine"
+      })),
+    requiredBeforeRun: [
+      "按 operator-download-checklist.md 核验 toolpath.nc、air-run.nc、rotary-calibration-airrun.nc 的 SHA-256。",
+      "确认 production-gate.json 为 allowProductionNc=true。",
+      "确认 machine-acceptance-log.json 和 trial-feedback-log.json 绑定当前 package-integrity。",
+      "正式加工前仍建议保留 air-run.nc 与 rotary-calibration-airrun.nc 的现场记录。"
+    ]
+  };
+}
+
 function createSafeTrialPackageReadme(packageManifest) {
   const included = packageManifest.files.map((file) => `- ${file.filename}: ${file.label} / ${file.machineUse?.summary ?? file.note}`).join("\n");
   return [
@@ -10634,6 +10757,36 @@ function createSafeTrialPackageReadme(packageManifest) {
     "## 文件清单",
     "",
     included || "- 无文件。"
+  ].join("\n");
+}
+
+function createProductionPackageReadme(packageManifest) {
+  const included = packageManifest.files.map((file) => `- ${file.filename}: ${file.label} / ${file.machineUse?.summary ?? file.note}`).join("\n");
+  return [
+    "# HeDiao3D V3 正式生产包",
+    "",
+    `Job ID: ${packageManifest.jobId}`,
+    `包级别: ${packageManifest.packageLevel}`,
+    "允许生产 NC: 是",
+    "",
+    "## 使用边界",
+    "",
+    "- 本包仅在 V3 production-gate 放行后由 Orchestrator 生成。",
+    "- camotics-preview.nc 不会放入本包，因为它只用于 CAMotics 展开仿真，禁止上机。",
+    "- 上机前仍需按 operator-download-checklist.md 核对 SHA-256 和文件用途。",
+    "- 机床模型：三轴控制器 + Y轴旋转夹具；X=长度方向，Y=旋转夹具，Z=刀深/安全高度。",
+    "",
+    "## 上机前必做",
+    "",
+    ...packageManifest.requiredBeforeRun.map((item, index) => `${index + 1}. ${item}`),
+    "",
+    "## 文件清单",
+    "",
+    included || "- 无文件。",
+    "",
+    "## 门禁摘要",
+    "",
+    packageManifest.productionGate.summary ?? "production-gate.json 未提供摘要。"
   ].join("\n");
 }
 
