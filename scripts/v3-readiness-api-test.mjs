@@ -37,6 +37,7 @@ async function main() {
   assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("native-cam-server-bootstrap.sh")), "acceptance plan missing native CAM bootstrap evidence");
   assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("native-cam-env.template")), "acceptance plan missing native CAM env template evidence");
   assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("native-cam-acceptance-checklist.md")), "acceptance plan missing native CAM checklist evidence");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("linux-cam-closed-loop-handoff.md")), "acceptance plan missing Linux CAM closed-loop handoff evidence");
   assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-real-output-acceptance" && step.evidence?.includes("native-cam-real-output-acceptance.json")), "acceptance plan missing native CAM real output acceptance step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "cam-server-config"), "acceptance plan missing CAM server config step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-neutral-handoff"), "acceptance plan missing external handoff step");

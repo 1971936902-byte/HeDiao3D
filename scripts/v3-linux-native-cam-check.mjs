@@ -462,6 +462,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         filename: "native-cam-real-output-check.sh",
         role: "real-output-acceptance-script",
         description: "在 Linux CAM 服务端执行真实 adapter 输出验收，解析 handoffEvidence 并阻止 fixture/synthetic/preview 误入生产证据。"
+      },
+      {
+        filename: "linux-cam-closed-loop-handoff.md",
+        role: "closed-loop-operator-handoff",
+        description: "一页式 Linux CAM 闭环交接说明：Native CAM 验收、真实输出 ZIP、CAMotics 结果 ZIP、V3 回填和 readiness 复核顺序。"
       }
     ],
     commands: [
@@ -471,7 +476,8 @@ function writeNativeCamServerPackageArtifacts(report) {
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
-      "bash native-cam-real-output-check.sh"
+      "bash native-cam-real-output-check.sh",
+      "npm run test:v3:readiness-api"
     ],
     productionBoundary: report.summary.integrationStrategy.productionBoundary
   };
@@ -479,8 +485,85 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-env.template"), createNativeCamEnvTemplate(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
   return artifacts;
+}
+
+function createLinuxCamClosedLoopHandoff(report) {
+  const commandLines = [
+    "bash native-cam-server-bootstrap.sh",
+    "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
+    "cp native-cam-env.template .env.cam",
+    "npm run test:v3:native-cam",
+    "npm run test:v3:freecad-proof-handoff",
+    "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+    "bash native-cam-real-output-check.sh",
+    "上传 native-cam-real-output-bundle.zip 到 HeDiao3D V3 Native CAM 回填面板",
+    "在当前 V3 job 下载 CAMotics Linux 仿真包并在 Linux 服务器执行",
+    "上传 camotics-result-bundle.zip 到当前 V3 job 的 CAMotics 结果回填面板",
+    "npm run test:v3:readiness-api",
+    "完成离料空跑、软料试雕、trial feedback 和 machine acceptance 回填"
+  ];
+  const evidence = [
+    "native-cam-readiness.json",
+    "v3-external-adapter-validation.json",
+    "native-cam-real-output-acceptance.json",
+    "native-cam-real-output-bundle.zip",
+    "camotics-cli-run-package.json",
+    "camotics-result.json",
+    "camotics-result-local-validation.json",
+    "camotics-result-bundle.zip",
+    "production-evidence-dossier.json",
+    "next-action-checklist.md",
+    "package-integrity.json",
+    "trial-feedback-log.json",
+    "machine-acceptance-log.json"
+  ];
+  return `# HeDiao3D V3 Linux CAM 闭环交接说明
+
+Generated: ${report.createdAt}
+
+这份文件给 Linux CAM 服务器操作者使用。它把 Native CAM、CAMotics、HeDiao3D V3 回填和总门禁复核串成同一条闭环。
+
+## 1. 目标边界
+
+- 目标机型：三轴控制器 + Y轴旋转夹具。
+- X = 长度方向，Y = 旋转夹具等效行程/角度步进，Z = 刀深/安全高度。
+- 外部 CAM 只负责产生可审计的 G-code 或 neutral toolpath 中间产物。
+- HeDiao3D 仍负责 wrapY 后处理、证据档案、生产门禁和最终上机包。
+- 这份交接说明本身不解锁生产 NC。
+
+## 2. 顺序执行
+
+${commandLines.map((item, index) => `${index + 1}. ${item}`).join("\n")}
+
+## 3. 必须保留的证据
+
+${evidence.map((item) => `- [ ] \`${item}\``).join("\n")}
+
+## 4. 上传回填规则
+
+- Native CAM 真实输出验收完成后，上传 \`native-cam-real-output-bundle.zip\`。
+- CAMotics 材料去除仿真完成后，上传 \`camotics-result-bundle.zip\`。
+- 两个 ZIP 必须对应同一轮模型、同一套 CAM 输入和同一个 V3 job。
+- 回填后重新生成 readiness，总门禁应能看到 \`nativeCamRealOutputAcceptance\` 和 \`readinessCamoticsEvidence\`。
+
+## 5. 生产锁
+
+正式生产包仍必须等待这些条件同时成立：
+
+${report.summary.executionPlan.productionLocks.map((item) => `- ${item}`).join("\n")}
+
+还必须补齐离料空跑、软料试雕、试雕反馈、机床验收，并且这些现场证据要和 \`package-integrity.json\` 中的同一组文件哈希匹配。
+
+## 6. 失败时先看哪里
+
+- Native CAM 验收失败：看 \`native-cam-readiness.json\` 和 \`v3-external-adapter-validation.json\`。
+- 出现 fixture/synthetic/preview：关闭对应环境变量，重新跑真实外部命令。
+- CAMotics 不被 readiness 接受：看 \`camotics-result-local-validation.json\`、输入 G-code SHA-256、motion profile 和截图/STL 证据。
+- 生产包仍 423：这是预期安全行为，查看 \`production-evidence-dossier.json\` 和 \`next-action-checklist.md\` 的缺口。
+`;
 }
 
 function createNativeCamBootstrapShell(report) {

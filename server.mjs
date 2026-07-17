@@ -952,6 +952,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
         "native-cam-server-bootstrap.sh",
         "native-cam-env.template",
         "native-cam-acceptance-checklist.md",
+        "linux-cam-closed-loop-handoff.md",
         "native-cam-server-package.json",
         "/api/orchestrator/native-cam/latest"
       ],
@@ -2614,6 +2615,7 @@ function createNativeCamReadinessArtifactLinks(checkId) {
     bootstrap: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-bootstrap.sh`,
     envTemplate: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-env.template`,
     checklist: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-acceptance-checklist.md`,
+    closedLoopHandoff: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/linux-cam-closed-loop-handoff.md`,
     realOutputCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-real-output-check.sh`,
     packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`,
     packageZip: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/server-package.zip`
@@ -2638,6 +2640,7 @@ function getNativeCamServerPackage(checkId, res) {
     "native-cam-server-bootstrap.sh",
     "native-cam-env.template",
     "native-cam-acceptance-checklist.md",
+    "linux-cam-closed-loop-handoff.md",
     "native-cam-real-output-check.sh",
     "native-cam-server-package.json"
   ];
@@ -2685,6 +2688,7 @@ function createNativeCamServerPackageReadme(checkId, manifest) {
     "- Read native-cam-acceptance-checklist.md.",
     "- Copy native-cam-env.template to your server environment file and keep synthetic CAMotics disabled.",
     "- Run native-cam-server-bootstrap.sh in dry-run mode first.",
+    "- Read linux-cam-closed-loop-handoff.md before moving between Native CAM, CAMotics and V3 upload panels.",
     "- Run native-cam-real-output-check.sh only after external CAM commands are configured.",
     "",
     "## Production Boundary",
