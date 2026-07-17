@@ -1923,6 +1923,14 @@ function readLatestFromDirectory(relativeRoot, filename, mapper) {
   }
 }
 
+function readLatestNativeCamRealOutputAcceptanceSummary() {
+  return readLatestFromDirectory(
+    "public/orchestrator-adapter-validation",
+    "native-cam-real-output-acceptance.json",
+    createNativeCamRealOutputAcceptancePublicSummary
+  );
+}
+
 function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) {
   const adapters = Array.isArray(report.adapters) ? report.adapters : [];
   const blockers = Array.isArray(report.blockers) ? report.blockers : [];
@@ -8327,6 +8335,8 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
 
 function createNextActionChecklistMarkdown({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, safeTrialExecutionPlan, postprocessProfile, machineControllerProfile }) {
   const axisInstruction = createOperatorAxisInstruction(postprocessProfile);
+  const nativeCamRealOutputAcceptance = readLatestNativeCamRealOutputAcceptanceSummary();
+  const nativeCamBoundaryStatus = nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus ?? null;
   const blockedRows = Array.isArray(productionUnlockMatrix?.rows)
     ? productionUnlockMatrix.rows.filter((row) => row.status === "block" || row.blocksProduction)
     : [];
@@ -8356,6 +8366,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
     "",
     `- 生产门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
     `- 仿真证据: ${productionGate?.simulationEvidence?.level ?? "missing"} / ${productionGate?.simulationEvidence?.summary ?? "未生成"}`,
+    `- Native CAM机型边界: ${nativeCamBoundaryStatus?.status ?? "missing"} / ${nativeCamBoundaryStatus?.summary ?? "未回填 native-cam-real-output-bundle.zip，尚未证明真实 CAM 输出适配当前三轴控制器 + Y轴旋转夹具。"}`,
     `- 解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
     `- 证据档案: ${productionEvidenceDossier?.status ?? "missing"} / ${productionEvidenceDossier?.summary ?? "未生成"}`,
     "",
@@ -8389,7 +8400,8 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
         ...((productionGate?.warnings ?? []).slice(0, 8).map((item) => `- 复核: ${item}`)),
         ...(blockedRows.slice(0, 8).map((row) => `- 矩阵阻断: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
         ...(reviewRows.slice(0, 6).map((row) => `- 矩阵复核: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
-        ...(dossierItems.slice(0, 8).map((item) => `- 证据缺口: ${item.label ?? item.id} / ${item.summary ?? item.status}`))
+        ...(dossierItems.slice(0, 8).map((item) => `- 证据缺口: ${item.label ?? item.id} / ${item.summary ?? item.status}`)),
+        ...(nativeCamBoundaryStatus?.status === "matched" ? [] : [`- 证据缺口: Native CAM 机型边界 / ${nativeCamBoundaryStatus?.summary ?? "缺少 target-machine-boundary.json 绑定。"}`])
       ]),
     "",
     "## 操作提醒",
@@ -9677,6 +9689,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
+  const nativeCamRealOutputAcceptance = readLatestNativeCamRealOutputAcceptanceSummary();
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
   const trialCandidate = productionGate.allowTrialNc ? "toolpath.nc" : null;
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary));
@@ -9868,6 +9881,28 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: nativeCamReadiness.summary,
       requiredActions: nativeCamReadiness.requiredActions
     } : null,
+    nativeCamRealOutputAcceptance: nativeCamRealOutputAcceptance ? {
+      id: nativeCamRealOutputAcceptance.id,
+      level: nativeCamRealOutputAcceptance.level,
+      productionCandidateCount: nativeCamRealOutputAcceptance.productionCandidateCount,
+      sourceReportBindingStatus: nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing",
+      targetMachineBoundaryStatus: nativeCamRealOutputAcceptance.targetMachineBoundaryStatus ?? null,
+      targetMachineBoundary: nativeCamRealOutputAcceptance.targetMachineBoundary ?? null,
+      summary: nativeCamRealOutputAcceptance.summary
+    } : {
+      id: null,
+      level: "missing",
+      productionCandidateCount: 0,
+      sourceReportBindingStatus: "missing",
+      targetMachineBoundaryStatus: {
+        schema: "hediao3d.native-cam-target-machine-boundary-status.v1",
+        status: "missing",
+        matched: false,
+        summary: "未回填 native-cam-real-output-bundle.zip，尚未证明真实 CAM 输出适配当前目标机型边界。"
+      },
+      targetMachineBoundary: null,
+      summary: "missing"
+    },
     camServerConfig: camServerConfig ? {
       status: camServerConfig.status,
       selectedEngine: camServerConfig.selectedEngine,

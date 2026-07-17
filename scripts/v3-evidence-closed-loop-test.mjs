@@ -99,9 +99,11 @@ async function main() {
 
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next-action checklist should show verified CAMotics evidence");
+  assert(nextActionChecklist.includes("Native CAM机型边界: matched"), "next-action checklist should show matched native CAM machine boundary");
   assert(nextActionChecklist.includes("生产门禁"), "next-action checklist should keep production gate visible");
 
   const packageIndex = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/machining-package-index.json`);
+  assert(packageIndex.nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus?.status === "matched", "package index should expose matched native CAM target machine boundary");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "package index should expose refreshed CAMotics cross-checks");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "package index should expose refreshed CAMotics machine context");
   assert(packageIndex.productionEvidenceDossier.crossChecks.productionReadinessAudit?.allowProductionPackage === false, "package index must keep production package locked");
