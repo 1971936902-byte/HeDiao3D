@@ -175,8 +175,46 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(run.status === 0, `validator should pass fixture, exited ${run.status}: ${run.stderr || run.stdout}`);
     const report = JSON.parse(run.stdout);
     assert(report.ok === true, "validator report should be ok");
+    assert(report.productionEvidenceEligible === true, "validator should mark passing fixture as production evidence eligible");
+    assert(Array.isArray(report.missing) && report.missing.length === 0, "passing validator should not list missing checks");
+    assert(/eligible to be imported/.test(report.summary), "passing validator should include import-ready summary");
     assert(report.checks?.some((check) => check.id === "run-package-hash" && check.ok), "validator should check run package hash");
     assert(report.checks?.some((check) => check.id === "visual-or-material-artifact" && check.ok), "validator should check visual/material artifact");
+
+    writeFileSync(resultPath, JSON.stringify({
+      schema: "hediao3d.camotics-result.v1",
+      jobId,
+      engine: "camotics",
+      status: "completed",
+      synthetic: false,
+      riskLevel: "ready",
+      inputs: {
+        preferredGcodeSha256: previewSha256,
+        camoticsCliRunPackageSha256: "bad-hash"
+      },
+      metrics: {
+        motionLineCount: previewMotionProfile.motionLineCount,
+        zMin: previewMotionProfile.zMin,
+        zMax: previewMotionProfile.zMax,
+        materialRemovedMm3: 3.2
+      },
+      artifacts: {
+        screenshot: "missing-preview.png",
+        materialMesh: "missing-material-removal.stl"
+      }
+    }, null, 2), "utf8");
+    const failedRun = spawnSync(process.execPath, [validatorPath, resultPath], {
+      cwd: dir,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    assert(failedRun.status !== 0, "validator should reject incomplete fixture");
+    const failedReport = JSON.parse(failedRun.stdout);
+    assert(failedReport.ok === false, "failed validator report should not be ok");
+    assert(failedReport.productionEvidenceEligible === false, "failed validator should not be production evidence eligible");
+    assert(failedReport.missing?.includes("run-package-hash"), "failed validator should list run-package-hash");
+    assert(failedReport.missing?.includes("visual-or-material-artifact"), "failed validator should list missing artifact evidence");
+    assert(/failed/.test(failedReport.summary), "failed validator should include failed summary");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

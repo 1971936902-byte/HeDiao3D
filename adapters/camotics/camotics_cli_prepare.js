@@ -307,18 +307,34 @@ const artifactEvidence = inspectArtifacts(result, resultPath, expected);
 check("visual-or-material-artifact", artifactEvidence.hasScreenshot || artifactEvidence.hasMaterialMesh, "Provide at least one existing artifact: camotics-preview.png or camotics-material-removal.stl.");
 
 const ok = checks.every((item) => item.ok);
+const missing = checks.filter((item) => !item.ok).map((item) => item.id);
+const productionEvidenceEligible = ok;
 const report = {
   schema: "hediao3d.camotics-result-local-validation.v1",
   createdAt: new Date().toISOString(),
   ok,
+  productionEvidenceEligible,
   resultPath,
   checks,
+  missing,
   artifactEvidence,
   expected: {
     preferredGcodeSha256: expected.preferredGcodeSha256,
     camoticsCliRunPackageSha256: expected.camoticsCliRunPackageSha256,
     motionProfile: expected.motionProfile
-  }
+  },
+  nextActions: productionEvidenceEligible
+    ? [
+      "Import camotics-result.json back into HeDiao3D.",
+      "Then inspect simulation-summary.json, production-gate.json and production-evidence-dossier.json before any trial cut."
+    ]
+    : [
+      "Fix every critical check before importing camotics-result.json.",
+      "Do not use this CAMotics result as production evidence until productionEvidenceEligible is true."
+    ],
+  summary: productionEvidenceEligible
+    ? "CAMotics local validation passed: result is eligible to be imported as material-removal evidence."
+    : "CAMotics local validation failed: " + missing.join(", ")
 };
 
 console.log(JSON.stringify(report, null, 2));
