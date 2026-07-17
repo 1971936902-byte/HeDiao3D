@@ -1966,6 +1966,48 @@ button:disabled {
   line-height: 1.35;
 }
 
+.v3-rotary-preview-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.v3-rotary-preview-card.ready {
+  border-left-color: var(--green);
+}
+
+.v3-rotary-preview-card.critical {
+  border-left-color: var(--rose);
+}
+
+.v3-rotary-preview-card div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.v3-rotary-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.v3-rotary-preview-grid span {
+  display: grid;
+  gap: 2px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.v3-rotary-preview-grid strong {
+  font-size: 12px;
+}
+
 .v3-pipeline {
   display: grid;
   gap: 6px;

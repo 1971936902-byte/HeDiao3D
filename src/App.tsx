@@ -521,6 +521,46 @@ type V3OrchestratorJob = {
           rotaryCoverage: number | null;
         };
       };
+      rotaryWrapPreviewReport?: {
+        schema: string;
+        level: "ready" | "review" | "critical";
+        summary: string;
+        camMode: string;
+        coordinateMapping: {
+          lengthAxis: string;
+          depthAxis: string;
+          rotaryAxis: string | null;
+          rotaryOutputMode: string;
+          rotaryWrapPerRevolutionMm: number | null;
+          expectedAngleSpanDeg: number | null;
+          expectedLinearSpanMm: number | null;
+          camoticsInterpretation?: string | null;
+        };
+        metrics: {
+          pointCount: number;
+          machineMotionLineCount: number;
+          pointAngleSpanDeg: number;
+          machineAngleSpanDeg: number;
+          machineRotaryLinearSpanMm: number | null;
+          pointCoverage: number | null;
+          machineCoverage: number | null;
+          linearizationErrorMm: number | null;
+          linearizationErrorRate: number | null;
+        };
+        axisRanges?: {
+          machineNc?: {
+            y?: { min: number | null; max: number | null; span: number; count: number };
+            a?: { min: number | null; max: number | null; span: number; count: number };
+            z?: { min: number | null; max: number | null; span: number; count: number };
+          };
+          camoticsPreviewNc?: {
+            z?: { min: number | null; max: number | null; span: number; count: number };
+          };
+        };
+        criticalIssues: string[];
+        warningIssues: string[];
+        requiredActions: string[];
+      };
       controllerDialectReport?: {
         level: "ready" | "review" | "critical";
         summary: string;
@@ -628,6 +668,14 @@ type V3OrchestratorJob = {
           requiredActions: string[];
         };
         recommendedSequence?: string[];
+        rotaryWrapPreview?: {
+          level: string;
+          summary: string;
+          machineCoverage: number | null;
+          pointCoverage: number | null;
+          linearizationErrorRate: number | null;
+          artifact: string;
+        } | null;
         camotics?: {
           status: string;
           previewFile: string;
@@ -5284,6 +5332,44 @@ export function App() {
                     : ""}
                 </small>
               )}
+              {v3Job?.result?.summary.rotaryWrapPreviewReport && (
+                <div className={`v3-rotary-preview-card ${v3Job.result.summary.rotaryWrapPreviewReport.level}`}>
+                  <div>
+                    <strong>旋转包裹预览：{v3Job.result.summary.rotaryWrapPreviewReport.level}</strong>
+                    <span>{v3Job.result.summary.rotaryWrapPreviewReport.summary}</span>
+                  </div>
+                  <div className="v3-rotary-preview-grid">
+                    <span>
+                      <strong>{v3Job.result.summary.rotaryWrapPreviewReport.metrics.machineCoverage !== null ? `${(v3Job.result.summary.rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"}</strong>
+                      机床NC覆盖
+                    </span>
+                    <span>
+                      <strong>{v3Job.result.summary.rotaryWrapPreviewReport.metrics.pointCoverage !== null ? `${(v3Job.result.summary.rotaryWrapPreviewReport.metrics.pointCoverage * 100).toFixed(1)}%` : "-"}</strong>
+                      刀路点覆盖
+                    </span>
+                    <span>
+                      <strong>{v3Job.result.summary.rotaryWrapPreviewReport.metrics.linearizationErrorRate !== null ? `${(v3Job.result.summary.rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}</strong>
+                      线性化误差
+                    </span>
+                    <span>
+                      <strong>{v3Job.result.summary.rotaryWrapPreviewReport.coordinateMapping.rotaryAxis ?? "-"}</strong>
+                      {v3Job.result.summary.rotaryWrapPreviewReport.coordinateMapping.rotaryOutputMode}
+                    </span>
+                  </div>
+                  <small>
+                    目标 {v3Job.result.summary.rotaryWrapPreviewReport.coordinateMapping.expectedAngleSpanDeg ?? "-"}°
+                    {" · "}
+                    每圈 {v3Job.result.summary.rotaryWrapPreviewReport.coordinateMapping.rotaryWrapPerRevolutionMm ?? "-"}mm
+                    {" · "}
+                    预览 {v3Job.result.summary.rotaryWrapPreviewReport.coordinateMapping.camoticsInterpretation ?? "-"}
+                  </small>
+                  {(v3Job.result.summary.rotaryWrapPreviewReport.criticalIssues[0] || v3Job.result.summary.rotaryWrapPreviewReport.warningIssues[0]) && (
+                    <small>
+                      复核：{v3Job.result.summary.rotaryWrapPreviewReport.criticalIssues[0] ?? v3Job.result.summary.rotaryWrapPreviewReport.warningIssues[0]}
+                    </small>
+                  )}
+                </div>
+              )}
               {v3Job?.result?.summary.controllerDialectReport && (
                 <small>
                   控制器方言：{v3Job.result.summary.controllerDialectReport.level}
@@ -7777,6 +7863,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const machineControllerProfile = summary?.machineControllerProfile;
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const camHandoffQuality = summary?.camHandoffQuality;
+  const rotaryWrapPreviewReport = summary?.rotaryWrapPreviewReport;
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
@@ -7814,6 +7901,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "证据档案报告: production-evidence-dossier.json",
     `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     "CAM交接报告: cam-handoff-quality.json",
+    `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
+    "旋转包裹预览报告: rotary-wrap-preview-report.json",
     `外部摄取源: ${camHandoffQuality?.sourceSnapshot ? `${camHandoffQuality.sourceSnapshot.kind} / ${camHandoffQuality.sourceSnapshot.sha256.slice(0, 12)}` : "无"}`,
     "",
     "## 机床验收",
