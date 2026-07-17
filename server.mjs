@@ -2568,6 +2568,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
   await writeFile(join(job.workDir, "rotary-calibration-airrun.nc"), rotaryCalibrationAirRunGcode, "utf8");
+  const camoticsCliPackage = await prepareCamoticsCliPackageForJob(job, job.workDir);
   const camoticsAdapterReport = await runCamoticsSimulationAdapter(job, settings, camoticsInput, camoticsSimulationPlan);
   pushIfArtifactExists(job, "camotics-adapter-report.json");
   pushIfArtifactExists(job, "camotics-result.json");
@@ -2743,6 +2744,10 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-simulation-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-project-template.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-cli-execution-plan.json"));
+  pushIfArtifactExists(job, "camotics-cli-run-package.json");
+  pushIfArtifactExists(job, "camotics-result-template.json");
+  pushIfArtifactExists(job, "camotics-linux-run.sh");
+  pushIfArtifactExists(job, "camotics-cli-package-report.json");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
@@ -2792,6 +2797,17 @@ async function processOrchestratorJob(job, settings) {
       camoticsInput,
       camoticsSimulationPlan,
       camoticsCliExecutionPlan,
+      camoticsCliPackage: camoticsCliPackage ? {
+        status: camoticsCliPackage.status,
+        ok: camoticsCliPackage.ok,
+        artifact: "camotics-cli-run-package.json",
+        resultTemplate: "camotics-result-template.json",
+        linuxRunScript: "camotics-linux-run.sh",
+        report: "camotics-cli-package-report.json",
+        productionUnlockEligible: false,
+        preferredGcodeSha256: camoticsCliPackage.preferredGcodeIdentity?.sha256 ?? null,
+        motionProfile: camoticsCliPackage.preferredGcodeIdentity?.motionProfile ?? null
+      } : null,
       rotaryWrapPreviewReport,
       ncStaticAnalysis,
       machineControllerProfile,
@@ -7571,59 +7587,17 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
   if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
   const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
   if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
-
-  const scriptPath = join(process.cwd(), "adapters", "camotics", "camotics_cli_prepare.js");
-  if (!existsSync(scriptPath)) return json(res, 500, { error: "找不到 CAMotics CLI 准备工具脚本" });
   if (!existsSync(join(workDir, "camotics-cli-execution-plan.json"))) {
     return json(res, 409, { error: "当前任务缺少 camotics-cli-execution-plan.json，无法生成 Linux CAMotics 准备包。" });
   }
 
-  const run = spawnSync(process.execPath, [scriptPath, workDir, workDir], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: Number(process.env.CAMOTICS_CLI_PREPARE_TIMEOUT_MS ?? 30000)
-  });
-  const runPackage = readJsonFile(join(workDir, "camotics-cli-run-package.json"));
-  if (run.error || run.status !== 0 || !runPackage) {
-    const report = {
-      schema: "hediao3d.camotics-cli-package-report.v1",
-      jobId: safeJobId,
-      createdAt: new Date().toISOString(),
-      status: "failed",
-      exitCode: run.status,
-      error: run.error?.message ?? `camotics cli prepare exit ${run.status}`,
-      stdout: String(run.stdout ?? "").slice(-6000),
-      stderr: String(run.stderr ?? "").slice(-6000)
-    };
-    await writeFile(join(workDir, "camotics-cli-package-report.json"), JSON.stringify(report, null, 2), "utf8");
+  const report = await prepareCamoticsCliPackageForJob(job, workDir);
+  if (!report || report.status === "failed") {
     pushIfArtifactExists(job, "camotics-cli-package-report.json");
     orchestratorJobs.set(safeJobId, job);
     await writeJobManifest(job);
-    return json(res, 500, { error: report.error, report });
+    return json(res, 500, { error: report?.error ?? "CAMotics Linux 准备包生成失败", report });
   }
-
-  const report = {
-    schema: "hediao3d.camotics-cli-package-report.v1",
-    jobId: safeJobId,
-    createdAt: new Date().toISOString(),
-    status: runPackage.status,
-    ok: runPackage.status === "ready-for-linux-camotics",
-    exitCode: run.status,
-    stdout: String(run.stdout ?? "").slice(-6000),
-    stderr: String(run.stderr ?? "").slice(-6000),
-    package: {
-      runPackage: "camotics-cli-run-package.json",
-      resultTemplate: "camotics-result-template.json",
-      linuxRunScript: "camotics-linux-run.sh"
-    },
-    preferredGcodeIdentity: runPackage.preferredGcodeIdentity ?? null,
-    checks: runPackage.checks ?? [],
-    safetyLocks: runPackage.safetyLocks ?? {
-      productionUnlockFromPreparePackage: false
-    }
-  };
-  await writeFile(join(workDir, "camotics-cli-package-report.json"), JSON.stringify(report, null, 2), "utf8");
 
   job.workDir = workDir;
   job.updatedAt = report.createdAt;
@@ -7684,6 +7658,65 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
     deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
     packageIntegrity: refreshedDelivery?.packageIntegrity ?? null
   });
+}
+
+async function prepareCamoticsCliPackageForJob(job, workDir) {
+  const scriptPath = join(process.cwd(), "adapters", "camotics", "camotics_cli_prepare.js");
+  const safeJobId = job.id;
+  if (!existsSync(scriptPath)) {
+    const report = {
+      schema: "hediao3d.camotics-cli-package-report.v1",
+      jobId: safeJobId,
+      createdAt: new Date().toISOString(),
+      status: "failed",
+      ok: false,
+      exitCode: null,
+      error: "找不到 CAMotics CLI 准备工具脚本",
+      package: {
+        runPackage: "camotics-cli-run-package.json",
+        resultTemplate: "camotics-result-template.json",
+        linuxRunScript: "camotics-linux-run.sh"
+      },
+      preferredGcodeIdentity: null,
+      checks: [],
+      safetyLocks: {
+        productionUnlockFromPreparePackage: false
+      }
+    };
+    await writeFile(join(workDir, "camotics-cli-package-report.json"), JSON.stringify(report, null, 2), "utf8");
+    return report;
+  }
+
+  const run = spawnSync(process.execPath, [scriptPath, workDir, workDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: Number(process.env.CAMOTICS_CLI_PREPARE_TIMEOUT_MS ?? 30000)
+  });
+  const runPackage = readJsonFile(join(workDir, "camotics-cli-run-package.json"));
+  const report = {
+    schema: "hediao3d.camotics-cli-package-report.v1",
+    jobId: safeJobId,
+    createdAt: new Date().toISOString(),
+    status: run.error || run.status !== 0 || !runPackage ? "failed" : runPackage.status,
+    ok: Boolean(!run.error && run.status === 0 && runPackage?.status === "ready-for-linux-camotics"),
+    exitCode: run.status,
+    error: run.error?.message ?? (run.status === 0 && runPackage ? null : `camotics cli prepare exit ${run.status}`),
+    stdout: String(run.stdout ?? "").slice(-6000),
+    stderr: String(run.stderr ?? "").slice(-6000),
+    package: {
+      runPackage: "camotics-cli-run-package.json",
+      resultTemplate: "camotics-result-template.json",
+      linuxRunScript: "camotics-linux-run.sh"
+    },
+    preferredGcodeIdentity: runPackage?.preferredGcodeIdentity ?? null,
+    checks: runPackage?.checks ?? [],
+    safetyLocks: runPackage?.safetyLocks ?? {
+      productionUnlockFromPreparePackage: false
+    }
+  };
+  await writeFile(join(workDir, "camotics-cli-package-report.json"), JSON.stringify(report, null, 2), "utf8");
+  return report;
 }
 
 async function importOrchestratorNeutralToolpath(req, jobId, res) {

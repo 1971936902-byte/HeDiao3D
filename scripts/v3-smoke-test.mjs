@@ -190,7 +190,9 @@ async function main() {
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-download-checklist.md"), "readFirst missing operator download checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "package-integrity.json"), "readFirst missing package integrity report");
   assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-cli-execution-plan.json"), "simulationOnly missing CAMotics CLI execution plan");
+  assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-cli-run-package.json"), "simulationOnly missing CAMotics CLI run package");
   assert(packageIndex.camotics?.cliExecutionPlan?.artifact === "camotics-cli-execution-plan.json", "package index missing CAMotics CLI execution summary");
+  assert(packageIndex.camotics?.cliRunPackage?.artifact === "camotics-cli-run-package.json", "package index missing CAMotics CLI run package summary");
   assert(packageIndex.filesByPurpose?.airRun?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "airRun group missing rotary calibration air-run");
   assert(packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "camotics-preview.nc"), "neverRunOnMachine missing camotics preview");
   assert(!packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "neverRunOnMachine should not include rotary calibration air-run");
@@ -222,6 +224,10 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-airrun.nc" && file.sha256), "package integrity missing rotary calibration air-run hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "camotics-preview.nc" && file.machineUse?.allowedOnMachine === false), "package integrity should mark CAMotics preview as never-machine");
   assert(packageIntegrity.files?.some((file) => file.filename === "camotics-cli-execution-plan.json" && file.sha256), "package integrity missing CAMotics CLI execution plan hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.sha256), "package integrity missing CAMotics CLI run package hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "camotics-result-template.json" && file.sha256), "package integrity missing CAMotics result template hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "camotics-linux-run.sh" && file.sha256), "package integrity missing CAMotics Linux script hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "camotics-cli-package-report.json" && file.sha256), "package integrity missing CAMotics package report hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");
   assert(createV3SmokeReadmeProbe(job).includes("CAM选择"), "V3 package readme should include CAM engine selection");
 
