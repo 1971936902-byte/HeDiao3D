@@ -58,7 +58,7 @@ async function main() {
   const resultTemplate = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-template.json`);
   assert(resultTemplate.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "CAMotics result template should bind to the current CLI run package hash");
   const completeImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(previewSha256, previewMotionProfile, runPackageSha256),
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: [
       "solid camotics_material_removal",
@@ -92,13 +92,14 @@ async function main() {
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
+  assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
   assert(resultArtifact.evidenceQuality?.motionConsistency?.status === "matched", "camotics result motion profile should match");
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult("0".repeat(64), previewMotionProfile, runPackageSha256),
+    result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -107,7 +108,7 @@ async function main() {
   assert(mismatchImport.simulationEvidence?.productionUnlockEligible === false, "hash mismatch must not be production eligible");
 
   const runPackageMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(previewSha256, previewMotionProfile, "1".repeat(64)),
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, "1".repeat(64)),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -116,7 +117,7 @@ async function main() {
   assert(runPackageMismatchImport.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "material-removal-simulation" && item.status !== "pass"), "run package mismatch must not pass material-removal evidence");
 
   const motionMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(previewSha256, {
+    result: createCamoticsResult(job.id, previewSha256, {
       ...previewMotionProfile,
       motionLineCount: Math.max(0, previewMotionProfile.motionLineCount - 100),
       zMin: previewMotionProfile.zMin + 0.5
@@ -126,6 +127,16 @@ async function main() {
   });
   assert(motionMismatchImport.ok === true, "motion mismatch import should complete as review evidence");
   assert(motionMismatchImport.simulationEvidence?.productionUnlockEligible === false, "motion mismatch must not be production eligible");
+
+  const jobMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    result: createCamoticsResult("wrong-job-id", previewSha256, previewMotionProfile, runPackageSha256),
+    screenshotDataUrl: toDataUrl("fake-camotics-png"),
+    materialMeshText: "solid material\nendsolid material\n"
+  });
+  assert(jobMismatchImport.ok === true, "job mismatch import should complete as review evidence");
+  assert(jobMismatchImport.simulationEvidence?.productionUnlockEligible === false, "job mismatch must not be production eligible");
+  const jobMismatchArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  assert(jobMismatchArtifact.evidenceQuality?.inputIdentity?.job?.status === "mismatch", "job mismatch should be reported in CAMotics evidence quality");
 
   console.log(JSON.stringify({
     ok: true,
@@ -137,9 +148,10 @@ async function main() {
   }, null, 2));
 }
 
-function createCamoticsResult(preferredGcodeSha256, motionProfile, runPackageSha256) {
+function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256) {
   return {
     schema: "hediao3d.camotics-result.v1",
+    jobId,
     engine: "camotics",
     status: "completed",
     synthetic: false,

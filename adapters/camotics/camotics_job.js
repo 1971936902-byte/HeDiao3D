@@ -269,7 +269,7 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
   }
   const inputIdentity = createCamoticsInputIdentity(adapterJob, simulationPlan);
   const artifactEvidence = materializeCamoticsEvidenceArtifacts(imported, sourcePath, dir);
-  const evidenceQuality = evaluateCamoticsEvidence(imported, inputIdentity, artifactEvidence);
+  const evidenceQuality = evaluateCamoticsEvidence(imported, inputIdentity, artifactEvidence, adapterJob);
   const result = {
     ...imported,
     jobId: imported.jobId ?? adapterJob.jobId ?? null,
@@ -433,13 +433,23 @@ function createCliRunPackageIdentity(path) {
   };
 }
 
-function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence = null) {
+function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence = null, adapterJob = null) {
   const metrics = result?.metrics ?? {};
   const importedHash = result?.inputs?.preferredGcodeSha256;
   const expectedHash = inputIdentity?.expectedPreferredGcodeSha256 ?? null;
   const importedCliPackageHash = result?.inputs?.camoticsCliRunPackageSha256;
   const expectedCliPackageHash = inputIdentity?.cliRunPackageIdentity?.sha256 ?? null;
   const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
+  const expectedJobId = adapterJob?.jobId ?? null;
+  const importedJobId = result?.jobId ?? null;
+  const jobIdentityOk = nonEmptyString(expectedJobId) && importedJobId === expectedJobId;
+  const jobIdentityStatus = !nonEmptyString(expectedJobId)
+    ? "missing-expected-job"
+    : !nonEmptyString(importedJobId)
+      ? "missing-imported-job"
+      : jobIdentityOk
+        ? "matched"
+        : "mismatch";
   const identityOk = nonEmptyString(expectedHash) && importedHash === expectedHash;
   const cliPackageRequired = Boolean(inputIdentity?.cliRunPackageIdentity?.exists);
   const cliPackageOk = !cliPackageRequired || (nonEmptyString(expectedCliPackageHash) && importedCliPackageHash === expectedCliPackageHash);
@@ -463,6 +473,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       id: "inputIdentity",
       ok: identityOk,
       message: "inputs.preferredGcodeSha256 must match the current camotics-preview.nc SHA-256."
+    },
+    {
+      id: "jobIdentity",
+      ok: jobIdentityOk,
+      message: "jobId must match the current Orchestrator/CAMotics adapter job."
     },
     {
       id: "cliRunPackageIdentity",
@@ -508,6 +523,16 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       preferredGcode: inputIdentity?.preferredGcode ?? null,
       expectedPreferredGcodeSha256: expectedHash,
       importedPreferredGcodeSha256: importedHash ?? null,
+      job: {
+        status: jobIdentityStatus,
+        expectedJobId,
+        importedJobId,
+        message: jobIdentityStatus === "matched"
+          ? "Imported CAMotics result is bound to the current job."
+          : jobIdentityStatus === "mismatch"
+            ? "Imported CAMotics result jobId does not match the current job."
+            : "Imported CAMotics result is missing a jobId binding."
+      },
       cliRunPackage: {
         status: cliPackageStatus,
         required: cliPackageRequired,

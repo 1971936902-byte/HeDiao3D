@@ -124,6 +124,7 @@ assert(result.metrics?.materialRemovedMm3 === 1.2, "imported metrics were not pr
 assert(result.evidenceQuality?.productionEvidenceEligible === true, "complete imported CAMotics evidence should be production eligible");
 assert(result.evidenceQuality?.status === "complete", `evidence quality should be complete, got ${result.evidenceQuality?.status}`);
 assert(result.evidenceQuality?.inputIdentity?.status === "matched", `input identity should match, got ${result.evidenceQuality?.inputIdentity?.status}`);
+assert(result.evidenceQuality?.inputIdentity?.job?.status === "matched", `job identity should match, got ${result.evidenceQuality?.inputIdentity?.job?.status}`);
 assert(result.evidenceQuality?.motionConsistency?.status === "matched", `motion profile should match, got ${result.evidenceQuality?.motionConsistency?.status}`);
 assert(result.inputs?.expectedPreferredGcodeSha256 === previewSha256, "expected preview hash missing from imported result");
 assert(result.evidenceQuality?.inputIdentity?.previewMotionProfile?.motionLineCount === 2, "preview motion profile should be recorded");
@@ -217,6 +218,30 @@ const motionMismatchResult = JSON.parse(readFileSync(join(workDir, "camotics-res
 assert(motionMismatchResult.evidenceQuality?.productionEvidenceEligible === false, "motion mismatch must not be production eligible");
 assert(motionMismatchResult.evidenceQuality?.missing?.includes("motionProfile"), "motion mismatch should be reported in evidence quality");
 assert(motionMismatchResult.evidenceQuality?.motionConsistency?.status === "mismatch", "motion mismatch status should be mismatch");
+
+const jobMismatchPath = join(workDir, "job-mismatch-camotics-result.json");
+const jobMismatchReportPath = join(workDir, "job-mismatch-camotics-adapter-report.json");
+writeFileSync(jobMismatchPath, JSON.stringify({
+  ...JSON.parse(readFileSync(importedPath, "utf8")),
+  jobId: "wrong-camotics-job"
+}, null, 2));
+const jobMismatchRun = spawnSync(process.execPath, ["adapters/camotics/camotics_job.js", jobPath, jobMismatchReportPath], {
+  cwd: root,
+  encoding: "utf8",
+  windowsHide: true,
+  env: {
+    ...process.env,
+    HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
+    HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "false",
+    HEDIAO3D_CAMOTICS_RESULT_JSON: jobMismatchPath
+  }
+});
+assert(!jobMismatchRun.error, `job mismatch adapter spawn failed: ${jobMismatchRun.error?.message}`);
+assert(jobMismatchRun.status === 0, `job mismatch adapter exited ${jobMismatchRun.status}: ${jobMismatchRun.stderr}`);
+const jobMismatchResult = JSON.parse(readFileSync(join(workDir, "camotics-result.json"), "utf8"));
+assert(jobMismatchResult.evidenceQuality?.productionEvidenceEligible === false, "job mismatch must not be production eligible");
+assert(jobMismatchResult.evidenceQuality?.missing?.includes("jobIdentity"), "job mismatch should be reported in evidence quality");
+assert(jobMismatchResult.evidenceQuality?.inputIdentity?.job?.status === "mismatch", "job mismatch status should be mismatch");
 
 const contract = {
   schema: "hediao3d.camotics-import-contract.v1",
