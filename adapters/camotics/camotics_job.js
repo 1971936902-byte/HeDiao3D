@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const [, , jobPath, resultPath] = process.argv;
@@ -268,7 +268,8 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
     };
   }
   const inputIdentity = createCamoticsInputIdentity(adapterJob, simulationPlan);
-  const evidenceQuality = evaluateCamoticsEvidence(imported, inputIdentity);
+  const artifactEvidence = materializeCamoticsEvidenceArtifacts(imported, sourcePath, dir);
+  const evidenceQuality = evaluateCamoticsEvidence(imported, inputIdentity, artifactEvidence);
   const result = {
     ...imported,
     jobId: imported.jobId ?? adapterJob.jobId ?? null,
@@ -277,6 +278,11 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
     importedFrom: sourcePath,
     importedAt: new Date().toISOString(),
     evidenceQuality,
+    artifactEvidence,
+    artifacts: {
+      ...(imported.artifacts ?? {}),
+      ...artifactEvidence.artifacts
+    },
     inputs: {
       ...(imported.inputs ?? {}),
       preferredGcode: imported.inputs?.preferredGcode ?? simulationPlan.inputs.preferredGcode,
@@ -295,6 +301,65 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
     imported: true,
     sourcePath
   };
+}
+
+function materializeCamoticsEvidenceArtifacts(result, sourcePath, outputDir) {
+  const artifactSpec = result?.artifacts ?? {};
+  const sourceDir = dirname(sourcePath);
+  const expected = [
+    { key: "screenshot", outputName: "camotics-preview.png" },
+    { key: "materialMesh", outputName: "camotics-material-removal.stl" }
+  ];
+  const files = {};
+  const artifacts = {};
+  const missing = [];
+
+  for (const item of expected) {
+    const rawValue = artifactSpec[item.key];
+    if (!nonEmptyString(rawValue)) continue;
+    const resolved = resolveArtifactPath(rawValue, sourceDir, outputDir);
+    if (!resolved || !existsSync(resolved)) {
+      missing.push({ key: item.key, value: rawValue, reason: "artifact file not found" });
+      artifacts[item.key] = rawValue;
+      continue;
+    }
+    const outputName = item.outputName || basename(resolved);
+    const outputPath = join(outputDir, outputName);
+    if (resolved !== outputPath) {
+      copyFileSync(resolved, outputPath);
+    }
+    const bytes = readFileSync(outputPath);
+    const stats = statSync(outputPath);
+    artifacts[item.key] = outputName;
+    files[item.key] = {
+      filename: outputName,
+      sourcePath: resolved,
+      copiedPath: outputPath,
+      sizeBytes: stats.size,
+      sha256: createHash("sha256").update(bytes).digest("hex")
+    };
+  }
+
+  return {
+    schema: "hediao3d.camotics-artifact-evidence.v1",
+    complete: Boolean(files.screenshot || files.materialMesh),
+    files,
+    artifacts,
+    missing,
+    summary: files.screenshot || files.materialMesh
+      ? "CAMotics visual/material-removal artifacts were copied into the job package and hashed."
+      : "No verifiable CAMotics visual/material-removal artifact was found."
+  };
+}
+
+function resolveArtifactPath(value, sourceDir, outputDir) {
+  if (!nonEmptyString(value)) return null;
+  if (isAbsolute(value) && existsSync(value)) return value;
+  const fromSource = join(sourceDir, value);
+  if (existsSync(fromSource)) return fromSource;
+  const fromOutput = join(outputDir, value);
+  if (existsSync(fromOutput)) return fromOutput;
+  return isAbsolute(value) ? value : fromSource;
 }
 
 function validateImportedCamoticsResult(result) {
@@ -331,12 +396,12 @@ function createCamoticsInputIdentity(adapterJob, simulationPlan) {
   };
 }
 
-function evaluateCamoticsEvidence(result, inputIdentity = null) {
+function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence = null) {
   const metrics = result?.metrics ?? {};
-  const artifacts = result?.artifacts ?? {};
   const importedHash = result?.inputs?.preferredGcodeSha256;
   const expectedHash = inputIdentity?.expectedPreferredGcodeSha256 ?? null;
   const identityOk = nonEmptyString(expectedHash) && importedHash === expectedHash;
+  const hasVerifiedArtifact = Boolean(artifactEvidence?.files?.screenshot || artifactEvidence?.files?.materialMesh);
   const identityStatus = !inputIdentity || inputIdentity.status !== "ready"
     ? "missing-preview"
     : !nonEmptyString(importedHash)
@@ -362,8 +427,8 @@ function evaluateCamoticsEvidence(result, inputIdentity = null) {
     },
     {
       id: "visualOrMeshArtifact",
-      ok: nonEmptyString(artifacts.screenshot) || nonEmptyString(artifacts.materialMesh),
-      message: "artifacts.screenshot or artifacts.materialMesh is required for production evidence."
+      ok: hasVerifiedArtifact,
+      message: "A screenshot or material-removal mesh file must exist, be copied into the job package and have a SHA-256 hash."
     },
     {
       id: "riskReady",
@@ -392,6 +457,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null) {
             ? "Imported CAMotics result is missing inputs.preferredGcodeSha256."
             : inputIdentity?.message ?? "Preview G-code identity could not be verified."
     },
+    artifactEvidence,
     summary: missing.length === 0
       ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."
       : `CAMotics result imported, but evidence is incomplete: ${missing.join(", ")}.`

@@ -2358,6 +2358,8 @@ async function processOrchestratorJob(job, settings) {
   const camoticsAdapterReport = await runCamoticsSimulationAdapter(job, settings, camoticsInput, camoticsSimulationPlan);
   pushIfArtifactExists(job, "camotics-adapter-report.json");
   pushIfArtifactExists(job, "camotics-result.json");
+  pushIfArtifactExists(job, "camotics-preview.png");
+  pushIfArtifactExists(job, "camotics-material-removal.stl");
   const simulationSummary = mergeCamoticsSimulationResult(internalSimulationSummary, camoticsAdapterReport, job);
   await writeFile(join(job.workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
   updatePipelineStage(job, "simulation", "completed", `仿真 ${simulationSummary.engine}，贴合 ${simulationSummary.metrics.fitRate.toFixed(1)}%，未命中 ${simulationSummary.metrics.missCount} 点。`);
@@ -5753,6 +5755,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-job.json", "CAMotics Adapter 任务", "report", existsSync(join(job.workDir, "camotics-job.json")), "CAMotics adapter 的独立输入快照。"),
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
+    createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
+    createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "camotics-run.md", "CAMotics 操作说明", "report", true, "说明如何用 CAMotics 打开 toolpath.nc 和 air-run.nc，以及旋转夹具模式限制。"),
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
