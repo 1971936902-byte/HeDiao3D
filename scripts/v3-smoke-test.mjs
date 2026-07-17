@@ -149,6 +149,7 @@ async function main() {
     "postprocess-profile.json",
     "machining-package-index.json",
     "delivery-manifest.json",
+    "operator-download-checklist.md",
     "package-integrity.json"
   ];
   for (const filename of requiredArtifacts) {
@@ -180,19 +181,27 @@ async function main() {
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-download-checklist.md"), "readFirst missing operator download checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "package-integrity.json"), "readFirst missing package integrity report");
   assert(packageIndex.filesByPurpose?.airRun?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "airRun group missing rotary calibration air-run");
   assert(packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "camotics-preview.nc"), "neverRunOnMachine missing camotics preview");
   assert(!packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "neverRunOnMachine should not include rotary calibration air-run");
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.every((file) => file.machineUse?.class), "delivery-manifest artifact missing machineUse classifications");
+  assert(deliveryManifest.files?.some((file) => file.filename === "operator-download-checklist.md" && file.downloadable), "delivery manifest should expose operator download checklist");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
+  const operatorDownloadChecklist = await getArtifactText(job.id, "operator-download-checklist.md");
   assert(operatorRunbook.includes("HeDiao3D V3 操作员上机说明书"), "operator runbook missing title");
   assert(operatorRunbook.includes("rotary-calibration-airrun.nc"), "operator runbook missing rotary calibration air-run");
   assert(operatorRunbook.includes("camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机"), "operator runbook should forbid CAMotics preview on machine");
+  assert(operatorDownloadChecklist.includes("HeDiao3D V3 操作员下载核验清单"), "operator download checklist missing title");
+  assert(operatorDownloadChecklist.includes("Get-FileHash .\\toolpath.nc -Algorithm SHA256"), "operator download checklist missing PowerShell hash command");
+  assert(operatorDownloadChecklist.includes("生产门禁未放行"), "operator download checklist should warn when production is locked");
+  assert(operatorDownloadChecklist.includes("camotics-preview.nc"), "operator download checklist should list never-machine simulation file");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "operator-download-checklist.md" && file.sha256), "package integrity missing operator download checklist hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-template.json" && file.sha256), "package integrity missing trial feedback template hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-handoff-quality.json" && file.sha256), "package integrity missing CAM handoff quality hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-server-config.json" && file.sha256), "package integrity missing CAM server config hash");

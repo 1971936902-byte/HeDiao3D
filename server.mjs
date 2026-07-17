@@ -2564,7 +2564,19 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "postprocess-profile.json"), JSON.stringify(postprocessProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
   await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
-  const packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(job.workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n生成中，请以最终 package-integrity.json 为准。\n", "utf8");
+  let packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+  await writeFile(join(job.workDir, "operator-download-checklist.md"), createOperatorDownloadChecklistMarkdown({
+    job,
+    deliveryManifest,
+    packageIntegrity,
+    productionGate,
+    machineControllerProfile,
+    camHandoffQuality,
+    simulationSummary
+  }), "utf8");
+  packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
   await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
   updatePipelineStage(job, "postprocess", productionGate.allowProductionNc ? "completed" : "review", productionGate.summary);
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
@@ -2593,6 +2605,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-profile.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machining-package-index.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-download-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
   job.status = "completed";
   job.currentStage = "completed";
@@ -5678,9 +5691,10 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json"),
+        getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -5851,6 +5865,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "machine-acceptance-log.json", "机床验收日志", "report", existsSync(join(job.workDir, "machine-acceptance-log.json")), "按时间保存机床现场验收记录，用于生产证据链。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
+    createDeliveryFile(job.id, "operator-download-checklist.md", "操作员下载核验清单", "report", true, "下载加工包后按此核验文件 SHA-256 和上机用途，避免误运行仿真或报告文件。"),
     createDeliveryFile(job.id, "package-integrity.json", "加工包完整性清单", "report", true, "记录交付文件大小和 SHA-256，用于下载后核验。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
     createDeliveryFile(job.id, "rotary-calibration-airrun.nc", "旋转夹具标定空跑 NC", "air-run", true, "主轴关闭且 Z 在安全高度，用 90/180/360 度动作核验旋转方向、每圈距离和反向间隙。"),
@@ -5974,6 +5989,7 @@ function createPackageIntegrityReport(job, deliveryManifest) {
         label: file.label,
         kind: file.kind,
         downloadable: file.downloadable,
+        machineUse: file.machineUse,
         exists: true,
         bytes: null,
         sha256: null,
@@ -5987,6 +6003,7 @@ function createPackageIntegrityReport(job, deliveryManifest) {
         label: file.label,
         kind: file.kind,
         downloadable: file.downloadable,
+        machineUse: file.machineUse,
         exists: false,
         bytes: 0,
         sha256: null,
@@ -5999,6 +6016,7 @@ function createPackageIntegrityReport(job, deliveryManifest) {
       label: file.label,
       kind: file.kind,
       downloadable: file.downloadable,
+      machineUse: file.machineUse,
       exists: true,
       bytes: bytes.byteLength,
       sha256: createHash("sha256").update(bytes).digest("hex"),
@@ -6025,6 +6043,82 @@ function createPackageIntegrityReport(job, deliveryManifest) {
   };
 }
 
+function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packageIntegrity, productionGate, machineControllerProfile, camHandoffQuality, simulationSummary }) {
+  const manifestByName = new Map((deliveryManifest.files ?? []).map((file) => [file.filename, file]));
+  const integrityFiles = packageIntegrity.files ?? [];
+  const fileRows = integrityFiles
+    .filter((file) => file.downloadable && !["package-integrity.json", "operator-download-checklist.md"].includes(file.filename))
+    .map((file) => ({
+      ...file,
+      manifest: manifestByName.get(file.filename),
+      machineUse: file.machineUse ?? manifestByName.get(file.filename)?.machineUse
+    }));
+  const machineCandidates = fileRows.filter((file) => file.filename === "toolpath.nc");
+  const airRunFiles = fileRows.filter((file) => file.machineUse?.class === "air-run-no-cut");
+  const neverMachineFiles = fileRows.filter((file) => file.machineUse?.allowedOnMachine === false);
+  const missing = integrityFiles.filter((file) => file.downloadable && !file.exists);
+  const hashLine = (file) => `- [ ] ${file.filename}: ${file.exists ? `${file.sha256 ?? "self-reference"} (${file.bytes ?? "-"} bytes)` : "缺失"}${file.machineUse?.summary ? ` - ${file.machineUse.summary}` : ""}`;
+  const lines = [
+    "# HeDiao3D V3 操作员下载核验清单",
+    "",
+    `Job ID: ${job.id}`,
+    `生成时间: ${new Date().toISOString()}`,
+    `包级别: ${deliveryManifest.packageLevel}`,
+    `完整性: ${packageIntegrity.status} / ${packageIntegrity.summary}`,
+    `机床: ${machineControllerProfile?.name ?? "未生成"} / ${machineControllerProfile?.controllerClass ?? "-"}`,
+    `CAM交接: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
+    `仿真: ${simulationSummary?.engine ?? "未生成"} / ${simulationSummary?.riskLevel ?? "-"}`,
+    "",
+    "## 上机前必须确认",
+    "",
+    "- [ ] 已阅读 `machining-package-index.json`、`production-gate.json`、`operator-runbook.md`。",
+    "- [ ] 已阅读 `package-integrity.json`，并用本清单核对下载后的文件哈希。",
+    "- [ ] 已确认机床接线与 `machine-controller-profile.json` 中的 X/Z/旋转轴映射一致。",
+    "- [ ] 已确认刀具与 `tool-setup-sheet.json` 一致，尤其是 4mm 25度平底尖刀、进给、转速和最大切深。",
+    "- [ ] 先运行 `rotary-calibration-airrun.nc`，再运行 `air-run.nc`，两者都必须主轴关闭、Z 保持安全高度。",
+    productionGate.allowProductionNc
+      ? "- [ ] 生产门禁已放行；仍需完成离料空跑、低进给试雕和现场验收后再运行 `toolpath.nc`。"
+      : "- [ ] 生产门禁未放行；`toolpath.nc` 最多只能按试雕/废料验证流程处理，禁止直接生产上机。",
+    "",
+    "## 推荐核验命令",
+    "",
+    "```powershell",
+    "Get-FileHash .\\toolpath.nc -Algorithm SHA256",
+    "Get-FileHash .\\air-run.nc -Algorithm SHA256",
+    "Get-FileHash .\\rotary-calibration-airrun.nc -Algorithm SHA256",
+    "```",
+    "",
+    "```bash",
+    "sha256sum toolpath.nc air-run.nc rotary-calibration-airrun.nc",
+    "```",
+    "",
+    "## 可上机候选",
+    "",
+    ...(machineCandidates.length ? machineCandidates.map(hashLine) : ["- 当前没有生产/试雕 NC 候选。"]),
+    "",
+    "## 只允许离料空跑",
+    "",
+    ...(airRunFiles.length ? airRunFiles.map(hashLine) : ["- 当前没有离料空跑文件。"]),
+    "",
+    "## 永远不要上机运行",
+    "",
+    ...(neverMachineFiles.length ? neverMachineFiles.map(hashLine) : ["- 无。"]),
+    "",
+    "## 缺失或异常",
+    "",
+    ...(missing.length ? missing.map((file) => `- [ ] ${file.filename}: 缺失，应重新生成加工包。`) : ["- 未发现缺失的可下载文件。"]),
+    "",
+    "## 操作记录",
+    "",
+    "- [ ] rotary-calibration-airrun.nc 运行结果：通过 / 未通过 / 备注：",
+    "- [ ] air-run.nc 运行结果：通过 / 未通过 / 备注：",
+    "- [ ] 低进给试雕结果：通过 / 未通过 / 备注：",
+    "- [ ] 已回填 trial-feedback-template.json 和 machine-acceptance-checklist.json。",
+    ""
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 async function refreshEvidenceDeliveryArtifacts(job) {
   if (!job?.workDir) return null;
   const manifestPath = join(job.workDir, "delivery-manifest.json");
@@ -6047,9 +6141,22 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, file);
   }
   await writeFile(manifestPath, JSON.stringify(deliveryManifest, null, 2), "utf8");
-  const packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(job.workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n更新中，请以最终 package-integrity.json 为准。\n", "utf8");
+  let packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+  await writeFile(join(job.workDir, "operator-download-checklist.md"), createOperatorDownloadChecklistMarkdown({
+    job,
+    deliveryManifest,
+    packageIntegrity,
+    productionGate: readJsonFile(join(job.workDir, "production-gate.json")) ?? { allowProductionNc: false },
+    machineControllerProfile: readJsonFile(join(job.workDir, "machine-controller-profile.json")),
+    camHandoffQuality: readJsonFile(join(job.workDir, "cam-handoff-quality.json")),
+    simulationSummary: readJsonFile(join(job.workDir, "simulation-summary.json"))
+  }), "utf8");
+  packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
   await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-download-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
   return { deliveryManifest, packageIntegrity };
 }
