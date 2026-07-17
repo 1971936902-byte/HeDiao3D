@@ -3001,9 +3001,12 @@ function parseGcodeMotionPoints(gcode, settings) {
   const points = [];
   const current = { x: 0, y: 0, a: 0, z: Number(settings.safeZ ?? 0), depth: 0 };
   const safeZ = Number(settings.safeZ ?? 0);
+  const rotaryAxis = settings.camMode === "rotaryWrap" ? String(settings.rotaryOutputAxis ?? "Y").toUpperCase() : null;
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
   for (const rawLine of gcode.split(/\r?\n/)) {
     const line = rawLine.replace(/\([^)]*\)/g, "").trim().toUpperCase();
     if (!line || !/(?:\bG0?0\b|\bG0?1\b)/.test(line)) continue;
+    const isCutFeedMove = /\bG0?1\b/.test(line);
     const x = parseGcodeWord(line, "X");
     const y = parseGcodeWord(line, "Y");
     const a = parseGcodeWord(line, "A");
@@ -3013,6 +3016,12 @@ function parseGcodeMotionPoints(gcode, settings) {
     if (Number.isFinite(a)) current.a = a;
     if (Number.isFinite(z)) current.z = z;
     current.depth = Math.max(0, safeZ - current.z);
+    if (settings.camMode === "rotaryWrap" && rotaryAxis && Number.isFinite(current[rotaryAxis.toLowerCase()])) {
+      current.a = rotaryAxis === "A"
+        ? Number(current.a ?? 0)
+        : (Number(current[rotaryAxis.toLowerCase()] ?? 0) / wrapPerRev) * 360;
+    }
+    if (!isCutFeedMove || current.depth <= 0.001) continue;
     points.push({ ...current });
   }
   return points;

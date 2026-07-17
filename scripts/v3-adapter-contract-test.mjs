@@ -303,6 +303,9 @@ try {
   assert(freecadProofReport.metrics.handoffEvidence.classification === "production-candidate", "freecad proof-backed output should be production-candidate");
   assert(freecadProofReport.metrics.handoffEvidence.productionCandidate === true, "freecad proof-backed output should be production candidate");
   assert(freecadProofReport.metrics.handoffEvidence.camOutputProof.gcodeSha256 === sha256(normalizedText(readFileSync(freecadProofGcodePath, "utf8"))), "freecad proof hash should bind current G-code");
+  assert(freecadProofReport.metrics.handoffEvidence.camOutputProof.jobId === "adapter-contract-test", "freecad proof should bind current job id");
+  assert(freecadProofReport.metrics.handoffEvidence.camOutputProof.modelSha256 === sha256Bytes(readFileSync(freecadExternalModelPath)), "freecad proof should bind current model");
+  assert(freecadProofReport.metrics.handoffEvidence.camOutputProof.planSha256 === sha256Bytes(readFileSync(freecadProofReport.metrics.freecadPlan.planPath)), "freecad proof should bind current CAM plan");
 
   const blendercamRunnerPath = resolve("adapters", "blendercam", "blendercam_runner.py");
   const blendercamExternalJobPath = join(workDir, "blendercam-external-job.json");
@@ -418,6 +421,9 @@ try {
   assert(blendercamProofReport.metrics.handoffEvidence.classification === "production-candidate", "blendercam proof-backed output should be production-candidate");
   assert(blendercamProofReport.metrics.handoffEvidence.productionCandidate === true, "blendercam proof-backed output should be production candidate");
   assert(blendercamProofReport.metrics.handoffEvidence.camOutputProof.gcodeSha256 === sha256(normalizedText(readFileSync(blendercamProofGcodePath, "utf8"))), "blendercam proof hash should bind current G-code");
+  assert(blendercamProofReport.metrics.handoffEvidence.camOutputProof.jobId === "adapter-contract-test", "blendercam proof should bind current job id");
+  assert(blendercamProofReport.metrics.handoffEvidence.camOutputProof.modelSha256 === sha256Bytes(readFileSync(blendercamExternalModelPath)), "blendercam proof should bind current model");
+  assert(blendercamProofReport.metrics.handoffEvidence.camOutputProof.planSha256 === sha256Bytes(readFileSync(blendercamProofReport.metrics.blendercamPlan.planPath)), "blendercam proof should bind current CAM plan");
 
   console.log(JSON.stringify({ ok: true, adapters: results }, null, 2));
 } finally {
@@ -466,6 +472,10 @@ function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 function normalizedText(text) {
   return text.replace(/\r\n/g, "\n");
 }
@@ -482,6 +492,7 @@ job_path = Path(sys.argv[-3])
 plan_path = Path(sys.argv[-2])
 output_path = Path(sys.argv[-1])
 job = json.loads(job_path.read_text(encoding="utf-8"))
+model_path = Path(str(job.get("modelPath") or ""))
 output_path.parent.mkdir(parents=True, exist_ok=True)
 gcode = "\\n".join([
     "(HeDiao3D ${engine} proof contract)",
@@ -500,7 +511,10 @@ if ${withProof ? "True" : "False"}:
     proof = {
         "schema": "${schema}",
         "engine": "${engine}",
+        "jobId": job.get("jobId"),
         "gcodeSha256": hashlib.sha256(gcode.encode("utf-8")).hexdigest(),
+        "modelSha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
+        "planSha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
         "quality": {
             "productionCandidate": True,
             "postprocessEligible": True,

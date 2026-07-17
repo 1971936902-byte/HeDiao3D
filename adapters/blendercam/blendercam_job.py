@@ -312,7 +312,7 @@ def run_external_blendercam_command(job: Dict[str, Any], plan: Dict[str, Any], j
             "externalCommand": command_report,
         }
     proof = load_cam_output_proof(gcode_path)
-    output_evidence = classify_gcode_output(gcode, command_parts, proof, gcode_path)
+    output_evidence = classify_gcode_output(gcode, command_parts, proof, gcode_path, job, plan_path)
     return {
         "status": "completed",
         "error": None,
@@ -353,7 +353,7 @@ def load_cam_output_proof(gcode_path: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode_path: Path, motion_count: int, fixture: bool, preview_scaffold: bool) -> Dict[str, Any]:
+def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode_path: Path, motion_count: int, fixture: bool, preview_scaffold: bool, job: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
     if not proof:
         return {
             "present": False,
@@ -367,6 +367,12 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
     artifacts = proof.get("artifacts") if isinstance(proof.get("artifacts"), dict) else {}
     expected_hash = str(proof.get("gcodeSha256") or artifacts.get("gcodeSha256") or "").lower()
     actual_hash = hashlib.sha256(gcode.encode("utf-8")).hexdigest()
+    expected_job_id = str(proof.get("jobId") or artifacts.get("jobId") or "")
+    actual_job_id = str(job.get("jobId") or "")
+    expected_model_hash = str(proof.get("modelSha256") or artifacts.get("modelSha256") or "").lower()
+    actual_model_hash = sha256_file(Path(str(job.get("modelPath") or "")))
+    expected_plan_hash = str(proof.get("planSha256") or artifacts.get("planSha256") or "").lower()
+    actual_plan_hash = sha256_file(plan_path)
     issues: List[str] = []
     if proof.get("schema") not in allowed_schemas:
         issues.append("unsupported CAM output proof schema")
@@ -376,6 +382,18 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
         issues.append("CAM output proof must include gcodeSha256")
     if expected_hash and expected_hash != actual_hash:
         issues.append("CAM output proof G-code SHA-256 does not match current output")
+    if not expected_job_id:
+        issues.append("CAM output proof must include jobId")
+    if expected_job_id and expected_job_id != actual_job_id:
+        issues.append("CAM output proof jobId does not match current adapter job")
+    if not expected_model_hash:
+        issues.append("CAM output proof must include modelSha256")
+    if expected_model_hash and expected_model_hash != actual_model_hash:
+        issues.append("CAM output proof model SHA-256 does not match current model")
+    if not expected_plan_hash:
+        issues.append("CAM output proof must include planSha256")
+    if expected_plan_hash and expected_plan_hash != actual_plan_hash:
+        issues.append("CAM output proof plan SHA-256 does not match current CAM plan")
     if fixture or bool(proof.get("fixture")) or bool(quality.get("fixture")):
         issues.append("fixture output cannot be a production candidate")
     if preview_scaffold or bool(proof.get("previewScaffold")) or bool(quality.get("previewScaffold")):
@@ -391,6 +409,12 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
         "engine": proof.get("engine"),
         "gcodeSha256": actual_hash,
         "declaredGcodeSha256": expected_hash or None,
+        "jobId": actual_job_id,
+        "declaredJobId": expected_job_id or None,
+        "modelSha256": actual_model_hash,
+        "declaredModelSha256": expected_model_hash or None,
+        "planSha256": actual_plan_hash,
+        "declaredPlanSha256": expected_plan_hash or None,
         "productionCandidate": production_candidate,
         "postprocessEligible": bool(quality.get("postprocessEligible")),
         "quality": quality,
@@ -398,12 +422,12 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
     }
 
 
-def classify_gcode_output(gcode: str, command_parts: List[str], proof: Optional[Dict[str, Any]], gcode_path: Path) -> Dict[str, Any]:
+def classify_gcode_output(gcode: str, command_parts: List[str], proof: Optional[Dict[str, Any]], gcode_path: Path, job: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
     upper = gcode.upper()
     fixture = is_true(os.environ.get("HEDIAO3D_BLENDERCAM_RUNNER_FIXTURE_OUTPUT")) or "BLENDERCAM EXTERNAL RUNNER FIXTURE" in upper
     preview_scaffold = "PREVIEW" in upper or "SCAFFOLD" in upper
     motion_count = len([line for line in upper.splitlines() if line.strip().startswith(("G0", "G1"))])
-    proof_evaluation = evaluate_cam_output_proof(proof, gcode, gcode_path, motion_count, fixture, preview_scaffold)
+    proof_evaluation = evaluate_cam_output_proof(proof, gcode, gcode_path, motion_count, fixture, preview_scaffold, job, plan_path)
     classification = "fixture-contract" if fixture else "preview-scaffold" if preview_scaffold else proof_evaluation["status"]
     production_candidate = motion_count > 0 and classification == "production-candidate" and bool(proof_evaluation["productionCandidate"])
     return {
@@ -437,6 +461,13 @@ def base_report(job: Dict[str, Any], status: str, error: Optional[str], warnings
 
 def is_true(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def sha256_file(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return None
 
 
 def main() -> int:
