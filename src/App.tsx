@@ -576,6 +576,27 @@ type V3OrchestratorJob = {
           depthAxis: string | null;
           rotaryUnit: string | null;
         };
+        sourceBinding?: {
+          schema: string;
+          status: string;
+          sourceName?: string | null;
+          submitted?: {
+            sha256: string;
+            pointCount: number;
+          };
+          importedArtifact?: {
+            sha256: string;
+            matchesSubmitted: boolean;
+          } | null;
+          postprocessArtifact?: {
+            sha256: string;
+          } | null;
+          sourceSnapshot?: {
+            sha256: string;
+            matchesPostprocessArtifact: boolean;
+          } | null;
+          summary?: string;
+        } | null;
         metrics?: {
           sourcePointCount: number;
           normalizedPointCount: number;
@@ -8619,6 +8640,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `Neutral导入校验: ${neutralToolpathImportValidation?.status ?? "未生成"} / ${neutralToolpathImportValidation?.postprocessEligible ? "可进入后处理" : neutralToolpathImportValidation ? "已拒绝" : "-"}`,
     `Neutral导入点数: ${neutralToolpathImportValidation?.metrics?.sourcePointCount ?? "-"} / 归一化 ${neutralToolpathImportValidation?.metrics?.normalizedPointCount ?? "-"} / 越界 ${neutralToolpathImportValidation?.metrics?.outOfRangeCount ?? "-"}`,
     `Neutral导入来源: ${neutralToolpathImportValidation?.engine ?? "-"} / ${neutralToolpathImportValidation?.sourceName ?? "-"}`,
+    `Neutral源绑定: ${neutralToolpathImportValidation?.sourceBinding?.status ?? "-"} / 输入 ${neutralToolpathImportValidation?.sourceBinding?.submitted?.sha256 ? `${neutralToolpathImportValidation.sourceBinding.submitted.sha256.slice(0, 12)}...` : "-"} / 后处理 ${neutralToolpathImportValidation?.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact ? "匹配" : neutralToolpathImportValidation?.sourceBinding ? "待复核" : "-"}`,
     "Neutral导入校验报告: neutral-toolpath-import-validation.json",
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",

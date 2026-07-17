@@ -2796,6 +2796,7 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
         : "neutral-toolpath 导入校验通过，可进入 HeDiao3D 后处理。",
     sourceName: source.sourceName ?? null,
     engine: source.engine ?? neutral?.engine ?? null,
+    sourceBinding: source.sourceBinding ?? null,
     classification: {
       synthetic: Boolean(neutral?.synthetic),
       fixture: Boolean(neutral?.fixture),
@@ -2826,6 +2827,26 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
       "该校验只证明 neutral-toolpath 可进入 HeDiao3D 后处理，不解锁生产 NC。",
       "生产仍需 production-candidate handoffEvidence、非 synthetic 材料去除仿真、空跑、软料试雕和机床验收。"
     ]
+  };
+}
+
+function createNeutralToolpathSourceBinding(neutral, source = {}) {
+  const submittedText = JSON.stringify(neutral, null, 2);
+  return {
+    schema: "hediao3d.neutral-toolpath-source-binding.v1",
+    status: "pending",
+    sourceName: source.sourceName ?? null,
+    submitted: {
+      sha256: createHash("sha256").update(submittedText).digest("hex"),
+      sizeBytes: Buffer.byteLength(submittedText, "utf8"),
+      schema: neutral?.schema ?? null,
+      engine: neutral?.engine ?? null,
+      pointCount: Array.isArray(neutral?.points) ? neutral.points.length : 0
+    },
+    importedArtifact: null,
+    postprocessArtifact: null,
+    sourceSnapshot: null,
+    summary: "neutral-toolpath 输入已记录，等待写入导入/后处理产物。"
   };
 }
 
@@ -8996,9 +9017,13 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
   if (!neutral) return json(res, 400, { error: "请传入 neutralToolpath 对象。" });
   const settings = readJobSettingsForRefresh(job, workDir);
   if (!settings) return json(res, 409, { error: "当前任务缺少 settings，无法执行 HeDiao3D 后处理。" });
+  const neutralSourceBinding = createNeutralToolpathSourceBinding(neutral, {
+    sourceName: String(input.sourceName ?? "neutral-toolpath.json")
+  });
   const importValidation = createNeutralToolpathImportValidation(neutral, settings, {
     sourceName: String(input.sourceName ?? "neutral-toolpath.json"),
-    engine: String(input.engine ?? neutral.engine ?? "opencamlib")
+    engine: String(input.engine ?? neutral.engine ?? "opencamlib"),
+    sourceBinding: neutralSourceBinding
   });
   if (!importValidation.postprocessEligible) {
     return json(res, 400, {
@@ -9009,12 +9034,31 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
 
   const importPath = join(workDir, "imported-neutral-toolpath.json");
   const neutralPath = join(workDir, "neutral-toolpath.json");
-  await writeFile(importPath, JSON.stringify(neutral, null, 2), "utf8");
-  await writeFile(neutralPath, JSON.stringify({
+  const importedNeutralText = JSON.stringify(neutral, null, 2);
+  const postprocessNeutral = {
     ...neutral,
     importedFromApi: true,
     importedAt: new Date().toISOString()
-  }, null, 2), "utf8");
+  };
+  const postprocessNeutralText = JSON.stringify(postprocessNeutral, null, 2);
+  neutralSourceBinding.importedArtifact = {
+    filename: "imported-neutral-toolpath.json",
+    sha256: createHash("sha256").update(importedNeutralText).digest("hex"),
+    matchesSubmitted: createHash("sha256").update(importedNeutralText).digest("hex") === neutralSourceBinding.submitted.sha256
+  };
+  neutralSourceBinding.postprocessArtifact = {
+    filename: "neutral-toolpath.json",
+    sha256: createHash("sha256").update(postprocessNeutralText).digest("hex"),
+    derivedFromSubmitted: true,
+    addsApiImportMetadata: true
+  };
+  neutralSourceBinding.status = neutralSourceBinding.importedArtifact.matchesSubmitted ? "bound" : "review";
+  neutralSourceBinding.summary = neutralSourceBinding.importedArtifact.matchesSubmitted
+    ? "neutral-toolpath API 输入、原始导入文件和后处理文件已建立哈希绑定。"
+    : "neutral-toolpath 原始导入文件与 API 输入哈希不一致，需复核。";
+  importValidation.sourceBinding = neutralSourceBinding;
+  await writeFile(importPath, importedNeutralText, "utf8");
+  await writeFile(neutralPath, postprocessNeutralText, "utf8");
   await writeFile(join(workDir, "neutral-toolpath-import-validation.json"), JSON.stringify(importValidation, null, 2), "utf8");
 
   const pointCount = Array.isArray(neutral.points) ? neutral.points.length : 0;
@@ -9048,6 +9092,7 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
         fixture: Boolean(neutral.fixture),
         previewScaffold: Boolean(importValidation.classification.previewScaffold),
         importValidation: "neutral-toolpath-import-validation.json",
+        sourceBinding: neutralSourceBinding,
         pointCount
       },
       estimatedMinutes: Number(neutral.estimatedMinutes ?? 0) || null
@@ -9057,6 +9102,23 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
 
   const toolpath = createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine);
   if (!toolpath) return json(res, 400, { error: "neutral-toolpath 无法转换为有效刀路，请检查 schema/points/坐标字段。" });
+  neutralSourceBinding.sourceSnapshot = toolpath.externalSourceSnapshot ? {
+    kind: toolpath.externalSourceSnapshot.kind,
+    sha256: toolpath.externalSourceSnapshot.sha256,
+    sizeBytes: toolpath.externalSourceSnapshot.sizeBytes,
+    capturedAt: toolpath.externalSourceSnapshot.capturedAt,
+    matchesPostprocessArtifact: toolpath.externalSourceSnapshot.sha256 === neutralSourceBinding.postprocessArtifact?.sha256
+  } : null;
+  neutralSourceBinding.status = neutralSourceBinding.importedArtifact?.matchesSubmitted && neutralSourceBinding.sourceSnapshot?.matchesPostprocessArtifact
+    ? "bound"
+    : "review";
+  neutralSourceBinding.summary = neutralSourceBinding.status === "bound"
+    ? "neutral-toolpath API 输入、原始导入文件、后处理文件和 toolpath sourceSnapshot 已完成哈希绑定。"
+    : "neutral-toolpath 绑定链路需要复核，请检查 sourceBinding。";
+  importValidation.sourceBinding = neutralSourceBinding;
+  adapterReport.metrics.neutralToolpath.sourceBinding = neutralSourceBinding;
+  await writeFile(join(workDir, "neutral-toolpath-import-validation.json"), JSON.stringify(importValidation, null, 2), "utf8");
+  await writeFile(join(workDir, "adapter-report.json"), JSON.stringify(adapterReport, null, 2), "utf8");
   job.workDir = workDir;
   const refreshed = await refreshImportedToolpathArtifacts(job, settings, selectedEngine, adapterReport, toolpath);
   appendOrchestratorLog(job, `外部 neutral-toolpath 已回填并后处理：${toolpath.points.length} 点。`);
@@ -9420,6 +9482,13 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     controllerDialectReport,
     machineControllerProfile,
     camoticsInput
+  });
+  const postprocessTraceReport = createPostprocessTraceReport({
+    job,
+    settings,
+    toolpath,
+    machineGcode: toolpath.gcode,
+    machineControllerProfile
   });
   await writeFile(join(workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");

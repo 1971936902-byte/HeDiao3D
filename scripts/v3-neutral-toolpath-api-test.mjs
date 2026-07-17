@@ -73,6 +73,9 @@ async function main() {
   assert(imported.ok === true, "neutral toolpath import should succeed");
   assert(imported.validation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "neutral import response missing validation report");
   assert(imported.validation.postprocessEligible === true, "valid neutral import should be postprocess eligible");
+  assert(imported.validation.sourceBinding?.status === "bound", "neutral import should bind submitted/imported/postprocess artifacts");
+  assert(imported.validation.sourceBinding.importedArtifact?.matchesSubmitted === true, "imported neutral artifact should match submitted payload hash");
+  assert(imported.validation.sourceBinding.sourceSnapshot?.matchesPostprocessArtifact === true, "source snapshot should match postprocess neutral artifact hash");
   assert(imported.toolpathSummary?.source === "external-adapter", "toolpath summary should mark external adapter source");
 
   const rejectedSynthetic = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
@@ -108,6 +111,8 @@ async function main() {
   assert(summary.camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff should snapshot neutral toolpath");
   assert(summary.neutralToolpathImportValidation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "reloaded job should expose neutral import validation");
   assert(summary.neutralToolpathImportValidation.postprocessEligible === true, "reloaded neutral validation should be eligible");
+  assert(summary.neutralToolpathImportValidation.sourceBinding?.status === "bound", "reloaded neutral validation should expose source binding");
+  assert(summary.neutralToolpathImportValidation.sourceBinding?.postprocessArtifact?.sha256 === summary.toolpathSummary.externalSourceSnapshot.sha256, "neutral source binding should match toolpath source snapshot hash");
   assert(summary.productionUnlockMatrix?.rows?.some((row) => row.id === "neutral-toolpath-import-validation" && row.status === "pass"), "unlock matrix should include passing neutral import validation row");
   assert(summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "neutral-toolpath-import-validation" && item.status === "pass"), "evidence dossier should include passing neutral import validation item");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.exists), "delivery manifest should include neutral-toolpath.json");
@@ -120,6 +125,10 @@ async function main() {
   const neutralArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath.json`);
   assert(neutralArtifact.importedFromApi === true, "neutral artifact should be marked as API import");
   assert(neutralArtifact.points?.length === 5, "neutral artifact should preserve source points");
+  const validationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath-import-validation.json`);
+  assert(validationArtifact.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact === true, "validation artifact should preserve postprocess source binding");
+  const adapterReport = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/adapter-report.json`);
+  assert(adapterReport.metrics?.neutralToolpath?.sourceBinding?.status === "bound", "adapter report should preserve neutral source binding");
 
   console.log(JSON.stringify({
     ok: true,
