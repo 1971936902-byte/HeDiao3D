@@ -512,6 +512,7 @@ function getLatestV3Readiness(res) {
 }
 
 async function buildV3ReadinessReport(reportId, outputRoot) {
+  const createdAt = new Date().toISOString();
   const diagnostics = await createOrchestratorDiagnosticsReport();
   const nativeCam = readLatestFromDirectory("public/native-cam-readiness", "native-cam-readiness.json", createNativeCamReadinessPublicSummary);
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
@@ -531,7 +532,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
-    createdAt: new Date().toISOString(),
+    createdAt,
     outputRoot,
     level: gates.level,
     summary: gates.summary,
@@ -623,12 +624,18 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   if (!runbookResult) {
     warnings.push("尚未执行 V3 部署验收脚本，当前总门禁缺少服务器侧执行证据。");
     nextActions.push("在 Linux CAM 服务器运行下载的 v3-acceptance-runbook.sh，再重新生成总门禁。");
+  } else if (!runbookResult.identityValid) {
+    blockers.push("V3 验收脚本结果缺少有效的 readiness 身份绑定，不能作为生产放行证据。");
+    nextActions.push("重新下载最新 v3-acceptance-runbook.sh，在 Linux CAM 服务器执行后再生成总门禁。");
   } else if (!runbookResult.ok) {
     const firstFailed = runbookResult.failedSteps[0];
     const message = `V3 验收脚本失败 ${runbookResult.failedCount} 项${firstFailed ? `：${firstFailed.title}` : ""}。`;
     if (runbookResult.failedSteps.some((step) => step.blocksProduction)) blockers.push(message);
     else warnings.push(message);
     nextActions.push("查看 runbook result JSON，优先修复失败步骤后重新运行验收脚本。");
+  } else if (!runbookResult.productionSafe) {
+    blockers.push("V3 验收脚本已执行，但生产安全标记未通过。");
+    nextActions.push("确认 runbook 的 blockingFailedCount 为 0 且 productionSafe=true 后再重新生成总门禁。");
   }
 
   if (!externalHandoff) {
@@ -1271,12 +1278,28 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
       exitCode: step.exitCode,
       blocksProduction: Boolean(step.blocksProduction)
     }));
+  const blockingFailedCount = Number.isFinite(Number(result.blockingFailedCount))
+    ? Number(result.blockingFailedCount)
+    : failedSteps.filter((step) => step.blocksProduction).length;
+  const readinessReportId = result.readinessReportId ?? null;
+  const linkedReadinessReportExists = readinessReportId
+    ? existsSync(join(process.cwd(), "public", "orchestrator-readiness", String(readinessReportId), "v3-readiness-report.json"))
+    : false;
+  const commandCount = Number.isFinite(Number(result.commandCount)) ? Number(result.commandCount) : steps.length;
+  const timeOrderValid = Boolean(result.readinessCreatedAt && result.runbookGeneratedAt && result.createdAt)
+    && new Date(result.readinessCreatedAt).getTime() <= new Date(result.runbookGeneratedAt).getTime()
+    && new Date(result.runbookGeneratedAt).getTime() <= new Date(result.createdAt).getTime();
+  const identityValid = Boolean(readinessReportId && result.readinessCreatedAt && result.runbookGeneratedAt && linkedReadinessReportExists && timeOrderValid);
   return {
     schema: result.schema ?? "unknown",
+    readinessReportId,
+    readinessCreatedAt: result.readinessCreatedAt ?? null,
+    runbookGeneratedAt: result.runbookGeneratedAt ?? null,
     createdAt: result.createdAt ?? null,
     ok: Boolean(result.ok),
     exitCode: Number.isFinite(Number(result.exitCode)) ? Number(result.exitCode) : null,
     failedCount: Number.isFinite(Number(result.failedCount)) ? Number(result.failedCount) : failedSteps.length,
+    blockingFailedCount,
     failedSteps: failedSteps.slice(0, 8).map((step) => ({
       id: step.id ?? "unknown",
       title: step.title ?? step.id ?? "unknown",
@@ -1284,6 +1307,17 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
       blocksProduction: Boolean(step.blocksProduction)
     })),
     stepCount: steps.length,
+    commandCount,
+    blockingStepCountAtReport: Number.isFinite(Number(result.blockingStepCountAtReport)) ? Number(result.blockingStepCountAtReport) : null,
+    productionSafe: Boolean(result.productionSafe) && identityValid && blockingFailedCount === 0,
+    identityValid,
+    linkedReadinessReportExists,
+    environment: result.environment && typeof result.environment === "object" ? {
+      nodeVersion: result.environment.nodeVersion ?? null,
+      platform: result.environment.platform ?? null,
+      cwd: result.environment.cwd ?? null,
+      apiBase: result.environment.apiBase ?? null
+    } : null,
     levelAtReport: result.levelAtReport ?? null,
     acceptanceAtReport: result.acceptanceAtReport ?? null,
     artifactPath: resultPath
@@ -1457,7 +1491,7 @@ function createV3ReadinessMarkdown(report) {
     `- Native CAM: ${report.nativeCam ? `${report.nativeCam.summary.readyCount}/${report.nativeCam.summary.requiredCount} ${report.nativeCam.summary.level}` : "missing"}`,
     `- CAM server config: ${report.camServerConfig ? `${report.camServerConfig.status} / ${report.camServerConfig.selectedEngineName} / missing=${report.camServerConfig.missingRequired.length}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
-    `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / ${report.runbookResult.stepCount} steps` : "missing"}`,
+    `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / blocking=${report.runbookResult.blockingFailedCount ?? "unknown"} / identity=${report.runbookResult.identityValid ? "valid" : "invalid"} / productionSafe=${report.runbookResult.productionSafe ? "yes" : "no"} / report=${report.runbookResult.readinessReportId ?? "missing"}` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
     `- External CAM handoffs: ${report.externalCamHandoffs ? `${report.externalCamHandoffs.completedEngines.length}/${report.externalCamHandoffs.requiredEngines.length} engines (${report.externalCamHandoffs.completedEngines.join(", ") || "none"})` : "missing"}`,
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
@@ -1477,6 +1511,7 @@ function createV3AcceptanceRunbookShell(report) {
     "set -u",
     "",
     "# HeDiao3D V3 deployment acceptance runbook",
+    `# Readiness report: ${report.id}`,
     `# Generated: ${report.createdAt}`,
     `# Level: ${report.level}`,
     "",
@@ -1522,6 +1557,7 @@ function createV3AcceptanceRunbookShell(report) {
     "}",
     "",
     "echo \"HeDiao3D V3 acceptance runbook\"",
+    "echo " + shellQuote(`Readiness report: ${report.id}`),
     "echo \"ROOT_DIR=${ROOT_DIR}\"",
     "echo \"API_BASE=${API_BASE}\"",
     "echo \"RESULT_JSON=${RESULT_JSON}\"",
@@ -1542,7 +1578,7 @@ function createV3AcceptanceRunbookShell(report) {
   }
   lines.push(
     "",
-    "RESULT_OVERALL=\"$overall\" RESULT_LEVEL=" + shellQuote(report.level) + " RESULT_ACCEPTANCE=" + shellQuote(`${report.acceptancePlan?.completed ?? 0}/${report.acceptancePlan?.total ?? 0}`) + " node - <<'NODE'",
+    "RESULT_OVERALL=\"$overall\" RESULT_READINESS_ID=" + shellQuote(report.id) + " RESULT_READINESS_CREATED_AT=" + shellQuote(report.createdAt) + " RESULT_RUNBOOK_GENERATED_AT=" + shellQuote(report.createdAt) + " RESULT_LEVEL=" + shellQuote(report.level) + " RESULT_ACCEPTANCE=" + shellQuote(`${report.acceptancePlan?.completed ?? 0}/${report.acceptancePlan?.total ?? 0}`) + " RESULT_COMMAND_COUNT=" + shellQuote(String(report.acceptancePlan?.steps?.length ?? 0)) + " RESULT_BLOCKING_STEP_COUNT=" + shellQuote(String((report.acceptancePlan?.steps ?? []).filter((step) => step.blocksProduction).length)) + " RESULT_API_BASE=\"$API_BASE\" node - <<'NODE'",
     "const fs = require('fs');",
     "const path = process.env.RESULT_JSON;",
     "const stepsPath = process.env.RESULT_STEPS_JSONL;",
@@ -1550,14 +1586,28 @@ function createV3AcceptanceRunbookShell(report) {
     "  ? fs.readFileSync(stepsPath, 'utf8').split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))",
     "  : [];",
     "const failed = steps.filter((step) => !step.ok);",
+    "const blockingFailed = failed.filter((step) => step.blocksProduction);",
     "const result = {",
     "  schema: 'hediao3d.v3-acceptance-runbook-result.v1',",
+    "  readinessReportId: process.env.RESULT_READINESS_ID,",
+    "  readinessCreatedAt: process.env.RESULT_READINESS_CREATED_AT,",
+    "  runbookGeneratedAt: process.env.RESULT_RUNBOOK_GENERATED_AT,",
     "  createdAt: new Date().toISOString(),",
     "  levelAtReport: process.env.RESULT_LEVEL,",
     "  acceptanceAtReport: process.env.RESULT_ACCEPTANCE,",
+    "  commandCount: Number(process.env.RESULT_COMMAND_COUNT),",
+    "  blockingStepCountAtReport: Number(process.env.RESULT_BLOCKING_STEP_COUNT),",
+    "  environment: {",
+    "    nodeVersion: process.version,",
+    "    platform: process.platform,",
+    "    cwd: process.cwd(),",
+    "    apiBase: process.env.RESULT_API_BASE",
+    "  },",
     "  exitCode: Number(process.env.RESULT_OVERALL),",
     "  ok: Number(process.env.RESULT_OVERALL) === 0,",
     "  failedCount: failed.length,",
+    "  blockingFailedCount: blockingFailed.length,",
+    "  productionSafe: Number(process.env.RESULT_OVERALL) === 0 && blockingFailed.length === 0,",
     "  failedSteps: failed.map((step) => ({ id: step.id, title: step.title, exitCode: step.exitCode, blocksProduction: step.blocksProduction })),",
     "  steps",
     "};",

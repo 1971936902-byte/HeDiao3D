@@ -82,6 +82,10 @@ async function main() {
   assert(runbook.includes("package-integrity.json"), "readiness runbook missing package integrity evidence");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
   assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
+  assert(runbook.includes("RESULT_READINESS_ID"), "readiness runbook missing readiness identity binding");
+  assert(runbook.includes("readinessReportId"), "readiness runbook missing readiness report id result field");
+  assert(runbook.includes("blockingFailedCount"), "readiness runbook missing blocking failure result field");
+  assert(runbook.includes("productionSafe"), "readiness runbook missing production safety result field");
 
   console.log(JSON.stringify({
     ok: true,
@@ -166,8 +170,15 @@ function validateRunbookResult(result, label) {
   assert(result.schema === "hediao3d.v3-acceptance-runbook-result.v1", `${label} schema mismatch`);
   assert(typeof result.ok === "boolean", `${label} ok missing`);
   assert(typeof result.failedCount === "number", `${label} failedCount missing`);
+  assert(typeof result.blockingFailedCount === "number", `${label} blockingFailedCount missing`);
   assert(Array.isArray(result.failedSteps), `${label} failedSteps missing`);
   assert(typeof result.stepCount === "number", `${label} stepCount missing`);
+  assert(typeof result.commandCount === "number", `${label} commandCount missing`);
+  assert(typeof result.productionSafe === "boolean", `${label} productionSafe missing`);
+  assert(typeof result.identityValid === "boolean", `${label} identityValid missing`);
+  assert(Object.hasOwn(result, "readinessReportId"), `${label} readinessReportId missing`);
+  assert(Object.hasOwn(result, "readinessCreatedAt"), `${label} readinessCreatedAt missing`);
+  assert(Object.hasOwn(result, "runbookGeneratedAt"), `${label} runbookGeneratedAt missing`);
 }
 
 async function getJson(path) {
