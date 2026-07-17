@@ -3676,6 +3676,44 @@ export function App() {
     }
   };
 
+  const handleDownloadV3EvidenceReviewPackage = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再下载证据审查包。");
+      return;
+    }
+
+    setIsV3PackageDownloading(true);
+    setV3Status("正在打包 V3 证据审查包");
+    try {
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/evidence-review-package`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? `证据审查包下载失败：${response.status}`);
+      }
+      const blob = await response.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-evidence-review-${stamp}.zip`, blob);
+      setV3Status("V3 证据审查包已由 Orchestrator 打包");
+      recordTask({
+        category: "cam",
+        status: "ok",
+        title: "下载 V3 证据审查包",
+        detail: "用于复核当前 job 的门禁、哈希、仿真、后处理和现场证据缺口；不是上机加工包。"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "V3 证据审查包下载失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "V3 证据审查包下载失败",
+        detail: message
+      });
+    } finally {
+      setIsV3PackageDownloading(false);
+    }
+  };
+
   const handleDownloadAirRun = () => {
     if (!airRunProgram) return;
     downloadText(airRunProgram.filename, airRunProgram.gcode);
@@ -5368,6 +5406,16 @@ export function App() {
                     <Download size={17} />
                     下载Linux仿真包
                   </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={handleDownloadV3EvidenceReviewPackage}
+                    disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
+                    title="集中下载当前 job 的门禁、哈希、仿真、后处理和现场证据报告；不是上机包"
+                  >
+                    <Download size={17} />
+                    下载证据审查包
+                  </button>
                 </div>
               </div>
             )}
@@ -6024,6 +6072,16 @@ export function App() {
                       <small key={action}>{action}</small>
                     ))}
                   </div>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={handleDownloadV3EvidenceReviewPackage}
+                    disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
+                    title="下载当前 job 的证据链报告和缺失项清单；不是上机加工包"
+                  >
+                    <Download size={17} />
+                    下载证据审查包
+                  </button>
                   <div className="v3-camotics-import">
                     <div>
                       <strong>CAMotics 真实仿真闭环</strong>

@@ -139,6 +139,11 @@ const server = createServer(async (req, res) => {
       return getOrchestratorCamoticsLinuxPackage(orchestratorCamoticsLinuxPackageMatch[1], res);
     }
 
+    const orchestratorEvidenceReviewPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/evidence-review-package$/);
+    if (req.method === "GET" && orchestratorEvidenceReviewPackageMatch) {
+      return getOrchestratorEvidenceReviewPackage(orchestratorEvidenceReviewPackageMatch[1], res);
+    }
+
     const orchestratorTrialPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/trial-package$/);
     if (req.method === "GET" && orchestratorTrialPackageMatch) {
       return getOrchestratorTrialPackage(orchestratorTrialPackageMatch[1], res);
@@ -11859,6 +11864,92 @@ function getOrchestratorCamoticsLinuxPackage(jobId, res) {
   res.end(zip);
 }
 
+function getOrchestratorEvidenceReviewPackage(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
+    return json(res, 400, { error: "非法 job 路径" });
+  }
+  const workDir = join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  const deliveryManifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
+  if (!deliveryManifest?.files?.length) {
+    return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
+  }
+
+  const evidenceFilenames = [
+    "machining-package-index.json",
+    "delivery-manifest.json",
+    "package-integrity.json",
+    "production-gate.json",
+    "production-unlock-matrix.json",
+    "production-evidence-dossier.json",
+    "production-readiness-audit.json",
+    "operator-download-checklist.md",
+    "safe-trial-execution-plan.json",
+    "next-action-checklist.md",
+    "linux-cam-closed-loop-handoff.md",
+    "machine-controller-profile.json",
+    "postprocess-profile.json",
+    "postprocess-trace-report.json",
+    "rotary-wrap-preview-report.json",
+    "nc-static-analysis.json",
+    "controller-dialect-report.json",
+    "cam-server-config.json",
+    "external-cam-recipe.json",
+    "adapter-preflight-report.json",
+    "adapter-report.json",
+    "neutral-toolpath.json",
+    "camotics-input.json",
+    "camotics-simulation-plan.json",
+    "camotics-cli-execution-plan.json",
+    "camotics-cli-run-package.json",
+    "camotics-cli-package-report.json",
+    "camotics-result-template.json",
+    "camotics-result-local-validation.json",
+    "camotics-result.json",
+    "camotics-preview.png",
+    "camotics-material-removal.stl",
+    "imported-camotics-result-bundle.zip",
+    "trial-feedback-template.json",
+    "trial-feedback-log.json",
+    "machine-acceptance-checklist.json",
+    "machine-acceptance-log.json",
+    "process-optimization-plan.json"
+  ];
+  const included = evidenceFilenames
+    .filter((filename) => existsSync(join(workDir, filename)))
+    .map((filename) => ({
+      filename,
+      sha256: sha256File(join(workDir, filename)),
+      bytes: statSync(join(workDir, filename)).size
+    }));
+  const missing = evidenceFilenames.filter((filename) => !existsSync(join(workDir, filename)));
+  const reviewManifest = createEvidenceReviewPackageManifest(safeJobId, deliveryManifest, included, missing);
+  const files = included.map((file) => ({
+    name: `hediao3d-v3-evidence/evidence/${file.filename}`,
+    content: readFileSync(join(workDir, file.filename))
+  }));
+  files.push({
+    name: "hediao3d-v3-evidence/evidence-review-manifest.json",
+    content: JSON.stringify(reviewManifest, null, 2)
+  });
+  files.push({
+    name: "hediao3d-v3-evidence/README-EVIDENCE-REVIEW.md",
+    content: createEvidenceReviewPackageReadme(reviewManifest)
+  });
+
+  const zip = createServerZipBuffer(files);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `hediao3d-v3-${safeJobId.slice(0, 8)}-evidence-review-${stamp}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
 function getOrchestratorProductionPackage(jobId, res) {
   const safeJobId = decodeURIComponent(jobId);
   if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
@@ -11989,7 +12080,7 @@ function isProductionPackageDeliveryFile(file) {
 function createCamoticsLinuxPackageFile(workDir, filename, required) {
   const filePath = join(workDir, filename);
   const stat = statSync(filePath);
-  const sha256 = createHash("sha256").update(readFileSync(filePath)).digest("hex");
+  const sha256 = sha256File(filePath);
   const simulationInputs = new Set([
     "camotics-preview.nc",
     "camotics-project-template.json",
@@ -12035,6 +12126,43 @@ function createCamoticsLinuxPackageFile(workDir, filename, required) {
         ? "展开三轴仿真 NC，禁止上机。"
         : "Linux CAMotics 仿真/回填参考文件，不是机床加工交付文件。"
     }
+  };
+}
+
+function sha256File(filePath) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, missing) {
+  const productionGate = deliveryManifest?.productionGate ?? {};
+  return {
+    schema: "hediao3d.v3-evidence-review-package.v1",
+    jobId,
+    createdAt: new Date().toISOString(),
+    packageLevel: deliveryManifest.packageLevel ?? "unknown",
+    allowProductionNc: Boolean(deliveryManifest.allowProductionNc),
+    allowTrialNc: Boolean(deliveryManifest.allowTrialNc),
+    allowAirRun: Boolean(deliveryManifest.allowAirRun),
+    productionGate: {
+      level: productionGate.level ?? null,
+      summary: productionGate.summary ?? null,
+      blockers: productionGate.blockers ?? [],
+      warnings: productionGate.warnings ?? []
+    },
+    policy: {
+      productionUseAllowed: false,
+      containsMachineNcForProduction: false,
+      purpose: "evidence-review-only",
+      note: "本包只用于审查证据链和排查缺口，不是上机加工包。"
+    },
+    files: included,
+    missing,
+    nextEvidence: [
+      "确认 production-evidence-dossier.json 的 blocked/review 项。",
+      "若缺少 camotics-result.json 或 camotics-result-local-validation.json，先下载 CAMotics Linux 仿真包并在服务器完成材料去除仿真。",
+      "若缺少 trial-feedback-log.json 或 machine-acceptance-log.json，先做离料空跑/软料试雕并回填现场证据。",
+      "生产 NC 只能由 production-package 接口在总门禁放行后生成。"
+    ]
   };
 }
 
@@ -12202,6 +12330,43 @@ function createSafeTrialPackageReadme(packageManifest) {
     "## 文件清单",
     "",
     included || "- 无文件。"
+  ].join("\n");
+}
+
+function createEvidenceReviewPackageReadme(packageManifest) {
+  const included = packageManifest.files
+    .map((file) => `- ${file.filename}: ${file.bytes} bytes / sha256=${file.sha256}`)
+    .join("\n");
+  const missing = packageManifest.missing.length
+    ? packageManifest.missing.map((filename) => `- ${filename}`).join("\n")
+    : "- 无";
+  return [
+    "# HeDiao3D V3 证据审查包",
+    "",
+    `Job ID: ${packageManifest.jobId}`,
+    `包级别: ${packageManifest.packageLevel}`,
+    `允许生产 NC: ${packageManifest.allowProductionNc ? "是" : "否"}`,
+    `允许试雕 NC: ${packageManifest.allowTrialNc ? "是" : "否"}`,
+    `允许空跑: ${packageManifest.allowAirRun ? "是" : "否"}`,
+    "",
+    "## 使用边界",
+    "",
+    "- 本包只用于审查 V3 证据链、定位缺失项和复核哈希。",
+    "- 本包不是安全试雕包，也不是正式生产包。",
+    "- 本包不应作为上机加工交付物；上机必须使用安全试雕包或总门禁放行后的正式生产包。",
+    "",
+    "## 已包含证据",
+    "",
+    included || "- 无",
+    "",
+    "## 缺失证据",
+    "",
+    missing,
+    "",
+    "## 下一步",
+    "",
+    ...packageManifest.nextEvidence.map((item, index) => `${index + 1}. ${item}`),
+    ""
   ].join("\n");
 }
 
