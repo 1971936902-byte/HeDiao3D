@@ -124,6 +124,11 @@ const server = createServer(async (req, res) => {
       return importOrchestratorCamoticsResult(req, orchestratorCamoticsResultMatch[1], res);
     }
 
+    const orchestratorNeutralToolpathMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/neutral-toolpath$/);
+    if (req.method === "POST" && orchestratorNeutralToolpathMatch) {
+      return importOrchestratorNeutralToolpath(req, orchestratorNeutralToolpathMatch[1], res);
+    }
+
     const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/artifacts\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorArtifactMatch) {
       return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
@@ -5999,6 +6004,9 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-input-plan.json", "CAM 输入计划", "report", true, "说明进入外部 CAM 前应使用哪份模型。"),
     createDeliveryFile(job.id, "cam-engine-selection.json", "CAM 引擎选择报告", "report", true, "说明当前为何选择 FreeCAD/BlenderCAM/OpenCAMLib 或降级到内置 fallback。"),
     createDeliveryFile(job.id, "external-cam-recipe.json", "外部CAM作业配方", "report", true, "统一描述 FreeCAD/BlenderCAM/OpenCAMLib 所需模型、毛坯、刀具、工序、后处理和仿真要求。"),
+    createDeliveryFile(job.id, "adapter-report.json", "外部 CAM Adapter 报告", "report", existsSync(join(job.workDir, "adapter-report.json")), "记录外部 CAM 或 API 回填中立刀路的执行结果、来源和风险。"),
+    createDeliveryFile(job.id, "neutral-toolpath.json", "外部中立刀路", "report", existsSync(join(job.workDir, "neutral-toolpath.json")), "外部 CAM 输出的统一刀位点，HeDiao3D 会在此基础上执行 Y/A 旋转夹具后处理。"),
+    createDeliveryFile(job.id, "imported-neutral-toolpath.json", "API导入原始中立刀路", "report", existsSync(join(job.workDir, "imported-neutral-toolpath.json")), "通过 API 回填时保存的原始 neutral-toolpath 输入快照，用于审计和复现。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
@@ -7094,6 +7102,124 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
   });
 }
 
+async function importOrchestratorNeutralToolpath(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  const input = await readJson(req, 30_000_000);
+  const neutral = input?.neutralToolpath && typeof input.neutralToolpath === "object" ? input.neutralToolpath : null;
+  if (!neutral) return json(res, 400, { error: "请传入 neutralToolpath 对象。" });
+  const settings = readJobSettingsForRefresh(job, workDir);
+  if (!settings) return json(res, 409, { error: "当前任务缺少 settings，无法执行 HeDiao3D 后处理。" });
+
+  const importPath = join(workDir, "imported-neutral-toolpath.json");
+  const neutralPath = join(workDir, "neutral-toolpath.json");
+  await writeFile(importPath, JSON.stringify(neutral, null, 2), "utf8");
+  await writeFile(neutralPath, JSON.stringify({
+    ...neutral,
+    importedFromApi: true,
+    importedAt: new Date().toISOString()
+  }, null, 2), "utf8");
+
+  const pointCount = Array.isArray(neutral.points) ? neutral.points.length : 0;
+  const selectedEngine = {
+    id: String(input.engine ?? neutral.engine ?? "opencamlib"),
+    name: engineDisplayName(String(input.engine ?? neutral.engine ?? "opencamlib")),
+    available: true,
+    adapterReady: true
+  };
+  const adapterReport = {
+    status: "completed",
+    protocolVersion: "hediao3d.adapter.v1",
+    engine: selectedEngine.id,
+    jobId: safeJobId,
+    imported: true,
+    importedViaApi: true,
+    neutralToolpathPath: neutralPath,
+    outputs: {
+      neutralToolpath: neutralPath
+    },
+    warnings: [
+      "外部 neutral-toolpath 已通过 API 回填；HeDiao3D 将负责最终 Y/A 旋转夹具后处理。"
+    ],
+    metrics: {
+      neutralToolpath: {
+        schema: neutral.schema ?? null,
+        path: neutralPath,
+        imported: true,
+        synthetic: Boolean(neutral.synthetic),
+        pointCount
+      },
+      estimatedMinutes: Number(neutral.estimatedMinutes ?? 0) || null
+    }
+  };
+  await writeFile(join(workDir, "adapter-report.json"), JSON.stringify(adapterReport, null, 2), "utf8");
+
+  const toolpath = createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine);
+  if (!toolpath) return json(res, 400, { error: "neutral-toolpath 无法转换为有效刀路，请检查 schema/points/坐标字段。" });
+  job.workDir = workDir;
+  const refreshed = await refreshImportedToolpathArtifacts(job, settings, selectedEngine, adapterReport, toolpath);
+  appendOrchestratorLog(job, `外部 neutral-toolpath 已回填并后处理：${toolpath.points.length} 点。`);
+  job.updatedAt = new Date().toISOString();
+  job.result = {
+    ...(job.result ?? {}),
+    engine: selectedEngine.id,
+    fallbackFrom: selectedEngine.id,
+    externalAvailable: true,
+    adapterReady: true,
+    adapterReport,
+    toolpath,
+    summary: {
+      ...(job.result?.summary ?? {}),
+      ...refreshed.summary
+    }
+  };
+  for (const filename of [
+    "imported-neutral-toolpath.json",
+    "neutral-toolpath.json",
+    "adapter-report.json",
+    "toolpath.nc",
+    "toolpath-summary.json",
+    "cam-handoff-quality.json",
+    "air-run.nc",
+    "rotary-calibration-airrun.nc",
+    "camotics-preview.nc",
+    "camotics-input.json",
+    "camotics-simulation-plan.json",
+    "camotics-project-template.json",
+    "camotics-run.md",
+    "simulation-summary.json",
+    "production-gate.json",
+    "production-unlock-matrix.json",
+    "production-evidence-dossier.json",
+    "machining-package-index.json",
+    "delivery-manifest.json",
+    "operator-download-checklist.md",
+    "package-integrity.json"
+  ]) {
+    pushIfArtifactExists(job, filename);
+  }
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: true,
+    adapterReport,
+    toolpathSummary: refreshed.summary.toolpathSummary,
+    camHandoffQuality: refreshed.summary.camHandoffQuality,
+    productionGate: refreshed.summary.productionGate,
+    artifacts: {
+      neutralToolpath: publicArtifactUrl(safeJobId, "neutral-toolpath.json"),
+      toolpath: publicArtifactUrl(safeJobId, "toolpath.nc"),
+      adapterReport: publicArtifactUrl(safeJobId, "adapter-report.json")
+    }
+  });
+}
+
 async function writeImportedCamoticsResultBundle(workDir, input) {
   const result = input?.result && typeof input.result === "object" ? { ...input.result } : null;
   if (!result) throw new Error("CAMotics result 不能为空，需传入 result 对象。");
@@ -7306,6 +7432,217 @@ function createToolpathStubForRefresh(job) {
     postProcessorName: summary.postProcessorName ?? toolpathSummary?.postProcessorName ?? "V3 postprocess",
     summary: {
       warnings: summary.warnings ?? toolpathSummary?.warnings ?? []
+    }
+  };
+}
+
+function readJobSettingsForRefresh(job, workDir) {
+  const jobSpec = readJsonFile(join(workDir, "job.json"));
+  return normalizeServerCamSettings(jobSpec?.settings ?? job.result?.summary?.settings ?? {});
+}
+
+async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, adapterReport, toolpath) {
+  const workDir = job.workDir;
+  await writeFile(join(workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+  await writeFile(join(workDir, "toolpath-summary.json"), JSON.stringify({
+    engine: selectedEngine.id,
+    fallbackFrom: selectedEngine.id,
+    source: "external-adapter",
+    externalSourceSnapshot: toolpath.externalSourceSnapshot ?? null,
+    points: toolpath.points.length,
+    previewPoints: toolpath.previewPoints?.length ?? 0,
+    estimatedMinutes: toolpath.estimatedMinutes,
+    postProcessorName: toolpath.postProcessorName,
+    warnings: toolpath.summary?.warnings ?? []
+  }, null, 2), "utf8");
+
+  const machineControllerProfile = createMachineControllerProfile(settings);
+  const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 imported neutral air run");
+  const rotaryCalibrationAirRunGcode = createRotaryCalibrationAirRunGcode(settings);
+  const camoticsPreviewGcode = createCamoticsPreviewGcode(toolpath.points, settings, toolpath.estimatedMinutes);
+  await writeFile(join(workDir, "air-run.nc"), airRunGcode, "utf8");
+  await writeFile(join(workDir, "rotary-calibration-airrun.nc"), rotaryCalibrationAirRunGcode, "utf8");
+  await writeFile(join(workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
+  await writeFile(join(workDir, "machine-controller-profile.json"), JSON.stringify(machineControllerProfile, null, 2), "utf8");
+
+  const ncStaticAnalysis = createNcStaticAnalysis({
+    settings,
+    files: [
+      { filename: "toolpath.nc", role: "machine", gcode: toolpath.gcode },
+      { filename: "air-run.nc", role: "air-run", gcode: airRunGcode },
+      { filename: "rotary-calibration-airrun.nc", role: "air-run", gcode: rotaryCalibrationAirRunGcode },
+      { filename: "camotics-preview.nc", role: "simulation-only", gcode: camoticsPreviewGcode }
+    ]
+  });
+  const controllerDialectReport = createControllerDialectReport({
+    settings,
+    machineControllerProfile,
+    files: [
+      { filename: "toolpath.nc", role: "machine", gcode: toolpath.gcode },
+      { filename: "air-run.nc", role: "air-run", gcode: airRunGcode },
+      { filename: "rotary-calibration-airrun.nc", role: "air-run", gcode: rotaryCalibrationAirRunGcode },
+      { filename: "camotics-preview.nc", role: "simulation-only", gcode: camoticsPreviewGcode }
+    ]
+  });
+  await writeFile(join(workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
+  await writeFile(join(workDir, "controller-dialect-report.json"), JSON.stringify(controllerDialectReport, null, 2), "utf8");
+
+  const camHandoffQuality = createCamHandoffQualityReport({
+    job,
+    settings,
+    toolpath,
+    selectedEngine,
+    resultEngine: selectedEngine.id,
+    adapterReport,
+    externalToolpathUsed: true
+  });
+  await writeFile(join(workDir, "cam-handoff-quality.json"), JSON.stringify(camHandoffQuality, null, 2), "utf8");
+
+  const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selectedEngine);
+  const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selectedEngine, camoticsInput);
+  await writeFile(join(workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
+  await writeFile(join(workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
+  await writeFile(join(workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
+  await writeFile(join(workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
+
+  const simulationSummary = createSimulationSummary(toolpath, settings, selectedEngine);
+  await writeFile(join(workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+  const meshQuality = readJsonFile(join(workDir, "mesh-quality.json")) ?? { verdict: "review", score: 0 };
+  const repairPlan = readJsonFile(join(workDir, "repair-plan.json")) ?? { status: "review-required" };
+  const repairExecution = readJsonFile(join(workDir, "repair-execution.json")) ?? null;
+  const camInputPlan = readJsonFile(join(workDir, "cam-input-plan.json")) ?? { status: "review", gate: { allowProductionNc: false, reason: "CAM 输入计划缺失。" } };
+  const engineReadiness = readJsonFile(join(workDir, "engine-diagnostics.json")) ?? { externalReady: true, summary: "External neutral toolpath imported via API." };
+  const nativeCamReadiness = readJsonFile(join(workDir, "native-cam-readiness.json"));
+  const productionGate = createProductionGate({
+    toolpath,
+    settings,
+    selectedEngine,
+    resultEngine: selectedEngine.id,
+    meshQuality,
+    repairPlan,
+    repairExecution,
+    camInputPlan,
+    engineReadiness,
+    nativeCamReadiness,
+    simulationSummary,
+    camoticsInput,
+    camHandoffQuality,
+    ncStaticAnalysis,
+    machineControllerProfile,
+    controllerDialectReport
+  });
+  await writeFile(join(workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
+
+  const postprocessProfile = createPostprocessProfile({
+    job,
+    settings,
+    toolpath,
+    selectedEngine,
+    resultEngine: selectedEngine.id,
+    productionGate
+  });
+  const toolSetupSheet = createToolSetupSheet({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile
+  });
+  const rotaryCalibrationSheet = createRotaryCalibrationSheet({
+    job,
+    settings,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    machineControllerProfile
+  });
+  await writeFile(join(workDir, "postprocess-profile.json"), JSON.stringify(postprocessProfile, null, 2), "utf8");
+  await writeFile(join(workDir, "tool-setup-sheet.json"), JSON.stringify(toolSetupSheet, null, 2), "utf8");
+  await writeFile(join(workDir, "rotary-calibration-sheet.json"), JSON.stringify(rotaryCalibrationSheet, null, 2), "utf8");
+
+  const productionUnlockMatrix = createProductionUnlockMatrix({
+    job,
+    productionGate,
+    meshQuality,
+    repairPlan,
+    camInputPlan,
+    engineReadiness,
+    nativeCamReadiness,
+    simulationSummary,
+    ncStaticAnalysis,
+    camHandoffQuality,
+    controllerDialectReport,
+    toolSetupSheet,
+    rotaryCalibrationSheet
+  });
+  await writeFile(join(workDir, "production-unlock-matrix.json"), JSON.stringify(productionUnlockMatrix, null, 2), "utf8");
+  const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job);
+  if (productionEvidenceDossier) {
+    await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+  }
+
+  const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
+  const machiningPackageIndex = createMachiningPackageIndex({
+    job,
+    toolpath,
+    productionGate,
+    postprocessProfile,
+    simulationSummary,
+    camoticsInput,
+    camoticsSimulationPlan,
+    camHandoffQuality,
+    camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
+    productionEvidenceDossier,
+    ncStaticAnalysis,
+    nativeCamReadiness,
+    camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
+    machineControllerProfile,
+    machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
+    controllerDialectReport,
+    deliveryManifest
+  });
+  await writeFile(join(workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
+  await writeFile(join(workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
+  await writeFile(join(workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n更新中，请以最终 package-integrity.json 为准。\n", "utf8");
+  let packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+  await writeFile(join(workDir, "operator-download-checklist.md"), createOperatorDownloadChecklistMarkdown({
+    job,
+    deliveryManifest,
+    packageIntegrity,
+    productionGate,
+    machineControllerProfile,
+    camHandoffQuality,
+    simulationSummary
+  }), "utf8");
+  packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+
+  return {
+    summary: {
+      adapterReport,
+      toolpathSummary: readJsonFile(join(workDir, "toolpath-summary.json")),
+      camHandoffQuality,
+      camoticsInput,
+      camoticsSimulationPlan,
+      ncStaticAnalysis,
+      controllerDialectReport,
+      machineControllerProfile,
+      simulation: simulationSummary,
+      productionGate,
+      postprocessProfile,
+      toolSetupSheet,
+      rotaryCalibrationSheet,
+      productionUnlockMatrix,
+      productionEvidenceDossier,
+      machiningPackageIndex,
+      deliveryManifest,
+      packageIntegrity,
+      points: toolpath.points.length,
+      previewPoints: toolpath.previewPoints?.length ?? 0,
+      estimatedMinutes: toolpath.estimatedMinutes,
+      postProcessorName: toolpath.postProcessorName,
+      warnings: toolpath.summary?.warnings ?? []
     }
   };
 }
