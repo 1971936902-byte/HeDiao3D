@@ -205,7 +205,14 @@ try {
   assert(freecadExternalReport.status === "completed", "freecad external handoff should complete in fixture mode");
   assert(freecadExternalReport.gcodePath === freecadExternalGcodePath, "freecad report should expose gcodePath");
   assert(freecadExternalReport.metrics?.gcode?.status === "generated", "freecad metrics should mark G-code generated");
+  assert(existsSync(freecadExternalReport.metrics?.freecadPlan?.runTemplatePath), "freecad run template missing");
   assert(existsSync(freecadExternalGcodePath), "freecad external G-code file missing");
+  const freecadRunTemplate = readFileSync(freecadExternalReport.metrics.freecadPlan.runTemplatePath, "utf8");
+  assert(freecadRunTemplate.includes("PathJob.Create"), "freecad run template should create a Path Job");
+  assert(freecadRunTemplate.includes("PathToolController.Create"), "freecad run template should create a ToolController");
+  assert(freecadRunTemplate.includes("PathPostProcessor.export"), "freecad run template should define postprocessing");
+  assert(freecadRunTemplate.includes("HEDIAO3D_FREECAD_TEMPLATE_ALLOW_UNVALIDATED_OPS"), "freecad run template should fail closed for unvalidated operations");
+  assert(freecadRunTemplate.includes(freecadExternalGcodePath.replaceAll("\\", "\\\\")) || freecadRunTemplate.includes(freecadExternalGcodePath), "freecad run template should include expected G-code output path");
   const freecadExternalGcode = readFileSync(freecadExternalGcodePath, "utf8");
   assert(freecadExternalGcode.includes("HeDiao3D FreeCAD external runner fixture"), "freecad external G-code marker missing");
   assert(/\bG1\b/.test(freecadExternalGcode), "freecad external G-code should contain G1 motion");
