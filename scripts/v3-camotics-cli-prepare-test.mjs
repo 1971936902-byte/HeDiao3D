@@ -67,6 +67,7 @@ assert(existsSync(runScriptPath), "Linux run script was not written");
 const cliPackage = JSON.parse(readFileSync(cliPackagePath, "utf8"));
 const template = JSON.parse(readFileSync(resultTemplatePath, "utf8"));
 const previewSha256 = createHash("sha256").update(readFileSync(join(workDir, "camotics-preview.nc"))).digest("hex");
+const cliPackageSha256 = createHash("sha256").update(readFileSync(cliPackagePath)).digest("hex");
 
 assert(cliPackage.schema === "hediao3d.camotics-cli-run-package.v1", "run package schema mismatch");
 assert(cliPackage.status === "ready-for-linux-camotics", `expected ready package, got ${cliPackage.status}`);
@@ -77,6 +78,8 @@ assert(cliPackage.preferredGcodeIdentity?.motionProfile?.zMax === 5, "motion pro
 assert(cliPackage.importBack?.requires?.some((item) => item.includes("preferredGcodeSha256")), "import instructions should require preferred G-code hash");
 assert(cliPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "prepare package must not unlock production");
 assert(template.inputs?.preferredGcodeSha256 === previewSha256, "template should include preferred G-code hash");
+assert(template.inputs?.camoticsCliRunPackage === "camotics-cli-run-package.json", "template should name CLI run package");
+assert(template.inputs?.camoticsCliRunPackageSha256 === cliPackageSha256, "template should bind to CLI run package hash");
 assert(template.metrics?.motionLineCount === 3, "template should seed motion count from preview");
 assert(template.metrics?.materialRemovedMm3 === null, "template must require real material removal volume");
 

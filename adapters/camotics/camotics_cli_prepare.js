@@ -44,11 +44,13 @@ for (const [key, filename] of optionalInputKeys) {
 const preferred = inputs.preferredGcode;
 const motionProfile = preferred.exists ? createGcodeMotionProfile(readFileSync(preferred.path, "utf8")) : null;
 const ready = checks.every((check) => check.ok);
-const resultTemplate = createResultTemplate(plan, preferred, motionProfile);
 const packageJson = createRunPackage(plan, inputs, motionProfile, ready);
 
+const runPackagePath = join(outputDir, "camotics-cli-run-package.json");
+writeFileSync(runPackagePath, JSON.stringify(packageJson, null, 2), "utf8");
+const runPackageIdentity = inspectWrittenRunPackage(runPackagePath);
+const resultTemplate = createResultTemplate(plan, preferred, motionProfile, runPackageIdentity);
 writeFileSync(join(outputDir, "camotics-result-template.json"), JSON.stringify(resultTemplate, null, 2), "utf8");
-writeFileSync(join(outputDir, "camotics-cli-run-package.json"), JSON.stringify(packageJson, null, 2), "utf8");
 writeFileSync(join(outputDir, "camotics-linux-run.sh"), createLinuxRunScript(packageJson), "utf8");
 
 console.log(JSON.stringify({
@@ -170,7 +172,17 @@ function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
   };
 }
 
-function createResultTemplate(plan, preferred, motionProfile) {
+function inspectWrittenRunPackage(path) {
+  const bytes = readFileSync(path);
+  return {
+    filename: "camotics-cli-run-package.json",
+    path,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sizeBytes: bytes.byteLength
+  };
+}
+
+function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity) {
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId: plan.jobId ?? null,
@@ -182,6 +194,8 @@ function createResultTemplate(plan, preferred, motionProfile) {
     inputs: {
       preferredGcode: preferred.filename,
       preferredGcodeSha256: preferred.sha256,
+      camoticsCliRunPackage: runPackageIdentity.filename,
+      camoticsCliRunPackageSha256: runPackageIdentity.sha256,
       expectedMotionProfile: motionProfile
     },
     metrics: {

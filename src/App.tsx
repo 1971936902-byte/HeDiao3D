@@ -1021,6 +1021,16 @@ type V3OrchestratorJob = {
             status: string;
             missing?: string[];
             summary?: string;
+            inputIdentity?: {
+              cliRunPackage?: {
+                status: string;
+                required: boolean;
+                expectedSha256?: string | null;
+                importedSha256?: string | null;
+                packageStatus?: string | null;
+                message?: string | null;
+              };
+            };
           } | null;
         };
       };
@@ -8748,6 +8758,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `运动行数: ${camoticsAdapter?.metrics?.motionLineCount ?? "-"}`,
     `证据状态: ${camoticsEvidenceQuality?.status ?? "-"}`,
     `生产证据资格: ${camoticsEvidenceQuality?.productionEvidenceEligible ? "是" : "否"}`,
+    `运行包绑定: ${camoticsEvidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "-"} / ${camoticsEvidenceQuality?.inputIdentity?.cliRunPackage?.required ? "必需" : "未要求"}`,
+    `运行包哈希: ${camoticsEvidenceQuality?.inputIdentity?.cliRunPackage?.expectedSha256 ? `${camoticsEvidenceQuality.inputIdentity.cliRunPackage.expectedSha256.slice(0, 12)}...` : "-"}`,
     `证据缺失项: ${camoticsEvidenceQuality?.missing?.length ? camoticsEvidenceQuality.missing.join(", ") : "无"}`,
     `说明: ${camoticsAdapter?.summary ?? packageIndex?.camotics?.limitation ?? "-"}`,
     "",

@@ -377,11 +377,14 @@ function createCamoticsInputIdentity(adapterJob, simulationPlan) {
   const dir = adapterJob.workDir ?? dirname(resultPath);
   const preferredGcode = simulationPlan.inputs.preferredGcode;
   const previewPath = join(dir, preferredGcode);
+  const cliRunPackagePath = join(dir, "camotics-cli-run-package.json");
+  const cliRunPackageIdentity = createCliRunPackageIdentity(cliRunPackagePath);
   if (!existsSync(previewPath)) {
     return {
       preferredGcode,
       previewPath,
       expectedPreferredGcodeSha256: null,
+      cliRunPackageIdentity,
       status: "missing-preview",
       message: `Preferred CAMotics preview G-code does not exist: ${previewPath}`
     };
@@ -393,8 +396,40 @@ function createCamoticsInputIdentity(adapterJob, simulationPlan) {
     previewPath,
     expectedPreferredGcodeSha256: createHash("sha256").update(bytes).digest("hex"),
     previewMotionProfile: createGcodeMotionProfile(text),
+    cliRunPackageIdentity,
     status: "ready",
     message: "Preferred CAMotics preview G-code identity hash computed."
+  };
+}
+
+function createCliRunPackageIdentity(path) {
+  if (!existsSync(path)) {
+    return {
+      exists: false,
+      filename: "camotics-cli-run-package.json",
+      path,
+      sha256: null,
+      status: "missing",
+      message: "CAMotics CLI run package was not found; legacy adapter contract only."
+    };
+  }
+  const bytes = readFileSync(path);
+  let parsed = null;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    parsed = null;
+  }
+  return {
+    exists: true,
+    filename: "camotics-cli-run-package.json",
+    path,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    schema: parsed?.schema ?? null,
+    status: parsed?.status ?? "unknown",
+    createdAt: parsed?.createdAt ?? null,
+    preferredGcodeSha256: parsed?.preferredGcodeIdentity?.sha256 ?? null,
+    message: "CAMotics CLI run package identity hash computed."
   };
 }
 
@@ -402,8 +437,19 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
   const metrics = result?.metrics ?? {};
   const importedHash = result?.inputs?.preferredGcodeSha256;
   const expectedHash = inputIdentity?.expectedPreferredGcodeSha256 ?? null;
+  const importedCliPackageHash = result?.inputs?.camoticsCliRunPackageSha256;
+  const expectedCliPackageHash = inputIdentity?.cliRunPackageIdentity?.sha256 ?? null;
   const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
   const identityOk = nonEmptyString(expectedHash) && importedHash === expectedHash;
+  const cliPackageRequired = Boolean(inputIdentity?.cliRunPackageIdentity?.exists);
+  const cliPackageOk = !cliPackageRequired || (nonEmptyString(expectedCliPackageHash) && importedCliPackageHash === expectedCliPackageHash);
+  const cliPackageStatus = !cliPackageRequired
+    ? "not-required"
+    : !nonEmptyString(importedCliPackageHash)
+      ? "missing-imported-hash"
+      : cliPackageOk
+        ? "matched"
+        : "mismatch";
   const hasVerifiedArtifact = Boolean(artifactEvidence?.files?.screenshot || artifactEvidence?.files?.materialMesh);
   const identityStatus = !inputIdentity || inputIdentity.status !== "ready"
     ? "missing-preview"
@@ -417,6 +463,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       id: "inputIdentity",
       ok: identityOk,
       message: "inputs.preferredGcodeSha256 must match the current camotics-preview.nc SHA-256."
+    },
+    {
+      id: "cliRunPackageIdentity",
+      ok: cliPackageOk,
+      message: "When camotics-cli-run-package.json exists, inputs.camoticsCliRunPackageSha256 must match it."
     },
     {
       id: "materialRemovedMm3",
@@ -457,6 +508,20 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       preferredGcode: inputIdentity?.preferredGcode ?? null,
       expectedPreferredGcodeSha256: expectedHash,
       importedPreferredGcodeSha256: importedHash ?? null,
+      cliRunPackage: {
+        status: cliPackageStatus,
+        required: cliPackageRequired,
+        expectedSha256: expectedCliPackageHash,
+        importedSha256: importedCliPackageHash ?? null,
+        packageStatus: inputIdentity?.cliRunPackageIdentity?.status ?? null,
+        message: cliPackageStatus === "matched"
+          ? "Imported CAMotics result is bound to the current Linux run package."
+          : cliPackageStatus === "not-required"
+            ? "No CAMotics Linux run package was present for this adapter contract."
+            : cliPackageStatus === "mismatch"
+              ? "Imported CAMotics result does not match the current Linux run package hash."
+              : "Imported CAMotics result is missing inputs.camoticsCliRunPackageSha256."
+      },
       previewMotionProfile: inputIdentity?.previewMotionProfile ?? null,
       message: identityStatus === "matched"
         ? "Imported CAMotics result matches the current preview G-code."

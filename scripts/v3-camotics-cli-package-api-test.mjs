@@ -68,10 +68,13 @@ async function main() {
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMin === previewMotionProfile.zMin, "run package zMin mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMax === previewMotionProfile.zMax, "run package zMax mismatch");
   assert(runPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "run package must keep production locked");
+  const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
+  const runPackageSha256 = createHash("sha256").update(runPackageText).digest("hex");
 
   const template = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-template.json`);
   assert(template.schema === "hediao3d.camotics-result.v1", "result template schema mismatch");
   assert(template.inputs?.preferredGcodeSha256 === previewSha256, "result template should include preview hash");
+  assert(template.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "result template should bind to current CLI run package hash");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
 
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
