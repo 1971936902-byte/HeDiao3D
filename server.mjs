@@ -64,6 +64,10 @@ const server = createServer(async (req, res) => {
       return getLatestV3RunbookResult(res);
     }
 
+    if (req.method === "POST" && req.url === "/api/orchestrator/readiness/runbook-result") {
+      return importV3ReadinessRunbookResult(req, res);
+    }
+
     if (req.method === "POST" && req.url === "/api/orchestrator/readiness") {
       return createV3ReadinessReport(req, res);
     }
@@ -177,6 +181,11 @@ const server = createServer(async (req, res) => {
     const nativeCamArtifactMatch = req.url?.match(/^\/api\/orchestrator\/native-cam\/([^/?#/]+)\/([^/?#/]+)$/);
     if (req.method === "GET" && nativeCamArtifactMatch) {
       return getNativeCamReadinessArtifact(nativeCamArtifactMatch[1], nativeCamArtifactMatch[2], res);
+    }
+
+    const readinessRunbookResultArtifactMatch = req.url?.match(/^\/api\/orchestrator\/readiness\/runbook-results\/([^/?#/]+)$/);
+    if (req.method === "GET" && readinessRunbookResultArtifactMatch) {
+      return getV3ReadinessRunbookResultArtifact(readinessRunbookResultArtifactMatch[1], res);
     }
 
     const readinessArtifactMatch = req.url?.match(/^\/api\/orchestrator\/readiness\/([^/?#/]+)\/([^/?#/]+)$/);
@@ -1624,6 +1633,100 @@ function getLatestV3RunbookResult(res) {
   return json(res, 200, { latest: readLatestV3RunbookResultSummary() });
 }
 
+async function importV3ReadinessRunbookResult(req, res) {
+  const input = await readJson(req, 30_000_000).catch((error) => ({ error }));
+  if (input.error) {
+    return json(res, 400, { error: input.error instanceof Error ? input.error.message : "V3 验收脚本结果 JSON 无法解析" });
+  }
+  let zipBundle = null;
+  try {
+    zipBundle = input.resultZipDataUrl ? extractV3RunbookResultZipBundle(input.resultZipDataUrl) : null;
+  } catch (error) {
+    return json(res, 400, { error: error instanceof Error ? error.message : "V3 验收脚本结果 ZIP 无法解析" });
+  }
+  const result = input.result ?? zipBundle?.result ?? input;
+  const validation = validateV3RunbookResult(result);
+  if (!validation.ok) {
+    return json(res, 400, { error: validation.error });
+  }
+
+  const outputRoot = join(process.cwd(), "public", "orchestrator-readiness", "runbook-results");
+  await mkdir(outputRoot, { recursive: true });
+  const imported = {
+    ...result,
+    importedAt: new Date().toISOString(),
+    importSource: {
+      sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : zipBundle?.sourceName ?? "v3-acceptance-runbook-result.json",
+      route: "/api/orchestrator/readiness/runbook-result",
+      note: "Imported from a Linux CAM/deployment acceptance runbook. Readiness gates consume this result but it does not unlock production by itself.",
+      zipBundle: zipBundle ? "imported-v3-acceptance-runbook-result-bundle.zip" : null
+    }
+  };
+  const resultPath = join(outputRoot, "v3-acceptance-runbook-result.json");
+  await writeFile(resultPath, JSON.stringify(imported, null, 2), "utf8");
+  if (zipBundle) {
+    await writeFile(join(outputRoot, "imported-v3-acceptance-runbook-result-bundle.zip"), zipBundle.sourceBuffer);
+  }
+  await writeFile(join(outputRoot, "v3-acceptance-runbook-result-import.json"), JSON.stringify({
+    schema: "hediao3d.v3-acceptance-runbook-result-import.v1",
+    createdAt: imported.importedAt,
+    sourceName: imported.importSource.sourceName,
+    zipBundle: imported.importSource.zipBundle,
+    resultSchema: imported.schema,
+    readinessReportId: imported.readinessReportId ?? null,
+    ok: Boolean(imported.ok),
+    failedCount: Number(imported.failedCount ?? 0),
+    blockingFailedCount: Number(imported.blockingFailedCount ?? 0),
+    productionSafe: Boolean(imported.productionSafe)
+  }, null, 2), "utf8");
+
+  const summary = createV3RunbookResultPublicSummary(imported, resultPath);
+  return json(res, 200, {
+    ...summary,
+    apiArtifacts: {
+      json: "/api/orchestrator/readiness/runbook-results/v3-acceptance-runbook-result.json",
+      importJson: "/api/orchestrator/readiness/runbook-results/v3-acceptance-runbook-result-import.json",
+      ...(zipBundle ? { zipBundle: "/api/orchestrator/readiness/runbook-results/imported-v3-acceptance-runbook-result-bundle.zip" } : {})
+    }
+  });
+}
+
+function extractV3RunbookResultZipBundle(value) {
+  const buffer = decodeInlineFile(value);
+  const entries = extractZipEntries(buffer);
+  const findEntry = (predicate) => entries.find((entry) => predicate(entry.name.toLowerCase()));
+  const resultEntry = findEntry((name) => /(^|\/)v3-acceptance-runbook-result\.json$/.test(name));
+  if (!resultEntry) throw new Error("ZIP 中找不到 v3-acceptance-runbook-result.json。");
+  return {
+    sourceBuffer: buffer,
+    sourceName: "v3-acceptance-runbook-result-bundle.zip",
+    result: parseJsonBuffer(resultEntry.content, "v3-acceptance-runbook-result.json"),
+    entries: entries.map((entry) => ({
+      name: entry.name,
+      sizeBytes: entry.content.length
+    }))
+  };
+}
+
+function validateV3RunbookResult(result) {
+  if (!result || typeof result !== "object") return { ok: false, error: "runbook result 必须是 JSON object。" };
+  if (result.schema !== "hediao3d.v3-acceptance-runbook-result.v1") {
+    return { ok: false, error: "schema 必须是 hediao3d.v3-acceptance-runbook-result.v1。" };
+  }
+  if (!result.readinessReportId || typeof result.readinessReportId !== "string") {
+    return { ok: false, error: "runbook result 缺少 readinessReportId。" };
+  }
+  if (!result.readinessCreatedAt || !result.runbookGeneratedAt || !result.createdAt) {
+    return { ok: false, error: "runbook result 缺少 readinessCreatedAt/runbookGeneratedAt/createdAt 身份时间。" };
+  }
+  if (!Array.isArray(result.steps)) return { ok: false, error: "runbook result 缺少 steps[]。" };
+  if (typeof result.ok !== "boolean") return { ok: false, error: "runbook result 缺少 ok boolean。" };
+  if (!Number.isFinite(Number(result.failedCount))) return { ok: false, error: "runbook result 缺少 failedCount number。" };
+  if (!Number.isFinite(Number(result.blockingFailedCount))) return { ok: false, error: "runbook result 缺少 blockingFailedCount number。" };
+  if (typeof result.productionSafe !== "boolean") return { ok: false, error: "runbook result 缺少 productionSafe boolean。" };
+  return { ok: true };
+}
+
 function readLatestV3RunbookResultSummary() {
   const resultPath = join(process.cwd(), "public", "orchestrator-readiness", "runbook-results", "v3-acceptance-runbook-result.json");
   if (!existsSync(resultPath)) return null;
@@ -1929,6 +2032,23 @@ function getV3ReadinessArtifact(reportId, filename, res) {
   }
   const filePath = join(process.cwd(), "public", "orchestrator-readiness", safeId, safeFilename);
   if (!existsSync(filePath)) return json(res, 404, { error: "找不到 V3 readiness 产物" });
+  const content = readFileSync(filePath);
+  res.writeHead(200, {
+    "Content-Type": artifactContentType(safeFilename),
+    "Content-Length": content.length,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(content);
+}
+
+function getV3ReadinessRunbookResultArtifact(filename, res) {
+  const safeFilename = decodeURIComponent(filename);
+  if (!/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return json(res, 400, { error: "非法 V3 runbook result 路径" });
+  }
+  const filePath = join(process.cwd(), "public", "orchestrator-readiness", "runbook-results", safeFilename);
+  if (!existsSync(filePath)) return json(res, 404, { error: "找不到 V3 runbook result 产物" });
   const content = readFileSync(filePath);
   res.writeHead(200, {
     "Content-Type": artifactContentType(safeFilename),
