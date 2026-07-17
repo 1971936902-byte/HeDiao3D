@@ -594,28 +594,45 @@ def evaluate_contact_report_input_identity(report: Dict[str, Any], expected_iden
     ]
     neutral_match = any(str(value) in acceptable_neutral_hashes for value in reported_neutral_hashes if value)
 
+    required_checks: List[Dict[str, Any]] = []
     optional_checks: List[Dict[str, Any]] = []
     for key in ("modelSha256", "planSha256"):
         expected = expected_identity.get(key)
         reported = identity.get(key)
-        if expected and reported:
-            optional_checks.append({
+        if expected:
+            required_checks.append({
                 "field": key,
                 "expected": expected,
                 "reported": reported,
-                "matches": str(expected) == str(reported),
+                "required": True,
+                "matches": bool(reported) and str(expected) == str(reported),
             })
-    optional_mismatch = any(check["matches"] is False for check in optional_checks)
-    has_reported_identity = any(value for value in reported_neutral_hashes) or bool(optional_checks)
-    status = "bound" if neutral_match and not optional_mismatch else "mismatch" if has_reported_identity else "missing"
+        elif reported:
+            optional_checks.append({
+                "field": key,
+                "expected": None,
+                "reported": reported,
+                "required": False,
+                "matches": True,
+            })
+    required_mismatch = any(check["matches"] is False for check in required_checks)
+    required_missing = any(not check.get("reported") for check in required_checks)
+    has_reported_identity = any(value for value in reported_neutral_hashes) or bool(required_checks) or bool(optional_checks)
+    if neutral_match and not required_mismatch and not required_missing:
+        status = "bound"
+    elif has_reported_identity:
+        status = "incomplete" if neutral_match and required_missing and not required_mismatch else "mismatch"
+    else:
+        status = "missing"
     return {
         "schema": "hediao3d.opencamlib-contact-report-input-binding.v1",
         "status": status,
         "neutralToolpathHashMatched": neutral_match,
+        "requiredChecks": required_checks,
         "optionalChecks": optional_checks,
-        "summary": "Contact report input identity matches neutral source/output hash."
+        "summary": "Contact report input identity matches neutral source/output hash, model hash and plan hash."
         if status == "bound"
-        else "Contact report is missing or mismatches neutral source/output hash; it cannot be a production candidate.",
+        else "Contact report is missing or mismatches required neutral/model/plan identity; it cannot be a production candidate.",
     }
 
 

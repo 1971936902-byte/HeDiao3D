@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { copyFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -2873,8 +2873,10 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
   if (neutral?.fixture === true) {
     errors.push("fixture neutral-toolpath 只能用于合约测试，不能通过真实导入接口进入后处理。");
   }
-  if (previewScaffold) {
+  if (previewScaffold && source.allowPreviewScaffold !== true) {
     errors.push("preview/heightfield scaffold 只能用于预览验证，不能通过真实导入接口进入后处理。");
+  } else if (previewScaffold) {
+    warnings.push("preview/heightfield scaffold 仅允许进入外部 adapter trial-only 小闭环，不能作为生产级 OpenCAMLib 刀具接触证据。");
   }
   if (coordinate.depthAxis && String(coordinate.depthAxis).toUpperCase() !== "Z") {
     errors.push(`coordinate.depthAxis 必须是 Z，当前为 ${coordinate.depthAxis}。`);
@@ -2941,7 +2943,8 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
       fixture: Boolean(neutral?.fixture),
       previewScaffold,
       imported: true,
-      generatedByExternalCommand: Boolean(neutral?.generatedByExternalCommand)
+      generatedByExternalCommand: Boolean(neutral?.generatedByExternalCommand),
+      allowPreviewScaffold: Boolean(source.allowPreviewScaffold)
     },
     coordinate: {
       lengthAxis: coordinate.lengthAxis ?? null,
@@ -2987,6 +2990,73 @@ function createNeutralToolpathSourceBinding(neutral, source = {}) {
     sourceSnapshot: null,
     summary: "neutral-toolpath 输入已记录，等待写入导入/后处理产物。"
   };
+}
+
+async function createExternalAdapterNeutralToolpathValidation(job, settings, adapterReport, toolpath, selectedEngine) {
+  if (!job?.workDir || !adapterReport || !toolpath?.externalSourceSnapshot) return null;
+  if (toolpath.externalSourceSnapshot.kind !== "neutral-toolpath") return null;
+  const neutralPath = join(job.workDir, "neutral-toolpath.json");
+  if (!existsSync(neutralPath)) return null;
+  const neutral = readJsonFile(neutralPath);
+  if (!neutral) return null;
+
+  const neutralText = JSON.stringify(neutral, null, 2);
+  const neutralFileBytes = await readFile(neutralPath);
+  const neutralFileSha256 = createHash("sha256").update(neutralFileBytes).digest("hex");
+  const neutralSourceBinding = createNeutralToolpathSourceBinding(neutral, {
+    sourceName: `${selectedEngine?.id ?? neutral.engine ?? "external"} adapter neutral-toolpath.json`
+  });
+  neutralSourceBinding.importedArtifact = {
+    filename: "neutral-toolpath.json",
+    sha256: neutralFileSha256,
+    sizeBytes: neutralFileBytes.byteLength,
+    matchesSubmitted: createHash("sha256").update(neutralText).digest("hex") === neutralSourceBinding.submitted.sha256,
+    generatedByExternalAdapter: true
+  };
+  neutralSourceBinding.postprocessArtifact = {
+    filename: "neutral-toolpath.json",
+    sha256: neutralFileSha256,
+    sizeBytes: neutralFileBytes.byteLength,
+    derivedFromSubmitted: true,
+    generatedByExternalAdapter: true
+  };
+  neutralSourceBinding.sourceSnapshot = {
+    kind: toolpath.externalSourceSnapshot.kind,
+    sha256: toolpath.externalSourceSnapshot.sha256,
+    sizeBytes: toolpath.externalSourceSnapshot.sizeBytes,
+    capturedAt: toolpath.externalSourceSnapshot.capturedAt,
+    matchesPostprocessArtifact: toolpath.externalSourceSnapshot.sha256 === neutralSourceBinding.postprocessArtifact.sha256
+  };
+  neutralSourceBinding.status = neutralSourceBinding.importedArtifact.matchesSubmitted && neutralSourceBinding.sourceSnapshot.matchesPostprocessArtifact
+    ? "bound"
+    : "review";
+  neutralSourceBinding.summary = neutralSourceBinding.status === "bound"
+    ? "外部 adapter neutral-toolpath、后处理输入和 toolpath sourceSnapshot 已完成哈希绑定。"
+    : "外部 adapter neutral-toolpath 绑定链路需要复核，请检查 adapter 输出、后处理输入和 sourceSnapshot。";
+
+  const importValidation = createNeutralToolpathImportValidation(neutral, settings, {
+    sourceName: neutralSourceBinding.sourceName,
+    engine: String(selectedEngine?.id ?? neutral.engine ?? "external"),
+    sourceBinding: neutralSourceBinding,
+    allowPreviewScaffold: true
+  });
+  importValidation.sourceBinding = neutralSourceBinding;
+  await writeFile(join(job.workDir, "neutral-toolpath-import-validation.json"), JSON.stringify(importValidation, null, 2), "utf8");
+
+  const nextAdapterReport = {
+    ...adapterReport,
+    metrics: {
+      ...(adapterReport.metrics ?? {}),
+      neutralToolpath: {
+        ...(adapterReport.metrics?.neutralToolpath ?? {}),
+        importValidation: "neutral-toolpath-import-validation.json",
+        sourceBinding: neutralSourceBinding
+      }
+    }
+  };
+  await writeFile(join(job.workDir, "adapter-report.json"), JSON.stringify(nextAdapterReport, null, 2), "utf8");
+  pushIfArtifactExists(job, "neutral-toolpath-import-validation.json");
+  return { validation: importValidation, adapterReport: nextAdapterReport };
 }
 
 function normalizeNeutralToolpathPoints(neutral, settings) {
@@ -3300,6 +3370,12 @@ async function processOrchestratorJob(job, settings) {
   }
   const toolpath = externalToolpath ?? await generateToolpathFromLocalModel(job.modelUrl, settings);
   checkOrchestratorCancellation(job);
+  const externalNeutralValidation = externalToolpath
+    ? await createExternalAdapterNeutralToolpathValidation(job, settings, adapterReport, toolpath, selected)
+    : null;
+  if (externalNeutralValidation?.adapterReport) {
+    adapterReport = externalNeutralValidation.adapterReport;
+  }
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
   const camHandoffQuality = createCamHandoffQualityReport({
     job,

@@ -103,6 +103,7 @@ async function main() {
   assert(meshQuality.boundaryEdges === 0, `closed STL should not have boundary edges, got ${meshQuality.boundaryEdges}`);
   assert(meshQuality.nonManifoldEdges === 0, `closed STL should not have non-manifold edges, got ${meshQuality.nonManifoldEdges}`);
 
+  const adapterReport = await getArtifactJson(job.id, "adapter-report.json");
   const neutralToolpath = await getArtifactJson(job.id, "neutral-toolpath.json");
   assert(neutralToolpath.generatedByExternalCommand === true, "neutral output should record external command generation");
   assert(neutralToolpath.experimentalHeightfield === true, "neutral output should mark heightfield mode");
@@ -113,6 +114,10 @@ async function main() {
   assert(cutterEnvelopeReport.schema === "hediao3d.opencamlib-cutter-envelope-report.v1", "cutter envelope report schema mismatch");
   assert(cutterEnvelopeReport.sampling?.pointCount === neutralToolpath.points.length, "cutter envelope report point count mismatch");
   assert(cutterEnvelopeReport.quality?.productionCandidate === false, "preview cutter envelope report must not unlock production");
+  const contactBinding = adapterReport.metrics?.neutralToolpath?.cutterContactReport?.inputIdentityBinding;
+  assert(contactBinding?.status === "bound", `contact report input identity should be bound, got ${contactBinding?.status}`);
+  assert(contactBinding.requiredChecks?.some((check) => check.field === "modelSha256" && check.matches), "contact report must bind to current model hash");
+  assert(contactBinding.requiredChecks?.some((check) => check.field === "planSha256" && check.matches), "contact report must bind to current OpenCAMLib plan hash");
 
   const camInputPlan = await getArtifactJson(job.id, "cam-input-plan.json");
   assert(camInputPlan.status === "ready", `closed STL CAM input should be ready, got ${camInputPlan.status}`);
