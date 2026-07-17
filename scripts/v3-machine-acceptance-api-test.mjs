@@ -54,6 +54,16 @@ async function main() {
   });
   const job = await waitForJob(created.id);
   assert(job.status === "completed", `job did not complete: ${job.status}`);
+  const initialPackageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  const integrityEvidenceFiles = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc", "camotics-preview.nc"].map((filename) => {
+    const file = initialPackageIntegrity.files?.find((item) => item.filename === filename);
+    return {
+      filename,
+      sha256: file?.sha256 ?? null,
+      verified: Boolean(file?.sha256),
+      machineUseClass: file?.machineUse?.class ?? null
+    };
+  });
 
   const acceptance = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/machine-acceptance`, {
     id: "machine-acceptance-api-test",
@@ -66,8 +76,15 @@ async function main() {
     airRunOk: true,
     softTrialOk: true,
     formalTrialOk: false,
+    downloadIntegrity: {
+      packageIntegrityReviewed: true,
+      operatorChecklistReviewed: true,
+      neverMachineConfirmed: true,
+      files: integrityEvidenceFiles
+    },
     steps: [
       { id: "read-package", passed: true, evidenceNote: "All package reports reviewed." },
+      { id: "verify-download-integrity", passed: true, evidenceNote: "SHA-256 for machine candidate and air-run files verified." },
       { id: "camotics-preview", passed: true, evidenceNote: "Preview checked for bounds and Z range." },
       { id: "rotary-calibration-airrun", passed: true, evidenceNote: "Rotary calibration air-run completed at safe Z." },
       { id: "air-run", passed: true, evidenceNote: "Dry run completed with spindle off and safe Z." },
@@ -80,6 +97,9 @@ async function main() {
   assert(acceptance.ok === true, "machine acceptance API did not return ok");
   assert(acceptance.record?.schema === "hediao3d.machine-acceptance-record.v1", "record schema mismatch");
   assert(acceptance.record.allRequiredPassed === true, "record should mark required steps passed");
+  assert(acceptance.record.downloadIntegrity?.allRequiredHashesVerified === true, "record should mark required hashes verified");
+  assert(acceptance.record.downloadIntegrity?.neverMachineConfirmed === true, "record should confirm never-machine files");
+  assert(acceptance.record.steps?.some((step) => step.id === "verify-download-integrity" && step.status === "pass"), "download integrity step should pass");
   assert(acceptance.record.steps?.some((step) => step.id === "air-run" && step.status === "pass"), "air-run step should pass");
   assert(acceptance.log?.recordCount >= 1, "machine acceptance log count missing");
   assert(acceptance.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "response missing production evidence dossier");

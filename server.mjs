@@ -4850,6 +4850,15 @@ function createMachineAcceptanceChecklist({ job, settings, toolpath, productionG
       blocksProduction: true
     },
     {
+      id: "verify-download-integrity",
+      title: "核验下载包 SHA-256 和文件用途",
+      required: true,
+      status: "required",
+      file: "operator-download-checklist.md",
+      expectedEvidence: "按 operator-download-checklist.md 和 package-integrity.json 核对 toolpath.nc、air-run.nc、rotary-calibration-airrun.nc 的 SHA-256，并确认 camotics-preview.nc 等仿真/报告文件不会上机运行。",
+      blocksProduction: true
+    },
+    {
       id: "camotics-preview",
       title: "执行 CAMotics/展开预览复核",
       required: true,
@@ -6795,12 +6804,16 @@ function createMachineAcceptanceRecord(job, checklist, input) {
   const now = new Date().toISOString();
   const checklistSteps = Array.isArray(checklist?.steps) ? checklist.steps : [];
   const submittedSteps = Array.isArray(input?.steps) ? input.steps : [];
+  const downloadIntegrity = normalizeDownloadIntegrityEvidence(input?.downloadIntegrity);
   const submittedById = new Map(submittedSteps
     .filter((step) => step && typeof step === "object")
     .map((step) => [String(step.id ?? ""), step]));
   const steps = checklistSteps.map((template) => {
     const submitted = submittedById.get(String(template.id));
-    const passed = normalizeBoolean(submitted?.passed ?? submitted?.ok);
+    let passed = normalizeBoolean(submitted?.passed ?? submitted?.ok);
+    if (template.id === "verify-download-integrity" && passed === true) {
+      passed = downloadIntegrity.allRequiredHashesVerified && downloadIntegrity.neverMachineConfirmed;
+    }
     const status = passed === true
       ? "pass"
       : passed === false
@@ -6855,6 +6868,7 @@ function createMachineAcceptanceRecord(job, checklist, input) {
     fixtureType: String(input?.fixtureType ?? checklist?.operatorRecordTemplate?.fixtureType ?? "三轴控制器 + 旋转轴夹具").slice(0, 200),
     materialBatch: String(input?.materialBatch ?? "").slice(0, 200),
     programName: String(input?.programName ?? "toolpath.nc").slice(0, 200),
+    downloadIntegrity,
     airRunOk: normalizeBoolean(input?.airRunOk),
     softTrialOk: normalizeBoolean(input?.softTrialOk),
     formalTrialOk: normalizeBoolean(input?.formalTrialOk),
@@ -6866,6 +6880,37 @@ function createMachineAcceptanceRecord(job, checklist, input) {
     notes,
     attachments: normalizeAcceptanceAttachments(input?.attachments, input?.photoName),
     recommendations: createMachineAcceptanceRecommendations({ outcome, failedRequired, steps: allSteps, checklist })
+  };
+}
+
+function normalizeDownloadIntegrityEvidence(input) {
+  const files = Array.isArray(input?.files) ? input.files : [];
+  const normalizedFiles = files
+    .map((file) => ({
+      filename: String(file?.filename ?? "").slice(0, 160),
+      sha256: typeof file?.sha256 === "string" ? file.sha256.trim().toLowerCase().slice(0, 128) : null,
+      verified: Boolean(file?.verified),
+      machineUseClass: typeof file?.machineUseClass === "string" ? file.machineUseClass.slice(0, 80) : null,
+      note: typeof file?.note === "string" ? file.note.slice(0, 240) : null
+    }))
+    .filter((file) => file.filename);
+  const requiredFilenames = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc"];
+  const verifiedRequired = requiredFilenames.filter((filename) => normalizedFiles.some((file) => file.filename === filename && file.verified && /^[a-f0-9]{64}$/.test(file.sha256 ?? "")));
+  const neverMachineConfirmed = input?.neverMachineConfirmed === true
+    || normalizedFiles.some((file) => file.filename === "camotics-preview.nc" && file.verified && file.machineUseClass === "simulation-only-never-machine");
+  const allRequiredHashesVerified = requiredFilenames.every((filename) => verifiedRequired.includes(filename));
+  return {
+    schema: "hediao3d.download-integrity-evidence.v1",
+    packageIntegrityReviewed: Boolean(input?.packageIntegrityReviewed),
+    operatorChecklistReviewed: Boolean(input?.operatorChecklistReviewed),
+    allRequiredHashesVerified,
+    verifiedRequired,
+    missingRequired: requiredFilenames.filter((filename) => !verifiedRequired.includes(filename)),
+    neverMachineConfirmed,
+    files: normalizedFiles,
+    summary: allRequiredHashesVerified && neverMachineConfirmed
+      ? "关键 NC 文件 SHA-256 已核验，且不可上机文件用途已确认。"
+      : "下载包核验证据不完整。"
   };
 }
 
@@ -6887,6 +6932,9 @@ function createMachineAcceptanceRecommendations({ outcome, failedRequired, steps
   }
   if (steps.some((step) => step.id === "air-run" && step.status !== "pass")) {
     recommendations.push("离料空跑未通过前不要装料加工；先确认 X/Y旋转/Z 方向、安全高度和夹具干涉。");
+  }
+  if (steps.some((step) => step.id === "verify-download-integrity" && step.status !== "pass")) {
+    recommendations.push("先按 operator-download-checklist.md 核验 SHA-256 和文件用途，确认 camotics-preview.nc 等仿真文件不会上机。");
   }
   if (steps.some((step) => step.id === "soft-material-trial" && step.status !== "pass")) {
     recommendations.push("软材料或废料试雕未通过前，不要进入正式核胚试雕。");

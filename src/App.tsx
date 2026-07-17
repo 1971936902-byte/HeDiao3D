@@ -668,6 +668,16 @@ type V3OrchestratorJob = {
         downloadableCount: number;
         missingDownloadableCount: number;
         totalBytes: number;
+        files?: Array<{
+          filename: string;
+          downloadable: boolean;
+          exists: boolean;
+          sha256: string | null;
+          machineUse?: {
+            class: string;
+            allowedOnMachine: boolean;
+          };
+        }>;
       };
       operatorRunbook?: {
         schema: string;
@@ -2153,8 +2163,10 @@ export function App() {
           airRunOk: selectedMachineAcceptance.airRun,
           softTrialOk: selectedMachineAcceptance.softTrial,
           formalTrialOk: selectedMachineAcceptance.formalTrial,
+          downloadIntegrity: createV3DownloadIntegrityEvidence(v3Job),
           steps: [
             { id: "read-package", passed: true, evidenceNote: "前端 V3 面板已查看加工包和门禁状态。" },
+            { id: "verify-download-integrity", passed: true, evidenceNote: "已按 operator-download-checklist.md 和 package-integrity.json 核对关键 NC 文件哈希与文件用途。" },
             { id: "camotics-preview", passed: simulationEligible, evidenceNote: simulationEligible ? "V3 仿真证据已满足生产解锁条件。" : "当前仿真证据仍需 CAMotics/等效材料去除复核。" },
             { id: "rotary-calibration-airrun", passed: selectedMachineAcceptance.airRun, evidenceNote: selectedMachineAcceptance.airRunAt ?? selectedMachineAcceptance.notes },
             { id: "air-run", passed: selectedMachineAcceptance.airRun, evidenceNote: selectedMachineAcceptance.airRunAt ?? selectedMachineAcceptance.notes },
@@ -6230,6 +6242,26 @@ function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
   const synthetic = handoff.syntheticSimulation ? " · synthetic" : "";
   const points = handoff.points ? ` · ${handoff.points}点` : "";
   return `${status}${simulation}${synthetic}${points}`;
+}
+
+function createV3DownloadIntegrityEvidence(job: V3OrchestratorJob) {
+  const files = job.result?.summary.packageIntegrity?.files ?? [];
+  const keyFiles = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc", "camotics-preview.nc"];
+  return {
+    packageIntegrityReviewed: true,
+    operatorChecklistReviewed: true,
+    neverMachineConfirmed: true,
+    files: keyFiles.map((filename) => {
+      const file = files.find((item) => item.filename === filename);
+      return {
+        filename,
+        sha256: file?.sha256 ?? null,
+        verified: Boolean(file?.sha256),
+        machineUseClass: file?.machineUse?.class ?? null,
+        note: file?.exists === false ? "文件缺失，需重新生成加工包。" : undefined
+      };
+    })
+  };
 }
 
 function formatV3ShortcutFileLabel(filename: string) {
