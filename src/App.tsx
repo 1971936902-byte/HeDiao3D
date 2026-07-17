@@ -1067,6 +1067,7 @@ type V3NativeCamReadinessSummary = {
     bootstrap?: string;
     envTemplate?: string;
     checklist?: string;
+    realOutputCheck?: string;
     packageManifest?: string;
   };
   packageArtifacts?: {
@@ -5017,6 +5018,11 @@ export function App() {
                         {v3NativeCamReadiness.apiArtifacts?.checklist && (
                           <a href={v3NativeCamReadiness.apiArtifacts.checklist} download>
                             下载验收清单
+                          </a>
+                        )}
+                        {v3NativeCamReadiness.apiArtifacts?.realOutputCheck && (
+                          <a href={v3NativeCamReadiness.apiArtifacts.realOutputCheck} download>
+                            下载真实输出验收
                           </a>
                         )}
                         {v3NativeCamReadiness.apiArtifacts?.packageManifest && (

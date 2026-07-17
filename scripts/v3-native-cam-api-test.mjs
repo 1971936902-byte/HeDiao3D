@@ -18,7 +18,9 @@ async function main() {
   assert(run.summary.capabilityMatrix.some((item) => item.id === "camotics" && item.category === "simulation"), "CAMotics capability matrix should mark simulation role");
   assert(run.apiArtifacts?.bootstrap?.endsWith("native-cam-server-bootstrap.sh"), "native CAM summary should expose bootstrap artifact");
   assert(run.apiArtifacts?.envTemplate?.endsWith("native-cam-env.template"), "native CAM summary should expose env template artifact");
+  assert(run.apiArtifacts?.realOutputCheck?.endsWith("native-cam-real-output-check.sh"), "native CAM summary should expose real output check artifact");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-acceptance-checklist.md"), "native CAM summary should expose server package files");
+  assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM summary should expose real output check package file");
   assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
   assert(run.checks.some((check) => check.id === "opencamlib" && check.capabilities?.outputFormats?.includes("neutral-toolpath")), "OpenCAMLib public check should expose neutral toolpath capability");
 
@@ -39,6 +41,7 @@ async function main() {
   assert(artifact.summary?.integrationStrategy?.rolloutStages?.some((item) => item.includes("Linux CAM 服务器")), "full artifact should include rollout stages");
   assert(artifact.artifacts?.schema === "hediao3d.native-cam-server-package.v1", "full artifact should include native CAM server package manifest");
   assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-server-bootstrap.sh"), "full artifact should include bootstrap package entry");
+  assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "full artifact should include real output check package entry");
   assert(artifact.checks.some((check) => check.id === "camotics" && check.capabilities?.notEnoughFor?.includes("刀路生成")), "full artifact should state CAMotics does not generate toolpaths");
 
   const markdownResponse = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
@@ -55,8 +58,14 @@ async function main() {
   assert(envTemplate.includes("HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=false"), "native CAM env template should forbid synthetic CAMotics by default");
   const checklist = await fetchText(latest.latest.apiArtifacts.checklist);
   assert(checklist.includes("Production Boundary"), "native CAM checklist should include production boundary");
+  assert(checklist.includes("native-cam-real-output-check.sh"), "native CAM checklist should include real output check command");
+  const realOutputCheck = await fetchText(latest.latest.apiArtifacts.realOutputCheck);
+  assert(realOutputCheck.includes("handoffEvidence"), "real output check should parse handoffEvidence");
+  assert(realOutputCheck.includes("production-candidate"), "real output check should require production-candidate output");
+  assert(realOutputCheck.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true"), "real output check should run native adapter validation");
   const packageManifest = await getJson(latest.latest.apiArtifacts.packageManifest);
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");
+  assert(packageManifest.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM package manifest missing real output check");
 
   console.log(JSON.stringify({
     ok: true,
@@ -79,6 +88,7 @@ function validateSummary(summary, label) {
   assert(summary.apiArtifacts?.bootstrap, `${label} missing bootstrap artifact`);
   assert(summary.apiArtifacts?.envTemplate, `${label} missing env template artifact`);
   assert(summary.apiArtifacts?.checklist, `${label} missing checklist artifact`);
+  assert(summary.apiArtifacts?.realOutputCheck, `${label} missing real output check artifact`);
   assert(summary.apiArtifacts?.packageManifest, `${label} missing package manifest artifact`);
   assert(summary.packageArtifacts?.schema === "hediao3d.native-cam-server-package.v1", `${label} missing packageArtifacts summary`);
   const firstCheck = summary.checks[0] ?? {};

@@ -361,6 +361,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         filename: "native-cam-acceptance-checklist.md",
         role: "operator-checklist",
         description: "Linux CAM 服务器从安装、adapter 验证到小模型试算的验收清单。"
+      },
+      {
+        filename: "native-cam-real-output-check.sh",
+        role: "real-output-acceptance-script",
+        description: "在 Linux CAM 服务端执行真实 adapter 输出验收，解析 handoffEvidence 并阻止 fixture/synthetic/preview 误入生产证据。"
       }
     ],
     commands: [
@@ -368,13 +373,15 @@ function writeNativeCamServerPackageArtifacts(report) {
       "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
       "cp native-cam-env.template .env.cam",
       "npm run test:v3:native-cam",
-      "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters"
+      "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      "bash native-cam-real-output-check.sh"
     ],
     productionBoundary: report.summary.integrationStrategy.productionBoundary
   };
   writeFileSync(join(outputRoot, "native-cam-server-bootstrap.sh"), createNativeCamBootstrapShell(report), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-env.template"), createNativeCamEnvTemplate(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
+  writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
   return artifacts;
 }
@@ -489,6 +496,88 @@ HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=false
 `;
 }
 
+function createNativeCamRealOutputCheckShell(report) {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+# HeDiao3D V3 real native CAM output acceptance.
+# Run this on the Linux CAM server after installing FreeCAD/BlenderCAM/OpenCAMLib/CAMotics.
+# It checks adapter handoffEvidence so fixture/synthetic/preview outputs cannot be mistaken for production CAM.
+
+ROOT="\${ROOT:-$(pwd)}"
+OUT_DIR="\${V3_ADAPTER_VALIDATION_DIR:-$ROOT/public/orchestrator-adapter-validation/native-real-output-$(date -u +%Y%m%dT%H%M%SZ)}"
+STRICT="\${STRICT:-1}"
+EXPECT_PRODUCTION_CANDIDATE="\${EXPECT_PRODUCTION_CANDIDATE:-1}"
+
+echo "[HeDiao3D] Real native CAM output acceptance"
+echo "[HeDiao3D] Root: $ROOT"
+echo "[HeDiao3D] Output: $OUT_DIR"
+echo "[HeDiao3D] Generated package time: ${report.createdAt}"
+
+mkdir -p "$OUT_DIR"
+
+echo "[HeDiao3D] Step 1/2 native readiness"
+npm run test:v3:native-cam
+
+echo "[HeDiao3D] Step 2/2 external adapter validation with native commands"
+V3_ADAPTER_USE_NATIVE_COMMANDS=true V3_ADAPTER_VALIDATION_DIR="$OUT_DIR" npm run test:v3:external-adapters
+
+REPORT="$OUT_DIR/v3-external-adapter-validation.json"
+if [[ ! -s "$REPORT" ]]; then
+  echo "[HeDiao3D] Missing validation report: $REPORT" >&2
+  exit 2
+fi
+
+node - "$REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" <<'NODE'
+const { readFileSync } = require("fs");
+const [reportPath, strictValue, expectValue] = process.argv.slice(2);
+const strict = /^(1|true|yes|on)$/i.test(strictValue || "");
+const expectProductionCandidate = /^(1|true|yes|on)$/i.test(expectValue || "");
+const report = JSON.parse(readFileSync(reportPath, "utf8"));
+const adapters = Array.isArray(report.adapters) ? report.adapters : [];
+const rows = adapters.map((adapter) => ({
+  id: adapter.id,
+  status: adapter.report?.status ?? adapter.run?.status ?? "missing",
+  classification: adapter.handoffEvidence?.classification ?? "missing",
+  productionCandidate: Boolean(adapter.handoffEvidence?.productionCandidate),
+  fixture: Boolean(adapter.handoffEvidence?.fixture),
+  synthetic: Boolean(adapter.handoffEvidence?.synthetic),
+  previewScaffold: Boolean(adapter.handoffEvidence?.previewScaffold),
+  generatedByExternalCommand: Boolean(adapter.handoffEvidence?.generatedByExternalCommand)
+}));
+console.log(JSON.stringify({ reportPath, rows }, null, 2));
+
+const unsafe = rows.filter((row) =>
+  row.fixture ||
+  row.synthetic ||
+  row.previewScaffold ||
+  ["fixture-contract", "synthetic-contract", "preview-scaffold"].includes(row.classification)
+);
+const missing = rows.filter((row) => ["missing", "not-generated"].includes(row.classification));
+const candidates = rows.filter((row) => row.productionCandidate && row.classification === "production-candidate");
+
+if (unsafe.length) {
+  console.error("[HeDiao3D] Unsafe fixture/synthetic/preview handoff detected:", unsafe.map((row) => row.id).join(", "));
+}
+if (expectProductionCandidate && candidates.length === 0) {
+  console.error("[HeDiao3D] No production-candidate adapter output found.");
+}
+if (missing.length) {
+  console.error("[HeDiao3D] Some adapters did not generate real output:", missing.map((row) => row.id + ":" + row.classification).join(", "));
+}
+
+if (strict && (unsafe.length || (expectProductionCandidate && candidates.length === 0))) {
+  process.exit(3);
+}
+NODE
+
+echo "[HeDiao3D] Acceptance artifacts:"
+echo "- $REPORT"
+echo "- $OUT_DIR/v3-external-adapter-validation.md"
+echo "[HeDiao3D] If this script exits 0 with production-candidate output, continue with CAMotics import, V3 readiness, air-run and machine acceptance."
+`;
+}
+
 function createNativeCamAcceptanceChecklist(report) {
   const rows = report.checks.map((check) => `- [ ] ${check.name}: ${check.ready ? "已探测到，但仍需小模型验证" : check.missing.join("; ")}`);
   return `# HeDiao3D V3 Native CAM Server Acceptance Checklist
@@ -503,6 +592,7 @@ ${rows.join("\n")}
 
 - [ ] \`npm run test:v3:native-cam\`
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
+- [ ] \`bash native-cam-real-output-check.sh\`
 - [ ] \`npm run test:v3:freecad-external-handoff\` for 3-axis/regular-solid route
 - [ ] \`npm run test:v3:closed-neutral-handoff\` for OpenCAMLib neutral route
 - [ ] \`npm run test:v3:camotics-import\`

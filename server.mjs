@@ -2100,6 +2100,7 @@ function createNativeCamReadinessArtifactLinks(checkId) {
     bootstrap: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-bootstrap.sh`,
     envTemplate: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-env.template`,
     checklist: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-acceptance-checklist.md`,
+    realOutputCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-real-output-check.sh`,
     packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`
   };
 }
