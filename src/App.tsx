@@ -2113,11 +2113,16 @@ export function App() {
       byName.get("rotary-calibration-airrun.nc"),
       byName.get("air-run.nc"),
       byName.get("operator-runbook.md"),
+      byName.get("safe-trial-execution-plan.json"),
       byName.get("machining-package-index.json"),
       byName.get("cam-handoff-evidence.md"),
       byName.get("open-source-cam-execution-plan.json")
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
+  const v3SafeTrialPlanFile = useMemo(
+    () => findV3DeliveryFile(v3Job, "safe-trial-execution-plan.json"),
+    [v3Job]
+  );
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
   const v3EvidenceLoopSummary = useMemo(
     () => createV3EvidenceLoopSummary(v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance),
@@ -2125,7 +2130,7 @@ export function App() {
   );
   const v3TrialWorkflow = useMemo(
     () => createV3TrialWorkflowSummary({
-      hasModel: Boolean(aiMeshStlUrl),
+      hasModel: Boolean(aiMeshStlUrl || v3Job?.result),
       job: v3Job,
       checklist: v3DownloadChecklistSummary,
       acceptance: selectedMachineAcceptance
@@ -5256,6 +5261,27 @@ export function App() {
                     ))}
                   </div>
                 )}
+                {v3Job?.result?.summary.safeTrialExecutionPlan && (
+                  <div className="v3-trial-plan-card">
+                    <div>
+                      <strong>安全试雕执行计划</strong>
+                      <small>
+                        {v3Job.result.summary.safeTrialExecutionPlan.stepCount} 步
+                        {" · "}
+                        {v3Job.result.summary.safeTrialExecutionPlan.activeGate}
+                        {" · "}
+                        空跑 {v3Job.result.summary.safeTrialExecutionPlan.allowAirRun ? "可用" : "锁定"}
+                        {" · "}
+                        试雕NC {v3Job.result.summary.safeTrialExecutionPlan.allowTrialNc ? "可用" : "未放行"}
+                      </small>
+                    </div>
+                    {v3SafeTrialPlanFile?.url && (
+                      <a href={v3SafeTrialPlanFile.url} download>
+                        下载执行计划
+                      </a>
+                    )}
+                  </div>
+                )}
                 <div className="v3-trial-action-panel">
                   {v3TrialWorkflow.activeStep.id === "model" && (
                     <button className="primary-action package-action" type="button" onClick={() => setActiveStage("model")}>
@@ -7993,6 +8019,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "camotics-result-template.json") return "结果回填模板";
   if (filename === "camotics-linux-run.sh") return "Linux运行脚本";
   if (filename === "camotics-cli-package-report.json") return "运行包报告";
+  if (filename === "safe-trial-execution-plan.json") return "安全试雕执行计划";
   if (filename === "operator-download-checklist.md") return "下载核验清单";
   if (filename === "operator-runbook.md") return "操作员说明";
   if (filename === "machining-package-index.json") return "加工包索引";
