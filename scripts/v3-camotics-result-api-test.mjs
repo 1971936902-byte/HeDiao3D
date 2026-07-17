@@ -77,6 +77,7 @@ async function main() {
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.simulation?.engine === "camotics", "job summary should expose camotics simulation");
   assert(reloaded.result.summary.productionGate.simulationEvidence.productionUnlockEligible === true, "job summary production gate should expose imported evidence");
+  assert(reloaded.result.summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "material-removal-simulation" && item.status === "pass"), "job summary evidence dossier should expose passing material-removal item");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result.json" && file.exists), "delivery manifest should expose camotics result");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);

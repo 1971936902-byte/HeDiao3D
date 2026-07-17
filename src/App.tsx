@@ -820,11 +820,19 @@ type V3OrchestratorJob = {
       };
       productionEvidenceDossier?: {
         schema: string;
+        artifact?: string;
         status: string;
         passedCount: number;
         reviewCount: number;
         blockedCount: number;
         summary: string;
+        evidenceItems?: Array<{
+          id: string;
+          label: string;
+          status: "pass" | "review" | "block";
+          summary: string;
+          evidence: string[];
+        }>;
       };
       trialFeedbackTemplate?: {
         schema: string;

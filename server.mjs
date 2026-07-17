@@ -5989,6 +5989,28 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   };
 }
 
+function createProductionEvidenceDossierPublicSummary(dossier) {
+  if (!dossier) return null;
+  return {
+    schema: dossier.schema,
+    artifact: "production-evidence-dossier.json",
+    status: dossier.status,
+    passedCount: dossier.passedCount,
+    reviewCount: dossier.reviewCount,
+    blockedCount: dossier.blockedCount,
+    summary: dossier.summary,
+    evidenceItems: Array.isArray(dossier.evidenceItems)
+      ? dossier.evidenceItems.map((item) => ({
+        id: item.id,
+        label: item.label,
+        status: item.status,
+        summary: item.summary,
+        evidence: item.evidence
+      }))
+      : []
+  };
+}
+
 function createTrialFeedbackTemplate({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist }) {
   const issueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "旋转错位", "耗时异常", "刀路停顿"];
   return {
@@ -8066,14 +8088,7 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       }
     } : {}),
     ...(productionEvidenceDossier ? {
-      productionEvidenceDossier: {
-        schema: productionEvidenceDossier.schema,
-        artifact: "production-evidence-dossier.json",
-        status: productionEvidenceDossier.status,
-        passedCount: productionEvidenceDossier.passedCount,
-        reviewCount: productionEvidenceDossier.reviewCount,
-        blockedCount: productionEvidenceDossier.blockedCount
-      }
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(productionEvidenceDossier)
     } : {})
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-record.json"));
@@ -8174,14 +8189,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
       }
     } : {}),
     ...(productionEvidenceDossier ? {
-      productionEvidenceDossier: {
-        schema: productionEvidenceDossier.schema,
-        artifact: "production-evidence-dossier.json",
-        status: productionEvidenceDossier.status,
-        passedCount: productionEvidenceDossier.passedCount,
-        reviewCount: productionEvidenceDossier.reviewCount,
-        blockedCount: productionEvidenceDossier.blockedCount
-      }
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(productionEvidenceDossier)
     } : {})
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-record.json"));
@@ -8276,14 +8284,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     simulation: refreshed.simulationSummary,
     productionGate: refreshed.productionGate,
     productionUnlockMatrix: refreshed.productionUnlockMatrix,
-    productionEvidenceDossier: refreshed.productionEvidenceDossier ? {
-      schema: refreshed.productionEvidenceDossier.schema,
-      artifact: "production-evidence-dossier.json",
-      status: refreshed.productionEvidenceDossier.status,
-      passedCount: refreshed.productionEvidenceDossier.passedCount,
-      reviewCount: refreshed.productionEvidenceDossier.reviewCount,
-      blockedCount: refreshed.productionEvidenceDossier.blockedCount
-    } : job.result.summary?.productionEvidenceDossier,
+    productionEvidenceDossier: refreshed.productionEvidenceDossier ? createProductionEvidenceDossierPublicSummary(refreshed.productionEvidenceDossier) : job.result.summary?.productionEvidenceDossier,
     machiningPackageIndex: refreshed.machiningPackageIndex ?? job.result.summary?.machiningPackageIndex,
     deliveryManifest: refreshed.deliveryManifest ?? job.result.summary?.deliveryManifest,
     packageIntegrity: refreshed.packageIntegrity ? {
