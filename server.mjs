@@ -531,6 +531,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const diagnostics = await createOrchestratorDiagnosticsReport();
   const nativeCam = readLatestFromDirectory("public/native-cam-readiness", "native-cam-readiness.json", createNativeCamReadinessPublicSummary);
   const adapterValidation = readLatestFromDirectory("public/orchestrator-adapter-validation", "v3-external-adapter-validation.json", createAdapterValidationPublicSummary);
+  const nativeCamRealOutputAcceptance = readLatestFromDirectory("public/orchestrator-adapter-validation", "native-cam-real-output-acceptance.json", createNativeCamRealOutputAcceptancePublicSummary);
   const runbookResult = readLatestV3RunbookResultSummary();
   const externalHandoff = getLatestExternalHandoffJobSummary();
   const externalCamHandoffs = getExternalCamHandoffSummaries();
@@ -542,8 +543,8 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const latestMachineAcceptance = getLatestJobLogSummary("machine-acceptance-log.json", createMachineAcceptanceLogPublicSummary);
   const camServerConfig = createDeploymentCamServerConfigReport(reportId);
   await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -557,6 +558,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     nativeCam,
     camServerConfig,
     adapterValidation,
+    nativeCamRealOutputAcceptance,
     runbookResult,
     externalHandoff,
     externalCamHandoffs,
@@ -592,7 +594,7 @@ function createDeploymentCamServerConfigReport(reportId) {
   });
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -634,6 +636,17 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     if (!adapterValidation.overall.readyForProduction) {
       nextActions.push(adapterValidation.overall.note ?? "继续完成外部 CAM adapter 的真实输出验收。");
     }
+  }
+
+  if (!nativeCamRealOutputAcceptance) {
+    warnings.push("尚未运行 Native CAM 真实输出验收，当前无法证明外部 CAM 已产生 production-candidate 输出。");
+    nextActions.push("在 Linux CAM 服务器运行 bash native-cam-real-output-check.sh，并保留 native-cam-real-output-acceptance.json。");
+  } else if (nativeCamRealOutputAcceptance.level === "critical") {
+    blockers.push(`Native CAM 真实输出验收未通过：${nativeCamRealOutputAcceptance.blockers[0] ?? nativeCamRealOutputAcceptance.summary}`);
+    nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
+  } else if (nativeCamRealOutputAcceptance.level !== "ready") {
+    warnings.push(`Native CAM 真实输出验收需要复核：${nativeCamRealOutputAcceptance.summary}`);
+    nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
   }
 
   if (!runbookResult) {
@@ -755,7 +768,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -828,6 +841,24 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
         ? `计划 ${adapterValidation.overall.generatedPlans}/${adapterValidation.overall.adapterCount}，completed ${adapterValidation.overall.completedAdapters}，失败 ${adapterValidation.overall.failed}`
         : "尚未运行外部 Adapter 验证。",
       blocksProduction: !adapterValidation || adapterValidation.overall.failed > 0 || adapterValidation.overall.completedAdapters === 0
+    }),
+    createAcceptanceStep({
+      order: 4.5,
+      id: "native-cam-real-output-acceptance",
+      title: "Native CAM 真实输出验收",
+      status: !nativeCamRealOutputAcceptance
+        ? "pending"
+        : nativeCamRealOutputAcceptance.level === "ready"
+          ? "done"
+          : nativeCamRealOutputAcceptance.level === "critical"
+            ? "blocked"
+            : "pending",
+      command: "bash native-cam-real-output-check.sh",
+      evidence: ["native-cam-real-output-acceptance.json", "v3-external-adapter-validation.json", "adapter-report.json"],
+      detail: nativeCamRealOutputAcceptance
+        ? `${nativeCamRealOutputAcceptance.level} / productionCandidate=${nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${nativeCamRealOutputAcceptance.unsafeCount} / missing=${nativeCamRealOutputAcceptance.missingCount}`
+        : "尚未运行 Linux CAM 服务端真实输出验收脚本。",
+      blocksProduction: !nativeCamRealOutputAcceptance || nativeCamRealOutputAcceptance.level !== "ready"
     }),
     createAcceptanceStep({
       order: 5,
@@ -1295,6 +1326,38 @@ function readLatestFromDirectory(relativeRoot, filename, mapper) {
   }
 }
 
+function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) {
+  const adapters = Array.isArray(report.adapters) ? report.adapters : [];
+  const blockers = Array.isArray(report.blockers) ? report.blockers : [];
+  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+  return {
+    id: acceptanceId,
+    schema: report.schema ?? "hediao3d.native-cam-real-output-acceptance.v1",
+    createdAt: report.createdAt ?? null,
+    sourceReport: report.sourceReport ?? null,
+    level: report.level ?? (blockers.length ? "critical" : warnings.length ? "review" : "ready"),
+    summary: `productionCandidate=${Number(report.productionCandidateCount ?? 0)} / unsafe=${Number(report.unsafeCount ?? 0)} / missing=${Number(report.missingCount ?? 0)}`,
+    productionCandidateCount: Number(report.productionCandidateCount ?? 0),
+    unsafeCount: Number(report.unsafeCount ?? 0),
+    missingCount: Number(report.missingCount ?? 0),
+    strict: Boolean(report.strict),
+    expectProductionCandidate: Boolean(report.expectProductionCandidate),
+    blockers: blockers.slice(0, 8),
+    warnings: warnings.slice(0, 8),
+    nextActions: Array.isArray(report.nextActions) ? report.nextActions.slice(0, 8) : [],
+    adapters: adapters.slice(0, 8).map((adapter) => ({
+      id: adapter.id,
+      status: adapter.status ?? null,
+      classification: adapter.classification ?? "missing",
+      productionCandidate: Boolean(adapter.productionCandidate),
+      fixture: Boolean(adapter.fixture),
+      synthetic: Boolean(adapter.synthetic),
+      previewScaffold: Boolean(adapter.previewScaffold),
+      generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand)
+    }))
+  };
+}
+
 function getLatestV3RunbookResult(res) {
   return json(res, 200, { latest: readLatestV3RunbookResultSummary() });
 }
@@ -1459,6 +1522,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
       completedAdapters: report.adapterValidation.overall.completedAdapters,
       readyForProduction: report.adapterValidation.overall.readyForProduction
     } : null,
+    nativeCamRealOutputAcceptance: report.nativeCamRealOutputAcceptance ?? null,
     runbookResult: report.runbookResult ?? null,
     externalHandoff: report.externalHandoff ?? null,
     externalCamHandoffs: report.externalCamHandoffs ?? null,
@@ -1566,6 +1630,7 @@ function createV3ReadinessMarkdown(report) {
     `- Native CAM server package: ${report.nativeCam?.packageArtifacts?.files?.length ? report.nativeCam.packageArtifacts.files.map((file) => file.filename).join(", ") : "missing"}`,
     `- CAM server config: ${report.camServerConfig ? `${report.camServerConfig.status} / ${report.camServerConfig.selectedEngineName} / missing=${report.camServerConfig.missingRequired.length}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
+    `- Native CAM real output acceptance: ${report.nativeCamRealOutputAcceptance ? `${report.nativeCamRealOutputAcceptance.level} / productionCandidate=${report.nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${report.nativeCamRealOutputAcceptance.unsafeCount} / missing=${report.nativeCamRealOutputAcceptance.missingCount}` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / blocking=${report.runbookResult.blockingFailedCount ?? "unknown"} / identity=${report.runbookResult.identityValid ? "valid" : "invalid"} / productionSafe=${report.runbookResult.productionSafe ? "yes" : "no"} / report=${report.runbookResult.readinessReportId ?? "missing"}` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
     `- External CAM handoffs: ${report.externalCamHandoffs ? `${report.externalCamHandoffs.completedEngines.length}/${report.externalCamHandoffs.requiredEngines.length} engines (${report.externalCamHandoffs.completedEngines.join(", ") || "none"})` : "missing"}`,
