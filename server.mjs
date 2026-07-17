@@ -541,6 +541,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const externalCamHandoffs = getExternalCamHandoffSummaries();
   const neutralImport = readLatestFromDirectory("public/orchestrator-neutral-import", "neutral-import-contract.json", createNeutralImportContractPublicSummary);
   const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
+  const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
   const latestJob = getLatestOrchestratorJobSummary();
   const latestEvidenceDossier = getLatestProductionEvidenceDossierSummary();
   const latestTrialFeedback = getLatestJobLogSummary("trial-feedback-log.json", createTrialFeedbackLogPublicSummary);
@@ -567,6 +568,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     externalHandoff,
     externalCamHandoffs,
     neutralImport,
+    postprocessHandoffReadiness,
     camoticsImport,
     latestJob,
     latestTrialFeedback,
@@ -716,6 +718,17 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   }
 
   const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
+  const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
+  if (postprocessHandoffReadiness.status === "blocked") {
+    blockers.push(postprocessHandoffReadiness.summary);
+    nextActions.push(...postprocessHandoffReadiness.nextActions);
+  } else if (postprocessHandoffReadiness.status === "pending") {
+    warnings.push(postprocessHandoffReadiness.summary);
+    nextActions.push(...postprocessHandoffReadiness.nextActions);
+  } else if (postprocessHandoffReadiness.status === "review") {
+    warnings.push(postprocessHandoffReadiness.summary);
+    nextActions.push(...postprocessHandoffReadiness.nextActions);
+  }
   if (!camoticsImport) {
     const message = productionCamEvidence.required
       ? `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但尚未导入 CAMotics 材料去除仿真结果。`
@@ -809,6 +822,59 @@ function createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamReal
   return {
     required: reasons.length > 0,
     summary: reasons.join("；") || "none"
+  };
+}
+
+function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport }) {
+  const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
+  const nextActions = [];
+  const neutralReady = Boolean(neutralImport?.ok && neutralImport?.postprocessEligible && neutralImport?.synthetic === false);
+  const pointCount = Number(neutralImport?.pointCount ?? 0);
+  if (neutralReady) {
+    return {
+      schema: "hediao3d.v3-postprocess-handoff-readiness.v1",
+      status: pointCount > 0 ? "ready" : "review",
+      summary: pointCount > 0
+        ? `真实 neutral-toolpath 已通过导入校验，可进入 HeDiao3D Y/A 旋转夹具后处理（${pointCount} 点）。`
+        : "neutral-toolpath 已通过导入校验，但点数为 0 或未知，需复核后处理输入。",
+      required: productionCamEvidence.required,
+      source: "neutral-import",
+      productionCamEvidence: productionCamEvidence.summary,
+      neutralImportId: neutralImport.id ?? null,
+      pointCount,
+      nextActions: pointCount > 0
+        ? ["继续执行 CAMotics 材料去除仿真、离料空跑、软料试雕和机床验收。"]
+        : ["复核 neutral-import-contract.json 和 neutral-toolpath.json，确认 points[] 有效。"]
+    };
+  }
+
+  nextActions.push("运行 npm run test:v3:neutral-import，导入非 synthetic/fixture/preview 的 hediao3d.neutral-toolpath.v1。");
+  nextActions.push("确认外部 CAM 输出不是 raw G-code 直传，而是可由 HeDiao3D 自研 Y/A 旋转夹具后处理消费的中立刀位点。");
+
+  if (productionCamEvidence.required) {
+    return {
+      schema: "hediao3d.v3-postprocess-handoff-readiness.v1",
+      status: "blocked",
+      summary: `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但尚未证明刀路可进入 HeDiao3D 自研 Y/A 旋转夹具后处理。`,
+      required: true,
+      source: neutralImport ? "neutral-import-ineligible" : "missing-neutral-import",
+      productionCamEvidence: productionCamEvidence.summary,
+      neutralImportId: neutralImport?.id ?? null,
+      pointCount,
+      nextActions
+    };
+  }
+
+  return {
+    schema: "hediao3d.v3-postprocess-handoff-readiness.v1",
+    status: "pending",
+    summary: "尚未证明外部 CAM neutral 刀位点可进入 HeDiao3D 自研 Y/A 旋转夹具后处理。",
+    required: false,
+    source: neutralImport ? "neutral-import-ineligible" : "missing-neutral-import",
+    productionCamEvidence: productionCamEvidence.summary,
+    neutralImportId: neutralImport?.id ?? null,
+    pointCount,
+    nextActions
   };
 }
 
@@ -1580,6 +1646,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     externalHandoff: report.externalHandoff ?? null,
     externalCamHandoffs: report.externalCamHandoffs ?? null,
     neutralImport: report.neutralImport ?? null,
+    postprocessHandoffReadiness: report.postprocessHandoffReadiness ?? null,
     camoticsImport: report.camoticsImport ?? null,
     latestJob: report.latestJob,
     latestTrialFeedback: report.latestTrialFeedback ?? null,
@@ -1695,6 +1762,7 @@ function createV3ReadinessMarkdown(report) {
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
     `- External CAM handoffs: ${report.externalCamHandoffs ? `${report.externalCamHandoffs.completedEngines.length}/${report.externalCamHandoffs.requiredEngines.length} engines (${report.externalCamHandoffs.completedEngines.join(", ") || "none"})` : "missing"}`,
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
+    `- Postprocess handoff: ${report.postprocessHandoffReadiness ? `${report.postprocessHandoffReadiness.status} / required=${report.postprocessHandoffReadiness.required} / source=${report.postprocessHandoffReadiness.source}` : "missing"}`,
     `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
     `- Latest trial feedback: ${report.latestTrialFeedback ? `${report.latestTrialFeedback.recordCount} records / ${report.latestTrialFeedback.latestOutcome ?? "unknown"}` : "missing"}`,

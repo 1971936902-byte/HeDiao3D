@@ -71,6 +71,7 @@ async function main() {
   assert(markdown.includes("Native CAM server package"), "readiness markdown missing native CAM server package summary");
   assert(markdown.includes("Native CAM real output acceptance"), "readiness markdown missing native CAM real output acceptance summary");
   assert(markdown.includes("Adapter Handoff Audit"), "readiness markdown missing adapter handoff audit section");
+  assert(markdown.includes("Postprocess handoff"), "readiness markdown missing postprocess handoff summary");
   assert(markdown.includes("Latest trial feedback"), "readiness markdown missing trial feedback summary");
   assert(markdown.includes("Latest machine acceptance"), "readiness markdown missing machine acceptance summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
@@ -174,6 +175,12 @@ function validateReadiness(report, label) {
   if (report.neutralImport) {
     assert(report.neutralImport.schema === "hediao3d.neutral-import-contract.v1", `${label} neutralImport schema mismatch`);
     assert(typeof report.neutralImport.postprocessEligible === "boolean", `${label} neutralImport eligibility missing`);
+  }
+  assert(Object.hasOwn(report, "postprocessHandoffReadiness"), `${label} missing postprocessHandoffReadiness field`);
+  if (report.postprocessHandoffReadiness) {
+    assert(report.postprocessHandoffReadiness.schema === "hediao3d.v3-postprocess-handoff-readiness.v1", `${label} postprocess handoff schema mismatch`);
+    assert(["ready", "review", "pending", "blocked"].includes(report.postprocessHandoffReadiness.status), `${label} postprocess handoff status mismatch`);
+    assert(typeof report.postprocessHandoffReadiness.required === "boolean", `${label} postprocess handoff required flag missing`);
   }
   assert(Object.hasOwn(report, "camoticsImport"), `${label} missing camoticsImport field`);
   if (report.camoticsImport) {
