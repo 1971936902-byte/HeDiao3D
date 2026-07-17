@@ -797,6 +797,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   } else if (latestTrialFeedback.latestOutcome === "failed") {
     blockers.push("最近试雕反馈为 failed，需先修正工艺参数并重新试雕。");
     nextActions.push("查看 trial-feedback-log.json 和 process-optimization-plan.json，按建议重新生成刀路。");
+  } else if (latestTrialFeedback.latestOutcome === "success" && latestTrialFeedback.latestDownloadIntegrityBound !== "matched") {
+    warnings.push("最近试雕反馈为 success，但未绑定当前下载包哈希，暂不能作为生产放行证据。");
+    nextActions.push("重新下载当前安全试雕包，按 operator-download-checklist.md 核验 SHA-256 后再回填试雕反馈。");
   } else if (latestTrialFeedback.latestOutcome !== "success") {
     warnings.push(`最近试雕反馈为 ${latestTrialFeedback.latestOutcome ?? "unknown"}，生产放行前仍需复核。`);
     nextActions.push("将试雕问题闭环到参数优化后，再回填 success 试雕记录。");
@@ -1158,15 +1161,15 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
         ? "pending"
         : latestTrialFeedback.latestOutcome === "failed"
           ? "blocked"
-          : latestTrialFeedback.latestOutcome === "success"
+          : latestTrialFeedback.latestOutcome === "success" && latestTrialFeedback.latestDownloadIntegrityBound === "matched"
             ? "done"
             : "pending",
       command: "在 V3 面板填写试雕反馈，或 POST /api/orchestrator/jobs/:id/trial-feedback",
       evidence: ["trial-feedback-log.json", "trial-feedback-record.json", "process-optimization-plan.json"],
       detail: latestTrialFeedback
-        ? `${latestTrialFeedback.recordCount} 条 / 最新 ${latestTrialFeedback.latestOutcome ?? "unknown"} / ${latestTrialFeedback.latestIssues?.length ?? 0} 个问题`
+        ? `${latestTrialFeedback.recordCount} 条 / 最新 ${latestTrialFeedback.latestOutcome ?? "unknown"} / ${latestTrialFeedback.latestIssues?.length ?? 0} 个问题 / 下载包绑定 ${latestTrialFeedback.latestDownloadIntegrityBound ?? "missing"}`
         : "尚未回填真实离料空跑/软料试雕反馈。",
-      blocksProduction: !latestTrialFeedback || latestTrialFeedback.latestOutcome !== "success"
+      blocksProduction: !latestTrialFeedback || latestTrialFeedback.latestOutcome !== "success" || latestTrialFeedback.latestDownloadIntegrityBound !== "matched"
     }),
     createAcceptanceStep({
       order: 16,
@@ -1358,6 +1361,9 @@ function createProductionEvidenceCrossChecksFromArtifacts(workDir) {
     machineAcceptancePassed: Boolean(machineAcceptanceLog?.latestOutcome === "success" && machineAcceptanceLog?.allRequiredPassed),
     machineAcceptanceIntegrityBound: Boolean(machineAcceptanceLog?.latestRecord?.integrity?.packageBindingStatus === "matched" || machineAcceptanceLog?.latestIntegrityBound),
     trialFeedbackRecords: Number(trialFeedbackLog?.recordCount ?? 0),
+    latestTrialFeedbackOutcome: trialFeedbackLog?.latestOutcome ?? null,
+    trialFeedbackPassed: Boolean(trialFeedbackLog?.latestOutcome === "success" && trialFeedbackLog?.records?.[0]?.downloadIntegrity?.packageBinding?.status === "matched"),
+    trialFeedbackIntegrityBound: trialFeedbackLog?.records?.[0]?.downloadIntegrity?.packageBinding?.status === "matched",
     optimizationStatus: optimizationPlan?.status ?? null
   };
 }
@@ -1380,6 +1386,9 @@ function createProductionEvidenceCrossChecksSummary(crossChecks) {
     machineAcceptancePassed: Boolean(crossChecks.machineAcceptancePassed),
     machineAcceptanceIntegrityBound: Boolean(crossChecks.machineAcceptanceIntegrityBound),
     trialFeedbackRecords: Number(crossChecks.trialFeedbackRecords ?? 0),
+    latestTrialFeedbackOutcome: crossChecks.latestTrialFeedbackOutcome ?? null,
+    trialFeedbackPassed: Boolean(crossChecks.trialFeedbackPassed),
+    trialFeedbackIntegrityBound: Boolean(crossChecks.trialFeedbackIntegrityBound),
     optimizationStatus: crossChecks.optimizationStatus ?? null
   };
 }
@@ -1393,6 +1402,7 @@ function formatProductionEvidenceCrossChecksForReadiness(crossChecks) {
     `camoticsMotion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"}`,
     `nc=${crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "ready" : "review"}`,
     `machine=${crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "accepted" : "locked"}`,
+    `trial=${crossChecks.trialFeedbackPassed && crossChecks.trialFeedbackIntegrityBound ? "bound-success" : "locked"}`,
     `trialRecords=${crossChecks.trialFeedbackRecords ?? 0}`
   ].join(" / ");
 }
@@ -1425,6 +1435,7 @@ function createJobLogSummaryFromJob(job, filename, summarizer) {
 }
 
 function createTrialFeedbackLogPublicSummary(log, job) {
+  const latestRecord = Array.isArray(log.records) ? log.records[0] : null;
   return {
     schema: log.schema ?? "unknown",
     jobId: log.jobId ?? job.id,
@@ -1433,7 +1444,9 @@ function createTrialFeedbackLogPublicSummary(log, job) {
     recordCount: Number(log.recordCount ?? (Array.isArray(log.records) ? log.records.length : 0)),
     latestRecordId: log.latestRecordId ?? null,
     latestOutcome: log.latestOutcome ?? null,
-    latestIssues: Array.isArray(log.records?.[0]?.issues) ? log.records[0].issues.slice(0, 8) : [],
+    latestIssues: Array.isArray(latestRecord?.issues) ? latestRecord.issues.slice(0, 8) : [],
+    latestDownloadIntegrityBound: log.latestDownloadIntegrityBound ?? latestRecord?.downloadIntegrity?.packageBinding?.status ?? null,
+    latestAllRequiredHashesVerified: Boolean(log.latestAllRequiredHashesVerified ?? latestRecord?.downloadIntegrity?.allRequiredHashesVerified),
     artifact: publicArtifactUrl(log.jobId ?? job.id, "trial-feedback-log.json")
   };
 }
@@ -6380,8 +6393,13 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     || existsSync(join(job.workDir, "neutral-toolpath.json"))
   );
   const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
+  const latestTrialFeedbackRecord = Array.isArray(trialFeedbackLog?.records) ? trialFeedbackLog.records[0] : null;
   const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
   const machineAcceptanceIntegrityBound = latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched";
+  const trialFeedbackIntegrityBound = latestTrialFeedbackRecord?.downloadIntegrity?.packageBinding?.status === "matched";
+  const trialFeedbackPassed = trialFeedbackLog?.recordCount > 0
+    && trialFeedbackLog.latestOutcome === "success"
+    && trialFeedbackIntegrityBound;
   const machineAcceptancePassed = machineAcceptanceLog?.recordCount > 0
     && machineAcceptanceLog.latestOutcome === "success"
     && machineAcceptanceLog.latestAllRequiredPassed === true
@@ -6464,11 +6482,11 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       id: "trial-feedback",
       label: "试雕反馈",
       status: trialFeedbackLog?.recordCount > 0
-        ? trialFeedbackLog.latestOutcome === "success" ? "pass" : "review"
+        ? trialFeedbackPassed ? "pass" : "review"
         : "review",
       evidence: ["trial-feedback-template.json", "trial-feedback-log.json", "trial-feedback-record.json"],
       summary: trialFeedbackLog?.recordCount > 0
-        ? `已回填 ${trialFeedbackLog.recordCount} 条试雕反馈，最新结论 ${trialFeedbackLog.latestOutcome}。`
+        ? `已回填 ${trialFeedbackLog.recordCount} 条试雕反馈，最新结论 ${trialFeedbackLog.latestOutcome}，下载包绑定${trialFeedbackIntegrityBound ? "已匹配" : "未匹配"}。`
         : "尚未回填真实空跑/试雕反馈。"
     },
     {
@@ -6531,6 +6549,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       machineAcceptancePassed,
       machineAcceptanceIntegrityBound,
       trialFeedbackRecords: trialFeedbackLog?.recordCount ?? 0,
+      latestTrialFeedbackOutcome: trialFeedbackLog?.latestOutcome ?? null,
+      trialFeedbackPassed,
+      trialFeedbackIntegrityBound,
       optimizationStatus: processOptimizationPlan?.status ?? null
     },
     requiredActions: dedupeStrings([
@@ -8799,7 +8820,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
 
   const input = await readJson(req);
-  const record = createTrialFeedbackRecord(job, input);
+  const packageIntegrity = readJsonFile(join(workDir, "package-integrity.json"));
+  const record = createTrialFeedbackRecord(job, input, packageIntegrity);
   const optimizationPlan = createProcessOptimizationPlan(job, record);
   const refreshedEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
     trialFeedbackLog: null,
@@ -8821,6 +8843,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
     recordCount: records.length + 1,
     latestRecordId: record.id,
     latestOutcome: record.outcome,
+    latestDownloadIntegrityBound: record.downloadIntegrity?.packageBinding?.status ?? null,
+    latestAllRequiredHashesVerified: Boolean(record.downloadIntegrity?.allRequiredHashesVerified),
     records: [record, ...records].slice(0, 80)
   };
   const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
@@ -8853,6 +8877,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       recordCount: updatedLog.recordCount,
       latestOutcome: record.outcome,
       latestRecordId: record.id,
+      latestDownloadIntegrityBound: record.downloadIntegrity?.packageBinding?.status ?? null,
+      latestAllRequiredHashesVerified: Boolean(record.downloadIntegrity?.allRequiredHashesVerified),
       recommendations: record.recommendations
     },
     processOptimizationPlan: {
@@ -10127,11 +10153,12 @@ function createMachineAcceptanceRecommendations({ outcome, failedRequired, steps
   return dedupeStrings(recommendations);
 }
 
-function createTrialFeedbackRecord(job, input) {
+function createTrialFeedbackRecord(job, input, packageIntegrity = null) {
   const summary = job.result?.summary ?? {};
   const now = new Date().toISOString();
   const settings = input?.settings && typeof input.settings === "object" ? input.settings : null;
   const outcome = ["success", "review", "failed"].includes(input?.outcome) ? input.outcome : "review";
+  const downloadIntegrity = normalizeDownloadIntegrityEvidence(input?.downloadIntegrity, packageIntegrity);
   const actualMinutes = normalizePositiveNumber(input?.actualMinutes);
   const estimatedMinutes = normalizePositiveNumber(input?.estimatedMinutes ?? summary.estimatedMinutes);
   const timeRatio = actualMinutes && estimatedMinutes ? actualMinutes / estimatedMinutes : null;
@@ -10161,6 +10188,7 @@ function createTrialFeedbackRecord(job, input) {
     notes,
     photoName,
     photoAttached,
+    downloadIntegrity,
     settingsHash,
     packageLevel: summary.productionGate?.level ?? summary.deliveryManifest?.packageLevel ?? null,
     resultEngine: job.result?.engine ?? null,

@@ -1528,6 +1528,8 @@ type V3ReadinessSummary = {
     latestRecordId: string | null;
     latestOutcome: MachineFeedback["outcome"] | string | null;
     latestIssues: string[];
+    latestDownloadIntegrityBound?: string | null;
+    latestAllRequiredHashesVerified?: boolean;
     artifact: string;
   } | null;
   latestMachineAcceptance: {
@@ -3252,6 +3254,7 @@ export function App() {
           notes: feedback.notes,
           photoName: feedback.photoName,
           photoAttached: Boolean(feedback.photoUrl),
+          downloadIntegrity: createV3DownloadIntegrityEvidence(v3Job),
           settings: feedback.settings
         })
       });
@@ -5280,6 +5283,7 @@ export function App() {
                   <small className={v3Readiness.latestTrialFeedback ? v3Readiness.latestTrialFeedback.latestOutcome === "success" ? "v3-inline-ok" : v3Readiness.latestTrialFeedback.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     最新试雕反馈：{v3Readiness.latestTrialFeedback ? `${v3Readiness.latestTrialFeedback.recordCount} 条 · ${v3Readiness.latestTrialFeedback.latestOutcome ?? "-"}` : "未回填"}
                     {v3Readiness.latestTrialFeedback?.latestIssues?.length ? ` · ${v3Readiness.latestTrialFeedback.latestIssues.join("、")}` : ""}
+                    {v3Readiness.latestTrialFeedback ? ` · 包绑定 ${v3Readiness.latestTrialFeedback.latestDownloadIntegrityBound ?? "missing"}` : ""}
                   </small>
                   <small className={v3Readiness.latestMachineAcceptance ? v3Readiness.latestMachineAcceptance.latestAllRequiredPassed ? "v3-inline-ok" : v3Readiness.latestMachineAcceptance.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     最新机床验收：{v3Readiness.latestMachineAcceptance ? `${v3Readiness.latestMachineAcceptance.recordCount} 条 · ${v3Readiness.latestMachineAcceptance.latestOutcome ?? "-"}` : "未回填"}

@@ -51,6 +51,29 @@ async function main() {
   });
   const job = await waitForJob(created.id);
   assert(job.status === "completed", `job did not complete: ${job.status}`);
+  const initialPackageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  const mismatchedDownloadIntegrity = createDownloadIntegrityEvidence(initialPackageIntegrity, { mismatch: true });
+  const matchedDownloadIntegrity = createDownloadIntegrityEvidence(initialPackageIntegrity);
+
+  const mismatchedSuccess = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
+    id: "trial-feedback-api-test-mismatch",
+    outcome: "success",
+    phase: "soft-trial",
+    machineName: "三轴控制器+Y轴旋转夹具",
+    toolName: "4mm 25度平底尖刀",
+    materialName: "软料试雕",
+    estimatedMinutes: job.result.summary.estimatedMinutes,
+    actualMinutes: Number(job.result.summary.estimatedMinutes ?? 1),
+    issues: [],
+    notes: "API test feedback: intentionally mismatched package hash.",
+    downloadIntegrity: mismatchedDownloadIntegrity,
+    settings
+  });
+
+  assert(mismatchedSuccess.ok === true, "mismatched feedback API did not return ok");
+  assert(mismatchedSuccess.record.downloadIntegrity?.packageBinding?.status === "mismatch", "mismatched feedback should record package binding mismatch");
+  assert(mismatchedSuccess.productionEvidenceDossier?.crossChecks?.trialFeedbackIntegrityBound === false, "mismatched feedback must not bind trial feedback evidence");
+  assert(mismatchedSuccess.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "trial-feedback" && item.status === "review"), "mismatched success feedback must remain review evidence");
 
   const feedback = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
     id: "trial-feedback-api-test",
@@ -65,6 +88,7 @@ async function main() {
     notes: "API test feedback: rotary mismatch and shallow detail.",
     photoName: "trial-feedback-api-test.jpg",
     photoAttached: true,
+    downloadIntegrity: matchedDownloadIntegrity,
     settings
   });
 
@@ -76,28 +100,49 @@ async function main() {
   assert(feedback.optimizationPlan.actions?.some((action) => action.id === "rotary-misalignment"), "optimization plan should include rotary action");
   assert(feedback.optimizationPlan.nextRunProfile?.requiresRegeneration === true, "optimization plan should require regeneration");
   assert(feedback.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "feedback response missing evidence dossier");
-  assert(feedback.productionEvidenceDossier.crossChecks?.trialFeedbackRecords >= 1, "evidence dossier should count feedback records");
+  assert(feedback.productionEvidenceDossier.crossChecks?.trialFeedbackRecords >= 2, "evidence dossier should count feedback records");
+  assert(feedback.record.downloadIntegrity?.packageBinding?.status === "matched", "review feedback should bind current package");
+
+  const matchedSuccess = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
+    id: "trial-feedback-api-test-success",
+    outcome: "success",
+    phase: "soft-trial",
+    machineName: "三轴控制器+Y轴旋转夹具",
+    toolName: "4mm 25度平底尖刀",
+    materialName: "软料试雕",
+    estimatedMinutes: job.result.summary.estimatedMinutes,
+    actualMinutes: Number(job.result.summary.estimatedMinutes ?? 1),
+    issues: [],
+    notes: "API test feedback: package-bound successful soft trial.",
+    downloadIntegrity: matchedDownloadIntegrity,
+    settings
+  });
+
+  assert(matchedSuccess.record.downloadIntegrity?.packageBinding?.status === "matched", "success feedback should bind current package");
+  assert(matchedSuccess.productionEvidenceDossier?.crossChecks?.trialFeedbackIntegrityBound === true, "matched success feedback should bind trial feedback evidence");
+  assert(matchedSuccess.productionEvidenceDossier?.crossChecks?.trialFeedbackPassed === true, "matched success feedback should pass trial feedback evidence");
+  assert(matchedSuccess.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "trial-feedback" && item.status === "pass"), "matched success feedback should pass dossier trial-feedback item");
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.trialFeedbackLog?.schema === "hediao3d.trial-feedback-log.v1", "job summary missing feedback log");
-  assert(reloaded.result.summary.trialFeedbackLog.recordCount >= 1, "job summary feedback count missing");
+  assert(reloaded.result.summary.trialFeedbackLog.recordCount >= 3, "job summary feedback count missing");
+  assert(reloaded.result.summary.trialFeedbackLog.latestDownloadIntegrityBound === "matched", "job summary should expose latest feedback package binding");
   assert(reloaded.result?.summary?.processOptimizationPlan?.schema === "hediao3d.process-optimization-plan.v1", "job summary missing optimization plan");
-  assert(reloaded.result.summary.processOptimizationPlan.actionCount >= 1, "job summary optimization action count missing");
   assert(reloaded.result?.summary?.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "job summary missing evidence dossier");
 
   const recordArtifact = await getArtifactJson(job.id, "trial-feedback-record.json");
-  assert(recordArtifact.id === feedback.record.id, "record artifact id mismatch");
-  assert(recordArtifact.photoAttached === true, "record should preserve photoAttached");
+  assert(recordArtifact.id === matchedSuccess.record.id, "record artifact id mismatch");
+  assert(recordArtifact.downloadIntegrity?.packageBinding?.status === "matched", "record artifact should preserve download integrity");
   assert(!("photoUrl" in recordArtifact), "record artifact must not store photo data URLs");
 
   const logArtifact = await getArtifactJson(job.id, "trial-feedback-log.json");
   assert(logArtifact.records?.some((record) => record.id === feedback.record.id), "log artifact missing record");
+  assert(logArtifact.latestDownloadIntegrityBound === "matched", "log artifact should expose latest package binding");
   const optimizationArtifact = await getArtifactJson(job.id, "process-optimization-plan.json");
-  assert(optimizationArtifact.actions?.some((action) => action.id === "under-cut-detail-loss"), "optimization artifact missing under-cut action");
-  assert(optimizationArtifact.nextRunProfile?.settingsPatch?.stepoverMm, "optimization artifact should suggest stepover patch");
+  assert(optimizationArtifact.status === "candidate-success-profile", "latest success feedback should promote candidate profile");
   const dossierArtifact = await getArtifactJson(job.id, "production-evidence-dossier.json");
-  assert(dossierArtifact.evidenceItems?.some((item) => item.id === "trial-feedback" && item.summary.includes("1 条")), "dossier missing feedback evidence item");
-  assert(dossierArtifact.missingEvidence?.some((item) => item.id === "process-optimization"), "dossier should still require process optimization review");
+  assert(dossierArtifact.evidenceItems?.some((item) => item.id === "trial-feedback" && item.status === "pass" && item.summary.includes("3 条")), "dossier missing feedback evidence item");
+  assert(dossierArtifact.crossChecks?.trialFeedbackIntegrityBound === true, "dossier should expose feedback package binding");
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.some((file) => file.filename === "trial-feedback-record.json" && file.downloadable), "delivery manifest should expose trial feedback record");
   assert(deliveryManifest.files?.some((file) => file.filename === "trial-feedback-log.json" && file.downloadable), "delivery manifest should expose trial feedback log");
@@ -110,10 +155,31 @@ async function main() {
     ok: true,
     jobId: job.id,
     recordId: feedback.record.id,
-    recordCount: feedback.log.recordCount,
+    recordCount: matchedSuccess.log.recordCount,
     recommendationCount: feedback.record.recommendations.length,
-    optimizationActions: feedback.optimizationPlan.actions.length
+    optimizationActions: feedback.optimizationPlan.actions.length,
+    latestTrialFeedbackIntegrity: matchedSuccess.record.downloadIntegrity.packageBinding.status
   }, null, 2));
+}
+
+function createDownloadIntegrityEvidence(packageIntegrity, options = {}) {
+  const keyFiles = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc", "camotics-preview.nc"];
+  return {
+    packageIntegrityReviewed: true,
+    operatorChecklistReviewed: true,
+    neverMachineConfirmed: true,
+    files: keyFiles.map((filename, index) => {
+      const file = packageIntegrity.files?.find((item) => item.filename === filename);
+      return {
+        filename,
+        sha256: options.mismatch && index === 0
+          ? "0".repeat(64)
+          : file?.sha256 ?? null,
+        verified: Boolean(file?.sha256),
+        machineUseClass: file?.machineUse?.class ?? null
+      };
+    })
+  };
 }
 
 async function waitForJob(jobId) {
