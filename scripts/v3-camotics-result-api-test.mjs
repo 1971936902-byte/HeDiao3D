@@ -94,14 +94,21 @@ async function main() {
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.machineContextStatus === "matched", "package index should expose CAMotics machine context");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result.json" && file.exists), "delivery manifest should expose camotics result");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.exists), "delivery manifest should expose local validation report");
+  assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-import.json" && file.exists), "delivery manifest should expose CAMotics import audit");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.sha256), "package integrity should hash local validation report");
+  assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-import.json" && file.sha256), "package integrity should hash CAMotics import audit");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "next-action-checklist.md" && file.sha256), "package integrity should hash refreshed next action checklist");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
   const localValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-local-validation.json`);
+  const importAuditArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   assert(localValidationArtifact.productionEvidenceEligible === true, "local validation artifact should preserve production evidence eligibility");
   assert(localValidationArtifact.importedVia === "api-camotics-result", "local validation artifact should record API import");
+  assert(importAuditArtifact.schema === "hediao3d.camotics-result-import-audit.v1", "import audit schema mismatch");
+  assert(importAuditArtifact.binding?.preferredGcode?.status === "matched", "import audit should bind preferred G-code hash");
+  assert(importAuditArtifact.binding?.camoticsCliRunPackage?.status === "matched", "import audit should bind CAMotics run package hash");
+  assert(importAuditArtifact.localValidation?.productionEvidenceEligible === true, "import audit should summarize local validation");
   assert(nextActionChecklist.includes("## 证据状态"), "next action checklist should be refreshed with evidence status");
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next action checklist should show imported CAMotics evidence level");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
@@ -122,11 +129,16 @@ async function main() {
   });
   assert(zipImport.ok === true, "zip import should succeed");
   assert(zipImport.adapterReport?.importBundle?.zipBundle === "imported-camotics-result-bundle.zip", "zip import should preserve source bundle artifact");
+  assert(zipImport.adapterReport?.importBundle?.importAudit === "camotics-result-import.json", "zip import should expose import audit artifact");
   assert(zipImport.adapterReport?.localValidation?.productionEvidenceEligible === true, "zip import should expose local validation");
   assert(zipImport.simulationEvidence?.productionUnlockEligible === true, "zip import should remain production evidence eligible");
   const zipReloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(zipReloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "imported-camotics-result-bundle.zip" && file.exists), "delivery manifest should expose imported CAMotics zip bundle");
+  assert(zipReloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-import.json" && file.exists), "delivery manifest should keep exposing CAMotics import audit after zip import");
   assert(zipReloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "imported-camotics-result-bundle.zip" && file.sha256), "package integrity should hash imported CAMotics zip bundle");
+  const zipImportAuditArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(zipImportAuditArtifact.zipBundle === "imported-camotics-result-bundle.zip", "zip import audit should record source bundle");
+  assert(zipImportAuditArtifact.zipEntries?.some((entry) => /camotics-result\.json$/.test(entry.name)), "zip import audit should record result entry");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256),

@@ -9864,6 +9864,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-job.json", "CAMotics Adapter 任务", "report", existsSync(join(job.workDir, "camotics-job.json")), "CAMotics adapter 的独立输入快照。"),
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
+    createDeliveryFile(job.id, "camotics-result-import.json", "CAMotics结果导入审计", "report", existsSync(join(job.workDir, "camotics-result-import.json")), "记录 Linux CAMotics 回填包的来源、ZIP 条目、输入哈希绑定和本地校验摘要。"),
     createDeliveryFile(job.id, "imported-camotics-result-bundle.zip", "CAMotics结果导入原包", "report", existsSync(join(job.workDir, "imported-camotics-result-bundle.zip")), "从 Linux CAM 服务器回传的一次性结果 ZIP 原件，用于审计回填来源。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
@@ -10169,6 +10170,7 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   const evidenceFiles = [
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
+    createDeliveryFile(job.id, "camotics-result-import.json", "CAMotics结果导入审计", "report", existsSync(join(job.workDir, "camotics-result-import.json")), "记录 Linux CAMotics 回填包的来源、ZIP 条目、输入哈希绑定和本地校验摘要。"),
     createDeliveryFile(job.id, "imported-camotics-result-bundle.zip", "CAMotics结果导入原包", "report", existsSync(join(job.workDir, "imported-camotics-result-bundle.zip")), "从 Linux CAM 服务器回传的一次性结果 ZIP 原件，用于审计回填来源。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
@@ -10922,7 +10924,8 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     screenshot: importBundle.screenshotFilename,
     materialMesh: importBundle.materialMeshFilename,
     localValidation: importBundle.localValidationFilename,
-    zipBundle: importBundle.zipBundleFilename
+    zipBundle: importBundle.zipBundleFilename,
+    importAudit: importBundle.importAuditFilename
   };
   adapterReport.localValidation = importBundle.localValidation
     ? {
@@ -10971,6 +10974,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
   };
   for (const filename of [
     "imported-camotics-result.json",
+    "camotics-result-import.json",
     "imported-camotics-result-bundle.zip",
     "camotics-adapter-report.json",
     "camotics-result-local-validation.json",
@@ -11595,7 +11599,84 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
   if (localValidation) {
     await writeFile(join(workDir, localValidationFilename), JSON.stringify(localValidation, null, 2), "utf8");
   }
-  return { resultPath, screenshotFilename, materialMeshFilename, localValidationFilename, localValidation, zipBundleFilename };
+  const importAudit = createCamoticsResultImportAudit({
+    workDir,
+    input,
+    result,
+    localValidation,
+    zipBundle,
+    screenshotFilename,
+    materialMeshFilename,
+    zipBundleFilename
+  });
+  const importAuditFilename = "camotics-result-import.json";
+  await writeFile(join(workDir, importAuditFilename), JSON.stringify(importAudit, null, 2), "utf8");
+  return { resultPath, screenshotFilename, materialMeshFilename, localValidationFilename, localValidation, zipBundleFilename, importAuditFilename, importAudit };
+}
+
+function createCamoticsResultImportAudit({ workDir, input, result, localValidation, zipBundle, screenshotFilename, materialMeshFilename, zipBundleFilename }) {
+  const previewPath = join(workDir, "camotics-preview.nc");
+  const runPackagePath = join(workDir, "camotics-cli-run-package.json");
+  const expectedPreviewSha256 = existsSync(previewPath) ? sha256File(previewPath) : null;
+  const expectedRunPackageSha256 = existsSync(runPackagePath) ? sha256File(runPackagePath) : null;
+  const submittedPreviewSha256 = typeof result?.inputs?.preferredGcodeSha256 === "string" ? result.inputs.preferredGcodeSha256.toLowerCase() : null;
+  const submittedRunPackageSha256 = typeof result?.inputs?.camoticsCliRunPackageSha256 === "string" ? result.inputs.camoticsCliRunPackageSha256.toLowerCase() : null;
+  const previewBindingStatus = expectedPreviewSha256 && submittedPreviewSha256 && expectedPreviewSha256 === submittedPreviewSha256 ? "matched" : "mismatch";
+  const runPackageBindingStatus = expectedRunPackageSha256 && submittedRunPackageSha256 && expectedRunPackageSha256 === submittedRunPackageSha256 ? "matched" : "mismatch";
+  return {
+    schema: "hediao3d.camotics-result-import-audit.v1",
+    createdAt: new Date().toISOString(),
+    sourceName: typeof input?.sourceName === "string" ? input.sourceName.slice(0, 160) : zipBundle ? "camotics-result-bundle.zip" : "camotics-result.json",
+    importRoute: "/api/orchestrator/jobs/:id/camotics-result",
+    zipBundle: zipBundleFilename,
+    zipEntries: Array.isArray(zipBundle?.entries) ? zipBundle.entries.slice(0, 80) : [],
+    result: {
+      schema: result?.schema ?? null,
+      jobId: result?.jobId ?? null,
+      status: result?.status ?? null,
+      synthetic: Boolean(result?.synthetic),
+      riskLevel: result?.riskLevel ?? null,
+      productionEvidenceEligible: Boolean(result?.evidenceQuality?.productionEvidenceEligible),
+      preferredGcodeSha256: submittedPreviewSha256,
+      camoticsCliRunPackageSha256: submittedRunPackageSha256,
+      machineContext: result?.inputs?.machineContext ?? null
+    },
+    binding: {
+      preferredGcode: {
+        expectedSha256: expectedPreviewSha256,
+        submittedSha256: submittedPreviewSha256,
+        status: previewBindingStatus
+      },
+      camoticsCliRunPackage: {
+        expectedSha256: expectedRunPackageSha256,
+        submittedSha256: submittedRunPackageSha256,
+        status: runPackageBindingStatus
+      }
+    },
+    localValidation: localValidation ? {
+      ok: Boolean(localValidation.ok),
+      productionEvidenceEligible: Boolean(localValidation.productionEvidenceEligible),
+      missing: Array.isArray(localValidation.missing) ? localValidation.missing.slice(0, 20) : [],
+      summary: localValidation.summary ?? null
+    } : null,
+    artifacts: {
+      importedResult: "imported-camotics-result.json",
+      normalizedResult: "camotics-result.json",
+      localValidation: localValidation ? "camotics-result-local-validation.json" : null,
+      screenshot: screenshotFilename,
+      materialMesh: materialMeshFilename,
+      sourceZipBundle: zipBundleFilename
+    },
+    safety: {
+      productionUnlockFromImport: false,
+      syntheticRejectedBeforeAudit: true,
+      requiresAdapterEvidenceQuality: true,
+      requiresReadinessRegeneration: true
+    },
+    summary: previewBindingStatus === "matched" && runPackageBindingStatus === "matched"
+      ? "CAMotics 回填结果与当前 job 的 preview NC 和 Linux run package 哈希匹配。"
+      : `CAMotics 回填哈希绑定不完整：preview=${previewBindingStatus} / runPackage=${runPackageBindingStatus}。`
+  };
 }
 
 function extractCamoticsResultZipBundle(value) {
