@@ -5831,9 +5831,9 @@ export function App() {
                 </button>
               )}
             </div>
-            {!V3_TRIAL_FOCUSED_UI && <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
+            <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
               <div className="v3-history-heading">
-                <strong>Native CAM 环境验收</strong>
+                <strong>{V3_TRIAL_FOCUSED_UI ? "Linux CAM 服务闭环" : "Native CAM 环境验收"}</strong>
                 <button type="button" onClick={refreshV3NativeCamReadiness}>刷新</button>
               </div>
               {v3NativeCamReadiness ? (
@@ -5844,7 +5844,11 @@ export function App() {
                     {v3NativeCamReadiness.summary.level}
                     {v3NativeCamReadiness.host?.platform ? ` · ${v3NativeCamReadiness.host.platform}/${v3NativeCamReadiness.host.arch ?? "unknown"}` : ""}
                   </span>
-                  <small>{v3NativeCamReadiness.summary.text}</small>
+                  <small>
+                    {V3_TRIAL_FOCUSED_UI
+                      ? "下载服务端 ZIP 到 Linux CAM 服务器，用真实外部 CAM/CAMotics 跑完后再回填结果；这一步只补证据链，不解锁正式生产 NC。"
+                      : v3NativeCamReadiness.summary.text}
+                  </small>
                   <div className="v3-adapter-list">
                     {v3NativeCamReadiness.checks.map((check) => (
                       <span className={check.ready ? "ok" : "warning"} key={check.id}>
@@ -5852,7 +5856,7 @@ export function App() {
                       </span>
                     ))}
                   </div>
-                  {v3NativeCamReadiness.summary.capabilityMatrix && v3NativeCamReadiness.summary.capabilityMatrix.length > 0 && (
+                  {!V3_TRIAL_FOCUSED_UI && v3NativeCamReadiness.summary.capabilityMatrix && v3NativeCamReadiness.summary.capabilityMatrix.length > 0 && (
                     <div className="v3-capability-matrix">
                       {v3NativeCamReadiness.summary.capabilityMatrix.map((item) => (
                         <article className={`v3-capability-card ${item.ready ? "ready" : "missing"}`} key={item.id}>
@@ -5868,7 +5872,7 @@ export function App() {
                       ))}
                     </div>
                   )}
-                  {v3NativeCamReadiness.summary.executionPlan && (
+                  {!V3_TRIAL_FOCUSED_UI && v3NativeCamReadiness.summary.executionPlan && (
                     <div className="v3-server-package">
                       <strong>开源 CAM 接入执行计划</strong>
                       <small>
@@ -5894,7 +5898,7 @@ export function App() {
                       )}
                     </div>
                   )}
-                  {v3NativeCamReadiness.checks.some((check) => check.capabilities?.notEnoughFor?.length) && (
+                  {!V3_TRIAL_FOCUSED_UI && v3NativeCamReadiness.checks.some((check) => check.capabilities?.notEnoughFor?.length) && (
                     <div className="v3-capability-boundary">
                       {v3NativeCamReadiness.checks
                         .filter((check) => check.capabilities?.notEnoughFor?.length)
@@ -5924,7 +5928,7 @@ export function App() {
                   {(v3NativeCamReadiness.packageArtifacts?.files?.length ?? 0) > 0 && (
                     <div className="v3-server-package">
                       <strong>Linux服务端准备包</strong>
-                      <small>用于在 CAM 服务器安装/探测 FreeCAD、OpenCAMLib、CAMotics，并保留生产边界。</small>
+                      <small>{V3_TRIAL_FOCUSED_UI ? "优先下载 ZIP 到 Linux 服务器执行；生成的真实输出 ZIP 再回填到这里，作为安全试雕证据。" : "用于在 CAM 服务器安装/探测 FreeCAD、OpenCAMLib、CAMotics，并保留生产边界。"}</small>
                       <div className="v3-artifact-list compact">
                         {v3NativeCamReadiness.apiArtifacts?.packageZip && (
                           <a href={v3NativeCamReadiness.apiArtifacts.packageZip} download>
@@ -5995,21 +5999,21 @@ export function App() {
                   </div>
                 </>
               ) : (
-                <small>还没有 Native CAM 环境验收记录；Linux CAM 服务器部署后建议先跑此检查。</small>
+                <small>{V3_TRIAL_FOCUSED_UI ? "还没有 Linux CAM 服务包；先点击下方“生成服务包”，下载 ZIP 到 Linux CAM 服务器继续闭环验证。" : "还没有 Native CAM 环境验收记录；Linux CAM 服务器部署后建议先跑此检查。"}</small>
               )}
-              {!V3_TRIAL_FOCUSED_UI && (
-                <div className="v3-action-row">
-                  <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(false)} disabled={isV3NativeCamChecking} type="button">
-                    <HardDrive size={17} />
-                    {isV3NativeCamChecking ? "验收中..." : "验收Native CAM"}
-                  </button>
+              <div className="v3-action-row">
+                <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(false)} disabled={isV3NativeCamChecking} type="button">
+                  <HardDrive size={17} />
+                  {isV3NativeCamChecking ? "生成中..." : V3_TRIAL_FOCUSED_UI ? "生成服务包" : "验收Native CAM"}
+                </button>
+                {!V3_TRIAL_FOCUSED_UI && (
                   <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(true)} disabled={isV3NativeCamChecking} type="button">
                     <ShieldCheck size={17} />
                     严格验收
                   </button>
-                </div>
-              )}
-            </div>}
+                )}
+              </div>
+            </div>
             {!V3_TRIAL_FOCUSED_UI && <div className={`v3-diagnostics ${v3AdapterValidation?.overall.failed ? "warning" : "ok"}`}>
               <div className="v3-history-heading">
                 <strong>外部 Adapter 验证</strong>
