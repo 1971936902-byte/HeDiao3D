@@ -109,6 +109,18 @@ async function main() {
   assert(camoticsPlan.inputs?.preferredGcode === "camotics-preview.nc", "CAMotics plan preferred G-code mismatch");
   assert(camoticsPlan.projectTemplate?.schema === "hediao3d.camotics-project-template.v1", "CAMotics project template missing from plan");
 
+  const rotaryWrapPreview = await getArtifactJson(job.id, "rotary-wrap-preview-report.json");
+  assert(rotaryWrapPreview.schema === "hediao3d.rotary-wrap-preview-report.v1", "rotary wrap preview report schema mismatch");
+  assert(rotaryWrapPreview.coordinateMapping?.rotaryAxis === "Y", "rotary wrap preview should use Y output axis");
+  assert(rotaryWrapPreview.coordinateMapping?.rotaryOutputMode === "linearized-rotary-axis", "Y wrap preview should be linearized");
+  assert(rotaryWrapPreview.coordinateMapping?.expectedLinearSpanMm === settings.rotaryWrapPerRevolutionMm, "360 degree wrap should equal one wrap revolution distance");
+  assert(rotaryWrapPreview.metrics?.machineCoverage >= 0.99, `machine rotary coverage should be near full, got ${rotaryWrapPreview.metrics?.machineCoverage}`);
+  assert(rotaryWrapPreview.metrics?.pointCoverage >= 0.99, `point rotary coverage should be near full, got ${rotaryWrapPreview.metrics?.pointCoverage}`);
+  assert(rotaryWrapPreview.metrics?.linearizationErrorRate <= 0.01, `linearization error should be low, got ${rotaryWrapPreview.metrics?.linearizationErrorRate}`);
+  assert(rotaryWrapPreview.axisRanges?.machineNc?.y?.span >= settings.rotaryWrapPerRevolutionMm - 0.01, "machine NC Y span should cover one rotary revolution");
+  assert(rotaryWrapPreview.axisRanges?.machineNc?.a?.count === 0, "wrapY machine NC should not contain A axis values");
+  assert(rotaryWrapPreview.axisRanges?.camoticsPreviewNc?.z?.min < 0, "CAMotics preview should include negative cutting Z");
+
   const dialect = await getArtifactJson(job.id, "controller-dialect-report.json");
   assert(dialect.level === "ready", `controller dialect expected ready, got ${dialect.level}: ${dialect.summary}`);
   assert(dialect.dialect.profileArtifact === "machine-controller-profile.json", "controller dialect report should reference machine-controller-profile.json");
@@ -137,6 +149,7 @@ async function main() {
     level: analysis.level,
     dialect: dialect.level,
     machineControllerProfile: profile.id,
+    rotaryWrapPreview: rotaryWrapPreview.level,
     machineAxes: machine.axisCounts,
     airRunZ: airRun.zRange,
     rotaryCalibrationZ: rotaryCalibration.zRange,

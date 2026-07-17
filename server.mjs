@@ -2518,12 +2518,25 @@ async function processOrchestratorJob(job, settings) {
   }, null, 2), "utf8");
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
   const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selected, camoticsInput);
+  const rotaryWrapPreviewReport = createRotaryWrapPreviewReport({
+    job,
+    settings,
+    toolpath,
+    machineGcode: toolpath.gcode,
+    airRunGcode,
+    camoticsPreviewGcode,
+    ncStaticAnalysis,
+    controllerDialectReport,
+    machineControllerProfile,
+    camoticsInput
+  });
   await writeFile(join(job.workDir, "machine-controller-profile.json"), JSON.stringify(machineControllerProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
   await writeFile(join(job.workDir, "controller-dialect-report.json"), JSON.stringify(controllerDialectReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
+  await writeFile(join(job.workDir, "rotary-wrap-preview-report.json"), JSON.stringify(rotaryWrapPreviewReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
@@ -2652,6 +2665,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     camoticsInput,
     camoticsSimulationPlan,
+    rotaryWrapPreviewReport,
     camHandoffQuality,
     camServerConfig,
     productionEvidenceDossier,
@@ -2700,6 +2714,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-simulation-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-project-template.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
@@ -2747,6 +2762,7 @@ async function processOrchestratorJob(job, settings) {
       camHandoffQuality,
       camoticsInput,
       camoticsSimulationPlan,
+      rotaryWrapPreviewReport,
       ncStaticAnalysis,
       machineControllerProfile,
       machineAcceptanceChecklist,
@@ -4414,6 +4430,191 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
   };
 }
 
+function createRotaryWrapPreviewReport({ job, settings, toolpath, machineGcode, airRunGcode, camoticsPreviewGcode, ncStaticAnalysis, controllerDialectReport, machineControllerProfile, camoticsInput }) {
+  const camMode = settings.camMode;
+  const expectedRotary = camMode === "rotaryWrap";
+  const rotaryAxis = expectedRotary ? String(settings.rotaryOutputAxis ?? "Y").toUpperCase() : null;
+  const lengthAxis = expectedRotary && rotaryAxis === "X" ? "Y" : "X";
+  const wrapPerRev = expectedRotary ? Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100)) : null;
+  const expectedAngleSpanDeg = expectedRotary ? Math.max(0.001, Number(settings.reliefAngleDeg ?? 360)) : null;
+  const expectedLinearSpanMm = expectedRotary && wrapPerRev && expectedAngleSpanDeg
+    ? (expectedAngleSpanDeg / 360) * wrapPerRev
+    : null;
+  const pointStats = summarizeHandoffPointStats(Array.isArray(toolpath?.points) ? toolpath.points : []);
+  const machineAxes = summarizeGcodeAxisRanges(machineGcode);
+  const airRunAxes = summarizeGcodeAxisRanges(airRunGcode);
+  const camoticsPreviewAxes = summarizeGcodeAxisRanges(camoticsPreviewGcode);
+  const pointAngleSpanDeg = pointStats.aSpan > 0
+    ? pointStats.aSpan
+    : expectedRotary && wrapPerRev && pointStats.ySpan > 0
+      ? (pointStats.ySpan / wrapPerRev) * 360
+      : 0;
+  const machineRotarySpan = rotaryAxis === "A" ? machineAxes.a.span : rotaryAxis === "Y" ? machineAxes.y.span : rotaryAxis === "X" ? machineAxes.x.span : 0;
+  const machineAngleSpanDeg = expectedRotary && rotaryAxis === "A"
+    ? machineRotarySpan
+    : expectedRotary && wrapPerRev
+      ? (machineRotarySpan / wrapPerRev) * 360
+      : 0;
+  const machineCoverage = expectedAngleSpanDeg ? clamp01(machineAngleSpanDeg / expectedAngleSpanDeg) : null;
+  const pointCoverage = expectedAngleSpanDeg ? clamp01(pointAngleSpanDeg / expectedAngleSpanDeg) : null;
+  const linearizationErrorMm = expectedLinearSpanMm === null
+    ? null
+    : Math.abs(machineRotarySpan - expectedLinearSpanMm);
+  const linearizationErrorRate = expectedLinearSpanMm && expectedLinearSpanMm > 0
+    ? linearizationErrorMm / expectedLinearSpanMm
+    : null;
+  const criticalIssues = [];
+  const warningIssues = [];
+  const requiredActions = [];
+
+  if (!expectedRotary) {
+    warningIssues.push("当前不是 rotaryWrap 模式，旋转包裹预览报告仅作参考。");
+  }
+  if (expectedRotary && !rotaryAxis) {
+    criticalIssues.push("未识别旋转输出轴。");
+  }
+  if (expectedRotary && wrapPerRev !== null && wrapPerRev <= 0) {
+    criticalIssues.push("rotaryWrapPerRevolutionMm 必须大于 0。");
+  }
+  if (expectedRotary && machineAxes.motionLineCount === 0) {
+    criticalIssues.push("机床 NC 未解析到 G0/G1 运动，无法验证旋转包裹。");
+  }
+  if (expectedRotary && rotaryAxis === "Y" && machineAxes.y.count === 0) {
+    criticalIssues.push("Y 轴旋转夹具模式下，toolpath.nc 未输出 Y 旋转运动。");
+  }
+  if (expectedRotary && rotaryAxis === "Y" && machineAxes.a.count > 0) {
+    criticalIssues.push("Y 轴旋转夹具模式下，toolpath.nc 不应输出 A 轴。");
+  }
+  if (expectedRotary && machineCoverage !== null && machineCoverage < 0.9) {
+    warningIssues.push(`机床 NC 旋转覆盖 ${(machineCoverage * 100).toFixed(1)}%，未达到目标角度范围。`);
+  }
+  if (expectedRotary && pointCoverage !== null && pointCoverage < 0.9) {
+    warningIssues.push(`中立/内部刀路点旋转覆盖 ${(pointCoverage * 100).toFixed(1)}%，可能不是完整 360°。`);
+  }
+  if (linearizationErrorRate !== null && linearizationErrorRate > 0.08) {
+    warningIssues.push(`旋转线性化距离与目标偏差 ${(linearizationErrorRate * 100).toFixed(1)}%，需复核每圈等效距离。`);
+  }
+  if (expectedRotary && !camoticsInput?.compatibility?.canRunInCamotics) {
+    warningIssues.push("CAMotics 展开预览未标记为可运行，需要人工复核坐标解释。");
+  }
+  if (airRunAxes.z.min !== null && Math.abs(airRunAxes.z.min - Number(settings.safeZ ?? 0)) > 0.001) {
+    criticalIssues.push("air-run.nc 的最小 Z 不等于安全高度。");
+  }
+  if (camoticsPreviewAxes.z.min !== null && camoticsPreviewAxes.z.min >= 0) {
+    warningIssues.push("camotics-preview.nc 未出现负向切深，展开材料去除预览可能无效。");
+  }
+  if (ncStaticAnalysis?.level === "critical") {
+    criticalIssues.push("NC 静态分析存在阻断项，请先处理 nc-static-analysis.json。");
+  }
+  if (controllerDialectReport?.level === "critical") {
+    criticalIssues.push("控制器方言检查存在阻断项，请先处理 controller-dialect-report.json。");
+  }
+
+  if (warningIssues.length > 0 || criticalIssues.length > 0) {
+    requiredActions.push("先运行 rotary-calibration-airrun.nc，确认 90/180/360 度方向和每圈等效距离。");
+    requiredActions.push("用 camotics-preview.nc 做展开三轴仿真，但不要把该文件上机。");
+    requiredActions.push("若旋转覆盖或线性化偏差异常，复核 rotaryWrapPerRevolutionMm、rotaryOutputAxis 和机床脉冲设置。");
+  }
+
+  const level = criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "review" : "ready";
+  return {
+    schema: "hediao3d.rotary-wrap-preview-report.v1",
+    createdAt: new Date().toISOString(),
+    jobId: job.id,
+    level,
+    camMode,
+    coordinateMapping: {
+      lengthAxis,
+      depthAxis: "Z",
+      rotaryAxis,
+      rotaryOutputMode: expectedRotary && rotaryAxis === "A" ? "degree-axis" : expectedRotary ? "linearized-rotary-axis" : "none",
+      rotaryWrapPerRevolutionMm: wrapPerRev,
+      expectedAngleSpanDeg,
+      expectedLinearSpanMm,
+      machineControllerProfile: machineControllerProfile?.id ?? null,
+      camoticsInterpretation: camoticsInput?.compatibility?.interpretation ?? null
+    },
+    metrics: {
+      pointCount: toolpath.points?.length ?? 0,
+      machineMotionLineCount: machineAxes.motionLineCount,
+      pointAngleSpanDeg,
+      machineAngleSpanDeg,
+      machineRotaryLinearSpanMm: expectedRotary && rotaryAxis !== "A" ? machineRotarySpan : null,
+      pointCoverage,
+      machineCoverage,
+      linearizationErrorMm,
+      linearizationErrorRate,
+      machineZRangeMm: machineAxes.z,
+      airRunZRangeMm: airRunAxes.z,
+      camoticsPreviewZRangeMm: camoticsPreviewAxes.z
+    },
+    axisRanges: {
+      points: {
+        x: { min: pointStats.xMin, max: pointStats.xMax, span: pointStats.xSpan },
+        y: { min: pointStats.yMin, max: pointStats.yMax, span: pointStats.ySpan },
+        a: { min: pointStats.aMin, max: pointStats.aMax, span: pointStats.aSpan },
+        z: { min: pointStats.zMin, max: pointStats.zMax, span: pointStats.zSpan }
+      },
+      machineNc: machineAxes,
+      airRunNc: airRunAxes,
+      camoticsPreviewNc: camoticsPreviewAxes
+    },
+    evidence: {
+      machineNc: "toolpath.nc",
+      airRunNc: "air-run.nc",
+      rotaryCalibrationAirRunNc: "rotary-calibration-airrun.nc",
+      camoticsPreviewNc: "camotics-preview.nc",
+      ncStaticAnalysis: "nc-static-analysis.json",
+      controllerDialectReport: "controller-dialect-report.json",
+      machineControllerProfile: "machine-controller-profile.json"
+    },
+    criticalIssues,
+    warningIssues,
+    requiredActions,
+    summary: criticalIssues.length > 0
+      ? `旋转包裹预览存在 ${criticalIssues.length} 个阻断项。`
+      : warningIssues.length > 0
+        ? `旋转包裹预览有 ${warningIssues.length} 个复核项。`
+        : "旋转包裹展开预览与 Y/A 后处理几何关系检查通过。"
+  };
+}
+
+function summarizeGcodeAxisRanges(gcode) {
+  const axes = {
+    x: createAxisSummary([]),
+    y: createAxisSummary([]),
+    z: createAxisSummary([]),
+    a: createAxisSummary([]),
+    motionLineCount: 0
+  };
+  const values = { x: [], y: [], z: [], a: [] };
+  for (const rawLine of String(gcode ?? "").split(/\r?\n/)) {
+    const upper = rawLine.toUpperCase();
+    if (!/(?:\bG0?0\b|\bG0?1\b)/.test(upper)) continue;
+    axes.motionLineCount += 1;
+    for (const axis of ["x", "y", "z", "a"]) {
+      const value = parseGcodeWord(upper, axis.toUpperCase());
+      if (value !== null && Number.isFinite(value)) values[axis].push(value);
+    }
+  }
+  return {
+    x: createAxisSummary(values.x),
+    y: createAxisSummary(values.y),
+    z: createAxisSummary(values.z),
+    a: createAxisSummary(values.a),
+    motionLineCount: axes.motionLineCount
+  };
+}
+
+function createAxisSummary(values) {
+  return {
+    min: minOrNull(values),
+    max: maxOrNull(values),
+    span: spanOrZero(values),
+    count: values.length
+  };
+}
+
 function summarizeHandoffPointStats(points) {
   if (!points.length) {
     return {
@@ -5931,7 +6132,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, rotaryWrapPreviewReport, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -5961,6 +6162,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("production-unlock-matrix.json"),
         getFile("production-evidence-dossier.json"),
         getFile("cam-handoff-quality.json"),
+        getFile("rotary-wrap-preview-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("operator-runbook.md"),
@@ -5978,7 +6180,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -6009,6 +6211,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
+      "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
       "试雕后填写 trial-feedback-template.json，把真实耗时、刀痕和旋转误差回填到工艺优化流程。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
@@ -6046,6 +6249,14 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: camHandoffQuality.summary,
       criticalIssues: camHandoffQuality.criticalIssues ?? [],
       warningIssues: camHandoffQuality.warningIssues ?? []
+    } : null,
+    rotaryWrapPreview: rotaryWrapPreviewReport ? {
+      level: rotaryWrapPreviewReport.level,
+      summary: rotaryWrapPreviewReport.summary,
+      machineCoverage: rotaryWrapPreviewReport.metrics?.machineCoverage ?? null,
+      pointCoverage: rotaryWrapPreviewReport.metrics?.pointCoverage ?? null,
+      linearizationErrorRate: rotaryWrapPreviewReport.metrics?.linearizationErrorRate ?? null,
+      artifact: "rotary-wrap-preview-report.json"
     } : null,
     productionEvidenceDossier: productionEvidenceDossier ? {
       status: productionEvidenceDossier.status,
@@ -6125,6 +6336,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
+    createDeliveryFile(job.id, "rotary-wrap-preview-report.json", "旋转包裹预览一致性报告", "report", true, "检查中立刀路、Y/A旋转后处理、CAMotics展开预览和每圈等效距离是否一致。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
     createDeliveryFile(job.id, "camotics-simulation-plan.json", "CAMotics 仿真计划", "report", true, "记录 CAMotics 预览 NC、展开毛坯、刀具、坐标解释和待执行检查项。"),

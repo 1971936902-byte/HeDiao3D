@@ -182,6 +182,7 @@ async function main() {
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-evidence-dossier.json"), "readFirst missing production evidence dossier");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-handoff-quality.json"), "readFirst missing CAM handoff quality report");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-wrap-preview-report.json"), "readFirst missing rotary wrap preview report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-server-config.json"), "readFirst missing CAM server config report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
@@ -215,6 +216,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "production-evidence-dossier.json" && file.sha256), "package integrity missing production evidence dossier hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "rotary-wrap-preview-report.json" && file.sha256), "package integrity missing rotary wrap preview hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-airrun.nc" && file.sha256), "package integrity missing rotary calibration air-run hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "camotics-preview.nc" && file.machineUse?.allowedOnMachine === false), "package integrity should mark CAMotics preview as never-machine");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");
