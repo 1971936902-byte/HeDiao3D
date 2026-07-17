@@ -123,6 +123,10 @@ async function main() {
   assert(runbook.includes("rotary-calibration-airrun.nc"), "readiness runbook missing rotary calibration air-run evidence");
   assert(runbook.includes("package-integrity.json"), "readiness runbook missing package integrity evidence");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
+  assert(runbook.includes("RESULT_BUNDLE_ZIP"), "readiness runbook missing uploadable result bundle path");
+  assert(runbook.includes("v3-acceptance-runbook-result-bundle.zip"), "readiness runbook missing result bundle filename");
+  assert(runbook.includes("README-RUNBOOK-RESULT.md"), "readiness runbook bundle missing README");
+  assert(runbook.includes("Upload this ZIP in the HeDiao3D V3 readiness runbook-result import panel."), "readiness runbook missing result upload instruction");
   assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
   assert(runbook.includes("RESULT_READINESS_ID"), "readiness runbook missing readiness identity binding");
   assert(runbook.includes("readinessReportId"), "readiness runbook missing readiness report id result field");
