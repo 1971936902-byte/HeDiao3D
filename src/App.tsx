@@ -1272,6 +1272,13 @@ type V3ReadinessSummary = {
     generatedPlans: number;
     completedAdapters: number;
     readyForProduction: boolean;
+    handoffClassificationAudit?: {
+      productionCandidateCount: number;
+      unsafeCount: number;
+      missingCount: number;
+      notGeneratedCount: number;
+      summary: string;
+    } | null;
   } | null;
   nativeCamRealOutputAcceptance: {
     id: string;
@@ -5026,7 +5033,16 @@ export function App() {
                     </>
                   )}
                   {v3Readiness.adapterValidation && (
-                    <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
+                    <small className={v3Readiness.adapterValidation.handoffClassificationAudit?.unsafeCount ? "v3-inline-critical" : v3Readiness.adapterValidation.handoffClassificationAudit?.productionCandidateCount ? "v3-inline-ok" : "v3-inline-warning"}>
+                      Adapter 计划 {v3Readiness.adapterValidation.generatedPlans}
+                      {" · "}
+                      失败 {v3Readiness.adapterValidation.failed}
+                      {" · "}
+                      completed {v3Readiness.adapterValidation.completedAdapters}
+                      {v3Readiness.adapterValidation.handoffClassificationAudit
+                        ? ` · productionCandidate ${v3Readiness.adapterValidation.handoffClassificationAudit.productionCandidateCount} · unsafe ${v3Readiness.adapterValidation.handoffClassificationAudit.unsafeCount}`
+                        : ""}
+                    </small>
                   )}
                   <small className={v3Readiness.nativeCamRealOutputAcceptance ? v3Readiness.nativeCamRealOutputAcceptance.level === "ready" ? "v3-inline-ok" : v3Readiness.nativeCamRealOutputAcceptance.level === "critical" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     真实CAM输出验收：{v3Readiness.nativeCamRealOutputAcceptance ? `${v3Readiness.nativeCamRealOutputAcceptance.level} · candidate ${v3Readiness.nativeCamRealOutputAcceptance.productionCandidateCount} · unsafe ${v3Readiness.nativeCamRealOutputAcceptance.unsafeCount} · missing ${v3Readiness.nativeCamRealOutputAcceptance.missingCount}` : "未运行"}

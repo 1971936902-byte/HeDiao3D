@@ -5,6 +5,10 @@ const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
 async function main() {
   await getJson("/api/health");
 
+  const adapterValidation = await postJson("/api/orchestrator/adapter-validation", { native: false });
+  assert(adapterValidation.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", "pre-readiness adapter validation missing handoff audit");
+  assert(adapterValidation.handoffClassificationAudit.unsafeCount >= 1, "safe-default adapter validation should produce unsafe handoff audit entries");
+
   const report = await postJson("/api/orchestrator/readiness", {});
   validateReadiness(report, "POST /api/orchestrator/readiness");
 
@@ -53,6 +57,11 @@ async function main() {
   assert(Object.hasOwn(full, "latestTrialFeedback"), "full readiness artifact missing latest trial feedback field");
   assert(Object.hasOwn(full, "latestMachineAcceptance"), "full readiness artifact missing latest machine acceptance field");
   assert(Object.hasOwn(full, "nativeCamRealOutputAcceptance"), "full readiness artifact missing native CAM real output acceptance field");
+  assert(full.adapterValidation?.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", "full readiness artifact missing adapter handoff audit");
+  assert(full.adapterValidation.handoffClassificationAudit.unsafeCount >= 1, "readiness should preserve unsafe handoff audit count");
+  const adapterStep = full.acceptancePlan.steps.find((step) => step.id === "adapter-validation");
+  assert(adapterStep?.status === "blocked", `adapter validation step should be blocked when handoff audit is unsafe, got ${adapterStep?.status}`);
+  assert(/unsafe=/.test(adapterStep.detail), "adapter validation step detail should include unsafe handoff count");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
@@ -61,6 +70,7 @@ async function main() {
   assert(markdown.includes("CAM server config"), "readiness markdown missing CAM server config summary");
   assert(markdown.includes("Native CAM server package"), "readiness markdown missing native CAM server package summary");
   assert(markdown.includes("Native CAM real output acceptance"), "readiness markdown missing native CAM real output acceptance summary");
+  assert(markdown.includes("Adapter Handoff Audit"), "readiness markdown missing adapter handoff audit section");
   assert(markdown.includes("Latest trial feedback"), "readiness markdown missing trial feedback summary");
   assert(markdown.includes("Latest machine acceptance"), "readiness markdown missing machine acceptance summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
