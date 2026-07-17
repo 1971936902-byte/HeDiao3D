@@ -5623,10 +5623,12 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       machineNcCandidates: [
         ...(trialCandidate ? [{ ...getFile(trialCandidate), usage: productionGate.allowProductionNc ? "production-or-trial" : "trial-only" }] : [])
       ],
-      neverRunOnMachine: [
-        { ...getFile("camotics-preview.nc"), reason: "展开三轴仿真预览，Z 已被归一化为负向切深，不是机床后处理输出。" },
-        { ...getFile("camotics-run.md"), reason: "Markdown 操作说明，不是 NC。" }
-      ]
+      neverRunOnMachine: deliveryManifest.files
+        .filter((file) => file.machineUse?.allowedOnMachine === false)
+        .map((file) => ({
+          ...file,
+          reason: file.machineUse?.summary ?? "不是可上机文件。"
+        }))
     },
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
@@ -5821,7 +5823,65 @@ function createDeliveryFile(jobId, filename, label, kind, downloadable, note) {
     kind,
     url: publicArtifactUrl(jobId, filename),
     downloadable,
+    machineUse: classifyDeliveryMachineUse(filename, kind, downloadable),
     note
+  };
+}
+
+function classifyDeliveryMachineUse(filename, kind, downloadable) {
+  if (filename === "toolpath.nc") {
+    return {
+      class: downloadable ? "trial-or-production-candidate" : "locked-machine-nc",
+      allowedOnMachine: Boolean(downloadable),
+      requiresGate: true,
+      spindleExpected: true,
+      summary: downloadable
+        ? "可按 production-gate.json 的试雕/生产门禁使用。"
+        : "机床 NC 已生成但当前门禁未放行，禁止上机。"
+    };
+  }
+  if (filename === "air-run.nc" || filename === "rotary-calibration-airrun.nc") {
+    return {
+      class: "air-run-no-cut",
+      allowedOnMachine: true,
+      requiresGate: false,
+      spindleExpected: false,
+      summary: "只允许离料空跑，主轴关闭，Z 保持安全高度。"
+    };
+  }
+  if (filename === "camotics-preview.nc" || kind === "simulation") {
+    return {
+      class: "simulation-only-never-machine",
+      allowedOnMachine: false,
+      requiresGate: false,
+      spindleExpected: false,
+      summary: "仅用于仿真/预览，禁止上机。"
+    };
+  }
+  if (kind === "model") {
+    return {
+      class: "cam-input-only",
+      allowedOnMachine: false,
+      requiresGate: false,
+      spindleExpected: false,
+      summary: "模型/CAM 输入候选，不是机床程序。"
+    };
+  }
+  if (kind === "report") {
+    return {
+      class: "report-only",
+      allowedOnMachine: false,
+      requiresGate: false,
+      spindleExpected: false,
+      summary: "报告或说明文件，不是机床程序。"
+    };
+  }
+  return {
+    class: "not-machine-code",
+    allowedOnMachine: false,
+    requiresGate: false,
+    spindleExpected: false,
+    summary: "未分类为机床程序。"
   };
 }
 

@@ -639,6 +639,13 @@ type V3OrchestratorJob = {
           kind: string;
           url: string;
           downloadable: boolean;
+          machineUse?: {
+            class: string;
+            allowedOnMachine: boolean;
+            requiresGate: boolean;
+            spindleExpected: boolean;
+            summary: string;
+          };
           note: string;
         }>;
       };
@@ -7473,9 +7480,20 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
         ? gate.requiredActions.map((item) => `- ${item}`)
         : ["- 先查看 machining-package-index.json、production-gate.json 和 delivery-manifest.json。"]),
     "",
+    "## 机器用途分类",
+    "",
+    "- trial-or-production-candidate: 需要通过 production-gate.json 门禁后才可按试雕/生产流程上机。",
+    "- locked-machine-nc: 机床 NC 已生成但门禁未放行，禁止上机。",
+    "- air-run-no-cut: 只允许离料空跑，主轴关闭，不切削材料。",
+    "- simulation-only-never-machine: 仅用于 CAMotics/预览，禁止上机。",
+    "- cam-input-only/report-only: 只作为 CAM 输入或报告，不是机床程序。",
+    "",
     "## 文件说明",
     "",
-    ...(manifest?.files.map((file) => `- ${file.filename}: ${file.label}，${file.downloadable ? "已打包" : "未打包"}。${file.note}`) ?? [])
+    ...(manifest?.files.map((file) => {
+      const machineUse = file.machineUse ? `用途 ${file.machineUse.class}，${file.machineUse.allowedOnMachine ? "允许按规则上机" : "不可上机"}。` : "";
+      return `- ${file.filename}: ${file.label}，${file.downloadable ? "已打包" : "未打包"}。${machineUse}${file.note}`;
+    }) ?? [])
   ];
   return `${lines.join("\n")}\n`;
 }
