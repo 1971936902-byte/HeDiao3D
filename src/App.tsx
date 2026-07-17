@@ -1165,6 +1165,13 @@ type V3AdapterValidationSummary = {
       notGenerated: boolean;
       unsafe: boolean;
       generatedByExternalCommand: boolean;
+      contactReport?: {
+        status: string;
+        productionCandidate: boolean;
+        inputBindingStatus: string;
+        reportSchema?: string | null;
+        summary?: string | null;
+      } | null;
     }>;
   } | null;
   adapters: Array<{
@@ -1187,6 +1194,13 @@ type V3AdapterValidationSummary = {
     };
     handoffClassification?: string;
     productionCandidate?: boolean;
+    contactReport?: {
+      status: string;
+      productionCandidate: boolean;
+      inputBindingStatus: string;
+      reportSchema?: string | null;
+      summary?: string | null;
+    } | null;
   }>;
   apiArtifacts?: {
     json?: string;
@@ -5481,6 +5495,7 @@ export function App() {
                         {v3AdapterValidation.handoffClassificationAudit.adapters.map((adapter) => (
                           <span className={adapter.productionCandidate ? "ok" : adapter.unsafe ? "critical" : "warning"} key={adapter.id} title={adapter.outputKind ?? ""}>
                             {adapter.id} · {formatHandoffClassification(adapter.classification)}
+                            {adapter.contactReport ? ` · contact ${adapter.contactReport.status} · binding ${adapter.contactReport.inputBindingStatus}` : ""}
                           </span>
                         ))}
                       </div>
@@ -5491,6 +5506,7 @@ export function App() {
                       <span className={adapter.productionCandidate ? "ok" : adapter.handoffClassification === "missing" || adapter.handoffClassification === "not-generated" ? "warning" : adapter.report?.status === "completed" || adapter.plan.generated ? "ok" : "warning"} key={adapter.id}>
                         {adapter.name} · {adapter.report?.status ?? adapter.run?.status ?? adapter.run?.exitCode ?? "待验证"}
                         {adapter.handoffClassification ? ` · ${formatHandoffClassification(adapter.handoffClassification)}` : ""}
+                        {adapter.contactReport ? ` · contact ${adapter.contactReport.status} · binding ${adapter.contactReport.inputBindingStatus}` : ""}
                       </span>
                     ))}
                   </div>

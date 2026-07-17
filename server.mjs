@@ -2060,7 +2060,14 @@ function createAdapterValidationPublicSummary(summary, validationId) {
           previewScaffold: Boolean(adapter.previewScaffold),
           notGenerated: Boolean(adapter.notGenerated),
           unsafe: Boolean(adapter.unsafe),
-          generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand)
+          generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand),
+          contactReport: adapter.contactReport ? {
+            status: adapter.contactReport.status ?? "unknown",
+            productionCandidate: Boolean(adapter.contactReport.productionCandidate),
+            inputBindingStatus: adapter.contactReport.inputBindingStatus ?? "missing",
+            reportSchema: adapter.contactReport.reportSchema ?? null,
+            summary: adapter.contactReport.summary ?? ""
+          } : null
         }))
         : []
     } : null,
@@ -2084,6 +2091,13 @@ function createAdapterValidationPublicSummary(summary, validationId) {
           durationMs: adapter.run?.durationMs ?? null
         },
         nativeSignals: adapter.nativeSignals ?? null,
+        contactReport: adapter.contactReport ? {
+          status: adapter.contactReport.status ?? "unknown",
+          productionCandidate: Boolean(adapter.contactReport.productionCandidate),
+          inputBindingStatus: adapter.contactReport.inputBindingStatus ?? "missing",
+          reportSchema: adapter.contactReport.reportSchema ?? null,
+          summary: adapter.contactReport.summary ?? ""
+        } : null,
         handoffClassification: adapter.handoffEvidence?.classification ?? "missing",
         productionCandidate: Boolean(adapter.handoffEvidence?.productionCandidate),
         failed: Boolean(adapter.failed)

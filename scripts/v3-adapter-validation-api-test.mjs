@@ -17,6 +17,7 @@ async function main() {
   assert(run.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", "POST summary missing handoff classification audit");
   assert(run.handoffClassificationAudit.readyForProduction === false, "handoff audit must not mark production ready");
   assert(run.handoffClassificationAudit.adapters?.length === 4, `expected 4 audited adapters, got ${run.handoffClassificationAudit.adapters?.length}`);
+  assert(run.handoffClassificationAudit.adapters.every((adapter) => adapter.contactReport?.inputBindingStatus), "handoff audit adapters should expose contact report binding status");
   assert(run.handoffClassificationAudit.productionCandidateCount === 0, "safe-default validation must not report production candidates");
   assert(run.handoffClassificationAudit.unsafeCount === 4, `safe-default validation should mark all adapters unsafe, got ${run.handoffClassificationAudit.unsafeCount}`);
 
@@ -64,6 +65,7 @@ function validatePublicSummary(summary, label) {
   for (const adapter of summary.adapters) {
     assert(adapter.id, `${label} adapter missing id`);
     assert(adapter.plan && typeof adapter.plan.generated === "boolean", `${label} adapter missing plan summary`);
+    assert(Object.hasOwn(adapter, "contactReport"), `${label} adapter missing contact report summary`);
     assert(!("workDir" in adapter), `${label} leaked adapter workDir`);
     assert(!("jobPath" in adapter), `${label} leaked adapter jobPath`);
     assert(!("resultPath" in adapter), `${label} leaked adapter resultPath`);

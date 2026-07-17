@@ -155,6 +155,7 @@ function runAdapterValidation(adapter) {
     report,
     plan,
     handoffEvidence: extractHandoffEvidence(adapter.id, report),
+    contactReport: summarizeAdapterContactReport(report),
     nativeSignals: extractNativeSignals(adapter.id, report),
     failed,
     nextActions: createNextActions(adapter.id, report, plan, commandResolution.mode)
@@ -432,6 +433,7 @@ function createProductionGuardrails(results) {
 function createHandoffClassificationAudit(results) {
   const adapters = results.map((item) => {
     const evidence = item.handoffEvidence ?? {};
+    const contactReport = summarizeAdapterContactReport(item.report);
     const classification = evidence.classification ?? "missing";
     const fixture = Boolean(evidence.fixture) || classification === "fixture-contract";
     const synthetic = Boolean(evidence.synthetic) || classification === "synthetic-contract";
@@ -456,7 +458,8 @@ function createHandoffClassificationAudit(results) {
       missing,
       notGenerated,
       unsafe,
-      generatedByExternalCommand: Boolean(evidence.generatedByExternalCommand)
+      generatedByExternalCommand: Boolean(evidence.generatedByExternalCommand),
+      contactReport
     };
   });
   const productionCandidateCount = adapters.filter((adapter) => adapter.productionCandidate).length;
@@ -499,6 +502,26 @@ function createHandoffClassificationAudit(results) {
       "只有 production-candidate 输出才允许进入后续 CAMotics 材料去除和机床验收链路。"
     ],
     adapters
+  };
+}
+
+function summarizeAdapterContactReport(report) {
+  const contact = report?.metrics?.neutralToolpath?.cutterContactReport;
+  if (!contact || typeof contact !== "object") {
+    return {
+      status: "missing",
+      productionCandidate: false,
+      inputBindingStatus: "missing",
+      reportSchema: null,
+      summary: "No cutter-contact report was exposed by this adapter."
+    };
+  }
+  return {
+    status: contact.status ?? "unknown",
+    productionCandidate: Boolean(contact.productionCandidate),
+    inputBindingStatus: contact.inputIdentityBinding?.status ?? "missing",
+    reportSchema: contact.reportSchema ?? null,
+    summary: contact.summary ?? ""
   };
 }
 
@@ -607,7 +630,7 @@ function createMarkdown(summary) {
     summary.handoffClassificationAudit.summary,
     "",
     "Adapters:",
-    ...summary.handoffClassificationAudit.adapters.map((adapter) => `- ${adapter.id}: ${adapter.classification} / productionCandidate=${adapter.productionCandidate} / unsafe=${adapter.unsafe}`),
+    ...summary.handoffClassificationAudit.adapters.map((adapter) => `- ${adapter.id}: ${adapter.classification} / productionCandidate=${adapter.productionCandidate} / unsafe=${adapter.unsafe} / contact=${adapter.contactReport?.status ?? "missing"} / binding=${adapter.contactReport?.inputBindingStatus ?? "missing"}`),
     "",
     "Audit next actions:",
     ...summary.handoffClassificationAudit.nextActions.map((item) => `- ${item}`),
@@ -640,6 +663,7 @@ function createMarkdown(summary) {
       `- Native signals: ${JSON.stringify(adapter.nativeSignals)}`,
       `- Handoff classification: ${adapter.handoffEvidence?.classification ?? "missing"}`,
       `- Production candidate: ${adapter.handoffEvidence?.productionCandidate ? "yes" : "no"}`,
+      `- Contact report: ${adapter.contactReport?.status ?? "(missing)"} / binding=${adapter.contactReport?.inputBindingStatus ?? "missing"}`,
       `- Work dir: ${adapter.workDir}`,
       "",
       "Plan files:",
