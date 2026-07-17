@@ -105,6 +105,22 @@ async function main() {
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
+  const zipImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2),
+      "camotics-result-local-validation.json": JSON.stringify(createLocalValidation(true), null, 2),
+      "camotics-preview.png": "zip-fixture-camotics-png",
+      "camotics-material-removal.stl": "solid zip_material\nendsolid zip_material\n"
+    })
+  });
+  assert(zipImport.ok === true, "zip import should succeed");
+  assert(zipImport.adapterReport?.importBundle?.zipBundle === "imported-camotics-result-bundle.zip", "zip import should preserve source bundle artifact");
+  assert(zipImport.adapterReport?.localValidation?.productionEvidenceEligible === true, "zip import should expose local validation");
+  assert(zipImport.simulationEvidence?.productionUnlockEligible === true, "zip import should remain production evidence eligible");
+  const zipReloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
+  assert(zipReloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "imported-camotics-result-bundle.zip" && file.exists), "delivery manifest should expose imported CAMotics zip bundle");
+  assert(zipReloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "imported-camotics-result-bundle.zip" && file.sha256), "package integrity should hash imported CAMotics zip bundle");
+
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
@@ -215,6 +231,31 @@ function createPreviewMotionProfile(gcodeText) {
 
 function toDataUrl(text) {
   return `data:application/octet-stream;base64,${Buffer.from(text).toString("base64")}`;
+}
+
+function toZipDataUrl(files) {
+  return `data:application/zip;base64,${createStoredZip(files).toString("base64")}`;
+}
+
+function createStoredZip(files) {
+  const chunks = [];
+  for (const [name, content] of Object.entries(files)) {
+    const nameBytes = Buffer.from(name, "utf8");
+    const data = Buffer.from(String(content), "utf8");
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0x0800, 6);
+    header.writeUInt16LE(0, 8);
+    header.writeUInt32LE(0, 10);
+    header.writeUInt32LE(0, 14);
+    header.writeUInt32LE(data.length, 18);
+    header.writeUInt32LE(data.length, 22);
+    header.writeUInt16LE(nameBytes.length, 26);
+    header.writeUInt16LE(0, 28);
+    chunks.push(header, nameBytes, data);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function waitForJob(jobId, startedAt) {

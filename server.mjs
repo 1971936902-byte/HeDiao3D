@@ -4,6 +4,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { inflateRawSync } from "node:zlib";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
@@ -8712,6 +8713,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-job.json", "CAMotics Adapter 任务", "report", existsSync(join(job.workDir, "camotics-job.json")), "CAMotics adapter 的独立输入快照。"),
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
+    createDeliveryFile(job.id, "imported-camotics-result-bundle.zip", "CAMotics结果导入原包", "report", existsSync(join(job.workDir, "imported-camotics-result-bundle.zip")), "从 Linux CAM 服务器回传的一次性结果 ZIP 原件，用于审计回填来源。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
@@ -9013,6 +9015,7 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   const evidenceFiles = [
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
+    createDeliveryFile(job.id, "imported-camotics-result-bundle.zip", "CAMotics结果导入原包", "report", existsSync(join(job.workDir, "imported-camotics-result-bundle.zip")), "从 Linux CAM 服务器回传的一次性结果 ZIP 原件，用于审计回填来源。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
@@ -9726,7 +9729,8 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     result: "imported-camotics-result.json",
     screenshot: importBundle.screenshotFilename,
     materialMesh: importBundle.materialMeshFilename,
-    localValidation: importBundle.localValidationFilename
+    localValidation: importBundle.localValidationFilename,
+    zipBundle: importBundle.zipBundleFilename
   };
   adapterReport.localValidation = importBundle.localValidation
     ? {
@@ -9775,6 +9779,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
   };
   for (const filename of [
     "imported-camotics-result.json",
+    "imported-camotics-result-bundle.zip",
     "camotics-adapter-report.json",
     "camotics-result-local-validation.json",
     "camotics-result.json",
@@ -10138,22 +10143,36 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
 }
 
 async function writeImportedCamoticsResultBundle(workDir, input) {
-  const result = input?.result && typeof input.result === "object" ? { ...input.result } : null;
+  const zipBundle = input?.resultZipDataUrl ? extractCamoticsResultZipBundle(input.resultZipDataUrl) : null;
+  const result = input?.result && typeof input.result === "object"
+    ? { ...input.result }
+    : zipBundle?.result
+      ? { ...zipBundle.result }
+      : null;
   if (!result) throw new Error("CAMotics result 不能为空，需传入 result 对象。");
   if (result.schema !== "hediao3d.camotics-result.v1") throw new Error("result.schema 必须是 hediao3d.camotics-result.v1。");
   if (result.synthetic === true) throw new Error("不能通过真实结果回填接口导入 synthetic CAMotics 结果。");
-  const localValidation = normalizeCamoticsLocalValidation(input?.localValidation);
+  const localValidation = normalizeCamoticsLocalValidation(input?.localValidation ?? zipBundle?.localValidation);
 
-  const screenshotFilename = input.screenshotDataUrl ? "imported-camotics-preview.png" : null;
-  const materialMeshFilename = input.materialMeshDataUrl || input.materialMeshText ? "imported-camotics-material-removal.stl" : null;
+  const screenshotBuffer = input.screenshotDataUrl
+    ? decodeInlineFile(input.screenshotDataUrl)
+    : zipBundle?.screenshot?.content ?? null;
+  const materialMeshBuffer = input.materialMeshText
+    ? Buffer.from(String(input.materialMeshText), "utf8")
+    : input.materialMeshDataUrl
+      ? decodeInlineFile(input.materialMeshDataUrl)
+      : zipBundle?.materialMesh?.content ?? null;
+  const screenshotFilename = screenshotBuffer ? "imported-camotics-preview.png" : null;
+  const materialMeshFilename = materialMeshBuffer ? "imported-camotics-material-removal.stl" : null;
   if (screenshotFilename) {
-    await writeFile(join(workDir, screenshotFilename), decodeInlineFile(input.screenshotDataUrl));
+    await writeFile(join(workDir, screenshotFilename), screenshotBuffer);
   }
   if (materialMeshFilename) {
-    const material = input.materialMeshText
-      ? Buffer.from(String(input.materialMeshText), "utf8")
-      : decodeInlineFile(input.materialMeshDataUrl);
-    await writeFile(join(workDir, materialMeshFilename), material);
+    await writeFile(join(workDir, materialMeshFilename), materialMeshBuffer);
+  }
+  const zipBundleFilename = zipBundle ? "imported-camotics-result-bundle.zip" : null;
+  if (zipBundleFilename) {
+    await writeFile(join(workDir, zipBundleFilename), zipBundle.sourceBuffer);
   }
 
   result.artifacts = {
@@ -10167,7 +10186,79 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
   if (localValidation) {
     await writeFile(join(workDir, localValidationFilename), JSON.stringify(localValidation, null, 2), "utf8");
   }
-  return { resultPath, screenshotFilename, materialMeshFilename, localValidationFilename, localValidation };
+  return { resultPath, screenshotFilename, materialMeshFilename, localValidationFilename, localValidation, zipBundleFilename };
+}
+
+function extractCamoticsResultZipBundle(value) {
+  const buffer = decodeInlineFile(value);
+  const entries = extractZipEntries(buffer);
+  const findEntry = (predicate) => entries.find((entry) => predicate(entry.name.toLowerCase()));
+  const resultEntry = findEntry((name) => /(^|\/)camotics-result\.json$/.test(name) && !/template/.test(name));
+  if (!resultEntry) throw new Error("ZIP 中找不到 camotics-result.json。");
+  const localValidationEntry = findEntry((name) => /(^|\/)camotics-result-local-validation\.json$/.test(name));
+  const screenshotEntry = findEntry((name) => /\.(png|jpg|jpeg|webp)$/.test(name) && /camotics|preview|screenshot/.test(name));
+  const materialMeshEntry = findEntry((name) => /\.stl$/.test(name) && /material|removal|camotics/.test(name));
+  return {
+    sourceBuffer: buffer,
+    entries: entries.map((entry) => ({
+      name: entry.name,
+      sizeBytes: entry.content.length
+    })),
+    result: parseJsonBuffer(resultEntry.content, "camotics-result.json"),
+    localValidation: localValidationEntry ? parseJsonBuffer(localValidationEntry.content, "camotics-result-local-validation.json") : null,
+    screenshot: screenshotEntry ? { name: screenshotEntry.name, content: screenshotEntry.content } : null,
+    materialMesh: materialMeshEntry ? { name: materialMeshEntry.name, content: materialMeshEntry.content } : null
+  };
+}
+
+function extractZipEntries(buffer) {
+  const entries = [];
+  let offset = 0;
+  while (offset < buffer.length - 4) {
+    const signature = buffer.readUInt32LE(offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    if (signature !== 0x04034b50) {
+      offset += 1;
+      continue;
+    }
+    const flags = buffer.readUInt16LE(offset + 6);
+    const method = buffer.readUInt16LE(offset + 8);
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const uncompressedSize = buffer.readUInt32LE(offset + 22);
+    const fileNameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + fileNameLength;
+    const dataStart = nameEnd + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (flags & 0x08) throw new Error("暂不支持带 data descriptor 的 ZIP，请使用普通 zip 文件。");
+    if (dataEnd > buffer.length) throw new Error("ZIP 文件不完整或损坏。");
+    const name = buffer.subarray(nameStart, nameEnd).toString("utf8").replace(/\\/g, "/");
+    if (!name.endsWith("/")) {
+      const compressed = buffer.subarray(dataStart, dataEnd);
+      const content = method === 0
+        ? Buffer.from(compressed)
+        : method === 8
+          ? inflateRawSync(compressed)
+          : null;
+      if (!content) throw new Error(`ZIP 条目 ${name} 使用了暂不支持的压缩方式 ${method}。`);
+      if (uncompressedSize !== 0 && content.length !== uncompressedSize) {
+        throw new Error(`ZIP 条目 ${name} 解压大小不匹配。`);
+      }
+      entries.push({ name, content });
+    }
+    offset = dataEnd;
+  }
+  if (entries.length === 0) throw new Error("ZIP 中没有可读取文件。");
+  return entries;
+}
+
+function parseJsonBuffer(buffer, label) {
+  try {
+    return JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw new Error(`${label} 不是有效 JSON。`);
+  }
 }
 
 function normalizeCamoticsLocalValidation(value) {

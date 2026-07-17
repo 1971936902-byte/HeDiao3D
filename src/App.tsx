@@ -2017,6 +2017,7 @@ export function App() {
   const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
   const [isV3CamoticsPackagePreparing, setIsV3CamoticsPackagePreparing] = useState(false);
   const [v3CamoticsResultFile, setV3CamoticsResultFile] = useState<File | null>(null);
+  const [v3CamoticsResultZipFile, setV3CamoticsResultZipFile] = useState<File | null>(null);
   const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceFile, setV3NativeCamAcceptanceFile] = useState<File | null>(null);
@@ -2771,20 +2772,22 @@ export function App() {
       setV3Status("请先运行或恢复一个 V3 任务，再回填 CAMotics 仿真结果。");
       return;
     }
-    if (!v3CamoticsResultFile) {
-      setV3Status("请先选择 camotics-result.json。");
+    if (!v3CamoticsResultFile && !v3CamoticsResultZipFile) {
+      setV3Status("请先选择 camotics-result.json，或选择 Linux 回传的结果 ZIP。");
       return;
     }
     setIsV3CamoticsImporting(true);
     try {
-      const result = JSON.parse(await v3CamoticsResultFile.text());
+      const resultZipDataUrl = v3CamoticsResultZipFile ? await fileToDataUrl(v3CamoticsResultZipFile) : null;
+      const result = v3CamoticsResultFile ? JSON.parse(await v3CamoticsResultFile.text()) : null;
       const screenshotDataUrl = v3CamoticsScreenshotFile ? await fileToDataUrl(v3CamoticsScreenshotFile) : null;
       const materialMeshText = v3CamoticsMaterialMeshFile ? await v3CamoticsMaterialMeshFile.text() : null;
       const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-result`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          result,
+          ...(result ? { result } : {}),
+          ...(resultZipDataUrl ? { resultZipDataUrl } : {}),
           screenshotDataUrl,
           materialMeshText
         })
@@ -2798,9 +2801,10 @@ export function App() {
         category: "cam",
         status: data.simulationEvidence?.productionUnlockEligible ? "ok" : "warning",
         title: "回填 CAMotics 材料去除结果",
-        detail: `${v3CamoticsResultFile.name} / ${level} / ${eligible}`
+        detail: `${v3CamoticsResultZipFile?.name ?? v3CamoticsResultFile?.name ?? "camotics-result"} / ${level} / ${eligible}`
       });
       setV3CamoticsResultFile(null);
+      setV3CamoticsResultZipFile(null);
       setV3CamoticsScreenshotFile(null);
       setV3CamoticsMaterialMeshFile(null);
       await handleLoadV3Job(v3Job.id);
@@ -5964,6 +5968,15 @@ export function App() {
                       </div>
                     )}
                     <label>
+                      <span>结果ZIP</span>
+                      <input
+                        accept=".zip,application/zip"
+                        type="file"
+                        onChange={(event) => setV3CamoticsResultZipFile(event.target.files?.[0] ?? null)}
+                      />
+                      <small>{v3CamoticsResultZipFile?.name ?? "可直接上传 Linux 回传包"}</small>
+                    </label>
+                    <label>
                       <span>结果JSON</span>
                       <input
                         accept=".json,application/json"
@@ -5994,7 +6007,7 @@ export function App() {
                       className="demo-action package-action"
                       type="button"
                       onClick={handleImportV3CamoticsResult}
-                      disabled={!v3Job?.id || !v3CamoticsResultFile || isV3CamoticsImporting}
+                      disabled={!v3Job?.id || (!v3CamoticsResultFile && !v3CamoticsResultZipFile) || isV3CamoticsImporting}
                     >
                       <UploadCloud size={17} />
                       {isV3CamoticsImporting ? "回填中..." : "回填CAMotics结果"}
