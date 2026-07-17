@@ -300,6 +300,28 @@ type V3OrchestratorJob = {
         }>;
         requiredNextActions?: string[];
       };
+      openSourceCamExecutionPlan?: {
+        schema: string;
+        selectedEngine: string;
+        selectedEngineName: string;
+        readyStageCount: number;
+        totalStageCount: number;
+        selectedStageId: string | null;
+        selectedStageStatus: string;
+        summary: string;
+        stages?: Array<{
+          id: string;
+          order: number;
+          title: string;
+          priority: string;
+          status: string;
+          selected: boolean;
+          canAttemptNow: boolean;
+          acceptance: string;
+        }>;
+        globalAcceptanceCommands?: string[];
+        productionLocks?: string[];
+      };
       nativeCamReadiness?: {
         schema: string;
         level: string;
@@ -1833,7 +1855,8 @@ export function App() {
       byName.get("air-run.nc"),
       byName.get("operator-runbook.md"),
       byName.get("machining-package-index.json"),
-      byName.get("cam-handoff-evidence.md")
+      byName.get("cam-handoff-evidence.md"),
+      byName.get("open-source-cam-execution-plan.json")
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
@@ -5491,6 +5514,25 @@ export function App() {
                   {v3Job.result.summary.camEngineSelection.fallbackReason}
                 </small>
               )}
+              {v3Job?.result?.summary.openSourceCamExecutionPlan && (
+                <div className="v3-deployment-validation">
+                  <small className={v3Job.result.summary.openSourceCamExecutionPlan.readyStageCount > 0 ? "v3-inline-warning" : "v3-inline-critical"}>
+                    开源CAM执行计划：
+                    {v3Job.result.summary.openSourceCamExecutionPlan.readyStageCount}/{v3Job.result.summary.openSourceCamExecutionPlan.totalStageCount}
+                    {" · "}
+                    {v3Job.result.summary.openSourceCamExecutionPlan.selectedEngineName}
+                    {" · "}
+                    {v3Job.result.summary.openSourceCamExecutionPlan.selectedStageStatus}
+                  </small>
+                  <div className="v3-adapter-list">
+                    {v3Job.result.summary.openSourceCamExecutionPlan.stages?.slice(0, 4).map((stage) => (
+                      <span className={stage.canAttemptNow ? "ok" : stage.selected ? "warning" : "critical"} key={stage.id} title={stage.acceptance}>
+                        {stage.priority} · {stage.title}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {v3Job?.result?.summary.nativeCamReadiness && (
                 <small>
                   Native CAM：{v3Job.result.summary.nativeCamReadiness.readyCount}/{v3Job.result.summary.nativeCamReadiness.requiredCount}
@@ -7113,6 +7155,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "operator-runbook.md") return "操作员说明";
   if (filename === "machining-package-index.json") return "加工包索引";
   if (filename === "cam-handoff-evidence.md") return "CAM交接证据";
+  if (filename === "open-source-cam-execution-plan.json") return "开源CAM执行计划";
   return filename;
 }
 

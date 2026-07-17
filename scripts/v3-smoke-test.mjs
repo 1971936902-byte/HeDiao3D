@@ -108,6 +108,8 @@ async function main() {
   assert(job.result?.summary?.camInputPlan?.modelSelection?.selectedModelId, "CAM input model selection did not select a model");
   assert(job.result?.summary?.camEngineSelection?.schema === "hediao3d.cam-engine-selection.v1", "CAM engine selection report missing");
   assert(job.result?.summary?.camEngineSelection?.selectedEngineName, "CAM engine selection missing selected engine name");
+  assert(job.result?.summary?.openSourceCamExecutionPlan?.schema === "hediao3d.job-open-source-cam-execution-plan.v1", "job open-source CAM execution plan missing");
+  assert(job.result.summary.openSourceCamExecutionPlan.stages?.some((stage) => stage.id === "opencamlib-neutral-core"), "job CAM execution plan missing OpenCAMLib stage");
   assert(job.result?.summary?.camServerConfig?.schema === "hediao3d.cam-server-config.v1", "CAM server config report missing");
   assert(job.result.summary.camServerConfig.deploymentValidation?.schema === "hediao3d.cam-server-deployment-validation.v1", "job summary missing CAM server deployment validation");
   assert(job.result.summary.camServerConfig.deploymentValidation.stages?.some((stage) => stage.id === "external-handoff-smoke"), "job summary deployment validation missing external handoff stage");
@@ -121,6 +123,7 @@ async function main() {
     "repair-execution.json",
     "cam-input-plan.json",
     "cam-engine-selection.json",
+    "open-source-cam-execution-plan.json",
     "external-cam-recipe.json",
     "cam-server-config.json",
     "cam-server-prep-checklist.md",
@@ -168,6 +171,11 @@ async function main() {
   assert(camInputPlan.modelSelection?.candidates?.some((candidate) => candidate.selectedForCam), "CAM input model candidates missing selectedForCam");
   const externalCamRecipe = await getArtifactJson(job.id, "external-cam-recipe.json");
   assert(externalCamRecipe.model?.modelSelection?.selectedModelPath === camInputPlan.selectedModelPath, "external CAM recipe did not receive selected CAM input model");
+  const openSourceCamExecutionPlan = await getArtifactJson(job.id, "open-source-cam-execution-plan.json");
+  assert(openSourceCamExecutionPlan.schema === "hediao3d.job-open-source-cam-execution-plan.v1", "job CAM execution plan schema mismatch");
+  assert(openSourceCamExecutionPlan.selectedEngineName, "job CAM execution plan missing selected engine name");
+  assert(openSourceCamExecutionPlan.stages?.some((stage) => stage.id === "camotics-material-removal" && stage.output.includes("camotics-result")), "job CAM execution plan missing CAMotics output contract");
+  assert(openSourceCamExecutionPlan.productionLocks?.some((item) => item.includes("production-candidate")), "job CAM execution plan missing production-candidate lock");
   const camServerConfig = await getArtifactJson(job.id, "cam-server-config.json");
   assert(camServerConfig.schema === "hediao3d.cam-server-config.v1", "CAM server config artifact schema mismatch");
   assert(camServerConfig.adapters?.some((adapter) => adapter.id === camServerConfig.selectedEngine), "CAM server config missing selected adapter details");
@@ -189,6 +197,7 @@ async function main() {
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");
+  assert(packageIndex.openSourceCamExecutionPlan?.artifact === "open-source-cam-execution-plan.json", "package index missing open-source CAM execution plan");
   assert(packageIndex.camServerConfig?.artifact === "cam-server-config.json", "package index missing CAM server config artifact");
   assert(packageIndex.camServerConfig?.prepChecklist === "cam-server-prep-checklist.md", "package index missing CAM server prep checklist artifact");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
@@ -201,6 +210,7 @@ async function main() {
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-wrap-preview-report.json"), "readFirst missing rotary wrap preview report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-server-config.json"), "readFirst missing CAM server config report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-server-prep-checklist.md"), "readFirst missing CAM server prep checklist");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "open-source-cam-execution-plan.json"), "readFirst missing open-source CAM execution plan");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "rotary-calibration-sheet.json"), "readFirst missing rotary calibration sheet");
@@ -215,6 +225,7 @@ async function main() {
   assert(!packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "neverRunOnMachine should not include rotary calibration air-run");
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.every((file) => file.machineUse?.class), "delivery-manifest artifact missing machineUse classifications");
+  assert(deliveryManifest.files?.some((file) => file.filename === "open-source-cam-execution-plan.json" && file.downloadable), "delivery manifest should expose open-source CAM execution plan");
   assert(deliveryManifest.files?.some((file) => file.filename === "operator-download-checklist.md" && file.downloadable), "delivery manifest should expose operator download checklist");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
@@ -235,6 +246,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-handoff-evidence.md" && file.sha256), "package integrity missing CAM handoff evidence hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-server-config.json" && file.sha256), "package integrity missing CAM server config hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-server-prep-checklist.md" && file.sha256), "package integrity missing CAM server prep checklist hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "open-source-cam-execution-plan.json" && file.sha256), "package integrity missing open-source CAM execution plan hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-evidence-dossier.json" && file.sha256), "package integrity missing production evidence dossier hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");

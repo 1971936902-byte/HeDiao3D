@@ -2700,6 +2700,18 @@ async function processOrchestratorJob(job, settings) {
   });
   await writeFile(join(job.workDir, "external-cam-recipe.json"), JSON.stringify(externalCamRecipe, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "external-cam-recipe.json"));
+  const openSourceCamExecutionPlan = createJobOpenSourceCamExecutionPlan({
+    job,
+    settings,
+    camInputPlan,
+    selectedEngine: selected,
+    engineReadiness,
+    camEngineSelection,
+    nativeCamReadiness,
+    externalCamRecipe
+  });
+  await writeFile(join(job.workDir, "open-source-cam-execution-plan.json"), JSON.stringify(openSourceCamExecutionPlan, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "open-source-cam-execution-plan.json"));
   await writeAdapterJobSpec(job, settings, { camInputPlan, meshQuality, repairPlan, repairExecution, engineReadiness, externalCamRecipe, camServerConfig });
   const adapterPreflight = createAdapterPreflightReport(selected, job, settings, camInputPlan, engineReadiness);
   await writeFile(join(job.workDir, "adapter-preflight.json"), JSON.stringify(adapterPreflight, null, 2), "utf8");
@@ -2950,6 +2962,7 @@ async function processOrchestratorJob(job, settings) {
     ncStaticAnalysis,
     nativeCamReadiness,
     camEngineSelection,
+    openSourceCamExecutionPlan,
     machineControllerProfile,
     machineAcceptanceChecklist,
     controllerDialectReport,
@@ -2983,6 +2996,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "open-source-cam-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
@@ -3030,6 +3044,7 @@ async function processOrchestratorJob(job, settings) {
       nativeCamReadiness,
       camServerConfig,
       externalCamRecipe,
+      openSourceCamExecutionPlan,
       adapterPreflight,
       productionGate,
       postprocessProfile,
@@ -3818,6 +3833,137 @@ function createExternalCamRecipe({ job, settings, camInputPlan, meshQuality, rep
       ...(!engineReadiness.externalReady ? ["外部 CAM adapter 环境未就绪，当前只能使用内置 fallback。"] : [])
     ],
     nextAdapterSteps: createExternalCamNextSteps(selectedEngine.id, rotaryMode)
+  };
+}
+
+function createJobOpenSourceCamExecutionPlan({ job, settings, camInputPlan, selectedEngine, engineReadiness, camEngineSelection, nativeCamReadiness, externalCamRecipe }) {
+  const enginesById = new Map((engineReadiness.engines ?? []).map((engine) => [engine.id, engine]));
+  const rotaryMode = settings.camMode === "rotaryWrap";
+  const stageDefinitions = [
+    {
+      id: "freecad-reference-cam",
+      engineId: "freecad",
+      title: "FreeCAD 标准三轴参考 CAM",
+      phase: "external-cam-generator",
+      priority: settings.camMode === "3axis" ? "P0" : "P1",
+      input: camInputPlan.selectedModelPath ?? camInputPlan.selectedModelUrl ?? "cam-input-plan.json",
+      output: "freecad-cam-plan.json / adapter-report.json / G-code source snapshot",
+      acceptance: "npm run test:v3:freecad-external-handoff",
+      handoff: rotaryMode
+        ? "仅作为展开三轴参考；最终 Y/A 旋转夹具 NC 仍由 HeDiao3D 后处理生成。"
+        : "FreeCAD 输出进入 Orchestrator 统一 NC 静态分析、CAMotics 仿真和交付门禁。",
+      productionBoundary: "不得直接使用 FreeCAD 默认后处理输出作为本机床生产 NC。"
+    },
+    {
+      id: "opencamlib-neutral-core",
+      engineId: "opencamlib",
+      title: "OpenCAMLib 曲面接触与中立刀位点",
+      phase: "geometry-kernel",
+      priority: "P0",
+      input: `${camInputPlan.selectedModelPath ?? "cam-input-plan.json"} + ${describeTool(settings).name}`,
+      output: "opencamlib-kernel-plan.json / neutral-toolpath.json / cutter-envelope-report",
+      acceptance: "npm run test:v3:neutral-import && npm run test:v3:closed-neutral-handoff",
+      handoff: "输出 hediao3d.neutral-toolpath.v1 后，由 HeDiao3D 转成 X+Z+Y/A 旋转夹具 NC。",
+      productionBoundary: "preview/fixture neutral 只能验协议；真实生产必须来自 OpenCAMLib/ocl 接触计算和材料去除仿真。"
+    },
+    {
+      id: "camotics-material-removal",
+      engineId: "camotics",
+      title: "CAMotics 材料去除仿真",
+      phase: "simulation",
+      priority: "P0",
+      input: "camotics-preview.nc / camotics-project-template.json / camotics-cli-run-package.json",
+      output: "camotics-result.json / camotics-preview.png / camotics-material-removal.stl",
+      acceptance: "npm run test:v3:camotics-import && npm run test:v3:camotics-cli-package-api",
+      handoff: "非 synthetic 仿真结果回填 Orchestrator 后进入 production-gate 和 production-evidence-dossier。",
+      productionBoundary: "CAMotics 不生成刀路；synthetic 或哈希不匹配的结果不能解锁生产。"
+    },
+    {
+      id: "blendercam-artistic-mesh",
+      engineId: "blendercam",
+      title: "BlenderCAM/Fabex 艺术 Mesh 候选刀路",
+      phase: "artistic-cam-generator",
+      priority: rotaryMode ? "P0" : "P1",
+      input: camInputPlan.selectedModelPath ?? camInputPlan.selectedModelUrl ?? "cam-input-plan.json",
+      output: "blendercam-cam-plan.json / operation report / G-code source snapshot",
+      acceptance: "npm run test:v3:blendercam-external-handoff",
+      handoff: "复杂佛头 Mesh 候选刀路必须回到 Orchestrator 摄取链路，与 OpenCAMLib 中立刀位点对照。",
+      productionBoundary: "Blender 插件版本、坐标系、刀具补偿和后处理必须在目标服务器和机床空跑中验收。"
+    }
+  ];
+  const stages = stageDefinitions.map((stage, index) => {
+    const engine = enginesById.get(stage.engineId);
+    const candidate = camEngineSelection.candidates?.find((item) => item.id === stage.engineId);
+    const selected = selectedEngine.id === stage.engineId;
+    const missing = [
+      ...(engine?.available ? [] : [`${engineDisplayName(stage.engineId)} native 命令未检测到`]),
+      ...(engine?.adapterReady ? [] : [`${engineDisplayName(stage.engineId)} adapter 尚未 ready`]),
+      ...(camInputPlan.status === "blocked" ? [camInputPlan.summary] : []),
+      ...(!enableExternalCamAdapters && stage.engineId !== "camotics" ? ["ENABLE_EXTERNAL_CAM_ADAPTERS=false，外部 CAM 只生成计划不执行"] : [])
+    ];
+    const canAttempt = Boolean(candidate?.canAttemptNow || (selected && selectedEngine.available && enableExternalCamAdapters && camInputPlan.status !== "blocked"));
+    return {
+      ...stage,
+      order: index + 1,
+      selected,
+      engineLevel: engine?.status ?? "missing",
+      engineAvailable: Boolean(engine?.available),
+      adapterReady: Boolean(engine?.adapterReady),
+      canAttemptNow: canAttempt,
+      status: canAttempt ? "ready-to-run-adapter" : missing.length ? "blocked-or-pending" : "review-required",
+      missing: dedupeStrings(missing),
+      evidence: [
+        "open-source-cam-execution-plan.json",
+        "native-cam-readiness.json",
+        "cam-engine-selection.json",
+        "external-cam-recipe.json",
+        "adapter-report.json",
+        stage.output
+      ]
+    };
+  });
+  const selectedStage = stages.find((stage) => stage.selected) ?? stages[0];
+  const readyStageCount = stages.filter((stage) => stage.canAttemptNow).length;
+  return {
+    schema: "hediao3d.job-open-source-cam-execution-plan.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    camMode: settings.camMode,
+    selectedEngine: selectedEngine.id,
+    selectedEngineName: selectedEngine.name,
+    sourceModelUrl: camInputPlan.sourceModelUrl,
+    selectedModelUrl: camInputPlan.selectedModelUrl,
+    selectedModelKind: camInputPlan.selectedModelKind,
+    camInputStatus: camInputPlan.status,
+    summary: `${readyStageCount}/${stages.length} 个开源 CAM 阶段可尝试执行；当前任务选择 ${selectedEngine.name}，${externalCamRecipe.status}。`,
+    strategy: rotaryMode
+      ? "佛头/核雕旋转夹具任务优先 OpenCAMLib 中立刀位点或 BlenderCAM 艺术 Mesh 候选，再由 HeDiao3D 后处理为 X+Z+Y/A NC。"
+      : "三轴任务优先 FreeCAD 标准三轴 CAM，OpenCAMLib/BlenderCAM 作为复杂曲面补充。",
+    readyStageCount,
+    totalStageCount: stages.length,
+    selectedStageId: selectedStage?.id ?? null,
+    selectedStageStatus: selectedStage?.status ?? "missing",
+    nativeCamLevel: nativeCamReadiness.level,
+    externalAdapterExecutionEnabled: enableExternalCamAdapters,
+    stages,
+    globalAcceptanceCommands: [
+      "npm run test:v3:native-cam",
+      "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      "bash native-cam-real-output-check.sh",
+      "npm run test:v3:real-neutral-handoff",
+      "npm run test:v3:camotics-import",
+      "npm run test:v3:readiness-api"
+    ],
+    productionLocks: [
+      "没有 production-candidate handoffEvidence 时禁止生产 NC。",
+      "没有非 synthetic CAMotics/等效材料去除仿真时禁止生产 NC。",
+      "没有 operator-runbook.md 指导下的离料空跑、软料试雕和机床验收记录时禁止生产 NC。"
+    ],
+    nextActions: dedupeStrings([
+      ...(selectedStage?.missing ?? []),
+      ...(camEngineSelection.requiredNextActions ?? []),
+      "在 Linux CAM 服务器执行真实输出验收后，把 native-cam-real-output-acceptance.json 回填到 V3 总门禁。"
+    ])
   };
 }
 
@@ -6687,7 +6833,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -6731,13 +6877,14 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-server-config.json"),
         getFile("cam-server-prep-checklist.md"),
         getFile("cam-engine-selection.json"),
+        getFile("open-source-cam-execution-plan.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json"),
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -6863,6 +7010,17 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       externalAttemptAllowed: camEngineSelection.externalAttemptAllowed,
       requiredNextActions: camEngineSelection.requiredNextActions
     } : null,
+    openSourceCamExecutionPlan: openSourceCamExecutionPlan ? {
+      schema: openSourceCamExecutionPlan.schema,
+      selectedEngine: openSourceCamExecutionPlan.selectedEngine,
+      selectedEngineName: openSourceCamExecutionPlan.selectedEngineName,
+      readyStageCount: openSourceCamExecutionPlan.readyStageCount,
+      totalStageCount: openSourceCamExecutionPlan.totalStageCount,
+      selectedStageId: openSourceCamExecutionPlan.selectedStageId,
+      selectedStageStatus: openSourceCamExecutionPlan.selectedStageStatus,
+      summary: openSourceCamExecutionPlan.summary,
+      artifact: "open-source-cam-execution-plan.json"
+    } : null,
     simulationEvidence: productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary),
     camotics: {
       status: camoticsInput.status,
@@ -6909,6 +7067,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
     createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
+    createDeliveryFile(job.id, "open-source-cam-execution-plan.json", "开源CAM执行计划", "report", true, "绑定本次任务的 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 输入、输出、验收命令和生产边界。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
     createDeliveryFile(job.id, "cam-handoff-evidence.md", "CAM Handoff证据说明", "report", true, "用可读文本说明刀路来源、输入哈希、fixture/synthetic 风险、覆盖率和生产边界。"),
@@ -7986,6 +8145,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "open-source-cam-execution-plan.json",
     "machining-package-index.json",
     "delivery-manifest.json",
     "operator-download-checklist.md",
@@ -8245,6 +8405,7 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "open-source-cam-execution-plan.json",
     "machining-package-index.json",
     "delivery-manifest.json",
     "operator-download-checklist.md",
@@ -8377,6 +8538,7 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
       ncStaticAnalysis: readJsonFile(join(workDir, "nc-static-analysis.json")),
       nativeCamReadiness: readJsonFile(join(workDir, "native-cam-readiness.json")),
       camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
+      openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
       machineControllerProfile: readJsonFile(join(workDir, "machine-controller-profile.json")),
       machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
       controllerDialectReport: readJsonFile(join(workDir, "controller-dialect-report.json")),
@@ -8668,6 +8830,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     ncStaticAnalysis,
     nativeCamReadiness,
     camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
+    openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
     machineControllerProfile,
     machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
     controllerDialectReport,
@@ -8709,6 +8872,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       rotaryCalibrationSheet,
       productionUnlockMatrix,
       productionEvidenceDossier,
+      openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
       machiningPackageIndex,
       deliveryManifest,
       packageIntegrity,
