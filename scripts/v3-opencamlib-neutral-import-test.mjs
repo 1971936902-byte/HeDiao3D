@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 
 const root = process.cwd();
 const workDir = join(tmpdir(), `hediao3d-opencamlib-neutral-import-${Date.now()}`);
@@ -128,6 +129,7 @@ const candidateJobPath = join(workDir, "opencamlib-candidate-job.json");
 const candidateResultPath = join(workDir, "adapter-candidate-report.json");
 const candidateImportedPath = join(workDir, "real-neutral-toolpath-with-contact-report.json");
 const candidateOutputNeutralPath = join(workDir, "neutral-toolpath-candidate.json");
+const candidateContactReportPath = join(workDir, "opencamlib-cutter-contact-report.json");
 writeFileSync(candidateImportedPath, JSON.stringify({
   schema: "hediao3d.neutral-toolpath.v1",
   engine: "opencamlib",
@@ -138,20 +140,24 @@ writeFileSync(candidateImportedPath, JSON.stringify({
     depthAxis: "Z",
     rotaryUnit: "degree"
   },
-  cutterContactReport: {
-    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
-    quality: {
-      level: "ready",
-      productionCandidate: true,
-      postprocessEligible: true,
-      summary: "Validated OpenCAMLib cutter-contact report fixture for production-candidate classification."
-    }
-  },
+  cutterContactReportPath: candidateContactReportPath,
   points: [
     { x: -12, a: 0, z: 21.6, depth: 0.4, source: "validated-contact-fixture" },
     { x: 0, a: 90, z: 21.2, depth: 0.8, source: "validated-contact-fixture" },
     { x: 12, a: 180, z: 21.5, depth: 0.5, source: "validated-contact-fixture" }
   ]
+}, null, 2));
+writeFileSync(candidateContactReportPath, JSON.stringify({
+  schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+  inputIdentity: {
+    sourceNeutralToolpathSha256: sha256File(candidateImportedPath)
+  },
+  quality: {
+    level: "ready",
+    productionCandidate: true,
+    postprocessEligible: true,
+    summary: "Validated OpenCAMLib cutter-contact report fixture for production-candidate classification."
+  }
 }, null, 2));
 writeFileSync(candidateJobPath, JSON.stringify({
   ...JSON.parse(readFileSync(jobPath, "utf8")),
@@ -177,15 +183,76 @@ assert(candidateRun.status === 0, `candidate adapter exited ${candidateRun.statu
 const candidateReport = JSON.parse(readFileSync(candidateResultPath, "utf8"));
 assert(candidateReport.status === "completed", `candidate adapter report expected completed, got ${candidateReport.status}: ${candidateReport.error}`);
 assert(candidateReport.metrics?.neutralToolpath?.cutterContactReport?.status === "production-candidate", "candidate contact report should be production-candidate");
+assert(candidateReport.metrics.neutralToolpath.cutterContactReport.inputIdentityBinding?.status === "bound", "candidate contact report should bind to source neutral hash");
 assert(candidateReport.metrics?.handoffEvidence?.classification === "production-candidate", `validated contact report should classify as production-candidate, got ${candidateReport.metrics?.handoffEvidence?.classification}`);
 assert(candidateReport.metrics?.handoffEvidence?.productionCandidate === true, "validated contact report should allow production candidate classification");
+
+const unboundJobPath = join(workDir, "opencamlib-unbound-contact-job.json");
+const unboundResultPath = join(workDir, "adapter-unbound-contact-report.json");
+const unboundImportedPath = join(workDir, "real-neutral-toolpath-unbound-contact-report.json");
+const unboundOutputNeutralPath = join(workDir, "neutral-toolpath-unbound.json");
+writeFileSync(unboundImportedPath, JSON.stringify({
+  schema: "hediao3d.neutral-toolpath.v1",
+  engine: "opencamlib",
+  synthetic: false,
+  coordinate: {
+    lengthAxis: "X",
+    rotaryAxis: "Y",
+    depthAxis: "Z",
+    rotaryUnit: "degree"
+  },
+  cutterContactReport: {
+    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    quality: {
+      level: "ready",
+      productionCandidate: true,
+      postprocessEligible: true,
+      summary: "Unbound report intentionally lacks inputIdentity and must not classify as production-candidate."
+    }
+  },
+  points: [
+    { x: -12, a: 0, z: 21.6, depth: 0.4, source: "unbound-contact-fixture" },
+    { x: 0, a: 90, z: 21.2, depth: 0.8, source: "unbound-contact-fixture" },
+    { x: 12, a: 180, z: 21.5, depth: 0.5, source: "unbound-contact-fixture" }
+  ]
+}, null, 2));
+writeFileSync(unboundJobPath, JSON.stringify({
+  ...JSON.parse(readFileSync(jobPath, "utf8")),
+  outputs: {
+    gcode: join(workDir, "toolpath-unbound.nc"),
+    report: unboundResultPath,
+    neutralToolpath: unboundOutputNeutralPath
+  }
+}, null, 2));
+const unboundRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/opencamlib/opencamlib_job.py", unboundJobPath, unboundResultPath], {
+  cwd: root,
+  encoding: "utf8",
+  windowsHide: true,
+  env: {
+    ...process.env,
+    HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
+    HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "false",
+    HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON: unboundImportedPath
+  }
+});
+assert(!unboundRun.error, `unbound adapter spawn failed: ${unboundRun.error?.message}`);
+assert(unboundRun.status === 0, `unbound adapter exited ${unboundRun.status}: ${unboundRun.stderr || unboundRun.stdout}`);
+const unboundReport = JSON.parse(readFileSync(unboundResultPath, "utf8"));
+assert(unboundReport.metrics?.neutralToolpath?.cutterContactReport?.inputIdentityBinding?.status === "missing", "unbound contact report should expose missing input identity");
+assert(unboundReport.metrics?.handoffEvidence?.classification === "contact-report-review", `unbound contact report should classify as review, got ${unboundReport.metrics?.handoffEvidence?.classification}`);
+assert(unboundReport.metrics?.handoffEvidence?.productionCandidate === false, "unbound contact report must not be production candidate");
 
 console.log(JSON.stringify({
   ...contract,
   missingContactClassification: report.metrics.handoffEvidence.classification,
-  candidateClassification: candidateReport.metrics.handoffEvidence.classification
+  candidateClassification: candidateReport.metrics.handoffEvidence.classification,
+  unboundClassification: unboundReport.metrics.handoffEvidence.classification
 }, null, 2));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }

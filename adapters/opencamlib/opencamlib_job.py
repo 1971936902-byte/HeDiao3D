@@ -13,6 +13,7 @@ postprocessing and safety gates.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shlex
@@ -337,7 +338,9 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
             },
         }
     try:
-        neutral = json.loads(neutral_path.read_text(encoding="utf-8"))
+        neutral_text = neutral_path.read_text(encoding="utf-8")
+        external_output_sha256 = sha256_text(neutral_text)
+        neutral = json.loads(neutral_text)
     except (OSError, json.JSONDecodeError):
         return {
             "status": "adapter_not_ready",
@@ -357,12 +360,17 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
         "generatedByExternalCommand": True,
     }
     neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+    normalized_output_sha256 = sha256_file(neutral_path)
     runner = neutral.get("runner") if isinstance(neutral.get("runner"), dict) else {}
     runner_mode = str(runner.get("mode") or "")
     heightfield_preview = bool(neutral.get("experimentalHeightfield")) or "heightfield" in runner_mode.lower()
     preview_scaffold = heightfield_preview or "preview" in runner_mode.lower() or "scaffold" in runner_mode.lower()
     fixture = bool(neutral.get("fixture")) or "fixture" in runner_mode.lower()
-    contact_report = evaluate_cutter_contact_report(neutral_path, neutral)
+    contact_report = evaluate_cutter_contact_report(neutral_path, neutral, {
+        "neutralToolpathSha256": [external_output_sha256, normalized_output_sha256],
+        "planSha256": sha256_file(plan_path),
+        "modelSha256": sha256_file(Path(str((plan.get("model") or {}).get("path") or ""))),
+    })
     preview_scaffold = preview_scaffold or contact_report["previewScaffold"]
     return {
         "status": "completed",
@@ -408,7 +416,9 @@ def try_import_neutral_toolpath(job: Dict[str, Any]) -> Optional[Dict[str, Any]]
             "error": f"HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON does not exist: {source}",
         }
     try:
-        neutral = json.loads(source_path.read_text(encoding="utf-8"))
+        neutral_text = source_path.read_text(encoding="utf-8")
+        source_neutral_sha256 = sha256_text(neutral_text)
+        neutral = json.loads(neutral_text)
     except (OSError, json.JSONDecodeError):
         return {
             "status": "adapter_not_ready",
@@ -434,7 +444,10 @@ def try_import_neutral_toolpath(job: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "importedFrom": str(source_path),
     }
     neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
-    contact_report = evaluate_cutter_contact_report(neutral_path, neutral)
+    contact_report = evaluate_cutter_contact_report(neutral_path, neutral, {
+        "sourceNeutralToolpathSha256": source_neutral_sha256,
+        "neutralToolpathSha256": [source_neutral_sha256, sha256_file(neutral_path)],
+    })
     return {
         "status": "completed",
         "error": None,
@@ -478,17 +491,17 @@ def validate_imported_neutral_toolpath(neutral: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def evaluate_cutter_contact_report(neutral_path: Path, neutral: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_cutter_contact_report(neutral_path: Path, neutral: Dict[str, Any], expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     embedded = neutral.get("cutterContactReport")
     if isinstance(embedded, dict):
-        return summarize_cutter_contact_report(embedded, None)
+        return summarize_cutter_contact_report(embedded, None, expected_identity)
     explicit_path = neutral.get("cutterContactReportPath") or neutral.get("cutterEnvelopeReportPath")
     if isinstance(explicit_path, str) and explicit_path:
         path = Path(explicit_path)
         if path.exists():
             loaded = read_optional_contact_report(path)
             if loaded is not None:
-                return summarize_cutter_contact_report(loaded, str(path))
+                return summarize_cutter_contact_report(loaded, str(path), expected_identity)
     runner = neutral.get("runner") if isinstance(neutral.get("runner"), dict) else {}
     heightfield = runner.get("heightfield") if isinstance(runner.get("heightfield"), dict) else {}
     reported = heightfield.get("cutterEnvelopeReport")
@@ -497,12 +510,12 @@ def evaluate_cutter_contact_report(neutral_path: Path, neutral: Dict[str, Any]) 
         if path.exists():
             loaded = read_optional_contact_report(path)
             if loaded is not None:
-                return summarize_cutter_contact_report(loaded, str(path))
+                return summarize_cutter_contact_report(loaded, str(path), expected_identity)
     sibling = neutral_path.with_name("opencamlib-cutter-envelope-report.json")
     if sibling.exists():
         loaded = read_optional_contact_report(sibling)
         if loaded is not None:
-            return summarize_cutter_contact_report(loaded, str(sibling))
+            return summarize_cutter_contact_report(loaded, str(sibling), expected_identity)
     return {
         "schema": "hediao3d.opencamlib-contact-report-summary.v1",
         "status": "missing",
@@ -523,10 +536,11 @@ def read_optional_contact_report(path: Path) -> Optional[Dict[str, Any]]:
     return report if isinstance(report, dict) else None
 
 
-def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str]) -> Dict[str, Any]:
+def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str], expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     schema = str(report.get("schema") or "")
     quality = report.get("quality") if isinstance(report.get("quality"), dict) else {}
     level = str(quality.get("level") or report.get("level") or "")
+    identity_binding = evaluate_contact_report_input_identity(report, expected_identity)
     preview_scaffold = (
         "preview" in schema.lower()
         or "envelope-report" in schema.lower()
@@ -539,6 +553,7 @@ def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str])
         and bool(quality.get("productionCandidate"))
         and bool(quality.get("postprocessEligible"))
         and not preview_scaffold
+        and identity_binding["status"] == "bound"
     )
     status = "production-candidate" if production_candidate else "preview-scaffold" if preview_scaffold else "review"
     return {
@@ -549,8 +564,70 @@ def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str])
         "productionCandidate": production_candidate,
         "postprocessEligible": bool(quality.get("postprocessEligible")),
         "previewScaffold": preview_scaffold,
+        "inputIdentityBinding": identity_binding,
         "summary": quality.get("summary") or report.get("summary") or "OpenCAMLib cutter-contact report evaluated.",
     }
+
+
+def evaluate_contact_report_input_identity(report: Dict[str, Any], expected_identity: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    identity = report.get("inputIdentity") if isinstance(report.get("inputIdentity"), dict) else {}
+    if not expected_identity:
+        return {
+            "schema": "hediao3d.opencamlib-contact-report-input-binding.v1",
+            "status": "not-checked",
+            "summary": "No expected input identity was available for this contact report.",
+        }
+    acceptable_neutral_hashes = set()
+    neutral_expected = expected_identity.get("neutralToolpathSha256")
+    if isinstance(neutral_expected, list):
+        acceptable_neutral_hashes.update(str(item) for item in neutral_expected if item)
+    elif neutral_expected:
+        acceptable_neutral_hashes.add(str(neutral_expected))
+    source_expected = expected_identity.get("sourceNeutralToolpathSha256")
+    if source_expected:
+        acceptable_neutral_hashes.add(str(source_expected))
+
+    reported_neutral_hashes = [
+        identity.get("neutralToolpathSha256"),
+        identity.get("sourceNeutralToolpathSha256"),
+        identity.get("externalNeutralToolpathSha256"),
+    ]
+    neutral_match = any(str(value) in acceptable_neutral_hashes for value in reported_neutral_hashes if value)
+
+    optional_checks: List[Dict[str, Any]] = []
+    for key in ("modelSha256", "planSha256"):
+        expected = expected_identity.get(key)
+        reported = identity.get(key)
+        if expected and reported:
+            optional_checks.append({
+                "field": key,
+                "expected": expected,
+                "reported": reported,
+                "matches": str(expected) == str(reported),
+            })
+    optional_mismatch = any(check["matches"] is False for check in optional_checks)
+    has_reported_identity = any(value for value in reported_neutral_hashes) or bool(optional_checks)
+    status = "bound" if neutral_match and not optional_mismatch else "mismatch" if has_reported_identity else "missing"
+    return {
+        "schema": "hediao3d.opencamlib-contact-report-input-binding.v1",
+        "status": status,
+        "neutralToolpathHashMatched": neutral_match,
+        "optionalChecks": optional_checks,
+        "summary": "Contact report input identity matches neutral source/output hash."
+        if status == "bound"
+        else "Contact report is missing or mismatches neutral source/output hash; it cannot be a production candidate.",
+    }
+
+
+def sha256_file(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def write_synthetic_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any]) -> str:
