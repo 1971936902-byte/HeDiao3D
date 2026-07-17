@@ -1580,6 +1580,16 @@ export function App() {
     if (!toolpath) return null;
     return getToolpathProgram(toolpath, toolpathKind);
   }, [toolpath, toolpathKind]);
+  const v3DeliveryShortcutFiles = useMemo(() => {
+    const files = v3Job?.result?.summary.deliveryManifest?.files ?? [];
+    const byName = new Map(files.map((file) => [file.filename, file]));
+    return [
+      byName.get("rotary-calibration-airrun.nc"),
+      byName.get("air-run.nc"),
+      byName.get("operator-runbook.md"),
+      byName.get("machining-package-index.json")
+    ].filter((file): file is NonNullable<typeof file> => Boolean(file));
+  }, [v3Job]);
   const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
   const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
@@ -4968,6 +4978,25 @@ export function App() {
                   交付清单：{v3Job.result.summary.deliveryManifest.files.filter((file) => file.downloadable).length}/{v3Job.result.summary.deliveryManifest.files.length} 个文件可下载
                 </small>
               )}
+              {v3DeliveryShortcutFiles.length > 0 && (
+                <div className="v3-delivery-shortcuts" aria-label="V3关键交付文件">
+                  <span>上机前顺序</span>
+                  {v3DeliveryShortcutFiles.map((file, index) => (
+                    <a
+                      className={!file.downloadable ? "disabled" : ""}
+                      download={file.downloadable}
+                      href={file.url}
+                      key={file.filename}
+                      onClick={(event) => {
+                        if (!file.downloadable) event.preventDefault();
+                      }}
+                      title={file.note}
+                    >
+                      {index + 1}. {formatV3ShortcutFileLabel(file.filename)}
+                    </a>
+                  ))}
+                </div>
+              )}
               {v3Job?.result?.summary.packageIntegrity && (
                 <small className={v3Job.result.summary.packageIntegrity.status === "complete" ? "v3-inline-ok" : "v3-inline-critical"}>
                   完整性：{v3Job.result.summary.packageIntegrity.status}
@@ -6170,6 +6199,14 @@ function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
   return `${status}${simulation}${synthetic}${points}`;
 }
 
+function formatV3ShortcutFileLabel(filename: string) {
+  if (filename === "rotary-calibration-airrun.nc") return "旋转标定空跑";
+  if (filename === "air-run.nc") return "整条刀路空跑";
+  if (filename === "operator-runbook.md") return "操作员说明";
+  if (filename === "machining-package-index.json") return "加工包索引";
+  return filename;
+}
+
 function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: boolean, exportGateReady: boolean) {
   if (isOperatorMode && !exportGateReady) return "操作员模式：只能下载已通过安全校验并完成正式确认的文件";
   if (exportBlocked) return "导出前安全校验存在阻断项";
@@ -7318,6 +7355,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `每圈距离: ${rotaryCalibrationSheet?.axisMapping?.rotaryWrapPerRevolutionMm ?? "-"}mm`,
     `每毫米角度: ${rotaryCalibrationSheet?.axisMapping?.rotaryDegPerLinearMm ?? "-"}deg/mm`,
     `复核项: ${rotaryCalibrationSheet?.warnings?.length ?? 0}`,
+    `标定空跑: ${manifest?.files.some((file) => file.filename === "rotary-calibration-airrun.nc") ? "rotary-calibration-airrun.nc" : "未生成"}`,
+    "建议顺序: 先运行 rotary-calibration-airrun.nc，再运行 air-run.nc，最后低进给试雕。",
     "标定报告: rotary-calibration-sheet.json",
     "",
     "## 外部CAM状态",
