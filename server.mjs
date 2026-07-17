@@ -2452,6 +2452,127 @@ function createExternalHandoffSourceSnapshot(filePath, kind, context = {}) {
   };
 }
 
+function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
+  const errors = [];
+  const warnings = [];
+  const points = Array.isArray(neutral?.points) ? neutral.points : [];
+  const coordinate = neutral?.coordinate && typeof neutral.coordinate === "object" ? neutral.coordinate : {};
+  const runner = neutral?.runner && typeof neutral.runner === "object" ? neutral.runner : null;
+  const previewScaffold = Boolean(
+    neutral?.experimentalHeightfield
+    || /preview|scaffold/i.test(String(runner?.mode ?? ""))
+    || /preview|scaffold/i.test(String(runner?.warning ?? ""))
+  );
+
+  if (neutral?.schema !== "hediao3d.neutral-toolpath.v1") {
+    errors.push(`schema 必须是 hediao3d.neutral-toolpath.v1，当前为 ${neutral?.schema ?? "unknown"}。`);
+  }
+  if (!Array.isArray(neutral?.points)) {
+    errors.push("points 必须是数组。");
+  } else if (points.length === 0) {
+    errors.push("points 不能为空。");
+  }
+  if (neutral?.synthetic === true) {
+    errors.push("synthetic neutral-toolpath 只能用于合约测试，不能通过真实导入接口进入后处理。");
+  }
+  if (neutral?.fixture === true) {
+    errors.push("fixture neutral-toolpath 只能用于合约测试，不能通过真实导入接口进入后处理。");
+  }
+  if (previewScaffold) {
+    errors.push("preview/heightfield scaffold 只能用于预览验证，不能通过真实导入接口进入后处理。");
+  }
+  if (coordinate.depthAxis && String(coordinate.depthAxis).toUpperCase() !== "Z") {
+    errors.push(`coordinate.depthAxis 必须是 Z，当前为 ${coordinate.depthAxis}。`);
+  }
+  if (coordinate.lengthAxis && String(coordinate.lengthAxis).toUpperCase() !== "X") {
+    warnings.push(`coordinate.lengthAxis 为 ${coordinate.lengthAxis}，HeDiao3D 会按 X 长度轴解释。`);
+  }
+
+  const safeZ = Number(settings.safeZ ?? 0);
+  const lengthLimit = Math.max(1, Number(settings.lengthMm ?? 0) / 2 + 5);
+  const zFloor = safeZ - Math.max(1, Number(settings.depthMm ?? 0) + Number(settings.stockAllowance ?? 0) + 5);
+  let invalidPointCount = 0;
+  let missingRotaryCount = 0;
+  let outOfRangeCount = 0;
+  let deepestZ = Infinity;
+  let shallowestZ = -Infinity;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const [index, point] of points.entries()) {
+    const x = Number(point?.x ?? point?.xMm ?? point?.lengthMm);
+    const z = Number(point?.z ?? point?.zMm);
+    const y = point?.y ?? point?.yMm;
+    const a = point?.a ?? point?.aDeg ?? point?.angleDeg;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      invalidPointCount += 1;
+      if (invalidPointCount <= 3) errors.push(`points[${index}] 缺少有效 x/z。`);
+      continue;
+    }
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    deepestZ = Math.min(deepestZ, z);
+    shallowestZ = Math.max(shallowestZ, z);
+    if (Math.abs(x) > lengthLimit || z < zFloor || z > safeZ + 5) {
+      outOfRangeCount += 1;
+    }
+    if (settings.camMode === "rotaryWrap" && !Number.isFinite(Number(a)) && !Number.isFinite(Number(y))) {
+      missingRotaryCount += 1;
+      if (missingRotaryCount <= 3) errors.push(`points[${index}] 在旋转夹具模式下缺少 a/aDeg/angleDeg 或 y/yMm。`);
+    }
+  }
+  if (invalidPointCount > 3) errors.push(`另有 ${invalidPointCount - 3} 个点缺少有效 x/z。`);
+  if (missingRotaryCount > 3) errors.push(`另有 ${missingRotaryCount - 3} 个点缺少旋转角度/线性旋转坐标。`);
+  if (outOfRangeCount > 0) {
+    warnings.push(`${outOfRangeCount} 个点超出保守工件/Z 范围，需在 CAM 软件和空跑中复核。`);
+  }
+
+  const normalizedPoints = errors.length === 0 ? normalizeNeutralToolpathPoints(neutral, settings) : [];
+  const level = errors.length ? "critical" : warnings.length ? "review" : "ready";
+  return {
+    schema: "hediao3d.neutral-toolpath-import-validation.v1",
+    createdAt: new Date().toISOString(),
+    status: level,
+    postprocessEligible: errors.length === 0,
+    summary: errors.length
+      ? `neutral-toolpath 导入被拒绝：${errors[0]}`
+      : warnings.length
+        ? `neutral-toolpath 可进入后处理，但有 ${warnings.length} 个复核项。`
+        : "neutral-toolpath 导入校验通过，可进入 HeDiao3D 后处理。",
+    sourceName: source.sourceName ?? null,
+    engine: source.engine ?? neutral?.engine ?? null,
+    classification: {
+      synthetic: Boolean(neutral?.synthetic),
+      fixture: Boolean(neutral?.fixture),
+      previewScaffold,
+      imported: true,
+      generatedByExternalCommand: Boolean(neutral?.generatedByExternalCommand)
+    },
+    coordinate: {
+      lengthAxis: coordinate.lengthAxis ?? null,
+      rotaryAxis: coordinate.rotaryAxis ?? null,
+      depthAxis: coordinate.depthAxis ?? null,
+      rotaryUnit: coordinate.rotaryUnit ?? null
+    },
+    metrics: {
+      sourcePointCount: points.length,
+      normalizedPointCount: normalizedPoints.length,
+      invalidPointCount,
+      missingRotaryCount,
+      outOfRangeCount,
+      xMin: Number.isFinite(minX) ? minX : null,
+      xMax: Number.isFinite(maxX) ? maxX : null,
+      zMin: Number.isFinite(deepestZ) ? deepestZ : null,
+      zMax: Number.isFinite(shallowestZ) ? shallowestZ : null
+    },
+    errors,
+    warnings,
+    productionBoundary: [
+      "该校验只证明 neutral-toolpath 可进入 HeDiao3D 后处理，不解锁生产 NC。",
+      "生产仍需 production-candidate handoffEvidence、非 synthetic 材料去除仿真、空跑、软料试雕和机床验收。"
+    ]
+  };
+}
+
 function normalizeNeutralToolpathPoints(neutral, settings) {
   const sourcePoints = Array.isArray(neutral?.points) ? neutral.points : [];
   const safeZ = Number(settings.safeZ ?? 0);
@@ -6879,6 +7000,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-engine-selection.json"),
         getFile("open-source-cam-execution-plan.json"),
         getFile("external-cam-recipe.json"),
+        getFile("neutral-toolpath-import-validation.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json"),
         getFile("operator-download-checklist.md"),
@@ -7021,6 +7143,11 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: openSourceCamExecutionPlan.summary,
       artifact: "open-source-cam-execution-plan.json"
     } : null,
+    neutralToolpathImportValidation: fileByName.has("neutral-toolpath-import-validation.json") ? {
+      artifact: "neutral-toolpath-import-validation.json",
+      exists: getFile("neutral-toolpath-import-validation.json").exists,
+      summary: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json"))?.summary ?? null
+    } : null,
     simulationEvidence: productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary),
     camotics: {
       status: camoticsInput.status,
@@ -7063,6 +7190,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "adapter-report.json", "外部 CAM Adapter 报告", "report", existsSync(join(job.workDir, "adapter-report.json")), "记录外部 CAM 或 API 回填中立刀路的执行结果、来源和风险。"),
     createDeliveryFile(job.id, "neutral-toolpath.json", "外部中立刀路", "report", existsSync(join(job.workDir, "neutral-toolpath.json")), "外部 CAM 输出的统一刀位点，HeDiao3D 会在此基础上执行 Y/A 旋转夹具后处理。"),
     createDeliveryFile(job.id, "imported-neutral-toolpath.json", "API导入原始中立刀路", "report", existsSync(join(job.workDir, "imported-neutral-toolpath.json")), "通过 API 回填时保存的原始 neutral-toolpath 输入快照，用于审计和复现。"),
+    createDeliveryFile(job.id, "neutral-toolpath-import-validation.json", "中立刀路导入校验", "report", existsSync(join(job.workDir, "neutral-toolpath-import-validation.json")), "导入外部 neutral-toolpath 前的 schema、点位、fixture/synthetic/preview 和坐标安全校验报告。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
@@ -8324,6 +8452,16 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
   if (!neutral) return json(res, 400, { error: "请传入 neutralToolpath 对象。" });
   const settings = readJobSettingsForRefresh(job, workDir);
   if (!settings) return json(res, 409, { error: "当前任务缺少 settings，无法执行 HeDiao3D 后处理。" });
+  const importValidation = createNeutralToolpathImportValidation(neutral, settings, {
+    sourceName: String(input.sourceName ?? "neutral-toolpath.json"),
+    engine: String(input.engine ?? neutral.engine ?? "opencamlib")
+  });
+  if (!importValidation.postprocessEligible) {
+    return json(res, 400, {
+      error: importValidation.summary,
+      validation: importValidation
+    });
+  }
 
   const importPath = join(workDir, "imported-neutral-toolpath.json");
   const neutralPath = join(workDir, "neutral-toolpath.json");
@@ -8333,6 +8471,7 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
     importedFromApi: true,
     importedAt: new Date().toISOString()
   }, null, 2), "utf8");
+  await writeFile(join(workDir, "neutral-toolpath-import-validation.json"), JSON.stringify(importValidation, null, 2), "utf8");
 
   const pointCount = Array.isArray(neutral.points) ? neutral.points.length : 0;
   const selectedEngine = {
@@ -8353,7 +8492,8 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
       neutralToolpath: neutralPath
     },
     warnings: [
-      "外部 neutral-toolpath 已通过 API 回填；HeDiao3D 将负责最终 Y/A 旋转夹具后处理。"
+      "外部 neutral-toolpath 已通过 API 回填；HeDiao3D 将负责最终 Y/A 旋转夹具后处理。",
+      ...importValidation.warnings
     ],
     metrics: {
       neutralToolpath: {
@@ -8361,6 +8501,9 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
         path: neutralPath,
         imported: true,
         synthetic: Boolean(neutral.synthetic),
+        fixture: Boolean(neutral.fixture),
+        previewScaffold: Boolean(importValidation.classification.previewScaffold),
+        importValidation: "neutral-toolpath-import-validation.json",
         pointCount
       },
       estimatedMinutes: Number(neutral.estimatedMinutes ?? 0) || null
@@ -8390,6 +8533,7 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
   for (const filename of [
     "imported-neutral-toolpath.json",
     "neutral-toolpath.json",
+    "neutral-toolpath-import-validation.json",
     "adapter-report.json",
     "toolpath.nc",
     "toolpath-summary.json",
@@ -8418,6 +8562,7 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
 
   return json(res, 200, {
     ok: true,
+    validation: importValidation,
     adapterReport,
     toolpathSummary: refreshed.summary.toolpathSummary,
     camHandoffQuality: refreshed.summary.camHandoffQuality,
@@ -8856,6 +9001,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   return {
     summary: {
       adapterReport,
+      neutralToolpathImportValidation: readJsonFile(join(workDir, "neutral-toolpath-import-validation.json")),
       toolpathSummary: readJsonFile(join(workDir, "toolpath-summary.json")),
       camHandoffQuality,
       camoticsInput,

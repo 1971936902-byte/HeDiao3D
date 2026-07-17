@@ -71,7 +71,30 @@ async function main() {
     }
   });
   assert(imported.ok === true, "neutral toolpath import should succeed");
+  assert(imported.validation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "neutral import response missing validation report");
+  assert(imported.validation.postprocessEligible === true, "valid neutral import should be postprocess eligible");
   assert(imported.toolpathSummary?.source === "external-adapter", "toolpath summary should mark external adapter source");
+
+  const rejectedSynthetic = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
+    engine: "opencamlib",
+    neutralToolpath: {
+      schema: "hediao3d.neutral-toolpath.v1",
+      engine: "opencamlib",
+      synthetic: true,
+      coordinate: {
+        lengthAxis: "X",
+        rotaryAxis: "Y",
+        depthAxis: "Z",
+        rotaryUnit: "degree"
+      },
+      points: [
+        { x: 0, a: 0, z: 21.8, depth: 0.2 }
+      ]
+    }
+  }, false);
+  assert(rejectedSynthetic.status === 400, `synthetic neutral import should be rejected, got ${rejectedSynthetic.status}`);
+  assert(rejectedSynthetic.data.validation?.postprocessEligible === false, "rejected neutral import should include failed validation");
+  assert(rejectedSynthetic.data.validation?.classification?.synthetic === true, "rejected neutral import should classify synthetic input");
 
   const gcode = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/toolpath.nc`);
   assert(gcode.includes("ROTARY_WRAP_AXIS=Y"), "postprocessed NC should declare Y rotary wrap axis");
@@ -83,9 +106,13 @@ async function main() {
   assert(summary.toolpathSummary?.source === "external-adapter", "reloaded job should expose external-adapter summary");
   assert(summary.camHandoffQuality?.level !== "internal-fallback", "CAM handoff should no longer be internal fallback");
   assert(summary.camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff should snapshot neutral toolpath");
+  assert(summary.neutralToolpathImportValidation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "reloaded job should expose neutral import validation");
+  assert(summary.neutralToolpathImportValidation.postprocessEligible === true, "reloaded neutral validation should be eligible");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.exists), "delivery manifest should include neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "imported-neutral-toolpath.json" && file.exists), "delivery manifest should include imported-neutral-toolpath.json");
+  assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.exists), "delivery manifest should include neutral import validation");
   assert(summary.packageIntegrity?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.sha256), "package integrity should hash neutral-toolpath.json");
+  assert(summary.packageIntegrity?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.sha256), "package integrity should hash neutral import validation");
   assert(summary.productionGate?.allowProductionNc !== true, "neutral import alone must not unlock production NC");
 
   const neutralArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath.json`);
@@ -123,15 +150,15 @@ async function getText(path) {
   return text;
 }
 
-async function postJson(path, body) {
+async function postJson(path, body, expectOk) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error ?? `${response.status} ${path}`);
-  return data;
+  if (expectOk !== false && !response.ok) throw new Error(data.error ?? `${response.status} ${path}`);
+  return expectOk === false ? { status: response.status, data } : data;
 }
 
 function assert(condition, message) {
