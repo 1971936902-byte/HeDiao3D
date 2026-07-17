@@ -40,12 +40,15 @@ async function main() {
   assert(imported.unsafeCount === 0, "imported acceptance should report zero unsafe outputs");
   assert(imported.sourceReportBindingStatus === "matched", "imported acceptance should bind to supplied validation report");
   assert(imported.sourceReportSha256 === validationReportSha256, "imported acceptance should expose source report hash");
+  assert(imported.sourceReportHandoffAudit?.productionCandidateCount === 1, "imported acceptance should expose source report production candidate audit");
+  assert(imported.sourceReportHandoffAudit?.unsafeCount === 0, "imported acceptance should expose source report unsafe audit");
   assert(imported.apiArtifacts?.json?.includes("native-cam-real-output-acceptance.json"), "imported acceptance should expose JSON artifact");
 
   const artifact = await getJson(imported.apiArtifacts.json);
   assert(artifact.importSource?.sourceName === "native-cam-real-output-acceptance.json", "artifact should preserve import source name");
   assert(artifact.adapters?.some((adapter) => adapter.classification === "production-candidate"), "artifact should preserve production-candidate classification");
   assert(artifact.sourceReportBinding?.status === "matched", "artifact should preserve source report binding");
+  assert(artifact.sourceReportSnapshot?.handoffClassificationAudit?.productionCandidateCount === 1, "artifact should preserve source report handoff audit snapshot");
 
   const zipImported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-bundle.zip",
@@ -67,8 +70,12 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.id === zipImported.id, "readiness should pick latest imported acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.level === "ready", "readiness should preserve acceptance level");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose matched source report binding");
+  assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
+  assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
-  assert(readiness.gates?.blockers?.some((item) => /真实输出验收为 ready.*handoff 审计仍不一致/.test(item)), "readiness should block inconsistent real-output acceptance and adapter handoff audit");
+  assert(!readiness.gates?.blockers?.some((item) => /真实输出验收为 ready.*handoff 审计仍不一致/.test(item)), "readiness should not compare matched real-output acceptance against a later unrelated adapter audit");
+  const camLayer = readiness.goalAudit?.layers?.find((layer) => layer.id === "cam-engine-layer");
+  assert(camLayer?.evidence?.some((item) => /bound-native-source-report/.test(item)), "CAM layer should use bound source report handoff audit when available");
   assert(readiness.postprocessHandoffReadiness?.status === "blocked", `readiness should block production candidate CAM evidence without neutral postprocess handoff, got ${readiness.postprocessHandoffReadiness?.status}`);
   assert(readiness.gates?.blockers?.some((item) => /Y\/A 旋转夹具后处理/.test(item)), "readiness should explain missing self-developed rotary fixture postprocess handoff");
   if (!readiness.camoticsImport || !readiness.camoticsImport.productionEvidenceEligible) {

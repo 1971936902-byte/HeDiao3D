@@ -649,8 +649,9 @@ function createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, ada
   const externalHandoffCount = externalCamHandoffs?.completedEngines?.length ?? 0;
   const requiredExternalEngines = externalCamHandoffs?.requiredEngines ?? ["freecad", "blendercam", "opencamlib"];
   const allExternalEnginesCovered = requiredExternalEngines.length > 0 && requiredExternalEngines.every((engineId) => externalCamHandoffs?.byEngine?.[engineId]?.status === "completed");
-  const handoffAudit = adapterValidation?.handoffClassificationAudit ?? null;
-  const adapterAuditClean = Boolean(handoffAudit && handoffAudit.unsafeCount === 0 && handoffAudit.productionCandidateCount > 0 && handoffAudit.unboundProductionCandidateCount === 0);
+  const effectiveHandoff = createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutputAcceptance });
+  const handoffAudit = effectiveHandoff?.audit ?? null;
+  const adapterAuditClean = Boolean(handoffAudit && Number(handoffAudit.unsafeCount ?? 0) === 0 && Number(handoffAudit.productionCandidateCount ?? 0) > 0 && Number(handoffAudit.unboundProductionCandidateCount ?? 0) === 0);
   const nativeCamReady = nativeCam?.summary?.level === "ready";
   const nativeRealOutputReady = nativeCamRealOutputAcceptance?.level === "ready" && (!nativeCamRealOutputAcceptance.sourceReportBindingRequired || nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched");
   const realCamChainReady = nativeCamReady && nativeRealOutputReady && adapterAuditClean && allExternalEnginesCovered;
@@ -717,7 +718,7 @@ function createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, ada
         `Native CAM: ${nativeCam?.summary?.level ?? "missing"}`,
         `CAM 服务配置: ${camServerConfig?.status ?? "missing"}`,
         `真实输出验收: ${nativeCamRealOutputAcceptance?.level ?? "missing"}`,
-        `Adapter handoff audit: production=${handoffAudit?.productionCandidateCount ?? 0} / unsafe=${handoffAudit?.unsafeCount ?? "missing"} / unbound=${handoffAudit?.unboundProductionCandidateCount ?? "missing"}`,
+        `CAM handoff audit(${effectiveHandoff?.source ?? "missing"}): production=${handoffAudit?.productionCandidateCount ?? 0} / unsafe=${handoffAudit?.unsafeCount ?? "missing"} / unbound=${handoffAudit?.unboundProductionCandidateCount ?? "missing"}`,
         `外部引擎闭环: ${externalHandoffCount}/${requiredExternalEngines.length}`
       ],
       missing: [
@@ -931,10 +932,11 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   } else if (nativeCamRealOutputAcceptance.level !== "ready") {
     warnings.push(`Native CAM 真实输出验收需要复核：${nativeCamRealOutputAcceptance.summary}`);
     nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
-  } else if (adapterValidation?.handoffClassificationAudit) {
-    const handoffAudit = adapterValidation.handoffClassificationAudit;
-    if (handoffAudit.unsafeCount > 0 || handoffAudit.productionCandidateCount === 0 || handoffAudit.unboundProductionCandidateCount > 0) {
-      blockers.push(`Native CAM 真实输出验收为 ready，但最新 Adapter handoff 审计仍不一致：productionCandidate=${handoffAudit.productionCandidateCount}，unsafe=${handoffAudit.unsafeCount}，unboundContact=${handoffAudit.unboundProductionCandidateCount ?? 0}。`);
+  } else {
+    const effectiveHandoff = createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutputAcceptance });
+    const handoffAudit = effectiveHandoff?.audit ?? null;
+    if (handoffAudit && (Number(handoffAudit.unsafeCount ?? 0) > 0 || Number(handoffAudit.productionCandidateCount ?? 0) === 0 || Number(handoffAudit.unboundProductionCandidateCount ?? 0) > 0)) {
+      blockers.push(`Native CAM 真实输出验收为 ready，但${effectiveHandoff?.source === "bound-native-source-report" ? "绑定源报告" : "最新 Adapter"} handoff 审计仍不一致：productionCandidate=${handoffAudit.productionCandidateCount}，unsafe=${handoffAudit.unsafeCount}，unboundContact=${handoffAudit.unboundProductionCandidateCount ?? 0}。`);
       nextActions.push("重新运行 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters 和 bash native-cam-real-output-check.sh，确保两份报告来自同一次真实 CAM 输出。");
     }
   }
@@ -1098,6 +1100,41 @@ function createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamReal
   return {
     required: reasons.length > 0,
     summary: reasons.join("；") || "none"
+  };
+}
+
+function createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutputAcceptance }) {
+  const boundAudit = nativeCamRealOutputAcceptance?.sourceReportBindingStatus === "matched"
+    ? nativeCamRealOutputAcceptance?.sourceReportHandoffAudit
+    : null;
+  if (boundAudit) {
+    return {
+      source: "bound-native-source-report",
+      audit: normalizeCamHandoffAudit(boundAudit)
+    };
+  }
+  if (adapterValidation?.handoffClassificationAudit) {
+    return {
+      source: "latest-adapter-validation",
+      audit: normalizeCamHandoffAudit(adapterValidation.handoffClassificationAudit)
+    };
+  }
+  return null;
+}
+
+function normalizeCamHandoffAudit(audit) {
+  if (!audit || typeof audit !== "object") return null;
+  return {
+    schema: audit.schema ?? "hediao3d.adapter-handoff-classification-audit.v1",
+    readyForProduction: Boolean(audit.readyForProduction),
+    productionCandidateCount: Number(audit.productionCandidateCount ?? 0),
+    unsafeCount: Number(audit.unsafeCount ?? 0),
+    missingCount: Number(audit.missingCount ?? 0),
+    unboundProductionCandidateCount: Number(audit.unboundProductionCandidateCount ?? 0),
+    contactReportBindingCounts: audit.contactReportBindingCounts && typeof audit.contactReportBindingCounts === "object"
+      ? audit.contactReportBindingCounts
+      : null,
+    summary: audit.summary ?? `production=${Number(audit.productionCandidateCount ?? 0)} / unsafe=${Number(audit.unsafeCount ?? 0)} / missing=${Number(audit.missingCount ?? 0)}`
   };
 }
 
@@ -1845,6 +1882,10 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
   const adapters = Array.isArray(report.adapters) ? report.adapters : [];
   const blockers = Array.isArray(report.blockers) ? report.blockers : [];
   const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+  const sourceReportSnapshot = report.sourceReportSnapshot && typeof report.sourceReportSnapshot === "object"
+    ? report.sourceReportSnapshot
+    : null;
+  const sourceReportHandoffAudit = sourceReportSnapshot?.handoffClassificationAudit ?? null;
   return {
     id: acceptanceId,
     schema: report.schema ?? "hediao3d.native-cam-real-output-acceptance.v1",
@@ -1854,6 +1895,14 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
     sourceReportBindingRequired: Boolean(report.sourceReportBinding?.required),
     sourceReportBindingSummary: report.sourceReportBinding?.summary ?? "未提供源报告绑定。",
     sourceReportSha256: report.sourceReportBinding?.expectedSha256 ?? report.sourceReportIdentity?.sha256 ?? null,
+    sourceReportSnapshot: sourceReportSnapshot ? {
+      schema: sourceReportSnapshot.schema ?? "hediao3d.native-cam-source-report-snapshot.v1",
+      source: sourceReportSnapshot.source ?? null,
+      createdAt: sourceReportSnapshot.createdAt ?? null,
+      sha256: sourceReportSnapshot.sha256 ?? null,
+      overall: sourceReportSnapshot.overall ?? null
+    } : null,
+    sourceReportHandoffAudit,
     level: report.level ?? (blockers.length ? "critical" : warnings.length ? "review" : "ready"),
     summary: `productionCandidate=${Number(report.productionCandidateCount ?? 0)} / unsafe=${Number(report.unsafeCount ?? 0)} / missing=${Number(report.missingCount ?? 0)}`,
     productionCandidateCount: Number(report.productionCandidateCount ?? 0),
@@ -1874,6 +1923,29 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       previewScaffold: Boolean(adapter.previewScaffold),
       generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand)
     }))
+  };
+}
+
+function createNativeCamSourceReportSnapshot(validationReport, sourceReportBinding, source) {
+  if (!validationReport || typeof validationReport !== "object") return null;
+  const handoffClassificationAudit = normalizeCamHandoffAudit(validationReport.handoffClassificationAudit);
+  return {
+    schema: "hediao3d.native-cam-source-report-snapshot.v1",
+    source,
+    createdAt: validationReport.createdAt ?? null,
+    sha256: sourceReportBinding?.expectedSha256 ?? sourceReportBinding?.suppliedSha256 ?? null,
+    validationSchema: validationReport.schema ?? null,
+    outputRoot: validationReport.outputRoot ?? null,
+    useNativeCommands: Boolean(validationReport.useNativeCommands),
+    overall: validationReport.overall && typeof validationReport.overall === "object"
+      ? {
+        readyForProduction: Boolean(validationReport.overall.readyForProduction),
+        completedAdapters: Number(validationReport.overall.completedAdapters ?? 0),
+        failed: Number(validationReport.overall.failed ?? 0),
+        note: validationReport.overall.note ?? null
+      }
+      : null,
+    handoffClassificationAudit
   };
 }
 
@@ -3229,7 +3301,12 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself.",
       zipBundle: zipBundle ? "imported-native-cam-real-output-bundle.zip" : null
     },
-    sourceReportBinding
+    sourceReportBinding,
+    sourceReportSnapshot: createNativeCamSourceReportSnapshot(
+      bindingInput.validationReport,
+      sourceReportBinding,
+      zipBundle ? "acceptanceZipDataUrl:v3-external-adapter-validation.json" : "validationReport"
+    )
   };
   await writeFile(join(outputRoot, "native-cam-real-output-acceptance.json"), JSON.stringify(imported, null, 2), "utf8");
   if (zipBundle) {
