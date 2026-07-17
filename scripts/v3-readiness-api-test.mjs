@@ -38,6 +38,8 @@ async function main() {
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-external-neutral-handoff"), "acceptance plan missing OpenCAMLib external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-neutral-import"), "acceptance plan missing OpenCAMLib neutral import step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-result-import"), "acceptance plan missing CAMotics import step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "trial-feedback" && step.evidence?.includes("trial-feedback-log.json")), "acceptance plan missing trial feedback evidence step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "machine-acceptance" && step.evidence?.includes("machine-acceptance-log.json")), "acceptance plan missing machine acceptance evidence step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "production-evidence-dossier"), "acceptance plan missing production evidence dossier step");
   assert(full.externalCamHandoffs?.schema === "hediao3d.external-cam-handoffs.v1", "full readiness artifact missing external CAM handoff summary");
   assert(full.externalCamHandoffs.requiredEngines.includes("freecad"), "external CAM handoff summary missing FreeCAD");

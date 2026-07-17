@@ -526,8 +526,8 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const latestMachineAcceptance = getLatestJobLogSummary("machine-acceptance-log.json", createMachineAcceptanceLogPublicSummary);
   const camServerConfig = createDeploymentCamServerConfigReport(reportId);
   await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -576,7 +576,7 @@ function createDeploymentCamServerConfigReport(reportId) {
   });
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -691,6 +691,27 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     }
   }
 
+  if (!latestTrialFeedback) {
+    warnings.push("尚未回填真实试雕反馈，生产 NC 继续保持锁定。");
+    nextActions.push("完成离料空跑/软料试雕后，在 V3 面板回填试雕反馈并重新生成 readiness。");
+  } else if (latestTrialFeedback.latestOutcome === "failed") {
+    blockers.push("最近试雕反馈为 failed，需先修正工艺参数并重新试雕。");
+    nextActions.push("查看 trial-feedback-log.json 和 process-optimization-plan.json，按建议重新生成刀路。");
+  } else if (latestTrialFeedback.latestOutcome !== "success") {
+    warnings.push(`最近试雕反馈为 ${latestTrialFeedback.latestOutcome ?? "unknown"}，生产放行前仍需复核。`);
+    nextActions.push("将试雕问题闭环到参数优化后，再回填 success 试雕记录。");
+  }
+
+  if (!latestMachineAcceptance) {
+    warnings.push("尚未回填机床现场验收记录，生产 NC 继续保持锁定。");
+    nextActions.push("按 machine-acceptance-checklist.json 完成机床验收并回填记录。");
+  } else if (latestMachineAcceptance.latestOutcome === "failed" || !latestMachineAcceptance.latestAllRequiredPassed) {
+    blockers.push("最近机床验收未通过必需项，禁止解锁生产 NC。");
+    nextActions.push("修复机床验收失败项后，重新执行离料空跑/软料试雕并回填验收。");
+  } else if (latestMachineAcceptance.latestOutcome !== "success") {
+    warnings.push(`最近机床验收为 ${latestMachineAcceptance.latestOutcome ?? "unknown"}，生产放行前仍需人工复核。`);
+  }
+
   const level = blockers.length > 0 ? "blocked" : warnings.length > 0 ? "trial-only" : "production-ready";
   return {
     level,
@@ -708,7 +729,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -907,6 +928,42 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 14,
+      id: "trial-feedback",
+      title: "真实试雕反馈回填",
+      status: !latestTrialFeedback
+        ? "pending"
+        : latestTrialFeedback.latestOutcome === "failed"
+          ? "blocked"
+          : latestTrialFeedback.latestOutcome === "success"
+            ? "done"
+            : "pending",
+      command: "在 V3 面板填写试雕反馈，或 POST /api/orchestrator/jobs/:id/trial-feedback",
+      evidence: ["trial-feedback-log.json", "trial-feedback-record.json", "process-optimization-plan.json"],
+      detail: latestTrialFeedback
+        ? `${latestTrialFeedback.recordCount} 条 / 最新 ${latestTrialFeedback.latestOutcome ?? "unknown"} / ${latestTrialFeedback.latestIssues?.length ?? 0} 个问题`
+        : "尚未回填真实离料空跑/软料试雕反馈。",
+      blocksProduction: !latestTrialFeedback || latestTrialFeedback.latestOutcome !== "success"
+    }),
+    createAcceptanceStep({
+      order: 15,
+      id: "machine-acceptance",
+      title: "机床现场验收回填",
+      status: !latestMachineAcceptance
+        ? "pending"
+        : latestMachineAcceptance.latestOutcome === "failed" || !latestMachineAcceptance.latestAllRequiredPassed
+          ? "blocked"
+          : latestMachineAcceptance.latestOutcome === "success"
+            ? "done"
+            : "pending",
+      command: "在 V3 面板填写机床验收，或 POST /api/orchestrator/jobs/:id/machine-acceptance",
+      evidence: ["machine-acceptance-checklist.json", "machine-acceptance-log.json", "machine-acceptance-record.json"],
+      detail: latestMachineAcceptance
+        ? `${latestMachineAcceptance.recordCount} 条 / 最新 ${latestMachineAcceptance.latestOutcome ?? "unknown"} / 必需项 ${latestMachineAcceptance.latestAllRequiredPassed ? "通过" : "未通过"}`
+        : "尚未回填机床现场验收记录。",
+      blocksProduction: !latestMachineAcceptance || latestMachineAcceptance.latestOutcome !== "success" || !latestMachineAcceptance.latestAllRequiredPassed
+    }),
+    createAcceptanceStep({
+      order: 16,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
