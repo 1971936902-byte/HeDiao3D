@@ -104,6 +104,15 @@ async function main() {
   assert(camHandoffQuality.previewScaffold === true, "CAM handoff quality should mark FreeCAD scaffold output");
   assert((camHandoffQuality.warningIssues ?? []).some((item) => /fixture|scaffold|预览|测试样例/i.test(item)), "CAM handoff quality should warn about fixture/scaffold output");
 
+  const gcodeImportValidation = await getArtifactJson(job.id, "external-gcode-import-validation.json");
+  assert(gcodeImportValidation.schema === "hediao3d.external-gcode-import-validation.v1", "FreeCAD G-code import validation schema mismatch");
+  assert(gcodeImportValidation.status === "bound-review", `fixture FreeCAD G-code should be bound-review, got ${gcodeImportValidation.status}`);
+  assert(gcodeImportValidation.sourceBinding?.sourceSnapshot?.matchesSourceArtifact === true, "FreeCAD G-code source snapshot should match source artifact");
+  assert(gcodeImportValidation.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact === true, "FreeCAD G-code source snapshot should match final toolpath.nc");
+  assert(gcodeImportValidation.adapterHandoffEvidence?.classification === "fixture-contract", "FreeCAD G-code validation should preserve fixture classification");
+  assert(gcodeImportValidation.productionCandidate === false, "fixture FreeCAD G-code validation must not be production candidate");
+  assert(gcodeImportValidation.camOutputProof?.status === "missing-cam-proof", "fixture FreeCAD G-code should require a companion CAM proof");
+
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowAirRun === true, "FreeCAD external G-code should allow air-run");
   assert(productionGate.allowTrialNc === true, `FreeCAD external G-code should allow trial NC; blockers: ${(productionGate.blockers ?? []).join("; ")}`);
@@ -116,6 +125,7 @@ async function main() {
     resultEngine: job.result.engine,
     source: toolpathSummary.source,
     gcode: adapterReport.metrics.gcode.status,
+    gcodeValidation: gcodeImportValidation.status,
     production: productionGate.allowProductionNc,
     trial: productionGate.allowTrialNc,
     airRun: productionGate.allowAirRun,

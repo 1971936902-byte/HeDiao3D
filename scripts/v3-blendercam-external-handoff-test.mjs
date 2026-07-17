@@ -101,6 +101,26 @@ async function main() {
   const toolpathSummary = await getArtifactJson(job.id, "toolpath-summary.json");
   assert(toolpathSummary.engine === "blendercam", "toolpath summary engine should be blendercam");
   assert(toolpathSummary.source === "external-adapter", "toolpath should come from external adapter");
+  assert(toolpathSummary.externalSourceSnapshot?.kind === "gcode", "toolpath summary should snapshot BlenderCAM G-code source");
+  assert(/^[a-f0-9]{64}$/.test(toolpathSummary.externalSourceSnapshot.sha256 ?? ""), "BlenderCAM G-code source snapshot should include SHA-256");
+  assert(toolpathSummary.externalSourceSnapshot.gcode?.motionLineCount > 0, "BlenderCAM G-code source snapshot should count motion lines");
+  assert(toolpathSummary.externalSourceSnapshot.gcode?.containsFixtureMarker === true, "BlenderCAM G-code source snapshot should classify fixture runner output");
+  assert(toolpathSummary.externalSourceSnapshot.gcode?.containsPreviewScaffoldMarker === true, "BlenderCAM G-code source snapshot should classify scaffold/contract output");
+
+  const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
+  assert(camHandoffQuality.sourceSnapshot?.kind === "gcode", "CAM handoff quality should include BlenderCAM G-code source snapshot");
+  assert(camHandoffQuality.sourceSnapshot?.sha256 === toolpathSummary.externalSourceSnapshot.sha256, "CAM handoff snapshot hash should match BlenderCAM toolpath summary");
+  assert(camHandoffQuality.importedFixture === true, "CAM handoff quality should mark BlenderCAM fixture output");
+  assert(camHandoffQuality.previewScaffold === true, "CAM handoff quality should mark BlenderCAM scaffold output");
+
+  const gcodeImportValidation = await getArtifactJson(job.id, "external-gcode-import-validation.json");
+  assert(gcodeImportValidation.schema === "hediao3d.external-gcode-import-validation.v1", "BlenderCAM G-code import validation schema mismatch");
+  assert(gcodeImportValidation.status === "bound-review", `fixture BlenderCAM G-code should be bound-review, got ${gcodeImportValidation.status}`);
+  assert(gcodeImportValidation.sourceBinding?.sourceSnapshot?.matchesSourceArtifact === true, "BlenderCAM G-code source snapshot should match source artifact");
+  assert(gcodeImportValidation.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact === true, "BlenderCAM G-code source snapshot should match final toolpath.nc");
+  assert(gcodeImportValidation.adapterHandoffEvidence?.classification === "fixture-contract", "BlenderCAM G-code validation should preserve fixture classification");
+  assert(gcodeImportValidation.productionCandidate === false, "fixture BlenderCAM G-code validation must not be production candidate");
+  assert(gcodeImportValidation.camOutputProof?.status === "missing-cam-proof", "fixture BlenderCAM G-code should require a companion CAM proof");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowAirRun === true, "BlenderCAM external G-code should allow air-run");
@@ -114,6 +134,7 @@ async function main() {
     resultEngine: job.result.engine,
     source: toolpathSummary.source,
     gcode: adapterReport.metrics.gcode.status,
+    gcodeValidation: gcodeImportValidation.status,
     production: productionGate.allowProductionNc,
     trial: productionGate.allowTrialNc,
     airRun: productionGate.allowAirRun,

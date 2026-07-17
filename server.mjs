@@ -3059,6 +3059,135 @@ async function createExternalAdapterNeutralToolpathValidation(job, settings, ada
   return { validation: importValidation, adapterReport: nextAdapterReport };
 }
 
+async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath, selectedEngine) {
+  if (!job?.workDir || !adapterReport || !toolpath?.externalSourceSnapshot) return null;
+  if (toolpath.externalSourceSnapshot.kind !== "gcode") return null;
+  const sourcePath = adapterReport.gcodePath
+    ?? adapterReport.outputs?.gcode
+    ?? toolpath.externalSourceSnapshot.path
+    ?? join(job.workDir, "toolpath.nc");
+  if (!sourcePath || !existsSync(sourcePath)) return null;
+  const finalPath = join(job.workDir, "toolpath.nc");
+  if (!existsSync(finalPath)) return null;
+
+  const sourceBytes = await readFile(sourcePath);
+  const finalBytes = await readFile(finalPath);
+  const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+  const finalSha256 = createHash("sha256").update(finalBytes).digest("hex");
+  const adapterEvidence = adapterReport.metrics?.handoffEvidence ?? null;
+  const normalizedEvidence = normalizeAdapterHandoffEvidence(adapterReport);
+  const camOutputProof = adapterEvidence?.camOutputProof ?? null;
+  const proofIssues = Array.isArray(camOutputProof?.issues) ? camOutputProof.issues : [];
+  const sourceMatchesSnapshot = sourceSha256 === toolpath.externalSourceSnapshot.sha256;
+  const finalMatchesSource = finalSha256 === sourceSha256;
+  const productionCandidate = Boolean(normalizedEvidence.productionCandidate && camOutputProof?.productionCandidate);
+  const reviewIssues = [];
+  const criticalIssues = [];
+  const requiredActions = [];
+
+  if (!sourceMatchesSnapshot) {
+    criticalIssues.push("外部 G-code 源文件与 toolpath-summary 中的 sourceSnapshot 哈希不一致。");
+  }
+  if (!finalMatchesSource) {
+    criticalIssues.push("最终 toolpath.nc 与外部 adapter G-code 源文件哈希不一致。");
+  }
+  if (!camOutputProof?.present) {
+    reviewIssues.push("外部 G-code 缺少 CAM output proof，不能作为生产候选。");
+    requiredActions.push("让 FreeCAD/BlenderCAM 服务端随 G-code 输出 .cam-proof.json，并包含 gcode/model/plan/job SHA-256。");
+  } else if (!camOutputProof.productionCandidate) {
+    reviewIssues.push(`CAM output proof 未通过生产候选校验：${proofIssues[0] ?? camOutputProof.status ?? "需要复核"}`);
+    requiredActions.push("复核 .cam-proof.json 的 gcodeSha256、modelSha256、planSha256、fixture/scaffold 和 postprocessEligible 字段。");
+  }
+  if (normalizedEvidence.fixture) {
+    reviewIssues.push("外部 G-code 被标记为 fixture/合约测试输出。");
+    requiredActions.push("关闭 adapter runner fixture 输出，改用真实 CAM 计算结果。");
+  }
+  if (normalizedEvidence.previewScaffold) {
+    reviewIssues.push("外部 G-code 被标记为 preview/scaffold 输出。");
+    requiredActions.push("用真实刀具接触/材料去除 CAM 输出替代预览脚手架。");
+  }
+  if (!normalizedEvidence.generatedByExternalCommand) {
+    reviewIssues.push("未检测到外部命令执行记录。");
+    requiredActions.push("检查 adapter-report.json，确认 G-code 由外部 CAM 命令生成。");
+  }
+
+  const status = criticalIssues.length
+    ? "critical"
+    : productionCandidate && reviewIssues.length === 0
+      ? "bound-production-candidate"
+      : "bound-review";
+  const validation = {
+    schema: "hediao3d.external-gcode-import-validation.v1",
+    createdAt: new Date().toISOString(),
+    jobId: job.id,
+    status,
+    postprocessEligible: criticalIssues.length === 0,
+    productionCandidate,
+    engine: selectedEngine?.id ?? adapterReport.engine ?? null,
+    sourceName: `${selectedEngine?.id ?? adapterReport.engine ?? "external"} adapter G-code`,
+    sourceBinding: {
+      schema: "hediao3d.external-gcode-source-binding.v1",
+      status: criticalIssues.length ? "mismatch" : "bound",
+      sourceArtifact: {
+        path: sourcePath,
+        sha256: sourceSha256,
+        sizeBytes: sourceBytes.byteLength
+      },
+      postprocessArtifact: {
+        filename: "toolpath.nc",
+        sha256: finalSha256,
+        sizeBytes: finalBytes.byteLength,
+        derivedFromExternalGcode: true
+      },
+      sourceSnapshot: {
+        kind: toolpath.externalSourceSnapshot.kind,
+        sha256: toolpath.externalSourceSnapshot.sha256,
+        sizeBytes: toolpath.externalSourceSnapshot.sizeBytes,
+        capturedAt: toolpath.externalSourceSnapshot.capturedAt,
+        matchesSourceArtifact: sourceMatchesSnapshot,
+        matchesPostprocessArtifact: toolpath.externalSourceSnapshot.sha256 === finalSha256
+      }
+    },
+    adapterHandoffEvidence: normalizedEvidence,
+    camOutputProof,
+    metrics: {
+      motionLineCount: toolpath.externalSourceSnapshot.gcode?.motionLineCount ?? null,
+      parsedPointCount: toolpath.externalSourceSnapshot.gcode?.parsedPointCount ?? null,
+      containsFixtureMarker: Boolean(toolpath.externalSourceSnapshot.gcode?.containsFixtureMarker),
+      containsPreviewScaffoldMarker: Boolean(toolpath.externalSourceSnapshot.gcode?.containsPreviewScaffoldMarker),
+      containsRotaryMarker: Boolean(toolpath.externalSourceSnapshot.gcode?.containsRotaryMarker)
+    },
+    criticalIssues,
+    warningIssues: reviewIssues,
+    requiredActions,
+    productionBoundary: [
+      "该报告只证明外部 G-code 摄取链路和哈希绑定状态。",
+      "生产 NC 仍需非 fixture/scaffold 的 CAM output proof、真实材料去除仿真、NC 静态分析、空跑、软料试雕和机床验收。"
+    ],
+    summary: criticalIssues.length
+      ? `外部 G-code 绑定存在 ${criticalIssues.length} 个阻断项。`
+      : reviewIssues.length
+        ? `外部 G-code 已绑定，但有 ${reviewIssues.length} 个生产复核项。`
+        : "外部 G-code、sourceSnapshot 和最终 toolpath.nc 已完成哈希绑定。"
+  };
+
+  await writeFile(join(job.workDir, "external-gcode-import-validation.json"), JSON.stringify(validation, null, 2), "utf8");
+  const nextAdapterReport = {
+    ...adapterReport,
+    metrics: {
+      ...(adapterReport.metrics ?? {}),
+      gcode: {
+        ...(adapterReport.metrics?.gcode ?? {}),
+        importValidation: "external-gcode-import-validation.json",
+        sourceBinding: validation.sourceBinding
+      }
+    }
+  };
+  await writeFile(join(job.workDir, "adapter-report.json"), JSON.stringify(nextAdapterReport, null, 2), "utf8");
+  pushIfArtifactExists(job, "external-gcode-import-validation.json");
+  return { validation, adapterReport: nextAdapterReport };
+}
+
 function normalizeNeutralToolpathPoints(neutral, settings) {
   const sourcePoints = Array.isArray(neutral?.points) ? neutral.points : [];
   const safeZ = Number(settings.safeZ ?? 0);
@@ -3377,6 +3506,12 @@ async function processOrchestratorJob(job, settings) {
     adapterReport = externalNeutralValidation.adapterReport;
   }
   await writeFile(join(job.workDir, "toolpath.nc"), toolpath.gcode, "utf8");
+  const externalGcodeValidation = externalToolpath
+    ? await createExternalAdapterGcodeValidation(job, adapterReport, toolpath, selected)
+    : null;
+  if (externalGcodeValidation?.adapterReport) {
+    adapterReport = externalGcodeValidation.adapterReport;
+  }
   const camHandoffQuality = createCamHandoffQualityReport({
     job,
     settings,
@@ -8015,6 +8150,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
 function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, postprocessTraceReport, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
+  const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
   const trialCandidate = productionGate.allowTrialNc ? "toolpath.nc" : null;
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary));
@@ -8063,6 +8199,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("open-source-cam-execution-plan.json"),
         getFile("external-cam-recipe.json"),
         getFile("neutral-toolpath-import-validation.json"),
+        getFile("external-gcode-import-validation.json"),
         getFile("postprocess-profile.json"),
         getFile("delivery-manifest.json"),
         getFile("operator-download-checklist.md"),
@@ -8106,6 +8243,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
       "阅读 postprocess-trace-report.json，确认 toolpath.nc 的 X/Y/A/Z 输出与源刀路点逐点一致。",
+      "若使用 FreeCAD/BlenderCAM 外部 G-code，阅读 external-gcode-import-validation.json，确认源 G-code、toolpath.nc 和 CAM proof 已绑定。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
       "阅读 safe-trial-execution-plan.json，按四步安全试雕计划执行并保留现场证据。",
       "试雕后填写 trial-feedback-template.json，把真实耗时、刀痕和旋转误差回填到工艺优化流程。",
@@ -8144,6 +8282,13 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       summary: camHandoffQuality.summary,
       criticalIssues: camHandoffQuality.criticalIssues ?? [],
       warningIssues: camHandoffQuality.warningIssues ?? []
+    } : null,
+    externalGcodeImportValidation: externalGcodeImportValidation ? {
+      artifact: "external-gcode-import-validation.json",
+      status: externalGcodeImportValidation.status,
+      productionCandidate: Boolean(externalGcodeImportValidation.productionCandidate),
+      postprocessEligible: Boolean(externalGcodeImportValidation.postprocessEligible),
+      summary: externalGcodeImportValidation.summary
     } : null,
     rotaryWrapPreview: rotaryWrapPreviewReport ? {
       level: rotaryWrapPreviewReport.level,
@@ -8271,6 +8416,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "neutral-toolpath.json", "外部中立刀路", "report", existsSync(join(job.workDir, "neutral-toolpath.json")), "外部 CAM 输出的统一刀位点，HeDiao3D 会在此基础上执行 Y/A 旋转夹具后处理。"),
     createDeliveryFile(job.id, "imported-neutral-toolpath.json", "API导入原始中立刀路", "report", existsSync(join(job.workDir, "imported-neutral-toolpath.json")), "通过 API 回填时保存的原始 neutral-toolpath 输入快照，用于审计和复现。"),
     createDeliveryFile(job.id, "neutral-toolpath-import-validation.json", "中立刀路导入校验", "report", existsSync(join(job.workDir, "neutral-toolpath-import-validation.json")), "导入外部 neutral-toolpath 前的 schema、点位、fixture/synthetic/preview 和坐标安全校验报告。"),
+    createDeliveryFile(job.id, "external-gcode-import-validation.json", "外部G-code导入校验", "report", existsSync(join(job.workDir, "external-gcode-import-validation.json")), "校验外部 FreeCAD/BlenderCAM G-code、sourceSnapshot、最终 toolpath.nc 和 CAM proof 的哈希绑定。"),
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
