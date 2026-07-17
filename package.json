@@ -26,6 +26,7 @@
     "test:v3:native-cam-api": "node scripts/v3-native-cam-api-test.mjs",
     "test:v3:readiness-api": "node scripts/v3-readiness-api-test.mjs",
     "test:v3:trial-feedback-api": "node scripts/v3-trial-feedback-api-test.mjs",
+    "test:v3:machine-acceptance-api": "node scripts/v3-machine-acceptance-api-test.mjs",
     "test:v3:postprocess": "node scripts/v3-postprocess-regression-test.mjs"
   },
   "dependencies": {

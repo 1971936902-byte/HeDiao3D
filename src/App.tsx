@@ -689,6 +689,15 @@ type V3OrchestratorJob = {
         latestRecordId: string;
         recommendations: string[];
       };
+      machineAcceptanceLog?: {
+        schema: string;
+        artifact: string;
+        recordCount: number;
+        latestOutcome: MachineFeedback["outcome"];
+        latestRecordId: string;
+        allRequiredPassed: boolean;
+        recommendations: string[];
+      };
       processOptimizationPlan?: {
         schema: string;
         artifact: string;
@@ -4766,6 +4775,15 @@ export function App() {
                   复核 {v3Job.result.summary.productionEvidenceDossier.reviewCount}
                   {" · "}
                   阻断 {v3Job.result.summary.productionEvidenceDossier.blockedCount}
+                </small>
+              )}
+              {v3Job?.result?.summary.machineAcceptanceLog && (
+                <small className={v3Job.result.summary.machineAcceptanceLog.allRequiredPassed ? "v3-inline-ok" : v3Job.result.summary.machineAcceptanceLog.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning"}>
+                  机床验收：{v3Job.result.summary.machineAcceptanceLog.latestOutcome}
+                  {" · "}
+                  记录 {v3Job.result.summary.machineAcceptanceLog.recordCount}
+                  {" · "}
+                  必需项 {v3Job.result.summary.machineAcceptanceLog.allRequiredPassed ? "已通过" : "待复核"}
                 </small>
               )}
               {v3Job?.result?.summary.productionGate?.simulationEvidence && (

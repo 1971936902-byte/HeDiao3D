@@ -114,6 +114,11 @@ const server = createServer(async (req, res) => {
       return createOrchestratorTrialFeedback(req, orchestratorTrialFeedbackMatch[1], res);
     }
 
+    const orchestratorMachineAcceptanceMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/machine-acceptance$/);
+    if (req.method === "POST" && orchestratorMachineAcceptanceMatch) {
+      return createOrchestratorMachineAcceptance(req, orchestratorMachineAcceptanceMatch[1], res);
+    }
+
     const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/artifacts\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorArtifactMatch) {
       return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
@@ -4360,14 +4365,18 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
     ncStaticAnalysis,
     controllerDialectReport,
     machineAcceptanceChecklist,
+    machineAcceptanceLog: overrides.machineAcceptanceLog ?? readJsonFile(join(job.workDir, "machine-acceptance-log.json")),
     trialFeedbackLog: overrides.trialFeedbackLog ?? readJsonFile(join(job.workDir, "trial-feedback-log.json")),
     processOptimizationPlan: overrides.processOptimizationPlan ?? readJsonFile(join(job.workDir, "process-optimization-plan.json"))
   });
 }
 
-function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, simulationSummary, ncStaticAnalysis, controllerDialectReport, machineAcceptanceChecklist, trialFeedbackLog = null, processOptimizationPlan = null }) {
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, simulationSummary, ncStaticAnalysis, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
+  const machineAcceptancePassed = machineAcceptanceLog?.recordCount > 0
+    && machineAcceptanceLog.latestOutcome === "success"
+    && machineAcceptanceLog.latestAllRequiredPassed === true;
   const evidenceItems = [
     {
       id: "production-gate",
@@ -4414,9 +4423,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     {
       id: "machine-acceptance",
       label: "机床现场验收",
-      status: machineAcceptanceChecklist?.steps?.some((step) => step.blocksProduction) ? "review" : machineAcceptanceChecklist ? "pass" : "review",
-      evidence: ["machine-acceptance-checklist.json", "operator-runbook.md"],
-      summary: machineAcceptanceChecklist?.summary ?? "未生成机床验收清单。"
+      status: machineAcceptanceLog?.recordCount > 0
+        ? machineAcceptancePassed ? "pass" : machineAcceptanceLog.latestOutcome === "failed" ? "block" : "review"
+        : "review",
+      evidence: ["machine-acceptance-checklist.json", "machine-acceptance-log.json", "machine-acceptance-record.json", "operator-runbook.md"],
+      summary: machineAcceptanceLog?.recordCount > 0
+        ? `已回填 ${machineAcceptanceLog.recordCount} 条机床验收记录，最新结论 ${machineAcceptanceLog.latestOutcome}，必需项${machineAcceptanceLog.latestAllRequiredPassed ? "已通过" : "未全部通过"}。`
+        : machineAcceptanceChecklist
+          ? "已生成机床验收清单，但尚未回填真实空跑/试雕验收记录。"
+          : "未生成机床验收清单。"
     },
     {
       id: "trial-feedback",
@@ -4478,6 +4493,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camHandoffReady: camHandoffQuality?.level === "ready",
       ncStaticReady: ncStaticAnalysis?.level === "ready",
       controllerDialectReady: controllerDialectReport?.level === "ready",
+      machineAcceptanceRecords: machineAcceptanceLog?.recordCount ?? 0,
+      latestMachineAcceptanceOutcome: machineAcceptanceLog?.latestOutcome ?? null,
+      machineAcceptancePassed,
       trialFeedbackRecords: trialFeedbackLog?.recordCount ?? 0,
       optimizationStatus: processOptimizationPlan?.status ?? null
     },
@@ -6169,6 +6187,211 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   });
 }
 
+async function createOrchestratorMachineAcceptance(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  const input = await readJson(req);
+  const checklist = readJsonFile(join(workDir, "machine-acceptance-checklist.json"));
+  const record = createMachineAcceptanceRecord(job, checklist, input);
+  const logPath = join(workDir, "machine-acceptance-log.json");
+  const existingLog = readJsonFile(logPath) ?? {
+    schema: "hediao3d.machine-acceptance-log.v1",
+    jobId: safeJobId,
+    createdAt: new Date().toISOString(),
+    records: []
+  };
+  const records = Array.isArray(existingLog.records) ? existingLog.records : [];
+  const updatedLog = {
+    ...existingLog,
+    schema: "hediao3d.machine-acceptance-log.v1",
+    jobId: safeJobId,
+    updatedAt: record.createdAt,
+    recordCount: records.length + 1,
+    latestRecordId: record.id,
+    latestOutcome: record.outcome,
+    latestAllRequiredPassed: record.allRequiredPassed,
+    records: [record, ...records].slice(0, 80)
+  };
+  const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
+    machineAcceptanceLog: updatedLog
+  });
+
+  await writeFile(join(workDir, "machine-acceptance-record.json"), JSON.stringify(record, null, 2), "utf8");
+  await writeFile(logPath, JSON.stringify(updatedLog, null, 2), "utf8");
+  if (productionEvidenceDossier) {
+    await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+  }
+  await writeMachineAcceptanceGlobalRecord(record);
+
+  job.workDir = workDir;
+  job.updatedAt = record.createdAt;
+  job.machineAcceptance = {
+    latestRecord: record,
+    logArtifact: "machine-acceptance-log.json",
+    recordCount: updatedLog.recordCount
+  };
+  job.result = job.result ?? {};
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    machineAcceptanceLog: {
+      schema: updatedLog.schema,
+      artifact: "machine-acceptance-log.json",
+      recordCount: updatedLog.recordCount,
+      latestOutcome: record.outcome,
+      latestRecordId: record.id,
+      allRequiredPassed: record.allRequiredPassed,
+      recommendations: record.recommendations
+    },
+    ...(productionEvidenceDossier ? {
+      productionEvidenceDossier: {
+        schema: productionEvidenceDossier.schema,
+        artifact: "production-evidence-dossier.json",
+        status: productionEvidenceDossier.status,
+        passedCount: productionEvidenceDossier.passedCount,
+        reviewCount: productionEvidenceDossier.reviewCount,
+        blockedCount: productionEvidenceDossier.blockedCount
+      }
+    } : {})
+  };
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-record.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-log.json"));
+  if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "production-evidence-dossier.json"));
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: true,
+    record,
+    log: {
+      schema: updatedLog.schema,
+      jobId: safeJobId,
+      recordCount: updatedLog.recordCount,
+      latestRecordId: record.id,
+      latestOutcome: updatedLog.latestOutcome,
+      latestAllRequiredPassed: updatedLog.latestAllRequiredPassed,
+      artifact: publicArtifactUrl(safeJobId, "machine-acceptance-log.json")
+    },
+    productionEvidenceDossier
+  });
+}
+
+function createMachineAcceptanceRecord(job, checklist, input) {
+  const now = new Date().toISOString();
+  const checklistSteps = Array.isArray(checklist?.steps) ? checklist.steps : [];
+  const submittedSteps = Array.isArray(input?.steps) ? input.steps : [];
+  const submittedById = new Map(submittedSteps
+    .filter((step) => step && typeof step === "object")
+    .map((step) => [String(step.id ?? ""), step]));
+  const steps = checklistSteps.map((template) => {
+    const submitted = submittedById.get(String(template.id));
+    const passed = normalizeBoolean(submitted?.passed ?? submitted?.ok);
+    const status = passed === true
+      ? "pass"
+      : passed === false
+        ? "failed"
+        : template.required ? "review" : "not-checked";
+    return {
+      id: template.id,
+      title: template.title,
+      required: Boolean(template.required),
+      status,
+      passed: passed === true,
+      file: template.file ?? null,
+      expectedEvidence: template.expectedEvidence ?? null,
+      evidenceNote: String(submitted?.evidenceNote ?? submitted?.notes ?? "").slice(0, 1000),
+      measuredValue: submitted?.measuredValue ?? null,
+      blocksProduction: Boolean(template.blocksProduction) && status !== "pass"
+    };
+  });
+  const extraSteps = submittedSteps
+    .filter((step) => step?.id && !steps.some((known) => known.id === String(step.id)))
+    .slice(0, 20)
+    .map((step) => {
+      const passed = normalizeBoolean(step.passed ?? step.ok);
+      return {
+        id: String(step.id).slice(0, 120),
+        title: String(step.title ?? step.id).slice(0, 200),
+        required: false,
+        status: passed === true ? "pass" : passed === false ? "failed" : "review",
+        passed: passed === true,
+        file: null,
+        expectedEvidence: null,
+        evidenceNote: String(step.evidenceNote ?? step.notes ?? "").slice(0, 1000),
+        measuredValue: step.measuredValue ?? null,
+        blocksProduction: false
+      };
+    });
+  const allSteps = [...steps, ...extraSteps];
+  const requiredSteps = allSteps.filter((step) => step.required);
+  const failedRequired = requiredSteps.filter((step) => step.status !== "pass");
+  const explicitOutcome = ["success", "review", "failed"].includes(input?.outcome) ? input.outcome : null;
+  const outcome = explicitOutcome ?? (failedRequired.length === 0 && requiredSteps.length > 0 ? "success" : "review");
+  const notes = String(input?.notes ?? "").trim().slice(0, 4000);
+  return {
+    schema: "hediao3d.machine-acceptance-record.v1",
+    id: input?.id && /^[a-zA-Z0-9_.:-]+$/.test(String(input.id)) ? String(input.id) : randomUUID(),
+    jobId: job.id,
+    createdAt: now,
+    source: String(input?.source ?? "frontend-machine-acceptance").slice(0, 80),
+    outcome,
+    operator: String(input?.operator ?? "").slice(0, 160),
+    machineSerial: String(input?.machineSerial ?? "").slice(0, 160),
+    fixtureType: String(input?.fixtureType ?? checklist?.operatorRecordTemplate?.fixtureType ?? "三轴控制器 + 旋转轴夹具").slice(0, 200),
+    materialBatch: String(input?.materialBatch ?? "").slice(0, 200),
+    programName: String(input?.programName ?? "toolpath.nc").slice(0, 200),
+    airRunOk: normalizeBoolean(input?.airRunOk),
+    softTrialOk: normalizeBoolean(input?.softTrialOk),
+    formalTrialOk: normalizeBoolean(input?.formalTrialOk),
+    requiredStepCount: requiredSteps.length,
+    passedRequiredCount: requiredSteps.length - failedRequired.length,
+    failedRequiredSteps: failedRequired.map((step) => step.id),
+    allRequiredPassed: requiredSteps.length > 0 && failedRequired.length === 0 && outcome === "success",
+    steps: allSteps,
+    notes,
+    attachments: normalizeAcceptanceAttachments(input?.attachments, input?.photoName),
+    recommendations: createMachineAcceptanceRecommendations({ outcome, failedRequired, steps: allSteps, checklist })
+  };
+}
+
+function normalizeAcceptanceAttachments(attachments, photoName) {
+  const normalized = Array.isArray(attachments)
+    ? attachments.map((item) => String(item).slice(0, 240)).filter(Boolean)
+    : [];
+  if (photoName) normalized.push(String(photoName).slice(0, 240));
+  return dedupeStrings(normalized).slice(0, 24);
+}
+
+function createMachineAcceptanceRecommendations({ outcome, failedRequired, steps, checklist }) {
+  const recommendations = [];
+  if (outcome !== "success") {
+    recommendations.push("机床验收未达到成功状态，保持生产 NC 锁定，仅允许按门禁执行空跑或小料复核。");
+  }
+  if (failedRequired.length > 0) {
+    recommendations.push(`优先复核未通过的必需项：${failedRequired.map((step) => step.title).join("、")}。`);
+  }
+  if (steps.some((step) => step.id === "air-run" && step.status !== "pass")) {
+    recommendations.push("离料空跑未通过前不要装料加工；先确认 X/Y旋转/Z 方向、安全高度和夹具干涉。");
+  }
+  if (steps.some((step) => step.id === "soft-material-trial" && step.status !== "pass")) {
+    recommendations.push("软材料或废料试雕未通过前，不要进入正式核胚试雕。");
+  }
+  if (steps.some((step) => step.id === "camotics-preview" && step.status !== "pass")) {
+    recommendations.push("仿真/展开预览未确认前，应先补齐 CAMotics 或等效材料去除验证。");
+  }
+  if (outcome === "success" && failedRequired.length === 0) {
+    recommendations.push("本次现场验收可作为生产证据之一；仍需结合真实 CAM、仿真和试雕反馈综合解锁。");
+  }
+  if (checklist?.unresolvedRisks?.length) {
+    recommendations.push(`验收时仍需关注加工包遗留风险：${checklist.unresolvedRisks.slice(0, 3).join("；")}。`);
+  }
+  return dedupeStrings(recommendations);
+}
+
 function createTrialFeedbackRecord(job, input) {
   const summary = job.result?.summary ?? {};
   const now = new Date().toISOString();
@@ -6396,6 +6619,18 @@ async function writeTrialFeedbackGlobalRecord(record) {
   const recordDir = join(process.cwd(), "public", "orchestrator-trial-feedback", record.id);
   await mkdir(recordDir, { recursive: true });
   await writeFile(join(recordDir, "trial-feedback-record.json"), JSON.stringify(record, null, 2), "utf8");
+}
+
+async function writeMachineAcceptanceGlobalRecord(record) {
+  const recordDir = join(process.cwd(), "public", "orchestrator-machine-acceptance", record.id);
+  await mkdir(recordDir, { recursive: true });
+  await writeFile(join(recordDir, "machine-acceptance-record.json"), JSON.stringify(record, null, 2), "utf8");
+}
+
+function normalizeBoolean(value) {
+  if (value === true || value === "true" || value === "yes" || value === "pass" || value === 1) return true;
+  if (value === false || value === "false" || value === "no" || value === "failed" || value === 0) return false;
+  return null;
 }
 
 function normalizePositiveNumber(value) {
