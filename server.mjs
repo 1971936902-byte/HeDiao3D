@@ -698,6 +698,10 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     if (latestJob.status !== "completed") warnings.push(`最近 V3 任务状态为 ${latestJob.status}。`);
     if (!latestJob.allowAirRun) warnings.push("最近任务未生成可用离料空跑文件。");
     if (!latestJob.allowTrialNc) warnings.push("最近任务未解锁试雕 NC。");
+    if (!latestJob.camoticsCliPackage?.artifactExists) {
+      warnings.push("最近任务尚未生成 CAMotics Linux 仿真准备包。");
+      nextActions.push("在 V3 面板点击“生成仿真准备包”，或运行 npm run test:v3:camotics-cli-package-api 验证准备包 API。");
+    }
     if (!latestJob.allowProductionNc) warnings.push(`最近任务生产 NC 未解锁，包级别 ${latestJob.packageLevel ?? "unknown"}。`);
   }
 
@@ -932,6 +936,22 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 13,
+      id: "camotics-cli-package",
+      title: "CAMotics Linux 仿真准备包",
+      status: !latestJob
+        ? "pending"
+        : latestJob.camoticsCliPackage?.artifactExists && latestJob.camoticsCliPackage?.productionUnlockEligible === false
+          ? "done"
+          : "pending",
+      command: "npm run test:v3:camotics-cli-package-api",
+      evidence: ["camotics-cli-run-package.json", "camotics-result-template.json", "camotics-linux-run.sh", "camotics-cli-package-report.json"],
+      detail: latestJob?.camoticsCliPackage
+        ? `${latestJob.camoticsCliPackage.status ?? "unknown"} / lines=${latestJob.camoticsCliPackage.motionLineCount ?? "-"} / productionUnlock=${latestJob.camoticsCliPackage.productionUnlockEligible}`
+        : "尚未为最近任务生成 CAMotics Linux 准备包。",
+      blocksProduction: false
+    }),
+    createAcceptanceStep({
+      order: 14,
       id: "production-evidence-dossier",
       title: "生产证据档案",
       status: !latestEvidenceDossier
@@ -949,7 +969,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestEvidenceDossier || latestEvidenceDossier.status !== "production-evidence-complete"
     }),
     createAcceptanceStep({
-      order: 14,
+      order: 15,
       id: "trial-feedback",
       title: "真实试雕反馈回填",
       status: !latestTrialFeedback
@@ -967,7 +987,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestTrialFeedback || latestTrialFeedback.latestOutcome !== "success"
     }),
     createAcceptanceStep({
-      order: 15,
+      order: 16,
       id: "machine-acceptance",
       title: "机床现场验收回填",
       status: !latestMachineAcceptance
@@ -985,7 +1005,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestMachineAcceptance || latestMachineAcceptance.latestOutcome !== "success" || !latestMachineAcceptance.latestAllRequiredPassed
     }),
     createAcceptanceStep({
-      order: 16,
+      order: 17,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -8676,6 +8696,13 @@ function createOrchestratorJobSummary(job) {
   const statusFile = job.workDir ? join(job.workDir, "job-status.json") : null;
   const diskUpdatedAt = statusFile && existsSync(statusFile) ? statSync(statusFile).mtime.toISOString() : null;
   const summary = job.result?.summary ?? {};
+  const camoticsCliPackageSummary = summary.camoticsCliPackage ?? null;
+  const camoticsCliPackagePath = job.workDir ? join(job.workDir, "camotics-cli-run-package.json") : null;
+  const camoticsCliPackageReportPath = job.workDir ? join(job.workDir, "camotics-cli-package-report.json") : null;
+  const camoticsCliPackageReport = camoticsCliPackageReportPath && existsSync(camoticsCliPackageReportPath)
+    ? readJsonFileSafe(camoticsCliPackageReportPath)
+    : null;
+  const camoticsCliPackageArtifactExists = Boolean(camoticsCliPackagePath && existsSync(camoticsCliPackagePath));
   return {
     id: job.id,
     status: job.status,
@@ -8697,7 +8724,17 @@ function createOrchestratorJobSummary(job) {
     preflightStatus: summary.adapterPreflight?.status ?? null,
     allowProductionNc: summary.productionGate?.allowProductionNc ?? false,
     allowTrialNc: summary.productionGate?.allowTrialNc ?? false,
-    allowAirRun: summary.productionGate?.allowAirRun ?? false
+    allowAirRun: summary.productionGate?.allowAirRun ?? false,
+    camoticsCliPackage: {
+      artifactExists: camoticsCliPackageArtifactExists,
+      status: camoticsCliPackageSummary?.status ?? camoticsCliPackageReport?.status ?? (camoticsCliPackageArtifactExists ? "ready-for-linux-camotics" : null),
+      artifact: camoticsCliPackageSummary?.artifact ?? (camoticsCliPackageArtifactExists ? "camotics-cli-run-package.json" : null),
+      report: camoticsCliPackageSummary?.report ?? (camoticsCliPackageReportPath && existsSync(camoticsCliPackageReportPath) ? "camotics-cli-package-report.json" : null),
+      productionUnlockEligible: Boolean(camoticsCliPackageSummary?.productionUnlockEligible),
+      motionLineCount: camoticsCliPackageSummary?.motionProfile?.motionLineCount
+        ?? camoticsCliPackageReport?.preferredGcodeIdentity?.motionProfile?.motionLineCount
+        ?? null
+    }
   };
 }
 

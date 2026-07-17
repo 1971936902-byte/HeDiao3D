@@ -38,6 +38,7 @@ async function main() {
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-external-neutral-handoff"), "acceptance plan missing OpenCAMLib external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-neutral-import"), "acceptance plan missing OpenCAMLib neutral import step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-result-import"), "acceptance plan missing CAMotics import step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-cli-package" && step.evidence?.includes("camotics-cli-run-package.json")), "acceptance plan missing CAMotics CLI package step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "trial-feedback" && step.evidence?.includes("trial-feedback-log.json")), "acceptance plan missing trial feedback evidence step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "machine-acceptance" && step.evidence?.includes("machine-acceptance-log.json")), "acceptance plan missing machine acceptance evidence step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "production-evidence-dossier"), "acceptance plan missing production evidence dossier step");
@@ -81,6 +82,7 @@ async function main() {
   assert(runbook.includes("npm run test:v3:closed-neutral-handoff"), "readiness runbook missing OpenCAMLib external handoff command");
   assert(runbook.includes("npm run test:v3:neutral-import"), "readiness runbook missing neutral import command");
   assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
+  assert(runbook.includes("npm run test:v3:camotics-cli-package-api"), "readiness runbook missing CAMotics CLI package command");
   assert(runbook.includes("production-evidence-dossier"), "readiness runbook missing evidence dossier step");
   assert(runbook.includes("rotary-calibration-airrun.nc"), "readiness runbook missing rotary calibration air-run evidence");
   assert(runbook.includes("package-integrity.json"), "readiness runbook missing package integrity evidence");
@@ -165,6 +167,7 @@ function validateReadiness(report, label) {
   }
   assert(Object.hasOwn(report, "latestEvidenceDossier"), `${label} missing latestEvidenceDossier field`);
   assert(report.acceptancePlan.steps.some((step) => step.id === "v3-small-loop" && step.evidence?.includes("rotary-calibration-airrun.nc")), `${label} V3 small loop missing rotary calibration evidence`);
+  assert(report.acceptancePlan.steps.some((step) => step.id === "camotics-cli-package" && step.evidence?.includes("camotics-cli-run-package.json")), `${label} missing CAMotics CLI package acceptance step`);
   if (report.latestEvidenceDossier) {
     assert(report.latestEvidenceDossier.schema === "hediao3d.production-evidence-dossier.v1", `${label} evidence dossier schema mismatch`);
     assert(typeof report.latestEvidenceDossier.reviewCount === "number", `${label} evidence dossier reviewCount missing`);
