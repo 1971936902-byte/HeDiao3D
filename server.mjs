@@ -8524,6 +8524,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-cli-package-report.json", "CAMotics运行包报告", "report", existsSync(join(job.workDir, "camotics-cli-package-report.json")), "记录 CAMotics Linux 准备包生成状态、检查项和安全锁。"),
     createDeliveryFile(job.id, "camotics-job.json", "CAMotics Adapter 任务", "report", existsSync(join(job.workDir, "camotics-job.json")), "CAMotics adapter 的独立输入快照。"),
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
+    createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
@@ -8824,6 +8825,7 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   };
   const evidenceFiles = [
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
+    createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
@@ -9535,8 +9537,18 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
   adapterReport.importBundle = {
     result: "imported-camotics-result.json",
     screenshot: importBundle.screenshotFilename,
-    materialMesh: importBundle.materialMeshFilename
+    materialMesh: importBundle.materialMeshFilename,
+    localValidation: importBundle.localValidationFilename
   };
+  adapterReport.localValidation = importBundle.localValidation
+    ? {
+        artifact: importBundle.localValidationFilename,
+        ok: importBundle.localValidation.ok,
+        productionEvidenceEligible: importBundle.localValidation.productionEvidenceEligible,
+        missing: importBundle.localValidation.missing,
+        summary: importBundle.localValidation.summary
+      }
+    : null;
   adapterReport.exitCode = run.status;
   adapterReport.stdout = String(run.stdout ?? "").slice(-6000);
   adapterReport.stderr = String(run.stderr ?? "").slice(-6000);
@@ -9576,6 +9588,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
   for (const filename of [
     "imported-camotics-result.json",
     "camotics-adapter-report.json",
+    "camotics-result-local-validation.json",
     "camotics-result.json",
     "camotics-preview.png",
     "camotics-material-removal.stl",
@@ -9936,6 +9949,7 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
   if (!result) throw new Error("CAMotics result 不能为空，需传入 result 对象。");
   if (result.schema !== "hediao3d.camotics-result.v1") throw new Error("result.schema 必须是 hediao3d.camotics-result.v1。");
   if (result.synthetic === true) throw new Error("不能通过真实结果回填接口导入 synthetic CAMotics 结果。");
+  const localValidation = normalizeCamoticsLocalValidation(input?.localValidation);
 
   const screenshotFilename = input.screenshotDataUrl ? "imported-camotics-preview.png" : null;
   const materialMeshFilename = input.materialMeshDataUrl || input.materialMeshText ? "imported-camotics-material-removal.stl" : null;
@@ -9956,7 +9970,27 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
   };
   const resultPath = join(workDir, "imported-camotics-result.json");
   await writeFile(resultPath, JSON.stringify(result, null, 2), "utf8");
-  return { resultPath, screenshotFilename, materialMeshFilename };
+  const localValidationFilename = localValidation ? "camotics-result-local-validation.json" : null;
+  if (localValidation) {
+    await writeFile(join(workDir, localValidationFilename), JSON.stringify(localValidation, null, 2), "utf8");
+  }
+  return { resultPath, screenshotFilename, materialMeshFilename, localValidationFilename, localValidation };
+}
+
+function normalizeCamoticsLocalValidation(value) {
+  if (!value || typeof value !== "object") return null;
+  if (value.schema !== "hediao3d.camotics-result-local-validation.v1") {
+    throw new Error("localValidation.schema 必须是 hediao3d.camotics-result-local-validation.v1。");
+  }
+  return {
+    ...value,
+    importedAt: new Date().toISOString(),
+    importedVia: "api-camotics-result",
+    ok: value.ok === true,
+    productionEvidenceEligible: value.productionEvidenceEligible === true,
+    missing: Array.isArray(value.missing) ? value.missing.map((item) => String(item)).slice(0, 50) : [],
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
+  };
 }
 
 function decodeInlineFile(value) {

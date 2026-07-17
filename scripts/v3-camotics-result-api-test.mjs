@@ -59,6 +59,7 @@ async function main() {
   assert(resultTemplate.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "CAMotics result template should bind to the current CLI run package hash");
   const completeImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256),
+    localValidation: createLocalValidation(true),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: [
       "solid camotics_material_removal",
@@ -74,6 +75,7 @@ async function main() {
     ].join("\n")
   });
   assert(completeImport.ok === true, `complete import should succeed: ${completeImport.adapterReport?.error}`);
+  assert(completeImport.adapterReport?.localValidation?.productionEvidenceEligible === true, "adapter report should expose passing local validation");
   assert(completeImport.simulationEvidence?.level === "material-removal-verified", `expected material-removal-verified, got ${completeImport.simulationEvidence?.level}`);
   assert(completeImport.simulationEvidence?.productionUnlockEligible === true, "complete CAMotics import should be production evidence eligible");
   assert(completeImport.productionUnlockMatrix?.rows?.some((row) => row.id === "simulation-evidence" && row.status === "pass"), "unlock matrix should mark simulation row pass");
@@ -89,8 +91,13 @@ async function main() {
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.cliRunPackageBindingStatus === "matched", "package index should expose CAMotics CLI package binding");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.motionConsistencyStatus === "matched", "package index should expose CAMotics motion consistency");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result.json" && file.exists), "delivery manifest should expose camotics result");
+  assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.exists), "delivery manifest should expose local validation report");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
+  assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.sha256), "package integrity should hash local validation report");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  const localValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-local-validation.json`);
+  assert(localValidationArtifact.productionEvidenceEligible === true, "local validation artifact should preserve production evidence eligibility");
+  assert(localValidationArtifact.importedVia === "api-camotics-result", "local validation artifact should record API import");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
@@ -169,6 +176,22 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       zMax: motionProfile.zMax,
       materialRemovedMm3: 8.4
     }
+  };
+}
+
+function createLocalValidation(ok) {
+  return {
+    schema: "hediao3d.camotics-result-local-validation.v1",
+    createdAt: new Date().toISOString(),
+    ok,
+    productionEvidenceEligible: ok,
+    resultPath: "camotics-result.json",
+    checks: [
+      { id: "result-file", ok: true, severity: "info", message: "fixture" },
+      { id: "run-package-hash", ok, severity: ok ? "info" : "critical", message: "fixture" }
+    ],
+    missing: ok ? [] : ["run-package-hash"],
+    summary: ok ? "CAMotics local validation passed: result is eligible to be imported as material-removal evidence." : "CAMotics local validation failed: run-package-hash"
   };
 }
 
