@@ -1643,6 +1643,7 @@ export function App() {
       byName.get("machining-package-index.json")
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
+  const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
   const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
   const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
@@ -5115,6 +5116,30 @@ export function App() {
                   缺失 {v3Job.result.summary.packageIntegrity.missingDownloadableCount}
                 </small>
               )}
+              {v3DownloadChecklistSummary && (
+                <div className="v3-download-checklist">
+                  <small>
+                    下载核验：关键文件 {v3DownloadChecklistSummary.verifiedKeyCount}/{v3DownloadChecklistSummary.keyFiles.length}
+                    {" · "}
+                    禁止上机 {v3DownloadChecklistSummary.neverMachineCount}
+                  </small>
+                  <div className="v3-adapter-list">
+                    {v3DownloadChecklistSummary.keyFiles.map((file) => (
+                      <span className={file.verified ? file.allowedOnMachine ? "ok" : "warning" : "critical"} key={file.filename} title={file.sha256 ?? "缺少 SHA-256"}>
+                        {formatV3ShortcutFileLabel(file.filename)}
+                        {" · "}
+                        {file.verified ? "已哈希" : "缺哈希"}
+                        {!file.allowedOnMachine ? " · 禁止上机" : ""}
+                      </span>
+                    ))}
+                  </div>
+                  {v3DownloadChecklistSummary.checklistUrl && (
+                    <a href={v3DownloadChecklistSummary.checklistUrl} download>
+                      下载操作员核验清单
+                    </a>
+                  )}
+                </div>
+              )}
               {v3Job?.result?.summary.operatorRunbook && (
                 <small className="v3-inline-ok">
                   操作员说明：{v3Job.result.summary.operatorRunbook.artifact}
@@ -6328,9 +6353,38 @@ function createV3DownloadIntegrityEvidence(job: V3OrchestratorJob) {
   };
 }
 
+function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
+  const integrityFiles = job?.result?.summary.packageIntegrity?.files ?? [];
+  if (integrityFiles.length === 0) return null;
+  const deliveryFiles = job?.result?.summary.deliveryManifest?.files ?? [];
+  const byName = new Map(integrityFiles.map((file) => [file.filename, file]));
+  const deliveryByName = new Map(deliveryFiles.map((file) => [file.filename, file]));
+  const keyFileNames = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc", "camotics-preview.nc"];
+  const keyFiles = keyFileNames.map((filename) => {
+    const file = byName.get(filename);
+    const delivery = deliveryByName.get(filename);
+    return {
+      filename,
+      sha256: file?.sha256 ?? null,
+      verified: Boolean(file?.sha256 && file.exists),
+      allowedOnMachine: Boolean(file?.machineUse?.allowedOnMachine ?? delivery?.machineUse?.allowedOnMachine),
+      machineUseClass: file?.machineUse?.class ?? delivery?.machineUse?.class ?? "unknown"
+    };
+  });
+  return {
+    keyFiles,
+    verifiedKeyCount: keyFiles.filter((file) => file.verified).length,
+    neverMachineCount: keyFiles.filter((file) => !file.allowedOnMachine).length,
+    checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null
+  };
+}
+
 function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "rotary-calibration-airrun.nc") return "旋转标定空跑";
   if (filename === "air-run.nc") return "整条刀路空跑";
+  if (filename === "toolpath.nc") return "候选刀路NC";
+  if (filename === "camotics-preview.nc") return "CAMotics预览";
+  if (filename === "operator-download-checklist.md") return "下载核验清单";
   if (filename === "operator-runbook.md") return "操作员说明";
   if (filename === "machining-package-index.json") return "加工包索引";
   return filename;
