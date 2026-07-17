@@ -65,6 +65,43 @@ async function main() {
     };
   });
 
+  const mismatchedEvidenceFiles = integrityEvidenceFiles.map((file) => file.filename === "toolpath.nc"
+    ? { ...file, sha256: "0".repeat(64), note: "Intentional mismatch for negative binding test." }
+    : file);
+  const rejectedAcceptance = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/machine-acceptance`, {
+    id: "machine-acceptance-api-test-mismatch",
+    outcome: "success",
+    operator: "API test operator",
+    machineSerial: "desktop-rotary-y-wrap-test",
+    fixtureType: "三轴控制器 + Y轴旋转夹具",
+    materialBatch: "soft-trial-block",
+    programName: "toolpath.nc",
+    airRunOk: true,
+    softTrialOk: true,
+    formalTrialOk: false,
+    downloadIntegrity: {
+      packageIntegrityReviewed: true,
+      operatorChecklistReviewed: true,
+      neverMachineConfirmed: true,
+      files: mismatchedEvidenceFiles
+    },
+    steps: [
+      { id: "read-package", passed: true, evidenceNote: "All package reports reviewed." },
+      { id: "verify-download-integrity", passed: true, evidenceNote: "Submitted hash should be rejected because it does not match package-integrity.json." },
+      { id: "camotics-preview", passed: true, evidenceNote: "Preview checked for bounds and Z range." },
+      { id: "rotary-calibration-airrun", passed: true, evidenceNote: "Rotary calibration air-run completed at safe Z." },
+      { id: "air-run", passed: true, evidenceNote: "Dry run completed with spindle off and safe Z." },
+      { id: "soft-material-trial", passed: true, evidenceNote: "Soft material trial completed at reduced feed." }
+    ],
+    notes: "Machine acceptance API negative test: mismatched toolpath hash must not pass."
+  });
+
+  assert(rejectedAcceptance.record.allRequiredPassed === false, "mismatched hash acceptance must not pass required steps");
+  assert(rejectedAcceptance.record.downloadIntegrity?.packageBinding?.status === "mismatch", "mismatched hash should create package binding mismatch");
+  assert(rejectedAcceptance.record.downloadIntegrity.packageBinding.files?.some((file) => file.filename === "toolpath.nc" && file.issues.includes("sha256-mismatch")), "toolpath hash mismatch should be reported");
+  assert(rejectedAcceptance.record.steps?.some((step) => step.id === "verify-download-integrity" && step.status === "failed"), "download integrity step should fail on hash mismatch");
+  assert(rejectedAcceptance.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.status !== "pass"), "mismatched acceptance must not pass dossier machine evidence");
+
   const acceptance = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/machine-acceptance`, {
     id: "machine-acceptance-api-test",
     outcome: "success",
@@ -99,6 +136,8 @@ async function main() {
   assert(acceptance.record.allRequiredPassed === true, "record should mark required steps passed");
   assert(acceptance.record.downloadIntegrity?.allRequiredHashesVerified === true, "record should mark required hashes verified");
   assert(acceptance.record.downloadIntegrity?.neverMachineConfirmed === true, "record should confirm never-machine files");
+  assert(acceptance.record.downloadIntegrity?.packageBinding?.status === "matched", "record should bind hashes to current package integrity");
+  assert(acceptance.record.downloadIntegrity.packageBinding.files?.every((file) => file.status === "matched"), "all bound package files should match");
   assert(acceptance.record.steps?.some((step) => step.id === "verify-download-integrity" && step.status === "pass"), "download integrity step should pass");
   assert(acceptance.record.steps?.some((step) => step.id === "air-run" && step.status === "pass"), "air-run step should pass");
   assert(acceptance.log?.recordCount >= 1, "machine acceptance log count missing");
@@ -108,8 +147,9 @@ async function main() {
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.machineAcceptanceLog?.schema === "hediao3d.machine-acceptance-log.v1", "job summary missing machine acceptance log");
-  assert(reloaded.result.summary.machineAcceptanceLog.recordCount >= 1, "job summary machine acceptance count missing");
+  assert(reloaded.result.summary.machineAcceptanceLog.recordCount >= 2, "job summary machine acceptance count missing");
   assert(reloaded.result.summary.machineAcceptanceLog.allRequiredPassed === true, "job summary should mark required steps passed");
+  assert(reloaded.result.summary.machineAcceptanceLog.downloadIntegrityBound === "matched", "job summary should expose package integrity binding");
 
   const recordArtifact = await getArtifactJson(job.id, "machine-acceptance-record.json");
   assert(recordArtifact.id === acceptance.record.id, "record artifact id mismatch");
@@ -121,6 +161,7 @@ async function main() {
   const dossierArtifact = await getArtifactJson(job.id, "production-evidence-dossier.json");
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.summary.includes("机床验收记录")), "dossier missing machine acceptance evidence item");
   assert(dossierArtifact.crossChecks?.machineAcceptancePassed === true, "dossier should mark machine acceptance passed");
+  assert(dossierArtifact.crossChecks?.machineAcceptanceIntegrityBound === true, "dossier should mark machine acceptance package binding passed");
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.downloadable), "delivery manifest should expose machine acceptance record");
   assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-log.json" && file.downloadable), "delivery manifest should expose machine acceptance log");

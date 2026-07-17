@@ -1348,6 +1348,7 @@ function createMachineAcceptanceLogPublicSummary(log, job) {
     latestRecordId: log.latestRecordId ?? null,
     latestOutcome: log.latestOutcome ?? null,
     latestAllRequiredPassed: Boolean(log.latestAllRequiredPassed),
+    latestDownloadIntegrityBound: log.latestDownloadIntegrityBound ?? log.records?.[0]?.downloadIntegrity?.packageBinding?.status ?? null,
     artifact: publicArtifactUrl(log.jobId ?? job.id, "machine-acceptance-log.json")
   };
 }
@@ -6037,9 +6038,12 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
     || existsSync(join(job.workDir, "neutral-toolpath.json"))
   );
+  const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
+  const machineAcceptanceIntegrityBound = latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const machineAcceptancePassed = machineAcceptanceLog?.recordCount > 0
     && machineAcceptanceLog.latestOutcome === "success"
-    && machineAcceptanceLog.latestAllRequiredPassed === true;
+    && machineAcceptanceLog.latestAllRequiredPassed === true
+    && machineAcceptanceIntegrityBound;
   const evidenceItems = [
     {
       id: "production-gate",
@@ -6107,7 +6111,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
         : "review",
       evidence: ["machine-acceptance-checklist.json", "machine-acceptance-log.json", "machine-acceptance-record.json", "operator-runbook.md"],
       summary: machineAcceptanceLog?.recordCount > 0
-        ? `已回填 ${machineAcceptanceLog.recordCount} 条机床验收记录，最新结论 ${machineAcceptanceLog.latestOutcome}，必需项${machineAcceptanceLog.latestAllRequiredPassed ? "已通过" : "未全部通过"}。`
+        ? `已回填 ${machineAcceptanceLog.recordCount} 条机床验收记录，最新结论 ${machineAcceptanceLog.latestOutcome}，必需项${machineAcceptanceLog.latestAllRequiredPassed ? "已通过" : "未全部通过"}，下载包绑定${machineAcceptanceIntegrityBound ? "已匹配" : "未匹配"}。`
         : machineAcceptanceChecklist
           ? "已生成机床验收清单，但尚未回填真实空跑/试雕验收记录。"
           : "未生成机床验收清单。"
@@ -6175,6 +6179,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       machineAcceptanceRecords: machineAcceptanceLog?.recordCount ?? 0,
       latestMachineAcceptanceOutcome: machineAcceptanceLog?.latestOutcome ?? null,
       machineAcceptancePassed,
+      machineAcceptanceIntegrityBound,
       trialFeedbackRecords: trialFeedbackLog?.recordCount ?? 0,
       optimizationStatus: processOptimizationPlan?.status ?? null
     },
@@ -8530,7 +8535,8 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
 
   const input = await readJson(req);
   const checklist = readJsonFile(join(workDir, "machine-acceptance-checklist.json"));
-  const record = createMachineAcceptanceRecord(job, checklist, input);
+  const packageIntegrity = readJsonFile(join(workDir, "package-integrity.json"));
+  const record = createMachineAcceptanceRecord(job, checklist, input, packageIntegrity);
   const logPath = join(workDir, "machine-acceptance-log.json");
   const existingLog = readJsonFile(logPath) ?? {
     schema: "hediao3d.machine-acceptance-log.v1",
@@ -8548,6 +8554,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
     latestRecordId: record.id,
     latestOutcome: record.outcome,
     latestAllRequiredPassed: record.allRequiredPassed,
+    latestDownloadIntegrityBound: record.downloadIntegrity?.packageBinding?.status ?? null,
     records: [record, ...records].slice(0, 80)
   };
   const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
@@ -8579,6 +8586,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
       latestOutcome: record.outcome,
       latestRecordId: record.id,
       allRequiredPassed: record.allRequiredPassed,
+      downloadIntegrityBound: record.downloadIntegrity?.packageBinding?.status ?? null,
       recommendations: record.recommendations
     },
     ...(refreshedDelivery ? {
@@ -9479,11 +9487,11 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   };
 }
 
-function createMachineAcceptanceRecord(job, checklist, input) {
+function createMachineAcceptanceRecord(job, checklist, input, packageIntegrity = null) {
   const now = new Date().toISOString();
   const checklistSteps = Array.isArray(checklist?.steps) ? checklist.steps : [];
   const submittedSteps = Array.isArray(input?.steps) ? input.steps : [];
-  const downloadIntegrity = normalizeDownloadIntegrityEvidence(input?.downloadIntegrity);
+  const downloadIntegrity = normalizeDownloadIntegrityEvidence(input?.downloadIntegrity, packageIntegrity);
   const submittedById = new Map(submittedSteps
     .filter((step) => step && typeof step === "object")
     .map((step) => [String(step.id ?? ""), step]));
@@ -9491,7 +9499,9 @@ function createMachineAcceptanceRecord(job, checklist, input) {
     const submitted = submittedById.get(String(template.id));
     let passed = normalizeBoolean(submitted?.passed ?? submitted?.ok);
     if (template.id === "verify-download-integrity" && passed === true) {
-      passed = downloadIntegrity.allRequiredHashesVerified && downloadIntegrity.neverMachineConfirmed;
+      passed = downloadIntegrity.allRequiredHashesVerified
+        && downloadIntegrity.neverMachineConfirmed
+        && downloadIntegrity.packageBinding?.status === "matched";
     }
     const status = passed === true
       ? "pass"
@@ -9562,7 +9572,7 @@ function createMachineAcceptanceRecord(job, checklist, input) {
   };
 }
 
-function normalizeDownloadIntegrityEvidence(input) {
+function normalizeDownloadIntegrityEvidence(input, packageIntegrity = null) {
   const files = Array.isArray(input?.files) ? input.files : [];
   const normalizedFiles = files
     .map((file) => ({
@@ -9574,9 +9584,27 @@ function normalizeDownloadIntegrityEvidence(input) {
     }))
     .filter((file) => file.filename);
   const requiredFilenames = ["toolpath.nc", "air-run.nc", "rotary-calibration-airrun.nc"];
-  const verifiedRequired = requiredFilenames.filter((filename) => normalizedFiles.some((file) => file.filename === filename && file.verified && /^[a-f0-9]{64}$/.test(file.sha256 ?? "")));
+  const packageBinding = createDownloadIntegrityPackageBinding(normalizedFiles, packageIntegrity, [
+    ...requiredFilenames,
+    "camotics-preview.nc"
+  ]);
+  const verifiedRequired = requiredFilenames.filter((filename) => {
+    const submitted = normalizedFiles.find((file) => file.filename === filename);
+    const bound = packageBinding.files?.find((file) => file.filename === filename);
+    return Boolean(
+      submitted?.verified
+      && /^[a-f0-9]{64}$/.test(submitted.sha256 ?? "")
+      && bound?.status === "matched"
+    );
+  });
   const neverMachineConfirmed = input?.neverMachineConfirmed === true
-    || normalizedFiles.some((file) => file.filename === "camotics-preview.nc" && file.verified && file.machineUseClass === "simulation-only-never-machine");
+    || normalizedFiles.some((file) => {
+      const bound = packageBinding.files?.find((item) => item.filename === "camotics-preview.nc");
+      return file.filename === "camotics-preview.nc"
+        && file.verified
+        && file.machineUseClass === "simulation-only-never-machine"
+        && (!bound || bound.status === "matched");
+    });
   const allRequiredHashesVerified = requiredFilenames.every((filename) => verifiedRequired.includes(filename));
   return {
     schema: "hediao3d.download-integrity-evidence.v1",
@@ -9586,10 +9614,53 @@ function normalizeDownloadIntegrityEvidence(input) {
     verifiedRequired,
     missingRequired: requiredFilenames.filter((filename) => !verifiedRequired.includes(filename)),
     neverMachineConfirmed,
+    packageBinding,
     files: normalizedFiles,
-    summary: allRequiredHashesVerified && neverMachineConfirmed
-      ? "关键 NC 文件 SHA-256 已核验，且不可上机文件用途已确认。"
+    summary: allRequiredHashesVerified && neverMachineConfirmed && packageBinding.status === "matched"
+      ? "关键 NC 文件 SHA-256 已与当前加工包匹配，且不可上机文件用途已确认。"
       : "下载包核验证据不完整。"
+  };
+}
+
+function createDownloadIntegrityPackageBinding(submittedFiles, packageIntegrity, filenames) {
+  const packageFiles = Array.isArray(packageIntegrity?.files) ? packageIntegrity.files : [];
+  const expectedByName = new Map(packageFiles.map((file) => [file.filename, file]));
+  const rows = filenames.map((filename) => {
+    const submitted = submittedFiles.find((file) => file.filename === filename);
+    const expected = expectedByName.get(filename);
+    const expectedSha = typeof expected?.sha256 === "string" ? expected.sha256.toLowerCase() : null;
+    const expectedMachineUseClass = expected?.machineUse?.class ?? null;
+    const submittedSha = typeof submitted?.sha256 === "string" ? submitted.sha256.toLowerCase() : null;
+    const issues = [];
+    if (!packageIntegrity) issues.push("missing-package-integrity");
+    if (!expected) issues.push("missing-expected-file");
+    if (!submitted) issues.push("missing-submitted-file");
+    if (expected && !expected.exists) issues.push("expected-file-not-generated");
+    if (expectedSha && submittedSha && expectedSha !== submittedSha) issues.push("sha256-mismatch");
+    if (expectedSha && !submittedSha) issues.push("missing-submitted-sha256");
+    if (submitted && !submitted.verified) issues.push("not-marked-verified");
+    if (expectedMachineUseClass && submitted?.machineUseClass && expectedMachineUseClass !== submitted.machineUseClass) issues.push("machine-use-mismatch");
+    return {
+      filename,
+      status: issues.length === 0 ? "matched" : "mismatch",
+      expectedSha256: expectedSha,
+      submittedSha256: submittedSha,
+      expectedMachineUseClass,
+      submittedMachineUseClass: submitted?.machineUseClass ?? null,
+      issues
+    };
+  });
+  const mismatches = rows.filter((row) => row.status !== "matched");
+  return {
+    schema: "hediao3d.download-integrity-package-binding.v1",
+    packageIntegrityJobId: packageIntegrity?.jobId ?? null,
+    status: mismatches.length === 0 ? "matched" : "mismatch",
+    matchedCount: rows.length - mismatches.length,
+    mismatchCount: mismatches.length,
+    files: rows,
+    summary: mismatches.length === 0
+      ? "验收提交的哈希与当前 package-integrity.json 完全匹配。"
+      : `验收提交与当前加工包存在 ${mismatches.length} 个文件绑定问题。`
   };
 }
 
