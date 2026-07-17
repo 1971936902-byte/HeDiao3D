@@ -79,6 +79,7 @@ const summary = {
     HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: process.env.HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN ?? null
   },
   nativeReadiness: createNativeReadiness(results),
+  productionGuardrails: createProductionGuardrails(results),
   adapters: results
 };
 
@@ -337,13 +338,63 @@ function createNextActions(id, report, plan, commandMode) {
 }
 
 function summarize(results) {
+  const productionGuardrails = createProductionGuardrails(results);
   return {
     adapterCount: results.length,
     failed: results.filter((item) => item.failed).length,
     generatedPlans: results.filter((item) => item.plan.generated).length,
     completedAdapters: results.filter((item) => item.report?.status === "completed").length,
     readyForProduction: false,
+    guardrailCount: productionGuardrails.required.length,
     note: "Plan generation is a deployment validation step. Production still requires completed adapter output plus HeDiao3D gates."
+  };
+}
+
+function createProductionGuardrails(results) {
+  const required = [
+    {
+      id: "disable-fixtures",
+      level: "critical",
+      summary: "生产验收必须关闭所有 synthetic/fixture 输出开关。",
+      envMustNotBeTrue: [
+        "HEDIAO3D_FREECAD_RUNNER_FIXTURE_OUTPUT",
+        "HEDIAO3D_BLENDERCAM_RUNNER_FIXTURE_OUTPUT",
+        "HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT",
+        "HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT"
+      ]
+    },
+    {
+      id: "camotics-input-identity",
+      level: "critical",
+      summary: "CAMotics 真实结果必须带 inputs.preferredGcodeSha256，并与当前 camotics-preview.nc 哈希匹配。",
+      evidence: ["camotics-result.json", "camotics-preview.nc", "simulation-summary.json"]
+    },
+    {
+      id: "rotary-postprocess-owned-by-hediao3d",
+      level: "critical",
+      summary: "外部 CAM 输出必须是中立/展开刀位点或可摄取 G-code；三轴控制器 + Y轴旋转夹具最终 NC 仍由 HeDiao3D 后处理生成。",
+      evidence: ["neutral-toolpath.json", "toolpath.nc", "postprocess-profile.json", "controller-dialect-report.json"]
+    },
+    {
+      id: "field-acceptance-required",
+      level: "critical",
+      summary: "生产 NC 解锁必须同时具备旋转标定空跑、整条离料空跑、机床验收和试雕反馈记录。",
+      evidence: ["rotary-calibration-airrun.nc", "air-run.nc", "machine-acceptance-log.json", "trial-feedback-log.json"]
+    }
+  ];
+  const adapterStatuses = Object.fromEntries(results.map((item) => [item.id, item.report?.status ?? "missing"]));
+  return {
+    schema: "hediao3d.external-adapter-production-guardrails.v1",
+    readyForProduction: false,
+    summary: "Adapter 验证只证明计划和接口契约；生产仍需真实外部 CAM、匹配 G-code 的 CAMotics 材料去除结果和现场验收。",
+    adapterStatuses,
+    required,
+    nextActions: [
+      "在 CAM 服务器上运行 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters。",
+      "逐项关闭 fixture/synthetic 开关，只保留真实外部命令输出。",
+      "运行 npm run test:v3:camotics-import，确认 CAMotics 结果与当前 camotics-preview.nc 哈希匹配。",
+      "完成 rotary-calibration-airrun.nc、air-run.nc、机床验收和试雕反馈回填后再重新生成 V3 readiness。"
+    ]
   };
 }
 
@@ -430,6 +481,7 @@ function createMarkdown(summary) {
     `- Completed external outputs: ${summary.overall.completedAdapters}`,
     `- Production ready: ${summary.overall.readyForProduction ? "yes" : "no"}`,
     `- Native readiness: ${summary.nativeReadiness.readyCount}/${summary.nativeReadiness.requiredCount} (${summary.nativeReadiness.level})`,
+    `- Guardrails: ${summary.productionGuardrails.required.length} required / production ready ${summary.productionGuardrails.readyForProduction ? "yes" : "no"}`,
     "",
     "## Environment switches",
     "",
@@ -444,6 +496,19 @@ function createMarkdown(summary) {
     "",
     "Next actions:",
     ...summary.nativeReadiness.nextActions.map((item) => `- ${item}`),
+    "",
+    "## Production guardrails",
+    "",
+    summary.productionGuardrails.summary,
+    "",
+    ...summary.productionGuardrails.required.flatMap((guardrail) => [
+      `- ${guardrail.id}: ${guardrail.summary}`,
+      ...(guardrail.envMustNotBeTrue ? [`  - env must not be true: ${guardrail.envMustNotBeTrue.join(", ")}`] : []),
+      ...(guardrail.evidence ? [`  - evidence: ${guardrail.evidence.join(", ")}`] : [])
+    ]),
+    "",
+    "Guardrail next actions:",
+    ...summary.productionGuardrails.nextActions.map((item) => `- ${item}`),
     "",
     "## Adapters",
     ""

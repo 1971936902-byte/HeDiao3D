@@ -1715,6 +1715,13 @@ function createAdapterValidationPublicSummary(summary, validationId) {
         failed: Boolean(adapter.failed)
       }))
       : [],
+    productionGuardrails: summary.productionGuardrails ? {
+      schema: summary.productionGuardrails.schema,
+      readyForProduction: Boolean(summary.productionGuardrails.readyForProduction),
+      summary: summary.productionGuardrails.summary,
+      requiredCount: Array.isArray(summary.productionGuardrails.required) ? summary.productionGuardrails.required.length : 0,
+      nextActions: Array.isArray(summary.productionGuardrails.nextActions) ? summary.productionGuardrails.nextActions.slice(0, 8) : []
+    } : null,
     apiArtifacts: createAdapterValidationArtifactLinks(validationId),
     run: {
       exitCode: summary.run?.exitCode ?? null,

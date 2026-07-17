@@ -876,6 +876,13 @@ type V3AdapterValidationSummary = {
       missing: string[];
     }>;
   };
+  productionGuardrails?: {
+    schema: string;
+    readyForProduction: boolean;
+    summary: string;
+    requiredCount: number;
+    nextActions: string[];
+  } | null;
   adapters: Array<{
     id: string;
     name: string;
@@ -4683,6 +4690,13 @@ export function App() {
                       {v3AdapterValidation.nativeReadiness.level}
                       {" · "}
                       {v3AdapterValidation.nativeReadiness.summary}
+                    </small>
+                  )}
+                  {v3AdapterValidation.productionGuardrails && (
+                    <small className={v3AdapterValidation.productionGuardrails.readyForProduction ? "v3-inline-ok" : "v3-inline-warning"}>
+                      生产保护：{v3AdapterValidation.productionGuardrails.requiredCount} 项
+                      {" · "}
+                      {v3AdapterValidation.productionGuardrails.summary}
                     </small>
                   )}
                   <div className="v3-adapter-list">
