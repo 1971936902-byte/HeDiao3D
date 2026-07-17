@@ -1136,7 +1136,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       command: "npm run test:v3",
       evidence: ["production-evidence-dossier.json", "production-unlock-matrix.json", "trial-feedback-log.json", "process-optimization-plan.json"],
       detail: latestEvidenceDossier
-        ? `${latestEvidenceDossier.status} / pass=${latestEvidenceDossier.passedCount} review=${latestEvidenceDossier.reviewCount} block=${latestEvidenceDossier.blockedCount}`
+        ? `${latestEvidenceDossier.status} / pass=${latestEvidenceDossier.passedCount} review=${latestEvidenceDossier.reviewCount} block=${latestEvidenceDossier.blockedCount} / ${formatProductionEvidenceCrossChecksForReadiness(latestEvidenceDossier.crossChecks)}`
         : "尚未生成生产证据档案。",
       blocksProduction: !latestEvidenceDossier || latestEvidenceDossier.status !== "production-evidence-complete"
     }),
@@ -1302,6 +1302,7 @@ function createProductionEvidenceDossierSummaryFromJob(job) {
   if (!dossierPath || !existsSync(dossierPath)) return null;
   const dossier = readJsonFileSafe(dossierPath);
   if (!dossier) return null;
+  const rawCrossChecks = dossier.crossChecks ?? createProductionEvidenceCrossChecksFromArtifacts(job.workDir);
   return {
     schema: dossier.schema ?? "unknown",
     jobId: dossier.jobId ?? job.id,
@@ -1315,8 +1316,75 @@ function createProductionEvidenceDossierSummaryFromJob(job) {
     blockedCount: Number(dossier.blockedCount ?? 0),
     missingEvidenceCount: Array.isArray(dossier.missingEvidence) ? dossier.missingEvidence.length : 0,
     summary: dossier.summary ?? null,
+    crossChecks: rawCrossChecks ? createProductionEvidenceCrossChecksSummary(rawCrossChecks) : null,
     artifact: publicArtifactUrl(dossier.jobId ?? job.id, "production-evidence-dossier.json")
   };
+}
+
+function createProductionEvidenceCrossChecksFromArtifacts(workDir) {
+  if (!workDir) return null;
+  const ncStatic = readJsonFileSafe(join(workDir, "nc-static-analysis.json"));
+  const controllerDialect = readJsonFileSafe(join(workDir, "controller-dialect-report.json"));
+  const camHandoff = readJsonFileSafe(join(workDir, "cam-handoff-quality.json"));
+  const neutralImport = readJsonFileSafe(join(workDir, "neutral-toolpath-import-validation.json"));
+  const camoticsResult = readJsonFileSafe(join(workDir, "camotics-result.json"));
+  const machineAcceptanceLog = readJsonFileSafe(join(workDir, "machine-acceptance-log.json"));
+  const trialFeedbackLog = readJsonFileSafe(join(workDir, "trial-feedback-log.json"));
+  const optimizationPlan = readJsonFileSafe(join(workDir, "process-optimization-plan.json"));
+  const camoticsEvidence = camoticsResult?.evidenceQuality;
+  return {
+    realMaterialRemovalVerified: Boolean(camoticsEvidence?.productionEvidenceEligible && camoticsResult?.synthetic === false),
+    camHandoffReady: camHandoff?.level === "ready",
+    neutralSourceBindingStatus: neutralImport?.sourceBinding?.status ?? "missing",
+    neutralSourceBindingPass: Boolean(neutralImport?.sourceBinding?.status === "bound" && neutralImport?.postprocessEligible),
+    camoticsInputIdentityStatus: camoticsEvidence?.inputIdentity?.status ?? "missing",
+    camoticsCliRunPackageBindingStatus: camoticsEvidence?.inputIdentity?.cliRunPackage?.status ?? "missing",
+    camoticsMotionConsistencyStatus: camoticsEvidence?.motionConsistency?.status ?? "missing",
+    camoticsArtifactEvidenceStatus: camoticsEvidence?.status ?? "missing",
+    ncStaticReady: ncStatic?.level === "ready",
+    controllerDialectReady: controllerDialect?.level === "ready",
+    machineAcceptanceRecords: Number(machineAcceptanceLog?.recordCount ?? 0),
+    latestMachineAcceptanceOutcome: machineAcceptanceLog?.latestOutcome ?? null,
+    machineAcceptancePassed: Boolean(machineAcceptanceLog?.latestOutcome === "success" && machineAcceptanceLog?.allRequiredPassed),
+    machineAcceptanceIntegrityBound: Boolean(machineAcceptanceLog?.latestRecord?.integrity?.packageBindingStatus === "matched" || machineAcceptanceLog?.latestIntegrityBound),
+    trialFeedbackRecords: Number(trialFeedbackLog?.recordCount ?? 0),
+    optimizationStatus: optimizationPlan?.status ?? null
+  };
+}
+
+function createProductionEvidenceCrossChecksSummary(crossChecks) {
+  return {
+    unlockMatrixPass: Boolean(crossChecks.unlockMatrixPass),
+    realMaterialRemovalVerified: Boolean(crossChecks.realMaterialRemovalVerified),
+    camHandoffReady: Boolean(crossChecks.camHandoffReady),
+    neutralSourceBindingStatus: crossChecks.neutralSourceBindingStatus ?? "missing",
+    neutralSourceBindingPass: Boolean(crossChecks.neutralSourceBindingPass),
+    camoticsInputIdentityStatus: crossChecks.camoticsInputIdentityStatus ?? "missing",
+    camoticsCliRunPackageBindingStatus: crossChecks.camoticsCliRunPackageBindingStatus ?? "missing",
+    camoticsMotionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
+    camoticsArtifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
+    ncStaticReady: Boolean(crossChecks.ncStaticReady),
+    controllerDialectReady: Boolean(crossChecks.controllerDialectReady),
+    machineAcceptanceRecords: Number(crossChecks.machineAcceptanceRecords ?? 0),
+    latestMachineAcceptanceOutcome: crossChecks.latestMachineAcceptanceOutcome ?? null,
+    machineAcceptancePassed: Boolean(crossChecks.machineAcceptancePassed),
+    machineAcceptanceIntegrityBound: Boolean(crossChecks.machineAcceptanceIntegrityBound),
+    trialFeedbackRecords: Number(crossChecks.trialFeedbackRecords ?? 0),
+    optimizationStatus: crossChecks.optimizationStatus ?? null
+  };
+}
+
+function formatProductionEvidenceCrossChecksForReadiness(crossChecks) {
+  if (!crossChecks) return "crossChecks=missing";
+  return [
+    `cam=${crossChecks.camHandoffReady ? "ready" : "review"}`,
+    `camoticsInput=${crossChecks.camoticsInputIdentityStatus ?? "missing"}`,
+    `camoticsRunPackage=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"}`,
+    `camoticsMotion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"}`,
+    `nc=${crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "ready" : "review"}`,
+    `machine=${crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "accepted" : "locked"}`,
+    `trialRecords=${crossChecks.trialFeedbackRecords ?? 0}`
+  ].join(" / ");
 }
 
 function getLatestJobLogSummary(filename, summarizer) {
@@ -1802,6 +1870,7 @@ function createV3ReadinessMarkdown(report) {
     `- Latest trial feedback: ${report.latestTrialFeedback ? `${report.latestTrialFeedback.recordCount} records / ${report.latestTrialFeedback.latestOutcome ?? "unknown"}` : "missing"}`,
     `- Latest machine acceptance: ${report.latestMachineAcceptance ? `${report.latestMachineAcceptance.recordCount} records / ${report.latestMachineAcceptance.latestOutcome ?? "unknown"} / required=${report.latestMachineAcceptance.latestAllRequiredPassed ? "pass" : "review"}` : "missing"}`,
     `- Production evidence dossier: ${report.latestEvidenceDossier ? `${report.latestEvidenceDossier.status} / pass=${report.latestEvidenceDossier.passedCount} review=${report.latestEvidenceDossier.reviewCount} block=${report.latestEvidenceDossier.blockedCount}` : "missing"}`,
+    `- Evidence cross checks: ${report.latestEvidenceDossier ? formatProductionEvidenceCrossChecksForReadiness(report.latestEvidenceDossier.crossChecks) : "missing"}`,
     ""
   ];
   return `${lines.join("\n")}\n`;
