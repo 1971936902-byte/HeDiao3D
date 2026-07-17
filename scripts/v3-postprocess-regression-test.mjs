@@ -108,6 +108,12 @@ async function main() {
   assert(camoticsPlan.schema === "hediao3d.camotics-simulation-plan.v1", "CAMotics simulation plan schema mismatch");
   assert(camoticsPlan.inputs?.preferredGcode === "camotics-preview.nc", "CAMotics plan preferred G-code mismatch");
   assert(camoticsPlan.projectTemplate?.schema === "hediao3d.camotics-project-template.v1", "CAMotics project template missing from plan");
+  const camoticsCliPlan = await getArtifactJson(job.id, "camotics-cli-execution-plan.json");
+  assert(camoticsCliPlan.schema === "hediao3d.camotics-cli-execution-plan.v1", "CAMotics CLI execution plan schema mismatch");
+  assert(camoticsCliPlan.inputs?.preferredGcode === "camotics-preview.nc", "CAMotics CLI plan preferred G-code mismatch");
+  assert(camoticsCliPlan.safetyLocks?.productionUnlockFromCliPlan === false, "CAMotics CLI plan must not unlock production by itself");
+  assert(camoticsCliPlan.resultContract?.requiredFields?.includes("inputs.preferredGcodeSha256"), "CAMotics CLI plan should require input hash");
+  assert(camoticsCliPlan.commandCandidates?.some((command) => command.id === "cli-wrapper"), "CAMotics CLI plan should include wrapper handoff command");
 
   const rotaryWrapPreview = await getArtifactJson(job.id, "rotary-wrap-preview-report.json");
   assert(rotaryWrapPreview.schema === "hediao3d.rotary-wrap-preview-report.v1", "rotary wrap preview report schema mismatch");

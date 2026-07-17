@@ -2518,6 +2518,7 @@ async function processOrchestratorJob(job, settings) {
   }, null, 2), "utf8");
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
   const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selected, camoticsInput);
+  const camoticsCliExecutionPlan = createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPlan, settings);
   const rotaryWrapPreviewReport = createRotaryWrapPreviewReport({
     job,
     settings,
@@ -2536,6 +2537,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
+  await writeFile(join(job.workDir, "camotics-cli-execution-plan.json"), JSON.stringify(camoticsCliExecutionPlan, null, 2), "utf8");
   await writeFile(join(job.workDir, "rotary-wrap-preview-report.json"), JSON.stringify(rotaryWrapPreviewReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
@@ -2665,6 +2667,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     camoticsInput,
     camoticsSimulationPlan,
+    camoticsCliExecutionPlan,
     rotaryWrapPreviewReport,
     camHandoffQuality,
     camServerConfig,
@@ -2714,6 +2717,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-simulation-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-project-template.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-cli-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
@@ -2762,6 +2766,7 @@ async function processOrchestratorJob(job, settings) {
       camHandoffQuality,
       camoticsInput,
       camoticsSimulationPlan,
+      camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
       ncStaticAnalysis,
       machineControllerProfile,
@@ -6017,6 +6022,88 @@ function createCamoticsSimulationPlan(job, toolpath, settings, selectedEngine, c
   };
 }
 
+function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPlan, settings) {
+  const preferredGcode = camoticsSimulationPlan.inputs?.preferredGcode ?? "camotics-preview.nc";
+  return {
+    schema: "hediao3d.camotics-cli-execution-plan.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status: camoticsInput.compatibility.canRunInCamotics ? "ready-for-linux-validation" : "review-required",
+    purpose: "在 Linux CAM 服务器上执行真实 CAMotics/等效材料去除仿真，并生成可回填的 camotics-result.json。",
+    inputs: {
+      preferredGcode,
+      projectTemplate: "camotics-project-template.json",
+      simulationPlan: "camotics-simulation-plan.json",
+      machineGcodeReferenceOnly: "toolpath.nc",
+      airRunReferenceOnly: "air-run.nc"
+    },
+    commandCandidates: [
+      {
+        id: "open-project",
+        command: "camotics camotics-project-template.json",
+        purpose: "人工打开项目模板，检查展开毛坯、刀具和预览刀路。"
+      },
+      {
+        id: "open-gcode",
+        command: `camotics ${preferredGcode}`,
+        purpose: "人工打开展开三轴预览 NC。"
+      },
+      {
+        id: "cli-wrapper",
+        command: "HEDIAO3D_CAMOTICS_RESULT_JSON=/absolute/path/to/camotics-result.json HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true node adapters/camotics/camotics_job.js camotics-job.json camotics-adapter-report.json",
+        purpose: "由经过验证的外部包装脚本生成 camotics-result.json 后，让 HeDiao3D adapter 摄取并校验证据。"
+      }
+    ],
+    expectedOutputs: {
+      resultJson: "camotics-result.json",
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl"
+    },
+    resultContract: {
+      schema: "hediao3d.camotics-result.v1",
+      requiredFields: [
+        "status=completed",
+        "synthetic=false",
+        "riskLevel=ready",
+        "inputs.preferredGcodeSha256",
+        "metrics.motionLineCount",
+        "metrics.zMin",
+        "metrics.zMax",
+        "metrics.materialRemovedMm3",
+        "artifacts.screenshot or artifacts.materialMesh"
+      ],
+      verification: [
+        "inputs.preferredGcodeSha256 必须匹配当前 camotics-preview.nc 的 SHA-256。",
+        "metrics.motionLineCount 和 Z 范围必须匹配 camotics-preview.nc 的运动画像。",
+        "截图或材料去除 STL 必须复制进加工包并生成 SHA-256。",
+        "synthetic 或 fixture 结果不能作为生产证据。"
+      ]
+    },
+    safetyLocks: {
+      productionUnlockFromCliPlan: false,
+      forbiddenProductionEnv: [
+        "HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=true"
+      ],
+      requiredBeforeProduction: [
+        "导入非 synthetic camotics-result.json",
+        "通过 motionProfile/inputIdentity/artifactEvidence 校验",
+        "完成 rotary-calibration-airrun.nc 和 air-run.nc 离料空跑",
+        "完成机床验收和试雕反馈"
+      ]
+    },
+    coordinateInterpretation: camoticsSimulationPlan.coordinateInterpretation,
+    stock: camoticsSimulationPlan.stock,
+    tool: camoticsSimulationPlan.tool,
+    notes: [
+      "camotics-preview.nc 是展开三轴仿真文件，禁止上机。",
+      "toolpath.nc 是目标机床后处理文件，不能直接等同于 CAMotics 三轴材料去除结论。",
+      settings.camMode === "rotaryWrap"
+        ? "Y/A 旋转夹具真实圆柱材料去除仍需结合旋转包裹预览报告和现场空跑。"
+        : "三轴模式仍需核对机床控制器方言和空跑结果。"
+    ]
+  };
+}
+
 function createCamoticsBounds(points, settings, rotaryAxis) {
   const xs = points.map((point) => Number(point.x)).filter(Number.isFinite);
   const ys = points.map((point) => Number(point.y)).filter(Number.isFinite);
@@ -6132,7 +6219,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, rotaryWrapPreviewReport, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -6191,6 +6278,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("camotics-input.json"),
         getFile("camotics-simulation-plan.json"),
         getFile("camotics-project-template.json"),
+        getFile("camotics-cli-execution-plan.json"),
         getFile("camotics-adapter-report.json"),
         getFile("camotics-result.json"),
         getFile("camotics-run.md"),
@@ -6304,6 +6392,11 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     camotics: {
       status: camoticsInput.status,
       previewFile: "camotics-preview.nc",
+      cliExecutionPlan: camoticsCliExecutionPlan ? {
+        status: camoticsCliExecutionPlan.status,
+        commandCount: camoticsCliExecutionPlan.commandCandidates?.length ?? 0,
+        artifact: "camotics-cli-execution-plan.json"
+      } : null,
       compatibility: camoticsInput.compatibility,
       resultFile: fileByName.has("camotics-result.json") ? "camotics-result.json" : null,
       evidenceLevel: productionGate.simulationEvidence?.level ?? null,
@@ -6341,6 +6434,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
     createDeliveryFile(job.id, "camotics-simulation-plan.json", "CAMotics 仿真计划", "report", true, "记录 CAMotics 预览 NC、展开毛坯、刀具、坐标解释和待执行检查项。"),
     createDeliveryFile(job.id, "camotics-project-template.json", "CAMotics 项目模板", "report", true, "后续 CAMotics adapter 生成真实项目/截图/材料去除网格的结构化模板。"),
+    createDeliveryFile(job.id, "camotics-cli-execution-plan.json", "CAMotics CLI执行计划", "report", true, "列出 Linux CAM 服务器真实材料去除仿真的命令、输出契约和生产安全锁。"),
     createDeliveryFile(job.id, "camotics-job.json", "CAMotics Adapter 任务", "report", existsSync(join(job.workDir, "camotics-job.json")), "CAMotics adapter 的独立输入快照。"),
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
@@ -7634,6 +7728,7 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
   const postprocessProfile = readJsonFile(join(workDir, "postprocess-profile.json"));
   const camoticsInput = readJsonFile(join(workDir, "camotics-input.json"));
   const camoticsSimulationPlan = readJsonFile(join(workDir, "camotics-simulation-plan.json"));
+  const camoticsCliExecutionPlan = readJsonFile(join(workDir, "camotics-cli-execution-plan.json"));
   const rotaryWrapPreviewReport = readJsonFile(join(workDir, "rotary-wrap-preview-report.json"));
   const machiningPackageIndex = deliveryManifest && postprocessProfile && camoticsInput
     ? createMachiningPackageIndex({
@@ -7644,6 +7739,7 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
       simulationSummary,
       camoticsInput,
       camoticsSimulationPlan,
+      camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
       camHandoffQuality: readJsonFile(join(workDir, "cam-handoff-quality.json")),
       camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
@@ -7829,6 +7925,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
 
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selectedEngine);
   const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selectedEngine, camoticsInput);
+  const camoticsCliExecutionPlan = createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPlan, settings);
   const rotaryWrapPreviewReport = createRotaryWrapPreviewReport({
     job,
     settings,
@@ -7844,6 +7941,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   await writeFile(join(workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
+  await writeFile(join(workDir, "camotics-cli-execution-plan.json"), JSON.stringify(camoticsCliExecutionPlan, null, 2), "utf8");
   await writeFile(join(workDir, "rotary-wrap-preview-report.json"), JSON.stringify(rotaryWrapPreviewReport, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
 
@@ -7932,6 +8030,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     simulationSummary,
     camoticsInput,
     camoticsSimulationPlan,
+    camoticsCliExecutionPlan,
     rotaryWrapPreviewReport,
     camHandoffQuality,
     camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
@@ -7968,6 +8067,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       camHandoffQuality,
       camoticsInput,
       camoticsSimulationPlan,
+      camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
       ncStaticAnalysis,
       controllerDialectReport,
