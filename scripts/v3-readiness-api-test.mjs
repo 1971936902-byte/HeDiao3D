@@ -204,6 +204,11 @@ function validateReadiness(report, label) {
   }
   assert(Object.hasOwn(report, "runbookResult"), `${label} missing runbookResult field`);
   assert(Object.hasOwn(report, "nativeCamRealOutputAcceptance"), `${label} missing nativeCamRealOutputAcceptance field`);
+  if (report.nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus) {
+    assert(report.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.schema === "hediao3d.native-cam-target-machine-boundary-status.v1", `${label} native CAM target boundary schema mismatch`);
+    assert(["matched", "missing", "mismatch"].includes(report.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.status), `${label} native CAM target boundary status mismatch`);
+    assert(typeof report.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.summary === "string", `${label} native CAM target boundary summary missing`);
+  }
   if (report.runbookResult) validateRunbookResult(report.runbookResult, `${label} runbookResult`);
   assert(Object.hasOwn(report, "externalHandoff"), `${label} missing externalHandoff field`);
   if (report.externalHandoff) {

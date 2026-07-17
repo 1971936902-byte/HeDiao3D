@@ -1542,6 +1542,22 @@ type V3ReadinessSummary = {
     sourceReportBindingRequired?: boolean;
     sourceReportBindingSummary?: string;
     sourceReportSha256?: string | null;
+    targetMachineBoundaryStatus?: {
+      schema?: string;
+      status: string;
+      matched?: boolean;
+      summary?: string;
+      mismatches?: string[];
+    } | null;
+    targetMachineBoundary?: {
+      schema?: string;
+      controllerClass?: string | null;
+      machineProfileId?: string | null;
+      camMode?: string | null;
+      postProcessor?: string | null;
+      rotaryOutputAxis?: string | null;
+      toolProfileId?: string | null;
+    } | null;
     blockers: string[];
     warnings: string[];
     nextActions: string[];
@@ -5835,8 +5851,14 @@ export function App() {
                   <small className={v3Readiness.nativeCamRealOutputAcceptance ? v3Readiness.nativeCamRealOutputAcceptance.level === "ready" ? "v3-inline-ok" : v3Readiness.nativeCamRealOutputAcceptance.level === "critical" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     真实CAM输出验收：{v3Readiness.nativeCamRealOutputAcceptance ? `${v3Readiness.nativeCamRealOutputAcceptance.level} · candidate ${v3Readiness.nativeCamRealOutputAcceptance.productionCandidateCount} · unsafe ${v3Readiness.nativeCamRealOutputAcceptance.unsafeCount} · missing ${v3Readiness.nativeCamRealOutputAcceptance.missingCount}` : "未运行"}
                     {v3Readiness.nativeCamRealOutputAcceptance ? ` · sourceBinding ${v3Readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing"}` : ""}
+                    {v3Readiness.nativeCamRealOutputAcceptance ? ` · machineBoundary ${v3Readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus?.status ?? "missing"}` : ""}
                     {v3Readiness.nativeCamRealOutputAcceptance?.blockers[0] ? ` · ${v3Readiness.nativeCamRealOutputAcceptance.blockers[0]}` : ""}
                   </small>
+                  {v3Readiness.nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus && v3Readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.status !== "matched" && (
+                    <small className="v3-inline-critical">
+                      机型边界：{v3Readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.summary ?? "真实 CAM 输出未证明适配三轴控制器 + Y轴旋转夹具 / wrapY / 4mm 25度平底尖刀。"}
+                    </small>
+                  )}
                   <small className={v3Readiness.externalHandoff ? v3Readiness.externalHandoff.status === "completed" && v3Readiness.externalHandoff.simulationStatus === "completed" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     Handoff：{v3Readiness.externalHandoff ? `${v3Readiness.externalHandoff.resultEngine ?? "-"} → ${v3Readiness.externalHandoff.simulationEngine ?? "-"}` : "未验证"}
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
