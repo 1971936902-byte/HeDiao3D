@@ -141,6 +141,15 @@ async function main() {
   const adapterReport = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/adapter-report.json`);
   assert(adapterReport.metrics?.neutralToolpath?.sourceBinding?.status === "bound", "adapter report should preserve neutral source binding");
 
+  const readiness = await postJson("/api/orchestrator/readiness", {});
+  assert(readiness.postprocessHandoffReadiness?.source === "latest-job-evidence-dossier", "readiness postprocess handoff should use latest job evidence dossier");
+  assert(readiness.postprocessHandoffReadiness?.status === "ready", "bound neutral job with NC and controller checks should be postprocess ready");
+  assert(readiness.postprocessHandoffReadiness?.sourceKind === "neutral-toolpath", "readiness postprocess source kind should identify neutral toolpath");
+  assert(readiness.postprocessHandoffReadiness?.jobId === job.id, "readiness postprocess handoff should reference latest neutral import job");
+  assert(readiness.postprocessHandoffReadiness?.sourceBindingStatus === "bound", "readiness postprocess handoff should preserve source binding status");
+  assert(readiness.postprocessHandoffReadiness?.controllerDialectReady === true, "readiness postprocess handoff should expose controller dialect readiness");
+  assert(readiness.postprocessHandoffReadiness?.ncStaticReady === true, "readiness postprocess handoff should expose NC static readiness");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,

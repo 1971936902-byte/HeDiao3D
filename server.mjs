@@ -582,9 +582,9 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const externalCamHandoffs = getExternalCamHandoffSummaries();
   const neutralImport = readLatestFromDirectory("public/orchestrator-neutral-import", "neutral-import-contract.json", createNeutralImportContractPublicSummary);
   const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
-  const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
   const latestJob = getLatestOrchestratorJobSummary();
   const latestEvidenceDossier = getLatestProductionEvidenceDossierSummary();
+  const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport, latestEvidenceDossier });
   const readinessCamoticsEvidence = createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier });
   const latestTrialFeedback = getLatestJobLogSummary("trial-feedback-log.json", createTrialFeedbackLogPublicSummary);
   const latestMachineAcceptance = getLatestJobLogSummary("machine-acceptance-log.json", createMachineAcceptanceLogPublicSummary);
@@ -988,8 +988,8 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     nextActions.push("查看 neutral-import-contract.json、adapter-report.json 和 neutral-toolpath.json。");
   }
 
-  const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
-  const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
+  const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport, latestEvidenceDossier });
+  const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport, latestEvidenceDossier });
   if (postprocessHandoffReadiness.status === "blocked") {
     blockers.push(postprocessHandoffReadiness.summary);
     nextActions.push(...postprocessHandoffReadiness.nextActions);
@@ -1087,7 +1087,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   };
 }
 
-function createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport }) {
+function createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport, latestEvidenceDossier = null }) {
   const reasons = [];
   const productionCandidateCount = Number(adapterValidation?.handoffClassificationAudit?.productionCandidateCount ?? 0);
   if (productionCandidateCount > 0) reasons.push(`Adapter production-candidate=${productionCandidateCount}`);
@@ -1096,6 +1096,12 @@ function createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamReal
   }
   if (neutralImport?.ok && neutralImport?.postprocessEligible && neutralImport?.synthetic === false) {
     reasons.push(`Neutral 导入可后处理 ${neutralImport.pointCount ?? 0} 点`);
+  }
+  if (latestEvidenceDossier?.crossChecks?.neutralSourceBindingPass) {
+    reasons.push(`最新 job neutral 源绑定通过：${latestEvidenceDossier.jobId ?? "unknown"}`);
+  }
+  if (latestEvidenceDossier?.crossChecks?.externalGcodeSourceBindingPass) {
+    reasons.push(`最新 job external G-code 源绑定通过：${latestEvidenceDossier.jobId ?? "unknown"}`);
   }
   return {
     required: reasons.length > 0,
@@ -1138,9 +1144,40 @@ function normalizeCamHandoffAudit(audit) {
   };
 }
 
-function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport }) {
-  const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
+function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport, latestEvidenceDossier = null }) {
+  const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport, latestEvidenceDossier });
   const nextActions = [];
+  const jobCrossChecks = latestEvidenceDossier?.crossChecks ?? null;
+  const jobNeutralBound = Boolean(jobCrossChecks?.neutralSourceBindingPass);
+  const jobExternalGcodeBound = Boolean(jobCrossChecks?.externalGcodeSourceBindingPass);
+  const jobSourceBound = jobNeutralBound || jobExternalGcodeBound;
+  const jobControllerReady = Boolean(jobCrossChecks?.ncStaticReady && jobCrossChecks?.controllerDialectReady);
+  if (jobSourceBound) {
+    const sourceKind = jobNeutralBound ? "neutral-toolpath" : "external-gcode";
+    const sourceBindingStatus = jobNeutralBound
+      ? jobCrossChecks.neutralSourceBindingStatus ?? "bound"
+      : jobCrossChecks.externalGcodeSourceBindingStatus ?? "bound";
+    return {
+      schema: "hediao3d.v3-postprocess-handoff-readiness.v1",
+      status: jobControllerReady ? "ready" : "review",
+      summary: jobControllerReady
+        ? `最新 job ${latestEvidenceDossier.jobId ?? ""} 已证明 ${sourceKind} 源绑定、NC 静态分析和控制器方言可进入 HeDiao3D 后处理链。`
+        : `最新 job ${latestEvidenceDossier.jobId ?? ""} 已证明 ${sourceKind} 源绑定，但 NC 静态分析或控制器方言仍需复核。`,
+      required: productionCamEvidence.required,
+      source: "latest-job-evidence-dossier",
+      productionCamEvidence: productionCamEvidence.summary,
+      neutralImportId: neutralImport?.id ?? null,
+      jobId: latestEvidenceDossier.jobId ?? null,
+      pointCount: null,
+      sourceBindingStatus,
+      sourceKind,
+      controllerDialectReady: Boolean(jobCrossChecks?.controllerDialectReady),
+      ncStaticReady: Boolean(jobCrossChecks?.ncStaticReady),
+      nextActions: jobControllerReady
+        ? ["继续执行 CAMotics 材料去除仿真、离料空跑、软料试雕和机床验收。"]
+        : ["查看最新 job 的 nc-static-analysis.json、controller-dialect-report.json 和 production-evidence-dossier.json。"]
+    };
+  }
   const neutralReady = Boolean(neutralImport?.ok && neutralImport?.postprocessEligible && neutralImport?.synthetic === false);
   const pointCount = Number(neutralImport?.pointCount ?? 0);
   const sourceBindingStatus = neutralImport?.sourceBindingStatus ?? "missing";

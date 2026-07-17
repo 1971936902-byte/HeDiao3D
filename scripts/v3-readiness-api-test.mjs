@@ -228,6 +228,12 @@ function validateReadiness(report, label) {
     assert(["ready", "review", "pending", "blocked"].includes(report.postprocessHandoffReadiness.status), `${label} postprocess handoff status mismatch`);
     assert(typeof report.postprocessHandoffReadiness.required === "boolean", `${label} postprocess handoff required flag missing`);
     assert(typeof report.postprocessHandoffReadiness.sourceBindingStatus === "string", `${label} postprocess handoff source binding status missing`);
+    if (report.postprocessHandoffReadiness.source === "latest-job-evidence-dossier") {
+      assert(typeof report.postprocessHandoffReadiness.jobId === "string" && report.postprocessHandoffReadiness.jobId.length > 0, `${label} postprocess handoff latest job id missing`);
+      assert(["neutral-toolpath", "external-gcode"].includes(report.postprocessHandoffReadiness.sourceKind), `${label} postprocess handoff source kind mismatch`);
+      assert(typeof report.postprocessHandoffReadiness.controllerDialectReady === "boolean", `${label} postprocess handoff controller readiness missing`);
+      assert(typeof report.postprocessHandoffReadiness.ncStaticReady === "boolean", `${label} postprocess handoff NC readiness missing`);
+    }
   }
   assert(Object.hasOwn(report, "camoticsImport"), `${label} missing camoticsImport field`);
   if (report.camoticsImport) {
