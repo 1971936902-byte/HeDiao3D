@@ -287,6 +287,11 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     z_span = max(1e-9, z_max - z_min)
     points: List[Dict[str, Any]] = []
     miss_count = 0
+    fallback_count = 0
+    cell_radius = max(
+        abs(x_max - x_min) / max(1, cols - 1),
+        abs(y_max - y_min) / max(1, rows - 1),
+    ) * 1.75
     for row in range(rows):
         row_t = row / (rows - 1)
         y = y_min + (y_max - y_min) * row_t
@@ -294,10 +299,14 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
         for col in range(cols):
             col_t = col / (cols - 1)
             x = x_min + (x_max - x_min) * col_t
-            surface_z = sample_projected_surface_z(triangles, x, y)
+            surface_z = sample_projected_surface_z(triangles, x, y, cell_radius)
             if surface_z is None:
                 miss_count += 1
                 continue
+            if isinstance(surface_z, dict):
+                if surface_z.get("fallback"):
+                    fallback_count += 1
+                surface_z = surface_z["z"]
             output_x = -output_length / 2 + output_length * col_t
             normalized_surface = max(0.0, min(1.0, (z_max - surface_z) / z_span))
             depth = output_depth * normalized_surface
@@ -340,6 +349,8 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
                 "cols": cols,
                 "pointCount": len(points),
                 "missCount": miss_count,
+                "fallbackCount": fallback_count,
+                "fallbackRadius": cell_radius,
                 "surfaceZMax": z_max,
                 "surfaceZMin": z_min,
                 "outputLengthMm": output_length,
@@ -355,13 +366,37 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     }
 
 
-def sample_projected_surface_z(triangles: List[List[List[float]]], x: float, y: float) -> Optional[float]:
+def sample_projected_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float = 0.0) -> Optional[Any]:
     hits: List[float] = []
     for tri in triangles:
         z = interpolate_triangle_z(tri, x, y)
         if z is not None:
             hits.append(z)
-    return max(hits) if hits else None
+    if hits:
+        return {"z": max(hits), "fallback": False}
+    fallback = nearest_projected_triangle_z(triangles, x, y, fallback_radius)
+    if fallback is None:
+        return None
+    return {"z": fallback, "fallback": True}
+
+
+def nearest_projected_triangle_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float) -> Optional[float]:
+    if fallback_radius <= 0:
+        return None
+    best_distance = float("inf")
+    best_z: Optional[float] = None
+    radius_sq = fallback_radius * fallback_radius
+    for tri in triangles:
+        cx = sum(vertex[0] for vertex in tri) / 3
+        cy = sum(vertex[1] for vertex in tri) / 3
+        dx = cx - x
+        dy = cy - y
+        distance_sq = dx * dx + dy * dy
+        if distance_sq > radius_sq or distance_sq >= best_distance:
+            continue
+        best_distance = distance_sq
+        best_z = sum(vertex[2] for vertex in tri) / 3
+    return best_z
 
 
 def interpolate_triangle_z(tri: List[List[float]], x: float, y: float) -> Optional[float]:

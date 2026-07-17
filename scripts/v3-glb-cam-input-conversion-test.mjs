@@ -60,7 +60,8 @@ async function main() {
       HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "false",
       HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW: "true",
       HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS: "4",
-      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS: "6"
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS: "6",
+      ORCHESTRATOR_CAM_STL_MAX_TRIANGLES: "20000"
     },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"]
@@ -84,6 +85,9 @@ async function main() {
   const repairExecution = await getArtifactJson(job.id, "repair-execution.json");
   assert(repairExecution.camSourceConversion?.status === "completed", `GLB conversion should complete, got ${repairExecution.camSourceConversion?.status}`);
   assert(repairExecution.camSourceConversion.targetPath?.endsWith("cam-source-converted.stl"), "conversion target should be cam-source-converted.stl");
+  assert(repairExecution.camSourceConversion.stats?.exportedTriangleCount <= 20000, `converted STL should honor triangle cap, got ${repairExecution.camSourceConversion.stats?.exportedTriangleCount}`);
+  assert(repairExecution.camSourceConversion.stats?.originalTriangleCount > repairExecution.camSourceConversion.stats?.exportedTriangleCount, "conversion should decimate high-poly GLB for CAM input");
+  assert(repairExecution.camSourceConversion.stats?.decimated === true, "conversion stats should mark decimation");
   assert(repairExecution.outputs?.some((candidate) => candidate.id === "camSourceConvertedStl" && candidate.exists), "repair outputs should expose converted STL candidate");
 
   const camInputPlan = await getArtifactJson(job.id, "cam-input-plan.json");
@@ -101,10 +105,12 @@ async function main() {
   assert(adapterReport.status === "completed", `OpenCAMLib adapter should complete with converted STL, got ${adapterReport.status}: ${adapterReport.error}`);
   assert(adapterReport.metrics?.neutralToolpath?.autoRunner === true, "OpenCAMLib adapter should use bundled preview runner");
   assert(adapterReport.metrics?.neutralToolpath?.previewScaffold === true, "converted GLB handoff should remain preview scaffold");
+  assert(adapterReport.metrics?.neutralToolpath?.pointCount === 24, `OpenCAMLib preview should emit 24 neutral points, got ${adapterReport.metrics?.neutralToolpath?.pointCount}`);
 
   const convertedStl = await getArtifactText(job.id, "cam-source-converted.stl");
   assert(convertedStl.startsWith("solid hediao3d_cam_source_converted"), "converted STL should be ASCII STL");
   assert(convertedStl.includes("facet normal"), "converted STL should contain facets");
+  assert(convertedStl.length < 15000000, `converted STL should be capped for CAM handoff, got ${convertedStl.length} bytes`);
 
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.some((file) => file.filename === "cam-source-converted.stl" && file.exists), "delivery manifest should include converted CAM STL");
@@ -115,7 +121,7 @@ async function main() {
     selectedModel: camInputPlan.modelSelection.selectedModelId,
     adapterStatus: adapterReport.status,
     convertedBytes: convertedStl.length,
-    neutralPoints: adapterReport.metrics.neutralToolpath.pointCount ?? null
+    neutralPoints: adapterReport.metrics.neutralToolpath.pointCount
   }, null, 2));
 }
 

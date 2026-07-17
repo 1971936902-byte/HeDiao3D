@@ -3137,8 +3137,17 @@ async function attachCamSourceConversion(job, repairExecution) {
   try {
     const geometry = await loadModelGeometry(sourceModelPath);
     try {
-      const stl = geometryToAsciiStl(geometry, "hediao3d_cam_source_converted");
-      await writeFile(targetPath, stl, "utf8");
+      const conversion = geometryToAsciiStl(geometry, "hediao3d_cam_source_converted", {
+        maxTriangles: getCamStlMaxTriangles()
+      });
+      await writeFile(targetPath, conversion.stl, "utf8");
+      repairExecution.camSourceConversionStats = {
+        originalTriangleCount: conversion.originalTriangleCount,
+        exportedTriangleCount: conversion.exportedTriangleCount,
+        decimated: conversion.decimated,
+        stride: conversion.stride,
+        maxTriangles: conversion.maxTriangles
+      };
     } finally {
       geometry.dispose?.();
     }
@@ -3155,6 +3164,7 @@ async function attachCamSourceConversion(job, repairExecution) {
       targetPath,
       targetUrl,
       format: "stl",
+      stats: repairExecution.camSourceConversionStats,
       summary: "已将 GLB/GLTF 转换为 STL，供外部 CAM adapter 使用。"
     };
   } catch (error) {
@@ -3171,6 +3181,7 @@ async function attachCamSourceConversion(job, repairExecution) {
       targetPath,
       targetUrl,
       format: "stl",
+      stats: repairExecution.camSourceConversionStats ?? null,
       error: error instanceof Error ? error.message : "GLB/GLTF 转 STL 失败。",
       summary: "未能生成外部 CAM STL 输入，adapter 可能需要直接处理源模型或降级。"
     };
@@ -8485,7 +8496,13 @@ async function loadModelGeometry(modelPath) {
   throw new Error("不支持的 Mesh 格式，当前支持 STL/GLB/GLTF");
 }
 
-function geometryToAsciiStl(geometry, name = "hediao3d_mesh") {
+function getCamStlMaxTriangles() {
+  const configured = Number(process.env.ORCHESTRATOR_CAM_STL_MAX_TRIANGLES ?? 80000);
+  if (!Number.isFinite(configured) || configured <= 0) return Infinity;
+  return Math.max(1000, Math.floor(configured));
+}
+
+function geometryToAsciiStl(geometry, name = "hediao3d_mesh", options = {}) {
   let working = geometry;
   let disposeWorking = false;
   if (working.index) {
@@ -8497,6 +8514,12 @@ function geometryToAsciiStl(geometry, name = "hediao3d_mesh") {
     if (disposeWorking) working.dispose();
     throw new Error("模型没有可导出的三角面。");
   }
+  const originalTriangleCount = Math.floor(position.count / 3);
+  const maxTriangles = Number(options.maxTriangles ?? Infinity);
+  const stride = Number.isFinite(maxTriangles) && maxTriangles > 0
+    ? Math.max(1, Math.ceil(originalTriangleCount / maxTriangles))
+    : 1;
+  const exportedTriangleCount = Math.ceil(originalTriangleCount / stride);
   const normal = new THREE.Vector3();
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
@@ -8504,7 +8527,8 @@ function geometryToAsciiStl(geometry, name = "hediao3d_mesh") {
   const cb = new THREE.Vector3();
   const ab = new THREE.Vector3();
   const lines = [`solid ${sanitizeStlName(name)}`];
-  for (let index = 0; index + 2 < position.count; index += 3) {
+  for (let triangleIndex = 0; triangleIndex < originalTriangleCount; triangleIndex += stride) {
+    const index = triangleIndex * 3;
     a.fromBufferAttribute(position, index);
     b.fromBufferAttribute(position, index + 1);
     c.fromBufferAttribute(position, index + 2);
@@ -8526,7 +8550,14 @@ function geometryToAsciiStl(geometry, name = "hediao3d_mesh") {
   }
   lines.push(`endsolid ${sanitizeStlName(name)}`, "");
   if (disposeWorking) working.dispose();
-  return lines.join("\n");
+  return {
+    stl: lines.join("\n"),
+    originalTriangleCount,
+    exportedTriangleCount,
+    decimated: stride > 1,
+    stride,
+    maxTriangles: Number.isFinite(maxTriangles) ? maxTriangles : null
+  };
 }
 
 function sanitizeStlName(name) {
