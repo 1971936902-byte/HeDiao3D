@@ -500,6 +500,17 @@ type V3OrchestratorJob = {
         resultEngine: string;
         synthetic: boolean;
         importedFixture: boolean;
+        sourceSnapshot?: {
+          schema: string;
+          kind: string;
+          path: string;
+          sizeBytes: number;
+          sha256: string;
+          selectedEngine: string | null;
+          adapterEngine: string | null;
+          adapterStatus: string | null;
+          generatedByExternalCommand: boolean;
+        } | null;
         summary: string;
         criticalIssues: string[];
         warningIssues: string[];
@@ -7342,6 +7353,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "证据档案报告: production-evidence-dossier.json",
     `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     "CAM交接报告: cam-handoff-quality.json",
+    `外部摄取源: ${camHandoffQuality?.sourceSnapshot ? `${camHandoffQuality.sourceSnapshot.kind} / ${camHandoffQuality.sourceSnapshot.sha256.slice(0, 12)}` : "无"}`,
     "",
     "## 机床验收",
     "",

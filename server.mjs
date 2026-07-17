@@ -1947,6 +1947,11 @@ function createToolpathFromAdapterReport(adapterReport, job, settings, selectedE
   const gcode = readFileSync(candidatePath, "utf8");
   if (!gcode.trim()) return null;
   const points = parseGcodeMotionPoints(gcode, settings);
+  const sourceSnapshot = createExternalHandoffSourceSnapshot(candidatePath, "gcode", {
+    points,
+    adapterReport,
+    selectedEngine
+  });
   const warnings = [
     `${selectedEngine.name} adapter 输出已由 Orchestrator 摄取。`,
     "外部 CAM G-code 已进入统一交付链路；正式上机前仍需 CAMotics/机床控制器复核。"
@@ -1963,6 +1968,7 @@ function createToolpathFromAdapterReport(adapterReport, job, settings, selectedE
     csv: toCsv(points),
     estimatedMinutes,
     postProcessorName: `${selectedEngine.name} adapter G-code + ${postProcessorName(settings.postProcessor)}`,
+    externalSourceSnapshot: sourceSnapshot,
     summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
   };
 }
@@ -1983,6 +1989,12 @@ function createToolpathFromNeutralAdapterOutput(adapterReport, job, settings, se
 
   const points = normalizeNeutralToolpathPoints(neutral, settings);
   if (points.length === 0) return null;
+  const sourceSnapshot = createExternalHandoffSourceSnapshot(candidatePath, "neutral-toolpath", {
+    neutral,
+    points,
+    adapterReport,
+    selectedEngine
+  });
   const estimatedMinutes = Number(
     adapterReport.metrics?.estimatedMinutes
       ?? neutral.estimatedMinutes
@@ -2006,7 +2018,64 @@ function createToolpathFromNeutralAdapterOutput(adapterReport, job, settings, se
     csv: toCsv(points),
     estimatedMinutes,
     postProcessorName: `${selectedEngine.name} neutral + ${postProcessorName(settings.postProcessor)}`,
+    externalSourceSnapshot: sourceSnapshot,
     summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
+  };
+}
+
+function createExternalHandoffSourceSnapshot(filePath, kind, context = {}) {
+  const bytes = readFileSync(filePath);
+  const stats = statSync(filePath);
+  const adapterReport = context.adapterReport ?? {};
+  const selectedEngine = context.selectedEngine ?? {};
+  const base = {
+    schema: "hediao3d.external-handoff-source-snapshot.v1",
+    kind,
+    path: filePath,
+    sizeBytes: stats.size,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    capturedAt: new Date().toISOString(),
+    selectedEngine: selectedEngine.id ?? null,
+    adapterEngine: adapterReport.engine ?? selectedEngine.id ?? null,
+    adapterStatus: adapterReport.status ?? null,
+    generatedByExternalCommand: Boolean(adapterReport.externalCommand || adapterReport.metrics?.neutralToolpath?.generatedByExternalCommand || adapterReport.metrics?.externalCommand)
+  };
+  if (kind === "neutral-toolpath") {
+    const neutral = context.neutral ?? {};
+    return {
+      ...base,
+      neutral: {
+        schema: neutral.schema ?? null,
+        pointCount: Array.isArray(neutral.points) ? neutral.points.length : 0,
+        normalizedPointCount: Array.isArray(context.points) ? context.points.length : 0,
+        synthetic: Boolean(neutral.synthetic),
+        fixture: Boolean(neutral.fixture),
+        imported: Boolean(adapterReport.imported || adapterReport.metrics?.neutralToolpath?.imported),
+        generatedByExternalCommand: Boolean(neutral.generatedByExternalCommand || base.generatedByExternalCommand),
+        coordinate: neutral.coordinate ?? null,
+        runner: neutral.runner
+          ? {
+              mode: neutral.runner.mode ?? null,
+              heightfieldMode: neutral.runner.mode === "heightfield-preview" || Boolean(neutral.experimentalHeightfield),
+              warning: neutral.runner.warning ?? null
+            }
+          : null
+      }
+    };
+  }
+  const text = bytes.toString("utf8");
+  const motionLineCount = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\([^)]*\)/g, "").trim().toUpperCase())
+    .filter((line) => /\bG0?0\b|\bG0?1\b/.test(line)).length;
+  return {
+    ...base,
+    gcode: {
+      motionLineCount,
+      parsedPointCount: Array.isArray(context.points) ? context.points.length : 0,
+      containsFixtureMarker: /fixture/i.test(text),
+      containsRotaryMarker: /ROTARY_WRAP_AXIS|A[-+]?\d|Y[-+]?\d/i.test(text.slice(0, 12000))
+    }
   };
 }
 
@@ -2337,6 +2406,7 @@ async function processOrchestratorJob(job, settings) {
     engine: externalToolpath ? selected.id : "internal-mesh-cam",
     fallbackFrom: selected.id,
     source: externalToolpath ? "external-adapter" : "internal-fallback",
+    externalSourceSnapshot: toolpath.externalSourceSnapshot ?? null,
     points: toolpath.points.length,
     previewPoints: toolpath.previewPoints?.length ?? 0,
     estimatedMinutes: toolpath.estimatedMinutes,
@@ -3971,6 +4041,7 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
   const adapterSynthetic = Boolean(adapterReport?.synthetic || adapterReport?.metrics?.neutralToolpath?.synthetic);
   const adapterImportedFixture = Boolean(adapterReport?.imported || adapterReport?.metrics?.neutralToolpath?.imported);
   const externalCommandGenerated = Boolean(adapterReport?.externalCommand || adapterReport?.metrics?.neutralToolpath?.generatedByExternalCommand);
+  const sourceSnapshot = toolpath?.externalSourceSnapshot ?? null;
 
   if (points.length <= 0) {
     criticalIssues.push("未生成任何可解析刀路点。");
@@ -4010,6 +4081,10 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
   if (externalToolpathUsed && !externalCommandGenerated && !adapterImportedFixture) {
     warningIssues.push("未检测到外部命令生成记录，需复核 adapter-report.json。");
   }
+  if (externalToolpathUsed && !sourceSnapshot?.sha256) {
+    warningIssues.push("外部 CAM 摄取源缺少 SHA-256 快照，无法完整追溯最终 NC 的来源。");
+    requiredActions.push("重新生成外部 CAM handoff，确认 toolpath-summary.json 中 externalSourceSnapshot 存在。");
+  }
 
   const level = criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "review" : "ready";
   return {
@@ -4022,6 +4097,7 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
     resultEngine,
     adapterStatus: adapterReport?.status ?? null,
     externalToolpathUsed,
+    sourceSnapshot,
     synthetic: adapterSynthetic,
     importedFixture: adapterImportedFixture,
     externalCommandGenerated,

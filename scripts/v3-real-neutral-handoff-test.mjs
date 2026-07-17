@@ -114,6 +114,10 @@ async function main() {
   const toolpathSummary = await getArtifactJson(job.id, "toolpath-summary.json");
   assert(toolpathSummary.source === "external-adapter", "toolpath should come from external adapter");
   assert(toolpathSummary.engine === "opencamlib", "toolpath summary engine should be opencamlib");
+  assert(toolpathSummary.externalSourceSnapshot?.kind === "neutral-toolpath", "toolpath summary should snapshot neutral source");
+  assert(/^[a-f0-9]{64}$/.test(toolpathSummary.externalSourceSnapshot.sha256 ?? ""), "neutral source snapshot should include SHA-256");
+  assert(toolpathSummary.externalSourceSnapshot.neutral?.pointCount === neutralToolpath.points.length, "neutral source snapshot point count mismatch");
+  assert(toolpathSummary.externalSourceSnapshot.neutral?.generatedByExternalCommand === true, "neutral source snapshot should record external command generation");
 
   const toolpath = await getArtifactText(job.id, "toolpath.nc");
   assert(toolpath.includes("OpenCAMLib neutral adapter"), "NC should name OpenCAMLib neutral adapter");
@@ -135,6 +139,10 @@ async function main() {
   const simulationSummary = await getArtifactJson(job.id, "simulation-summary.json");
   assert(simulationSummary.engine === "camotics", `simulation expected camotics, got ${simulationSummary.engine}`);
   assert(simulationSummary.camoticsAdapter?.synthetic === false, "simulation summary should mark non-synthetic CAMotics result");
+
+  const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
+  assert(camHandoffQuality.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff quality should include neutral source snapshot");
+  assert(camHandoffQuality.sourceSnapshot?.sha256 === toolpathSummary.externalSourceSnapshot.sha256, "CAM handoff snapshot hash should match toolpath summary");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.simulationEvidence?.level === "material-removal-incomplete", `expected material-removal-incomplete evidence, got ${productionGate.simulationEvidence?.level}`);
