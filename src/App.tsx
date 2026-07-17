@@ -5318,6 +5318,60 @@ export function App() {
           </div>
           <p className="panel-note">当前主线是三轴控制器 + Y轴旋转夹具：先跑 V3 小闭环，再下载安全试雕包做标定、空跑和低风险试雕。</p>
             {V3_TRIAL_FOCUSED_UI && (
+              <div className="v3-focused-mainline">
+                <div>
+                  <strong>当前保留主线</strong>
+                  <small>非必要的旧版直接 NC 下载、正式生产包和高级 Adapter 面板暂时收起；先把真实 3D 模型到安全试雕闭环跑稳。</small>
+                </div>
+                <div className="v3-focused-actions">
+                  <button className="demo-action package-action" type="button" onClick={() => setActiveStage("model")}>
+                    <Box size={17} />
+                    导入/生成3D模型
+                  </button>
+                  <button
+                    className="primary-action package-action"
+                    onClick={handleRunV3OrchestratorLoop}
+                    disabled={isV3JobRunning || !aiMeshStlUrl}
+                    type="button"
+                    title={aiMeshStlUrl ? "提交当前 GLB/STL 到后端 Orchestrator" : "请先导入 GLB/STL 或用 Meshy 生成模型"}
+                  >
+                    <Cloud size={17} />
+                    {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
+                  </button>
+                  <button
+                    className="primary-action package-action"
+                    onClick={handleDownloadV3TrialPackage}
+                    disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
+                    type="button"
+                    title="只包含标定、空跑、报告、清单，以及门禁允许的试雕候选文件"
+                  >
+                    <Download size={17} />
+                    {isV3PackageDownloading ? "打包中..." : "下载安全试雕包"}
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={handlePrepareV3CamoticsCliPackage}
+                    disabled={!v3Job?.id || isV3CamoticsPackagePreparing}
+                    title="生成给 Linux CAM/CAMotics 服务器使用的材料去除仿真输入包"
+                  >
+                    <Download size={17} />
+                    {isV3CamoticsPackagePreparing ? "生成中..." : "生成仿真准备包"}
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={handleDownloadV3CamoticsLinuxPackage}
+                    disabled={!v3Job?.id || !v3Job.result?.summary.camoticsCliPackage || isV3PackageDownloading}
+                    title="下载到 Linux 服务器运行 CAMotics，回填真实材料去除证据"
+                  >
+                    <Download size={17} />
+                    下载Linux仿真包
+                  </button>
+                </div>
+              </div>
+            )}
+            {V3_TRIAL_FOCUSED_UI && (
               <div className={`v3-trial-workflow ${v3TrialWorkflow.level}`}>
                 <div className="v3-trial-workflow-head">
                   <div>
