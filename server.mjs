@@ -660,6 +660,12 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   } else if (nativeCamRealOutputAcceptance.level !== "ready") {
     warnings.push(`Native CAM 真实输出验收需要复核：${nativeCamRealOutputAcceptance.summary}`);
     nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
+  } else if (adapterValidation?.handoffClassificationAudit) {
+    const handoffAudit = adapterValidation.handoffClassificationAudit;
+    if (handoffAudit.unsafeCount > 0 || handoffAudit.productionCandidateCount === 0) {
+      blockers.push(`Native CAM 真实输出验收为 ready，但最新 Adapter handoff 审计仍不一致：productionCandidate=${handoffAudit.productionCandidateCount}，unsafe=${handoffAudit.unsafeCount}。`);
+      nextActions.push("重新运行 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters 和 bash native-cam-real-output-check.sh，确保两份报告来自同一次真实 CAM 输出。");
+    }
   }
 
   if (!runbookResult) {

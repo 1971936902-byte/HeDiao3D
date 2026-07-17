@@ -15,6 +15,9 @@ async function main() {
   assert(invalid.status === 400, `invalid schema should be rejected, got ${invalid.status}`);
   assert(String(invalid.data.error ?? "").includes("schema"), "invalid schema response should explain schema mismatch");
 
+  const adapterValidation = await postJson("/api/orchestrator/adapter-validation", { native: false });
+  assert(adapterValidation.handoffClassificationAudit?.unsafeCount >= 1, "safe-default adapter validation should provide unsafe handoff audit for consistency check");
+
   const imported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-acceptance.json",
     acceptance: createAcceptanceFixture()
@@ -34,6 +37,7 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.id === imported.id, "readiness should pick latest imported acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.level === "ready", "readiness should preserve acceptance level");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
+  assert(readiness.gates?.blockers?.some((item) => /真实输出验收为 ready.*handoff 审计仍不一致/.test(item)), "readiness should block inconsistent real-output acceptance and adapter handoff audit");
 
   console.log(JSON.stringify({
     ok: true,
