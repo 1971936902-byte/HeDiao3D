@@ -6100,6 +6100,7 @@ function createRotaryCalibrationSheet({ job, settings, toolpath, productionGate,
 }
 
 function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist, ncStaticAnalysis, controllerDialectReport }) {
+  const axisInstruction = createOperatorAxisInstruction(postprocessProfile);
   const lines = [
     "# HeDiao3D V3 操作员上机说明书",
     "",
@@ -6134,6 +6135,7 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
     `- 刀深轴: ${postprocessProfile.coordinateMapping?.depthAxis ?? "Z"}`,
     `- 旋转轴: ${postprocessProfile.coordinateMapping?.rotaryAxis ?? "无"}`,
     `- 每圈等效距离: ${rotaryCalibrationSheet.axisMapping?.rotaryWrapPerRevolutionMm ?? "-"} mm/圈`,
+    `- 上机轴向: ${axisInstruction}`,
     "",
     "## 刀具确认",
     "",
@@ -6152,7 +6154,7 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
     "2. 阅读 `production-gate.json`、`tool-setup-sheet.json`、`rotary-calibration-sheet.json`。",
     "3. 手动低速验证旋转夹具方向和每圈等效距离。",
     "4. 运行 `rotary-calibration-airrun.nc`，确认 90/180/360 度旋转方向、每圈距离和反向间隙。",
-    "5. 运行 `air-run.nc`，确认 X/Y或A/Z 方向、行程和安全高度。",
+    `5. 运行 \`air-run.nc\`，确认 ${axisInstruction} 的方向、行程和安全高度。`,
     "6. 若允许试雕，使用废料或低价值核胚运行 `toolpath.nc`，进给倍率建议 30%-50%。",
     "7. 记录试雕结果；只有生产门禁允许且现场验收通过后，才可正式加工。",
     "",
@@ -6183,6 +6185,18 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
     `长度/直径: ${fmt(settings.lengthMm, 2)}mm / ${fmt(settings.diameterMm, 2)}mm`
   ];
   return `${lines.join("\n")}\n`;
+}
+
+function createOperatorAxisInstruction(postprocessProfile = {}) {
+  const mapping = postprocessProfile.coordinateMapping ?? {};
+  const lengthAxis = mapping.lengthAxis ?? "X";
+  const depthAxis = mapping.depthAxis ?? "Z";
+  const rotaryAxis = mapping.rotaryAxis ?? null;
+  if (postprocessProfile.camMode === "rotaryWrap" && rotaryAxis) {
+    return `${lengthAxis}=长度方向，${rotaryAxis}=旋转夹具，${depthAxis}=刀深/安全高度`;
+  }
+  const planarAxis = mapping.planarWidthAxis ?? "Y";
+  return `${lengthAxis}=长度方向，${planarAxis}=平面宽度方向，${depthAxis}=刀深/安全高度`;
 }
 
 function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
@@ -7751,6 +7765,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
   const trialCandidate = productionGate.allowTrialNc ? "toolpath.nc" : null;
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary));
+  const axisInstruction = createOperatorAxisInstruction(postprocessProfile);
 
   return {
     schema: "hediao3d.machining-package-index.v1",
@@ -7843,10 +7858,10 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
       "阅读 rotary-calibration-sheet.json，确认旋转轴方向、每圈距离和反向间隙。",
       "按 machine-acceptance-checklist.json 完成操作员现场验收记录。",
-      "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
+      `阅读 postprocess-profile.json，确认 ${axisInstruction} 与机床接线一致。`,
       "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
       "先运行 rotary-calibration-airrun.nc，确认旋转夹具 90/180/360 度方向和每圈等效距离。",
-      "再运行 air-run.nc 做整条刀路离料空跑，确认夹具旋转方向、行程和 Z 安全高度。",
+      `再运行 air-run.nc 做整条刀路离料空跑，确认 ${axisInstruction}。`,
       productionGate.allowProductionNc
         ? "通过外部 CAM 与仿真门禁后，可按生产流程运行 toolpath.nc。"
         : "当前仅允许小料/废料低进给试雕；生产前必须补齐外部 CAM 和真实仿真复核。"
@@ -8241,6 +8256,10 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
   const airRunFiles = fileRows.filter((file) => file.machineUse?.class === "air-run-no-cut");
   const neverMachineFiles = fileRows.filter((file) => file.machineUse?.allowedOnMachine === false);
   const missing = integrityFiles.filter((file) => file.downloadable && !file.exists);
+  const axisInstruction = createOperatorAxisInstruction({
+    camMode: machineControllerProfile?.camMode,
+    coordinateMapping: machineControllerProfile?.axisMapping
+  });
   const hashLine = (file) => `- [ ] ${file.filename}: ${file.exists ? `${file.sha256 ?? "self-reference"} (${file.bytes ?? "-"} bytes)` : "缺失"}${file.machineUse?.summary ? ` - ${file.machineUse.summary}` : ""}`;
   const lines = [
     "# HeDiao3D V3 操作员下载核验清单",
@@ -8250,6 +8269,7 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
     `包级别: ${deliveryManifest.packageLevel}`,
     `完整性: ${packageIntegrity.status} / ${packageIntegrity.summary}`,
     `机床: ${machineControllerProfile?.name ?? "未生成"} / ${machineControllerProfile?.controllerClass ?? "-"}`,
+    `上机轴向: ${axisInstruction}`,
     `CAM交接: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     `仿真: ${simulationSummary?.engine ?? "未生成"} / ${simulationSummary?.riskLevel ?? "-"}`,
     "",
@@ -8257,7 +8277,7 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
     "",
     "- [ ] 已阅读 `machining-package-index.json`、`production-gate.json`、`operator-runbook.md`。",
     "- [ ] 已阅读 `package-integrity.json`，并用本清单核对下载后的文件哈希。",
-    "- [ ] 已确认机床接线与 `machine-controller-profile.json` 中的 X/Z/旋转轴映射一致。",
+    `- [ ] 已确认机床接线与 \`machine-controller-profile.json\` 中的轴向一致：${axisInstruction}。`,
     "- [ ] 已确认刀具与 `tool-setup-sheet.json` 一致，尤其是 4mm 25度平底尖刀、进给、转速和最大切深。",
     "- [ ] 先运行 `rotary-calibration-airrun.nc`，再运行 `air-run.nc`，两者都必须主轴关闭、Z 保持安全高度。",
     productionGate.allowProductionNc

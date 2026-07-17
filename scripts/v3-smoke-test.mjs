@@ -233,10 +233,14 @@ async function main() {
   assert(operatorRunbook.includes("HeDiao3D V3 操作员上机说明书"), "operator runbook missing title");
   assert(operatorRunbook.includes("rotary-calibration-airrun.nc"), "operator runbook missing rotary calibration air-run");
   assert(operatorRunbook.includes("camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机"), "operator runbook should forbid CAMotics preview on machine");
+  assert(operatorRunbook.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "operator runbook should state exact wrapY axis mapping");
+  assert(!operatorRunbook.includes("X/Y或A/Z"), "operator runbook should not use ambiguous axis wording");
   assert(operatorDownloadChecklist.includes("HeDiao3D V3 操作员下载核验清单"), "operator download checklist missing title");
   assert(operatorDownloadChecklist.includes("Get-FileHash .\\toolpath.nc -Algorithm SHA256"), "operator download checklist missing PowerShell hash command");
   assert(operatorDownloadChecklist.includes("生产门禁未放行"), "operator download checklist should warn when production is locked");
+  assert(operatorDownloadChecklist.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "operator download checklist should state exact wrapY axis mapping");
   assert(operatorDownloadChecklist.includes("camotics-preview.nc"), "operator download checklist should list never-machine simulation file");
+  assert(packageIndex.recommendedSequence?.some((line) => line.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度")), "package index recommended sequence should state exact wrapY axis mapping");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.machineUse?.class), "package integrity missing toolpath machineUse");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
