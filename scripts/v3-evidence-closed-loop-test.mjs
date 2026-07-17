@@ -110,6 +110,9 @@ async function main() {
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.nativeCamRealOutputAcceptance?.level === "ready", "readiness should expose latest native CAM acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose native CAM source binding");
+  assert(readiness.readinessCamoticsEvidence?.source === "latest-job-evidence-dossier", `readiness should use latest job CAMotics evidence, got ${readiness.readinessCamoticsEvidence?.source}`);
+  assert(readiness.readinessCamoticsEvidence.productionEvidenceEligible === true, "readiness should mark latest job CAMotics evidence eligible");
+  assert(readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched", "readiness CAMotics evidence should preserve matched input identity");
   assert(readiness.latestEvidenceDossier?.jobId === job.id, "readiness should point to the refreshed closed-loop job");
   assert(readiness.latestEvidenceDossier.crossChecks?.realMaterialRemovalVerified === true, "readiness should expose verified material-removal evidence through latest job dossier");
   assert(readiness.latestEvidenceDossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "readiness must keep production locked until field evidence passes");

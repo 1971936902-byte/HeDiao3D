@@ -565,12 +565,13 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const postprocessHandoffReadiness = createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
   const latestJob = getLatestOrchestratorJobSummary();
   const latestEvidenceDossier = getLatestProductionEvidenceDossierSummary();
+  const readinessCamoticsEvidence = createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier });
   const latestTrialFeedback = getLatestJobLogSummary("trial-feedback-log.json", createTrialFeedbackLogPublicSummary);
   const latestMachineAcceptance = getLatestJobLogSummary("machine-acceptance-log.json", createMachineAcceptanceLogPublicSummary);
   const camServerConfig = createDeploymentCamServerConfigReport(reportId);
   await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -591,6 +592,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     neutralImport,
     postprocessHandoffReadiness,
     camoticsImport,
+    readinessCamoticsEvidence,
     latestJob,
     latestTrialFeedback,
     latestMachineAcceptance,
@@ -621,7 +623,7 @@ function createDeploymentCamServerConfigReport(reportId) {
   });
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -757,22 +759,20 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     warnings.push(postprocessHandoffReadiness.summary);
     nextActions.push(...postprocessHandoffReadiness.nextActions);
   }
-  if (!camoticsImport) {
+  const camoticsEvidence = readinessCamoticsEvidence ?? createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier });
+  if (!camoticsEvidence.productionEvidenceEligible) {
     const message = productionCamEvidence.required
-      ? `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但尚未导入 CAMotics 材料去除仿真结果。`
-      : "尚未运行 CAMotics 真实结果导入契约测试。";
+      ? `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但 CAMotics 材料去除证据未达到生产标准：${camoticsEvidence.summary}`
+      : camoticsEvidence.source === "latest-job-evidence-dossier"
+        ? `最新 job 的 CAMotics 材料去除证据仍需复核：${camoticsEvidence.summary}`
+        : "尚未运行 CAMotics 真实结果导入契约测试，且最新 job 也没有可用材料去除证据。";
     if (productionCamEvidence.required) blockers.push(message);
     else warnings.push(message);
-    nextActions.push("运行 npm run test:v3:camotics-import，验证非 synthetic 材料去除结果可回填。");
-  } else if (!camoticsImport.ok || !camoticsImport.productionEvidenceEligible) {
-    const message = productionCamEvidence.required
-      ? `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但 CAMotics 导入契约未达到生产证据标准：${camoticsImport.status ?? "unknown"}。`
-      : `CAMotics 导入契约未通过：${camoticsImport.status ?? "unknown"}。`;
-    if (productionCamEvidence.required) blockers.push(message);
-    else warnings.push(message);
-    nextActions.push("查看 camotics-import-contract.json、camotics-adapter-report.json 和 camotics-result.json。");
-  } else if (camoticsImport.inputIdentityStatus !== "matched") {
-    blockers.push(`CAMotics 导入契约已标记生产证据，但输入哈希绑定状态为 ${camoticsImport.inputIdentityStatus}。`);
+    nextActions.push(camoticsEvidence.source === "latest-job-evidence-dossier"
+      ? "查看最新 job 的 production-evidence-dossier.json、camotics-result.json 和 camotics-result-local-validation.json。"
+      : "运行 npm run test:v3:camotics-import，验证非 synthetic 材料去除结果可回填。");
+  } else if (camoticsEvidence.inputIdentityStatus !== "matched") {
+    blockers.push(`CAMotics 材料去除证据已标记可用，但输入哈希绑定状态为 ${camoticsEvidence.inputIdentityStatus}。`);
     nextActions.push("查看 camotics-result.json 的 evidenceQuality.inputIdentity，确认 preferredGcodeSha256 与当前 camotics-preview.nc 匹配。");
   }
 
@@ -921,7 +921,8 @@ function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealO
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
+  const camoticsEvidence = readinessCamoticsEvidence ?? createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier });
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -1100,17 +1101,19 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       order: 11,
       id: "camotics-result-import",
       title: "CAMotics 真实结果导入契约",
-      status: !camoticsImport
+      status: !camoticsEvidence || camoticsEvidence.source === "missing"
         ? "pending"
-        : camoticsImport.ok && camoticsImport.productionEvidenceEligible
+        : camoticsEvidence.ok && camoticsEvidence.productionEvidenceEligible
           ? "done"
           : "blocked",
       command: "npm run test:v3:camotics-import",
-      evidence: ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
-      detail: camoticsImport
-        ? `${camoticsImport.status} / synthetic=${camoticsImport.synthetic} / risk=${camoticsImport.riskLevel ?? "unknown"} / input=${camoticsImport.inputIdentityStatus ?? "missing"} / cli=${camoticsImport.cliRunPackageBindingStatus ?? "not-required"} / motion=${camoticsImport.motionConsistencyStatus ?? "missing"}`
+      evidence: camoticsEvidence?.source === "latest-job-evidence-dossier"
+        ? ["production-evidence-dossier.json", "camotics-result.json", "camotics-result-local-validation.json"]
+        : ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
+      detail: camoticsEvidence && camoticsEvidence.source !== "missing"
+        ? `${camoticsEvidence.status} / source=${camoticsEvidence.source} / synthetic=${camoticsEvidence.synthetic} / risk=${camoticsEvidence.riskLevel ?? "unknown"} / input=${camoticsEvidence.inputIdentityStatus ?? "missing"} / cli=${camoticsEvidence.cliRunPackageBindingStatus ?? "not-required"} / motion=${camoticsEvidence.motionConsistencyStatus ?? "missing"}`
         : "尚未验证真实 CAMotics 结果导入契约 / input=missing / cli=not-required / motion=missing。",
-      blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible || camoticsImport.inputIdentityStatus !== "matched"
+      blocksProduction: !camoticsEvidence || !camoticsEvidence.ok || !camoticsEvidence.productionEvidenceEligible || camoticsEvidence.inputIdentityStatus !== "matched"
     }),
     createAcceptanceStep({
       order: 12,
@@ -1703,6 +1706,88 @@ function createCamoticsImportContractPublicSummary(report, contractId) {
   };
 }
 
+function createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier }) {
+  const latestJobEvidence = createReadinessCamoticsEvidenceFromLatestJob(latestEvidenceDossier);
+  if (camoticsImport && latestJobEvidence?.productionEvidenceEligible) {
+    const importTime = new Date(camoticsImport.createdAt ?? 0).getTime();
+    const jobTime = new Date(latestEvidenceDossier?.updatedAt ?? 0).getTime();
+    if (!Number.isFinite(importTime) || !Number.isFinite(jobTime) || jobTime >= importTime) {
+      return latestJobEvidence;
+    }
+  }
+  if (camoticsImport) {
+    return {
+      schema: "hediao3d.readiness-camotics-evidence.v1",
+      source: "camotics-import-contract",
+      id: camoticsImport.id ?? null,
+      jobId: camoticsImport.camoticsResult?.jobId ?? null,
+      ok: Boolean(camoticsImport.ok),
+      status: camoticsImport.status ?? null,
+      synthetic: Boolean(camoticsImport.synthetic),
+      riskLevel: camoticsImport.riskLevel ?? null,
+      productionEvidenceEligible: Boolean(camoticsImport.productionEvidenceEligible),
+      realMaterialRemovalVerified: Boolean(camoticsImport.productionEvidenceEligible && camoticsImport.synthetic === false),
+      inputIdentityStatus: camoticsImport.inputIdentityStatus ?? "missing",
+      cliRunPackageBindingStatus: camoticsImport.cliRunPackageBindingStatus ?? "not-required",
+      motionConsistencyStatus: camoticsImport.motionConsistencyStatus ?? "missing",
+      artifactEvidenceStatus: camoticsImport.evidenceQualityStatus ?? "unknown",
+      summary: camoticsImport.productionEvidenceEligible
+        ? "CAMotics 全局导入契约已达到材料去除证据标准。"
+        : `CAMotics 全局导入契约未达到材料去除证据标准：${camoticsImport.status ?? "unknown"}。`
+    };
+  }
+  if (latestJobEvidence) return latestJobEvidence;
+
+  return {
+    schema: "hediao3d.readiness-camotics-evidence.v1",
+    source: "missing",
+    id: null,
+    jobId: latestEvidenceDossier?.jobId ?? null,
+    ok: false,
+    status: "missing",
+    synthetic: null,
+    riskLevel: null,
+    productionEvidenceEligible: false,
+    realMaterialRemovalVerified: false,
+    inputIdentityStatus: "missing",
+    cliRunPackageBindingStatus: "missing",
+    motionConsistencyStatus: "missing",
+    artifactEvidenceStatus: "missing",
+    summary: "尚未找到 CAMotics 全局导入契约或最新 job 材料去除证据。"
+  };
+}
+
+function createReadinessCamoticsEvidenceFromLatestJob(latestEvidenceDossier) {
+  const crossChecks = latestEvidenceDossier?.crossChecks;
+  if (!crossChecks) return null;
+
+  const verified = Boolean(crossChecks.realMaterialRemovalVerified);
+  const inputMatched = crossChecks.camoticsInputIdentityStatus === "matched";
+  const cliMatched = ["matched", "not-required"].includes(crossChecks.camoticsCliRunPackageBindingStatus);
+  const motionMatched = crossChecks.camoticsMotionConsistencyStatus === "matched";
+  const artifactComplete = ["complete", "ready", "matched"].includes(crossChecks.camoticsArtifactEvidenceStatus);
+  const eligible = verified && inputMatched && cliMatched && motionMatched && artifactComplete;
+  return {
+    schema: "hediao3d.readiness-camotics-evidence.v1",
+    source: "latest-job-evidence-dossier",
+    id: latestEvidenceDossier.artifact ?? null,
+    jobId: latestEvidenceDossier.jobId ?? null,
+    ok: eligible,
+    status: eligible ? "completed" : verified ? "review" : "missing",
+    synthetic: false,
+    riskLevel: eligible ? "ready" : "review",
+    productionEvidenceEligible: eligible,
+    realMaterialRemovalVerified: verified,
+    inputIdentityStatus: crossChecks.camoticsInputIdentityStatus ?? "missing",
+    cliRunPackageBindingStatus: crossChecks.camoticsCliRunPackageBindingStatus ?? "missing",
+    motionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
+    artifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
+    summary: eligible
+      ? `最新 job ${latestEvidenceDossier.jobId} 的 production-evidence-dossier 已包含可用 CAMotics 材料去除证据。`
+      : `最新 job ${latestEvidenceDossier.jobId ?? "unknown"} 的 CAMotics 证据仍需复核：verified=${verified} / input=${crossChecks.camoticsInputIdentityStatus ?? "missing"} / cli=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"} / motion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"} / artifacts=${crossChecks.camoticsArtifactEvidenceStatus ?? "missing"}。`
+  };
+}
+
 function createNeutralImportContractPublicSummary(report, contractId) {
   const sourceBinding = report.sourceBinding ?? report.neutralToolpathImportValidation?.sourceBinding ?? null;
   return {
@@ -1796,6 +1881,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     neutralImport: report.neutralImport ?? null,
     postprocessHandoffReadiness: report.postprocessHandoffReadiness ?? null,
     camoticsImport: report.camoticsImport ?? null,
+    readinessCamoticsEvidence: report.readinessCamoticsEvidence ?? null,
     latestJob: report.latestJob,
     latestTrialFeedback: report.latestTrialFeedback ?? null,
     latestMachineAcceptance: report.latestMachineAcceptance ?? null,
@@ -1912,6 +1998,7 @@ function createV3ReadinessMarkdown(report) {
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
     `- Postprocess handoff: ${report.postprocessHandoffReadiness ? `${report.postprocessHandoffReadiness.status} / required=${report.postprocessHandoffReadiness.required} / source=${report.postprocessHandoffReadiness.source}` : "missing"}`,
     `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
+    `- CAMotics readiness evidence: ${report.readinessCamoticsEvidence ? `${report.readinessCamoticsEvidence.status} / source=${report.readinessCamoticsEvidence.source} / eligible=${report.readinessCamoticsEvidence.productionEvidenceEligible} / input=${report.readinessCamoticsEvidence.inputIdentityStatus} / motion=${report.readinessCamoticsEvidence.motionConsistencyStatus}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
     `- Latest trial feedback: ${report.latestTrialFeedback ? `${report.latestTrialFeedback.recordCount} records / ${report.latestTrialFeedback.latestOutcome ?? "unknown"}` : "missing"}`,
     `- Latest machine acceptance: ${report.latestMachineAcceptance ? `${report.latestMachineAcceptance.recordCount} records / ${report.latestMachineAcceptance.latestOutcome ?? "unknown"} / required=${report.latestMachineAcceptance.latestAllRequiredPassed ? "pass" : "review"}` : "missing"}`,

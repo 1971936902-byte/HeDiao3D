@@ -78,6 +78,7 @@ async function main() {
   assert(markdown.includes("CAM server config"), "readiness markdown missing CAM server config summary");
   assert(markdown.includes("Native CAM server package"), "readiness markdown missing native CAM server package summary");
   assert(markdown.includes("Native CAM real output acceptance"), "readiness markdown missing native CAM real output acceptance summary");
+  assert(markdown.includes("CAMotics readiness evidence"), "readiness markdown missing CAMotics readiness evidence summary");
   assert(markdown.includes("Adapter Handoff Audit"), "readiness markdown missing adapter handoff audit section");
   assert(markdown.includes("Postprocess handoff"), "readiness markdown missing postprocess handoff summary");
   assert(markdown.includes("Latest trial feedback"), "readiness markdown missing trial feedback summary");
@@ -200,6 +201,13 @@ function validateReadiness(report, label) {
     assert(report.camoticsImport.schema === "hediao3d.camotics-import-contract.v1", `${label} camoticsImport schema mismatch`);
     assert(typeof report.camoticsImport.productionEvidenceEligible === "boolean", `${label} camoticsImport eligibility missing`);
     assert(typeof report.camoticsImport.inputIdentityStatus === "string", `${label} camoticsImport input identity status missing`);
+  }
+  assert(Object.hasOwn(report, "readinessCamoticsEvidence"), `${label} missing readinessCamoticsEvidence field`);
+  if (report.readinessCamoticsEvidence) {
+    assert(report.readinessCamoticsEvidence.schema === "hediao3d.readiness-camotics-evidence.v1", `${label} readinessCamoticsEvidence schema mismatch`);
+    assert(typeof report.readinessCamoticsEvidence.productionEvidenceEligible === "boolean", `${label} readiness CAMotics eligibility missing`);
+    assert(typeof report.readinessCamoticsEvidence.source === "string", `${label} readiness CAMotics source missing`);
+    assert(typeof report.readinessCamoticsEvidence.inputIdentityStatus === "string", `${label} readiness CAMotics input status missing`);
   }
   assert(Object.hasOwn(report, "latestTrialFeedback"), `${label} missing latestTrialFeedback field`);
   if (report.latestTrialFeedback) {
