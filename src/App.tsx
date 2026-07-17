@@ -1129,6 +1129,15 @@ type V3ReadinessSummary = {
     level: string;
     readyCount: number;
     requiredCount: number;
+    serverPackage?: {
+      schema?: string | null;
+      files: Array<{
+        filename: string;
+        role: string;
+        url?: string | null;
+      }>;
+      commands: string[];
+    } | null;
   } | null;
   camServerConfig: {
     schema: string;
@@ -4790,7 +4799,12 @@ export function App() {
                   </span>
                   <small>{v3Readiness.summary}</small>
                   {v3Readiness.nativeCam && (
-                    <small>Native CAM {v3Readiness.nativeCam.readyCount}/{v3Readiness.nativeCam.requiredCount} · {v3Readiness.nativeCam.level}</small>
+                    <>
+                      <small>Native CAM {v3Readiness.nativeCam.readyCount}/{v3Readiness.nativeCam.requiredCount} · {v3Readiness.nativeCam.level}</small>
+                      {v3Readiness.nativeCam.serverPackage?.files?.length ? (
+                        <small>服务端准备包：{v3Readiness.nativeCam.serverPackage.files.length} 个文件</small>
+                      ) : null}
+                    </>
                   )}
                   {v3Readiness.camServerConfig && (
                     <>

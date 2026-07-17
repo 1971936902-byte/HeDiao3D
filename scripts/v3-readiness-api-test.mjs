@@ -30,6 +30,9 @@ async function main() {
   assert(full.camServerConfig.adapters?.some((adapter) => adapter.id === full.camServerConfig.selectedEngine), "CAM server config missing selected adapter");
   assert(full.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", "full readiness artifact missing acceptance plan");
   assert(full.acceptancePlan.steps.length >= 9, "acceptance plan should include deployment steps");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("native-cam-server-bootstrap.sh")), "acceptance plan missing native CAM bootstrap evidence");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("native-cam-env.template")), "acceptance plan missing native CAM env template evidence");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "native-cam-readiness" && step.evidence?.includes("native-cam-acceptance-checklist.md")), "acceptance plan missing native CAM checklist evidence");
   assert(full.acceptancePlan.steps.some((step) => step.id === "cam-server-config"), "acceptance plan missing CAM server config step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-neutral-handoff"), "acceptance plan missing external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "external-real-neutral-handoff"), "acceptance plan missing real neutral handoff step");
@@ -54,6 +57,7 @@ async function main() {
   const markdown = await markdownArtifact.text();
   assert(markdown.includes("V3 Readiness Report"), "readiness markdown missing heading");
   assert(markdown.includes("CAM server config"), "readiness markdown missing CAM server config summary");
+  assert(markdown.includes("Native CAM server package"), "readiness markdown missing native CAM server package summary");
   assert(markdown.includes("Latest trial feedback"), "readiness markdown missing trial feedback summary");
   assert(markdown.includes("Latest machine acceptance"), "readiness markdown missing machine acceptance summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
@@ -73,6 +77,9 @@ async function main() {
   const runbook = await runbookArtifact.text();
   assert(runbook.includes("HeDiao3D V3 deployment acceptance runbook"), "readiness runbook missing heading");
   assert(runbook.includes("npm run test:v3:native-cam"), "readiness runbook missing native CAM command");
+  assert(runbook.includes("native-cam-server-bootstrap.sh"), "readiness runbook missing native CAM bootstrap evidence");
+  assert(runbook.includes("native-cam-env.template"), "readiness runbook missing native CAM env template evidence");
+  assert(runbook.includes("native-cam-acceptance-checklist.md"), "readiness runbook missing native CAM checklist evidence");
   assert(runbook.includes("cam-server-config.json"), "readiness runbook missing CAM server config evidence");
   assert(runbook.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters"), "readiness runbook missing CAM server config native adapter command");
   assert(runbook.includes("npm run test:v3:neutral-adapter"), "readiness runbook missing neutral handoff command");
@@ -116,6 +123,8 @@ function validateReadiness(report, label) {
   if (report.nativeCam?.level === "missing") {
     assert(report.acceptancePlan.nextStep?.id === "native-cam-readiness", `${label} next step should be native CAM readiness when native engines are missing`);
   }
+  const nativeCamStep = report.acceptancePlan.steps.find((step) => step.id === "native-cam-readiness");
+  assert(nativeCamStep?.evidence?.includes("native-cam-server-package.json"), `${label} native CAM step missing server package manifest evidence`);
   assert(["production-ready", "trial-only", "blocked"].includes(report.level), `${label} unexpected level ${report.level}`);
   assert(Array.isArray(report.gates.blockers), `${label} gates.blockers missing`);
   assert(Array.isArray(report.gates.warnings), `${label} gates.warnings missing`);

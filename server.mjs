@@ -780,9 +780,16 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       title: "Native CAM 环境验收",
       status: !nativeCam ? "pending" : nativeCam.summary.level === "ready" ? "done" : "pending",
       command: "npm run test:v3:native-cam",
-      evidence: ["native-cam-readiness.json", "/api/orchestrator/native-cam/latest"],
+      evidence: [
+        "native-cam-readiness.json",
+        "native-cam-server-bootstrap.sh",
+        "native-cam-env.template",
+        "native-cam-acceptance-checklist.md",
+        "native-cam-server-package.json",
+        "/api/orchestrator/native-cam/latest"
+      ],
       detail: nativeCam
-        ? `${nativeCam.summary.readyCount}/${nativeCam.summary.requiredCount} ${nativeCam.summary.level}`
+        ? `${nativeCam.summary.readyCount}/${nativeCam.summary.requiredCount} ${nativeCam.summary.level}${nativeCam.packageArtifacts?.files?.length ? ` / server-package=${nativeCam.packageArtifacts.files.length} files` : ""}`
         : "尚未生成 Native CAM 环境验收报告。",
       blocksProduction: !nativeCam || nativeCam.summary.level !== "ready"
     }),
@@ -1420,7 +1427,8 @@ function createV3ReadinessPublicSummary(report, reportId) {
     nativeCam: report.nativeCam ? {
       level: report.nativeCam.summary.level,
       readyCount: report.nativeCam.summary.readyCount,
-      requiredCount: report.nativeCam.summary.requiredCount
+      requiredCount: report.nativeCam.summary.requiredCount,
+      serverPackage: createNativeCamServerPackageSummary(report.nativeCam)
     } : null,
     camServerConfig: report.camServerConfig ? {
       schema: report.camServerConfig.schema,
@@ -1461,6 +1469,22 @@ function createV3ReadinessPublicSummary(report, reportId) {
     latestMachineAcceptance: report.latestMachineAcceptance ?? null,
     latestEvidenceDossier: report.latestEvidenceDossier ?? null,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
+  };
+}
+
+function createNativeCamServerPackageSummary(nativeCam) {
+  const files = nativeCam?.packageArtifacts?.files;
+  if (!Array.isArray(files) || files.length === 0) return null;
+  return {
+    schema: nativeCam.packageArtifacts.schema ?? "hediao3d.native-cam-server-package.v1",
+    files: files.map((file) => ({
+      filename: file.filename,
+      role: file.role,
+      url: file.url ?? null
+    })),
+    commands: Array.isArray(nativeCam.packageArtifacts.commands)
+      ? nativeCam.packageArtifacts.commands.slice(0, 6)
+      : []
   };
 }
 
@@ -1539,6 +1563,7 @@ function createV3ReadinessMarkdown(report) {
     "",
     `- Diagnostics: ${report.diagnostics?.level ?? "unknown"} / ${report.diagnostics?.summary ?? ""}`,
     `- Native CAM: ${report.nativeCam ? `${report.nativeCam.summary.readyCount}/${report.nativeCam.summary.requiredCount} ${report.nativeCam.summary.level}` : "missing"}`,
+    `- Native CAM server package: ${report.nativeCam?.packageArtifacts?.files?.length ? report.nativeCam.packageArtifacts.files.map((file) => file.filename).join(", ") : "missing"}`,
     `- CAM server config: ${report.camServerConfig ? `${report.camServerConfig.status} / ${report.camServerConfig.selectedEngineName} / missing=${report.camServerConfig.missingRequired.length}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / blocking=${report.runbookResult.blockingFailedCount ?? "unknown"} / identity=${report.runbookResult.identityValid ? "valid" : "invalid"} / productionSafe=${report.runbookResult.productionSafe ? "yes" : "no"} / report=${report.runbookResult.readinessReportId ?? "missing"}` : "missing"}`,
@@ -1670,6 +1695,9 @@ function createV3AcceptanceRunbookShell(report) {
     "echo \"- public/orchestrator-readiness/*/v3-readiness-report.json\"",
     "echo \"- public/orchestrator-readiness/*/cam-server-config.json\"",
     "echo \"- public/native-cam-readiness/*/native-cam-readiness.json\"",
+    "echo \"- public/native-cam-readiness/*/native-cam-server-bootstrap.sh\"",
+    "echo \"- public/native-cam-readiness/*/native-cam-env.template\"",
+    "echo \"- public/native-cam-readiness/*/native-cam-acceptance-checklist.md\"",
     "echo \"- public/orchestrator-adapter-validation/*/v3-external-adapter-validation.json\"",
     "echo \"- public/orchestrator-jobs/*/production-gate.json\"",
     "echo",
