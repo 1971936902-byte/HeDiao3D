@@ -38,6 +38,9 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.level === "ready", "readiness should preserve acceptance level");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
   assert(readiness.gates?.blockers?.some((item) => /真实输出验收为 ready.*handoff 审计仍不一致/.test(item)), "readiness should block inconsistent real-output acceptance and adapter handoff audit");
+  if (!readiness.camoticsImport || !readiness.camoticsImport.productionEvidenceEligible) {
+    assert(readiness.gates?.blockers?.some((item) => /真实 CAM 生产候选证据.*CAMotics/.test(item)), "readiness should block production candidate CAM evidence without eligible CAMotics material-removal evidence");
+  }
 
   console.log(JSON.stringify({
     ok: true,

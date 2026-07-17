@@ -715,11 +715,20 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     nextActions.push("查看 neutral-import-contract.json、adapter-report.json 和 neutral-toolpath.json。");
   }
 
+  const productionCamEvidence = createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport });
   if (!camoticsImport) {
-    warnings.push("尚未运行 CAMotics 真实结果导入契约测试。");
+    const message = productionCamEvidence.required
+      ? `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但尚未导入 CAMotics 材料去除仿真结果。`
+      : "尚未运行 CAMotics 真实结果导入契约测试。";
+    if (productionCamEvidence.required) blockers.push(message);
+    else warnings.push(message);
     nextActions.push("运行 npm run test:v3:camotics-import，验证非 synthetic 材料去除结果可回填。");
   } else if (!camoticsImport.ok || !camoticsImport.productionEvidenceEligible) {
-    warnings.push(`CAMotics 导入契约未通过：${camoticsImport.status ?? "unknown"}。`);
+    const message = productionCamEvidence.required
+      ? `已有真实 CAM 生产候选证据（${productionCamEvidence.summary}），但 CAMotics 导入契约未达到生产证据标准：${camoticsImport.status ?? "unknown"}。`
+      : `CAMotics 导入契约未通过：${camoticsImport.status ?? "unknown"}。`;
+    if (productionCamEvidence.required) blockers.push(message);
+    else warnings.push(message);
     nextActions.push("查看 camotics-import-contract.json、camotics-adapter-report.json 和 camotics-result.json。");
   }
 
@@ -784,6 +793,22 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     blockers: dedupeStrings(blockers),
     warnings: dedupeStrings(warnings),
     nextActions: dedupeStrings(nextActions).slice(0, 12)
+  };
+}
+
+function createV3ProductionCamEvidenceSummary({ adapterValidation, nativeCamRealOutputAcceptance, neutralImport }) {
+  const reasons = [];
+  const productionCandidateCount = Number(adapterValidation?.handoffClassificationAudit?.productionCandidateCount ?? 0);
+  if (productionCandidateCount > 0) reasons.push(`Adapter production-candidate=${productionCandidateCount}`);
+  if (nativeCamRealOutputAcceptance?.level === "ready" && Number(nativeCamRealOutputAcceptance.productionCandidateCount ?? 0) > 0) {
+    reasons.push(`Native CAM 真实输出 ready=${nativeCamRealOutputAcceptance.productionCandidateCount}`);
+  }
+  if (neutralImport?.ok && neutralImport?.postprocessEligible && neutralImport?.synthetic === false) {
+    reasons.push(`Neutral 导入可后处理 ${neutralImport.pointCount ?? 0} 点`);
+  }
+  return {
+    required: reasons.length > 0,
+    summary: reasons.join("；") || "none"
   };
 }
 
