@@ -1657,6 +1657,7 @@ function createProductionEvidenceCrossChecksFromArtifacts(workDir) {
   const trialFeedbackLog = readJsonFileSafe(join(workDir, "trial-feedback-log.json"));
   const optimizationPlan = readJsonFileSafe(join(workDir, "process-optimization-plan.json"));
   const camoticsEvidence = camoticsResult?.evidenceQuality;
+  const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
   return {
     realMaterialRemovalVerified: Boolean(camoticsEvidence?.productionEvidenceEligible && camoticsResult?.synthetic === false),
     camHandoffReady: camHandoff?.level === "ready",
@@ -1671,8 +1672,10 @@ function createProductionEvidenceCrossChecksFromArtifacts(workDir) {
     controllerDialectReady: controllerDialect?.level === "ready",
     machineAcceptanceRecords: Number(machineAcceptanceLog?.recordCount ?? 0),
     latestMachineAcceptanceOutcome: machineAcceptanceLog?.latestOutcome ?? null,
-    machineAcceptancePassed: Boolean(machineAcceptanceLog?.latestOutcome === "success" && machineAcceptanceLog?.allRequiredPassed),
-    machineAcceptanceIntegrityBound: Boolean(machineAcceptanceLog?.latestRecord?.integrity?.packageBindingStatus === "matched" || machineAcceptanceLog?.latestIntegrityBound),
+    machineAcceptancePassed: Boolean(machineAcceptanceLog?.latestOutcome === "success" && machineAcceptanceLog?.latestAllRequiredPassed),
+    machineAcceptanceIntegrityBound: Boolean(machineAcceptanceLog?.latestDownloadIntegrityBound === "matched" || latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched"),
+    rotaryCalibrationPassed: Boolean(latestMachineAcceptanceRecord?.rotaryCalibration?.required === false || latestMachineAcceptanceRecord?.rotaryCalibration?.status === "pass"),
+    rotaryCalibrationStatus: latestMachineAcceptanceRecord?.rotaryCalibration?.status ?? "missing",
     trialFeedbackRecords: Number(trialFeedbackLog?.recordCount ?? 0),
     latestTrialFeedbackOutcome: trialFeedbackLog?.latestOutcome ?? null,
     trialFeedbackPassed: Boolean(trialFeedbackLog?.latestOutcome === "success" && trialFeedbackLog?.records?.[0]?.downloadIntegrity?.packageBinding?.status === "matched"),
@@ -1699,6 +1702,8 @@ function createProductionEvidenceCrossChecksSummary(crossChecks) {
     latestMachineAcceptanceOutcome: crossChecks.latestMachineAcceptanceOutcome ?? null,
     machineAcceptancePassed: Boolean(crossChecks.machineAcceptancePassed),
     machineAcceptanceIntegrityBound: Boolean(crossChecks.machineAcceptanceIntegrityBound),
+    rotaryCalibrationPassed: Boolean(crossChecks.rotaryCalibrationPassed),
+    rotaryCalibrationStatus: crossChecks.rotaryCalibrationStatus ?? "missing",
     trialFeedbackRecords: Number(crossChecks.trialFeedbackRecords ?? 0),
     latestTrialFeedbackOutcome: crossChecks.latestTrialFeedbackOutcome ?? null,
     trialFeedbackPassed: Boolean(crossChecks.trialFeedbackPassed),
@@ -1726,6 +1731,7 @@ function formatProductionEvidenceCrossChecksForReadiness(crossChecks) {
     `camoticsRunPackage=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"}`,
     `camoticsMotion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"}`,
     `nc=${crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "ready" : "review"}`,
+    `rotaryCalibration=${crossChecks.rotaryCalibrationPassed ? "pass" : crossChecks.rotaryCalibrationStatus ?? "missing"}`,
     `machine=${crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "accepted" : "locked"}`,
     `trial=${crossChecks.trialFeedbackPassed && crossChecks.trialFeedbackIntegrityBound ? "bound-success" : "locked"}`,
     `productionAudit=${crossChecks.productionReadinessAudit?.status ?? "missing"}`,
@@ -1778,6 +1784,7 @@ function createTrialFeedbackLogPublicSummary(log, job) {
 }
 
 function createMachineAcceptanceLogPublicSummary(log, job) {
+  const latestRecord = Array.isArray(log.records) ? log.records[0] : null;
   return {
     schema: log.schema ?? "unknown",
     jobId: log.jobId ?? job.id,
@@ -1788,6 +1795,7 @@ function createMachineAcceptanceLogPublicSummary(log, job) {
     latestOutcome: log.latestOutcome ?? null,
     latestAllRequiredPassed: Boolean(log.latestAllRequiredPassed),
     latestDownloadIntegrityBound: log.latestDownloadIntegrityBound ?? log.records?.[0]?.downloadIntegrity?.packageBinding?.status ?? null,
+    latestRotaryCalibrationStatus: log.latestRotaryCalibrationStatus ?? latestRecord?.rotaryCalibration?.status ?? null,
     artifact: publicArtifactUrl(log.jobId ?? job.id, "machine-acceptance-log.json")
   };
 }
@@ -7272,6 +7280,7 @@ function createRotaryCalibrationSheet({ job, settings, toolpath, productionGate,
     acceptanceThresholds: {
       oneRevolutionErrorDegMax: 2,
       quarterTurnErrorDegMax: 1,
+      halfTurnErrorDegMax: 1.5,
       backlashDegMax: 0.5,
       lengthAxisPositionErrorMmMax: 0.1,
       safeZMustRemainMm: Number(settings.safeZ ?? 0)
@@ -7660,6 +7669,8 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   const externalGcodeBinding = createExternalGcodeBindingGateStatus(externalGcodeImportValidation, camHandoffQuality);
   const machineAcceptanceIntegrityBound = latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const trialFeedbackIntegrityBound = latestTrialFeedbackRecord?.downloadIntegrity?.packageBinding?.status === "matched";
+  const rotaryCalibrationPassed = latestMachineAcceptanceRecord?.rotaryCalibration?.required === false
+    || latestMachineAcceptanceRecord?.rotaryCalibration?.status === "pass";
   const fieldEvidencePackageBinding = createFieldEvidencePackageBinding(latestMachineAcceptanceRecord, latestTrialFeedbackRecord);
   const trialFeedbackPassed = trialFeedbackLog?.recordCount > 0
     && trialFeedbackLog.latestOutcome === "success"
@@ -7667,7 +7678,8 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   const machineAcceptancePassed = machineAcceptanceLog?.recordCount > 0
     && machineAcceptanceLog.latestOutcome === "success"
     && machineAcceptanceLog.latestAllRequiredPassed === true
-    && machineAcceptanceIntegrityBound;
+    && machineAcceptanceIntegrityBound
+    && rotaryCalibrationPassed;
   const productionReadinessAudit = createProductionReadinessAudit({
     productionGate,
     camHandoffQuality,
@@ -7678,6 +7690,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     controllerDialectReport,
     machineAcceptancePassed,
     trialFeedbackPassed,
+    rotaryCalibrationPassed,
     fieldEvidencePackageBinding
   });
   const evidenceItems = [
@@ -7749,6 +7762,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       status: controllerDialectReport?.level === "ready" ? "pass" : controllerDialectReport?.level === "critical" ? "block" : "review",
       evidence: ["controller-dialect-report.json", "machine-controller-profile.json"],
       summary: controllerDialectReport?.summary ?? "未生成控制器方言报告。"
+    },
+    {
+      id: "rotary-calibration-evidence",
+      label: "旋转夹具实测标定",
+      status: latestMachineAcceptanceRecord?.rotaryCalibration
+        ? rotaryCalibrationPassed ? "pass" : latestMachineAcceptanceRecord.rotaryCalibration.status === "failed" ? "block" : "review"
+        : "review",
+      evidence: ["rotary-calibration-sheet.json", "rotary-calibration-airrun.nc", "machine-acceptance-record.json"],
+      summary: latestMachineAcceptanceRecord?.rotaryCalibration?.summary ?? "尚未回填 90/180/360 度、方向和反向间隙实测标定。"
     },
     {
       id: "machine-acceptance",
@@ -7837,6 +7859,8 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       latestMachineAcceptanceOutcome: machineAcceptanceLog?.latestOutcome ?? null,
       machineAcceptancePassed,
       machineAcceptanceIntegrityBound,
+      rotaryCalibrationPassed,
+      rotaryCalibrationStatus: latestMachineAcceptanceRecord?.rotaryCalibration?.status ?? "missing",
       trialFeedbackRecords: trialFeedbackLog?.recordCount ?? 0,
       latestTrialFeedbackOutcome: trialFeedbackLog?.latestOutcome ?? null,
       trialFeedbackPassed,
@@ -7857,7 +7881,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   };
 }
 
-function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, fieldEvidencePackageBinding }) {
+function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, rotaryCalibrationPassed, fieldEvidencePackageBinding }) {
   const externalSourceReady = camHandoffQuality?.level === "ready"
     && camHandoffQuality?.source === "external-adapter"
     && camHandoffQuality?.externalToolpathUsed === true
@@ -7878,6 +7902,7 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
   const fieldReady = Boolean(
     machineAcceptancePassed
     && trialFeedbackPassed
+    && rotaryCalibrationPassed
     && fieldEvidencePackageBinding?.status === "matched"
   );
   const gates = [
@@ -7904,6 +7929,14 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
       summary: ncReady
         ? "NC 静态分析和控制器方言检查通过。"
         : "NC 静态分析或控制器方言仍需复核。"
+    },
+    {
+      id: "rotary-calibration-proof",
+      label: "旋转夹具实测标定",
+      status: rotaryCalibrationPassed ? "pass" : "review",
+      summary: rotaryCalibrationPassed
+        ? "旋转夹具方向、90/180/360 度和反向间隙实测已通过。"
+        : "缺少旋转夹具实测标定，或标定误差超出阈值。"
     },
     {
       id: "field-package-proof",
@@ -8534,6 +8567,14 @@ function createMachineAcceptanceChecklist({ job, settings, toolpath, productionG
       fixtureType: "三轴控制器 + 旋转轴夹具",
       materialBatch: "",
       toolMeasuredDiameterMm: settings.toolDiameter ?? null,
+      rotaryCalibration: {
+        directionOk: false,
+        measuredQuarterTurnDeg: "",
+        measuredHalfTurnDeg: "",
+        measuredFullTurnDeg: "",
+        backlashDeg: "",
+        measuredWrapPerRevolutionMm: machineControllerProfile?.rotary?.wrapPerRevolutionMm ?? postprocessProfile.machine?.rotaryWrapPerRevolutionMm ?? null
+      },
       airRunAt: "",
       softTrialAt: "",
       formalTrialAt: "",
@@ -10738,8 +10779,9 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
 
   const input = await readJson(req);
   const checklist = readJsonFile(join(workDir, "machine-acceptance-checklist.json"));
+  const rotaryCalibrationSheet = readJsonFile(join(workDir, "rotary-calibration-sheet.json"));
   const packageIntegrity = readJsonFile(join(workDir, "package-integrity.json"));
-  const record = createMachineAcceptanceRecord(job, checklist, input, packageIntegrity);
+  const record = createMachineAcceptanceRecord(job, checklist, input, packageIntegrity, rotaryCalibrationSheet);
   const logPath = join(workDir, "machine-acceptance-log.json");
   const existingLog = readJsonFile(logPath) ?? {
     schema: "hediao3d.machine-acceptance-log.v1",
@@ -10758,6 +10800,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
     latestOutcome: record.outcome,
     latestAllRequiredPassed: record.allRequiredPassed,
     latestDownloadIntegrityBound: record.downloadIntegrity?.packageBinding?.status ?? null,
+    latestRotaryCalibrationStatus: record.rotaryCalibration?.status ?? null,
     records: [record, ...records].slice(0, 80)
   };
   const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
@@ -10790,6 +10833,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
       latestRecordId: record.id,
       allRequiredPassed: record.allRequiredPassed,
       downloadIntegrityBound: record.downloadIntegrity?.packageBinding?.status ?? null,
+      rotaryCalibrationStatus: record.rotaryCalibration?.status ?? null,
       recommendations: record.recommendations
     },
     ...(refreshedDelivery ? {
@@ -12087,11 +12131,12 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   };
 }
 
-function createMachineAcceptanceRecord(job, checklist, input, packageIntegrity = null) {
+function createMachineAcceptanceRecord(job, checklist, input, packageIntegrity = null, rotaryCalibrationSheet = null) {
   const now = new Date().toISOString();
   const checklistSteps = Array.isArray(checklist?.steps) ? checklist.steps : [];
   const submittedSteps = Array.isArray(input?.steps) ? input.steps : [];
   const downloadIntegrity = normalizeDownloadIntegrityEvidence(input?.downloadIntegrity, packageIntegrity);
+  const rotaryCalibration = createRotaryCalibrationEvidence(input?.rotaryCalibration, rotaryCalibrationSheet);
   const submittedById = new Map(submittedSteps
     .filter((step) => step && typeof step === "object")
     .map((step) => [String(step.id ?? ""), step]));
@@ -12143,8 +12188,10 @@ function createMachineAcceptanceRecord(job, checklist, input, packageIntegrity =
   const requiredSteps = allSteps.filter((step) => step.required);
   const failedRequired = requiredSteps.filter((step) => step.status !== "pass");
   const explicitOutcome = ["success", "review", "failed"].includes(input?.outcome) ? input.outcome : null;
-  const outcome = explicitOutcome ?? (failedRequired.length === 0 && requiredSteps.length > 0 ? "success" : "review");
+  const rotaryBlocksAcceptance = rotaryCalibration.required && rotaryCalibration.status !== "pass";
+  const outcome = explicitOutcome ?? (failedRequired.length === 0 && !rotaryBlocksAcceptance && requiredSteps.length > 0 ? "success" : "review");
   const notes = String(input?.notes ?? "").trim().slice(0, 4000);
+  const allRequiredPassed = requiredSteps.length > 0 && failedRequired.length === 0 && !rotaryBlocksAcceptance && outcome === "success";
   return {
     schema: "hediao3d.machine-acceptance-record.v1",
     id: input?.id && /^[a-zA-Z0-9_.:-]+$/.test(String(input.id)) ? String(input.id) : randomUUID(),
@@ -12158,18 +12205,93 @@ function createMachineAcceptanceRecord(job, checklist, input, packageIntegrity =
     materialBatch: String(input?.materialBatch ?? "").slice(0, 200),
     programName: String(input?.programName ?? "toolpath.nc").slice(0, 200),
     downloadIntegrity,
+    rotaryCalibration,
     airRunOk: normalizeBoolean(input?.airRunOk),
     softTrialOk: normalizeBoolean(input?.softTrialOk),
     formalTrialOk: normalizeBoolean(input?.formalTrialOk),
     requiredStepCount: requiredSteps.length,
     passedRequiredCount: requiredSteps.length - failedRequired.length,
     failedRequiredSteps: failedRequired.map((step) => step.id),
-    allRequiredPassed: requiredSteps.length > 0 && failedRequired.length === 0 && outcome === "success",
+    allRequiredPassed,
     steps: allSteps,
     notes,
     attachments: normalizeAcceptanceAttachments(input?.attachments, input?.photoName),
-    recommendations: createMachineAcceptanceRecommendations({ outcome, failedRequired, steps: allSteps, checklist })
+    recommendations: createMachineAcceptanceRecommendations({ outcome, failedRequired, steps: allSteps, checklist, rotaryCalibration })
   };
+}
+
+function createRotaryCalibrationEvidence(input, sheet) {
+  const required = sheet?.mode === "rotaryWrap" || sheet?.axisMapping?.rotaryOutputMode === "linearized-rotary-axis";
+  const thresholds = {
+    quarterTurnErrorDegMax: Number(sheet?.acceptanceThresholds?.quarterTurnErrorDegMax ?? 1),
+    halfTurnErrorDegMax: Number(sheet?.acceptanceThresholds?.halfTurnErrorDegMax ?? 1.5),
+    oneRevolutionErrorDegMax: Number(sheet?.acceptanceThresholds?.oneRevolutionErrorDegMax ?? 2),
+    backlashDegMax: Number(sheet?.acceptanceThresholds?.backlashDegMax ?? 0.5)
+  };
+  const expectedWrapPerRevolutionMm = Number(sheet?.axisMapping?.rotaryWrapPerRevolutionMm ?? 0) || null;
+  const directionOk = normalizeBoolean(input?.directionOk);
+  const measurements = {
+    quarterTurnDeg: normalizeOptionalNumber(input?.measuredQuarterTurnDeg ?? input?.quarterTurnDeg),
+    halfTurnDeg: normalizeOptionalNumber(input?.measuredHalfTurnDeg ?? input?.halfTurnDeg),
+    oneRevolutionDeg: normalizeOptionalNumber(input?.measuredFullTurnDeg ?? input?.measuredOneRevolutionDeg ?? input?.fullTurnDeg),
+    backlashDeg: normalizeOptionalNumber(input?.backlashDeg),
+    measuredWrapPerRevolutionMm: normalizeOptionalNumber(input?.measuredWrapPerRevolutionMm)
+  };
+  const checks = [
+    createRotaryMeasurementCheck("direction", "旋转方向", directionOk === true, directionOk, true, "direction-ok-required"),
+    createRotaryMeasurementCheck("quarter-turn", "90度标定", measurements.quarterTurnDeg != null && Math.abs(measurements.quarterTurnDeg - 90) <= thresholds.quarterTurnErrorDegMax, measurements.quarterTurnDeg, 90, `max-error-deg=${thresholds.quarterTurnErrorDegMax}`),
+    createRotaryMeasurementCheck("half-turn", "180度标定", measurements.halfTurnDeg != null && Math.abs(measurements.halfTurnDeg - 180) <= thresholds.halfTurnErrorDegMax, measurements.halfTurnDeg, 180, `max-error-deg=${thresholds.halfTurnErrorDegMax}`),
+    createRotaryMeasurementCheck("one-revolution", "360度标定", measurements.oneRevolutionDeg != null && Math.abs(measurements.oneRevolutionDeg - 360) <= thresholds.oneRevolutionErrorDegMax, measurements.oneRevolutionDeg, 360, `max-error-deg=${thresholds.oneRevolutionErrorDegMax}`),
+    createRotaryMeasurementCheck("backlash", "反向间隙", measurements.backlashDeg != null && measurements.backlashDeg <= thresholds.backlashDegMax, measurements.backlashDeg, `<=${thresholds.backlashDegMax}`, `max-backlash-deg=${thresholds.backlashDegMax}`)
+  ];
+  const missing = checks.filter((check) => check.status === "missing");
+  const failed = checks.filter((check) => check.status === "failed");
+  const suggestedWrapPerRevolutionMm = expectedWrapPerRevolutionMm && measurements.oneRevolutionDeg && measurements.oneRevolutionDeg > 0
+    ? Number((expectedWrapPerRevolutionMm * 360 / measurements.oneRevolutionDeg).toFixed(4))
+    : null;
+  const status = !required && missing.length === checks.length
+    ? "not-required"
+    : missing.length > 0
+      ? "review"
+      : failed.length > 0
+        ? "failed"
+        : "pass";
+  return {
+    schema: "hediao3d.rotary-calibration-evidence.v1",
+    required,
+    status,
+    axis: sheet?.axisMapping?.rotaryAxis ?? null,
+    expectedWrapPerRevolutionMm,
+    suggestedWrapPerRevolutionMm,
+    thresholds,
+    measurements,
+    checks,
+    summary: status === "pass"
+      ? "旋转夹具 90/180/360 度、方向和反向间隙实测通过。"
+      : status === "not-required"
+        ? "当前任务不要求旋转包裹标定。"
+        : status === "failed"
+          ? `旋转夹具标定存在 ${failed.length} 个失败项，不能作为生产验收通过依据。`
+          : `旋转夹具标定缺少 ${missing.length} 个实测项，需补齐后再试雕。`
+  };
+}
+
+function createRotaryMeasurementCheck(id, title, passed, measured, expected, criterion) {
+  const missing = measured == null || measured === "";
+  return {
+    id,
+    title,
+    status: missing ? "missing" : passed ? "pass" : "failed",
+    measured,
+    expected,
+    criterion
+  };
+}
+
+function normalizeOptionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function normalizeDownloadIntegrityEvidence(input, packageIntegrity = null) {
@@ -12272,7 +12394,7 @@ function normalizeAcceptanceAttachments(attachments, photoName) {
   return dedupeStrings(normalized).slice(0, 24);
 }
 
-function createMachineAcceptanceRecommendations({ outcome, failedRequired, steps, checklist }) {
+function createMachineAcceptanceRecommendations({ outcome, failedRequired, steps, checklist, rotaryCalibration = null }) {
   const recommendations = [];
   if (outcome !== "success") {
     recommendations.push("机床验收未达到成功状态，保持生产 NC 锁定，仅允许按门禁执行空跑或小料复核。");
@@ -12292,7 +12414,13 @@ function createMachineAcceptanceRecommendations({ outcome, failedRequired, steps
   if (steps.some((step) => step.id === "camotics-preview" && step.status !== "pass")) {
     recommendations.push("仿真/展开预览未确认前，应先补齐 CAMotics 或等效材料去除验证。");
   }
-  if (outcome === "success" && failedRequired.length === 0) {
+  if (rotaryCalibration?.required && rotaryCalibration.status !== "pass") {
+    const suggested = rotaryCalibration.suggestedWrapPerRevolutionMm
+      ? `；按 360 度实测可先试算每圈距离 ${rotaryCalibration.suggestedWrapPerRevolutionMm}mm`
+      : "";
+    recommendations.push(`旋转夹具标定未通过，先修正方向、反向间隙或 rotaryWrapPerRevolutionMm 后重新生成刀路${suggested}。`);
+  }
+  if (outcome === "success" && failedRequired.length === 0 && (!rotaryCalibration?.required || rotaryCalibration.status === "pass")) {
     recommendations.push("本次现场验收可作为生产证据之一；仍需结合真实 CAM、仿真和试雕反馈综合解锁。");
   }
   if (checklist?.unresolvedRisks?.length) {

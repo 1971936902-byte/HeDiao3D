@@ -98,6 +98,7 @@ async function main() {
 
   assert(rejectedAcceptance.record.allRequiredPassed === false, "mismatched hash acceptance must not pass required steps");
   assert(rejectedAcceptance.record.downloadIntegrity?.packageBinding?.status === "mismatch", "mismatched hash should create package binding mismatch");
+  assert(rejectedAcceptance.record.rotaryCalibration?.status !== "pass", "missing rotary calibration measurements must not pass");
   assert(rejectedAcceptance.record.downloadIntegrity.packageBinding.files?.some((file) => file.filename === "toolpath.nc" && file.issues.includes("sha256-mismatch")), "toolpath hash mismatch should be reported");
   assert(rejectedAcceptance.record.steps?.some((step) => step.id === "verify-download-integrity" && step.status === "failed"), "download integrity step should fail on hash mismatch");
   assert(rejectedAcceptance.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.status !== "pass"), "mismatched acceptance must not pass dossier machine evidence");
@@ -119,6 +120,14 @@ async function main() {
       neverMachineConfirmed: true,
       files: integrityEvidenceFiles
     },
+    rotaryCalibration: {
+      directionOk: true,
+      measuredQuarterTurnDeg: 90.3,
+      measuredHalfTurnDeg: 179.4,
+      measuredFullTurnDeg: 360.8,
+      backlashDeg: 0.28,
+      measuredWrapPerRevolutionMm: settings.rotaryWrapPerRevolutionMm
+    },
     steps: [
       { id: "read-package", passed: true, evidenceNote: "All package reports reviewed." },
       { id: "verify-download-integrity", passed: true, evidenceNote: "SHA-256 for machine candidate and air-run files verified." },
@@ -137,6 +146,8 @@ async function main() {
   assert(acceptance.record.downloadIntegrity?.allRequiredHashesVerified === true, "record should mark required hashes verified");
   assert(acceptance.record.downloadIntegrity?.neverMachineConfirmed === true, "record should confirm never-machine files");
   assert(acceptance.record.downloadIntegrity?.packageBinding?.status === "matched", "record should bind hashes to current package integrity");
+  assert(acceptance.record.rotaryCalibration?.status === "pass", `rotary calibration should pass, got ${acceptance.record.rotaryCalibration?.status}`);
+  assert(acceptance.record.rotaryCalibration.checks?.every((check) => check.status === "pass"), "all rotary calibration checks should pass");
   assert(acceptance.record.downloadIntegrity.packageBinding.files?.every((file) => file.status === "matched"), "all bound package files should match");
   assert(acceptance.record.steps?.some((step) => step.id === "verify-download-integrity" && step.status === "pass"), "download integrity step should pass");
   assert(acceptance.record.steps?.some((step) => step.id === "air-run" && step.status === "pass"), "air-run step should pass");
@@ -150,6 +161,7 @@ async function main() {
   assert(reloaded.result.summary.machineAcceptanceLog.recordCount >= 2, "job summary machine acceptance count missing");
   assert(reloaded.result.summary.machineAcceptanceLog.allRequiredPassed === true, "job summary should mark required steps passed");
   assert(reloaded.result.summary.machineAcceptanceLog.downloadIntegrityBound === "matched", "job summary should expose package integrity binding");
+  assert(reloaded.result.summary.machineAcceptanceLog.rotaryCalibrationStatus === "pass", "job summary should expose rotary calibration pass status");
 
   const recordArtifact = await getArtifactJson(job.id, "machine-acceptance-record.json");
   assert(recordArtifact.id === acceptance.record.id, "record artifact id mismatch");
@@ -162,6 +174,8 @@ async function main() {
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.summary.includes("机床验收记录")), "dossier missing machine acceptance evidence item");
   assert(dossierArtifact.crossChecks?.machineAcceptancePassed === true, "dossier should mark machine acceptance passed");
   assert(dossierArtifact.crossChecks?.machineAcceptanceIntegrityBound === true, "dossier should mark machine acceptance package binding passed");
+  assert(dossierArtifact.crossChecks?.rotaryCalibrationPassed === true, "dossier should mark rotary calibration passed");
+  assert(dossierArtifact.evidenceItems?.some((item) => item.id === "rotary-calibration-evidence" && item.status === "pass"), "dossier should include passed rotary calibration evidence item");
   assert(dossierArtifact.crossChecks?.fieldEvidencePackageBinding?.status === "partial", "dossier should mark field package binding partial before trial feedback");
 
   const feedback = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
