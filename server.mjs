@@ -2633,16 +2633,26 @@ function getNativeCamReadinessArtifact(checkId, filename, res) {
 }
 
 async function importNativeCamRealOutputAcceptance(req, res) {
-  const input = await readJson(req, 5_000_000).catch((error) => ({ error }));
+  const input = await readJson(req, 30_000_000).catch((error) => ({ error }));
   if (input.error) {
     return json(res, 400, { error: input.error instanceof Error ? input.error.message : "native CAM 真实输出验收 JSON 无法解析" });
   }
-  const acceptance = input.acceptance ?? input;
+  let zipBundle = null;
+  try {
+    zipBundle = input.acceptanceZipDataUrl ? extractNativeCamRealOutputAcceptanceZipBundle(input.acceptanceZipDataUrl) : null;
+  } catch (error) {
+    return json(res, 400, { error: error instanceof Error ? error.message : "native CAM 真实输出验收 ZIP 无法解析" });
+  }
+  const acceptance = input.acceptance ?? zipBundle?.acceptance ?? input;
+  const bindingInput = {
+    ...input,
+    ...(zipBundle?.validationReport && !input.validationReport ? { validationReport: zipBundle.validationReport } : {})
+  };
   const validation = validateNativeCamRealOutputAcceptance(acceptance);
   if (!validation.ok) {
     return json(res, 400, { error: validation.error });
   }
-  const sourceReportBinding = createNativeCamRealOutputSourceReportBinding(acceptance, input);
+  const sourceReportBinding = createNativeCamRealOutputSourceReportBinding(acceptance, bindingInput);
   if (sourceReportBinding.status === "mismatch") {
     return json(res, 400, {
       error: sourceReportBinding.summary,
@@ -2658,18 +2668,23 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     ...acceptance,
     importedAt: new Date().toISOString(),
     importSource: {
-      sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : "native-cam-real-output-acceptance.json",
+      sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : zipBundle?.sourceName ?? "native-cam-real-output-acceptance.json",
       route: "/api/orchestrator/native-cam/real-output-acceptance",
-      note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself."
+      note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself.",
+      zipBundle: zipBundle ? "imported-native-cam-real-output-bundle.zip" : null
     },
     sourceReportBinding
   };
   await writeFile(join(outputRoot, "native-cam-real-output-acceptance.json"), JSON.stringify(imported, null, 2), "utf8");
+  if (zipBundle) {
+    await writeFile(join(outputRoot, "imported-native-cam-real-output-bundle.zip"), zipBundle.sourceBuffer);
+  }
   await writeFile(join(outputRoot, "native-cam-real-output-import.json"), JSON.stringify({
     schema: "hediao3d.native-cam-real-output-import.v1",
     id: importId,
     createdAt: imported.importedAt,
     sourceName: imported.importSource.sourceName,
+    zipBundle: imported.importSource.zipBundle,
     acceptanceSchema: imported.schema,
     acceptanceLevel: imported.level ?? null,
     sourceReportBinding,
@@ -2683,9 +2698,29 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     ...summary,
     apiArtifacts: {
       json: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/native-cam-real-output-acceptance.json`,
-      importJson: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/native-cam-real-output-import.json`
+      importJson: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/native-cam-real-output-import.json`,
+      ...(zipBundle ? { zipBundle: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/imported-native-cam-real-output-bundle.zip` } : {})
     }
   });
+}
+
+function extractNativeCamRealOutputAcceptanceZipBundle(value) {
+  const buffer = decodeInlineFile(value);
+  const entries = extractZipEntries(buffer);
+  const findEntry = (predicate) => entries.find((entry) => predicate(entry.name.toLowerCase()));
+  const acceptanceEntry = findEntry((name) => /(^|\/)native-cam-real-output-acceptance\.json$/.test(name));
+  if (!acceptanceEntry) throw new Error("ZIP 中找不到 native-cam-real-output-acceptance.json。");
+  const validationEntry = findEntry((name) => /(^|\/)v3-external-adapter-validation\.json$/.test(name));
+  return {
+    sourceBuffer: buffer,
+    sourceName: "native-cam-real-output-bundle.zip",
+    acceptance: parseJsonBuffer(acceptanceEntry.content, "native-cam-real-output-acceptance.json"),
+    validationReport: validationEntry ? parseJsonBuffer(validationEntry.content, "v3-external-adapter-validation.json") : null,
+    entries: entries.map((entry) => ({
+      name: entry.name,
+      sizeBytes: entry.content.length
+    }))
+  };
 }
 
 function createNativeCamRealOutputSourceReportBinding(acceptance, input) {

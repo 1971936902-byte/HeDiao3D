@@ -47,9 +47,24 @@ async function main() {
   assert(artifact.adapters?.some((adapter) => adapter.classification === "production-candidate"), "artifact should preserve production-candidate classification");
   assert(artifact.sourceReportBinding?.status === "matched", "artifact should preserve source report binding");
 
+  const zipImported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
+    sourceName: "native-cam-real-output-bundle.zip",
+    acceptanceZipDataUrl: toZipDataUrl({
+      "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256), null, 2),
+      "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2)
+    })
+  });
+  assert(zipImported.schema === "hediao3d.native-cam-real-output-acceptance.v1", "zip imported acceptance schema mismatch");
+  assert(zipImported.sourceReportBindingStatus === "matched", "zip imported acceptance should bind validation report");
+  assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
+  const zipArtifact = await getJson(zipImported.apiArtifacts.json);
+  assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
+  const zipImportReport = await getJson(zipImported.apiArtifacts.importJson);
+  assert(zipImportReport.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import report should preserve source bundle filename");
+
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.nativeCamRealOutputAcceptance, "readiness should include imported native CAM real output acceptance");
-  assert(readiness.nativeCamRealOutputAcceptance.id === imported.id, "readiness should pick latest imported acceptance");
+  assert(readiness.nativeCamRealOutputAcceptance.id === zipImported.id, "readiness should pick latest imported acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.level === "ready", "readiness should preserve acceptance level");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose matched source report binding");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
@@ -62,7 +77,7 @@ async function main() {
 
   console.log(JSON.stringify({
     ok: true,
-    importId: imported.id,
+    importId: zipImported.id,
     readinessId: readiness.id,
     level: readiness.nativeCamRealOutputAcceptance.level,
     candidates: readiness.nativeCamRealOutputAcceptance.productionCandidateCount
@@ -125,6 +140,31 @@ function createAcceptanceFixture(sourceReportSha256) {
       }
     ]
   };
+}
+
+function toZipDataUrl(files) {
+  return `data:application/zip;base64,${createStoredZip(files).toString("base64")}`;
+}
+
+function createStoredZip(files) {
+  const chunks = [];
+  for (const [name, content] of Object.entries(files)) {
+    const nameBytes = Buffer.from(name, "utf8");
+    const data = Buffer.from(String(content), "utf8");
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0x0800, 6);
+    header.writeUInt16LE(0, 8);
+    header.writeUInt32LE(0, 10);
+    header.writeUInt32LE(0, 14);
+    header.writeUInt32LE(data.length, 18);
+    header.writeUInt32LE(data.length, 22);
+    header.writeUInt16LE(nameBytes.length, 26);
+    header.writeUInt16LE(0, 28);
+    chunks.push(header, nameBytes, data);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function getJson(path) {

@@ -2022,6 +2022,7 @@ export function App() {
   const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceFile, setV3NativeCamAcceptanceFile] = useState<File | null>(null);
+  const [v3NativeCamAcceptanceZipFile, setV3NativeCamAcceptanceZipFile] = useState<File | null>(null);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -2376,19 +2377,21 @@ export function App() {
   };
 
   const handleImportV3NativeCamRealOutputAcceptance = async () => {
-    if (!v3NativeCamAcceptanceFile) {
-      setV3Status("请先选择 native-cam-real-output-acceptance.json。");
+    if (!v3NativeCamAcceptanceFile && !v3NativeCamAcceptanceZipFile) {
+      setV3Status("请先选择 native-cam-real-output-acceptance.json，或选择 Linux 回传的验收 ZIP。");
       return;
     }
     setIsV3NativeCamAcceptanceImporting(true);
     try {
-      const acceptance = JSON.parse(await v3NativeCamAcceptanceFile.text());
+      const acceptanceZipDataUrl = v3NativeCamAcceptanceZipFile ? await fileToDataUrl(v3NativeCamAcceptanceZipFile) : null;
+      const acceptance = v3NativeCamAcceptanceFile ? JSON.parse(await v3NativeCamAcceptanceFile.text()) : null;
       const response = await fetch("/api/orchestrator/native-cam/real-output-acceptance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          acceptance,
-          sourceName: v3NativeCamAcceptanceFile.name
+          ...(acceptance ? { acceptance } : {}),
+          ...(acceptanceZipDataUrl ? { acceptanceZipDataUrl } : {}),
+          sourceName: v3NativeCamAcceptanceZipFile?.name ?? v3NativeCamAcceptanceFile?.name ?? "native-cam-real-output-acceptance"
         })
       });
       const data = await response.json().catch(() => ({}));
@@ -2398,9 +2401,10 @@ export function App() {
         category: "cam",
         status: data.level === "ready" ? "ok" : data.level === "critical" ? "error" : "warning",
         title: "导入真实 CAM 输出验收",
-        detail: `${v3NativeCamAcceptanceFile.name} / ${data.summary ?? data.level ?? "unknown"}`
+        detail: `${v3NativeCamAcceptanceZipFile?.name ?? v3NativeCamAcceptanceFile?.name ?? "native-cam-acceptance"} / ${data.summary ?? data.level ?? "unknown"}`
       });
       setV3NativeCamAcceptanceFile(null);
+      setV3NativeCamAcceptanceZipFile(null);
       await refreshV3Readiness();
     } catch (error) {
       const message = error instanceof Error ? error.message : "真实 CAM 输出验收导入失败";
@@ -5743,7 +5747,16 @@ export function App() {
                   )}
                   <div className="v3-server-package">
                     <strong>真实输出验收回填</strong>
-                    <small>Linux CAM 服务器执行 native-cam-real-output-check.sh 后，选择生成的 native-cam-real-output-acceptance.json 回填到总门禁。</small>
+                    <small>Linux CAM 服务器执行 native-cam-real-output-check.sh 后，可直接选择结果 ZIP，或单独选择 native-cam-real-output-acceptance.json 回填到总门禁。</small>
+                    <label className="v3-file-picker">
+                      <UploadCloud size={16} />
+                      <span>{v3NativeCamAcceptanceZipFile ? v3NativeCamAcceptanceZipFile.name : "选择验收ZIP"}</span>
+                      <input
+                        accept=".zip,application/zip"
+                        type="file"
+                        onChange={(event) => setV3NativeCamAcceptanceZipFile(event.target.files?.[0] ?? null)}
+                      />
+                    </label>
                     <label className="v3-file-picker">
                       <UploadCloud size={16} />
                       <span>{v3NativeCamAcceptanceFile ? v3NativeCamAcceptanceFile.name : "选择验收JSON"}</span>
@@ -5755,7 +5768,7 @@ export function App() {
                     </label>
                     <button
                       className="demo-action package-action"
-                      disabled={!v3NativeCamAcceptanceFile || isV3NativeCamAcceptanceImporting}
+                      disabled={(!v3NativeCamAcceptanceFile && !v3NativeCamAcceptanceZipFile) || isV3NativeCamAcceptanceImporting}
                       onClick={handleImportV3NativeCamRealOutputAcceptance}
                       type="button"
                     >
