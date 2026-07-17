@@ -909,6 +909,25 @@ type V3OrchestratorJob = {
         reviewCount: number;
         blockedCount: number;
         summary: string;
+        crossChecks?: {
+          unlockMatrixPass?: boolean;
+          realMaterialRemovalVerified?: boolean;
+          camoticsInputIdentityStatus?: string | null;
+          camoticsCliRunPackageBindingStatus?: string | null;
+          camoticsMotionConsistencyStatus?: string | null;
+          camoticsArtifactEvidenceStatus?: string | null;
+          camHandoffReady?: boolean;
+          neutralSourceBindingStatus?: string | null;
+          neutralSourceBindingPass?: boolean;
+          ncStaticReady?: boolean;
+          controllerDialectReady?: boolean;
+          machineAcceptanceRecords?: number;
+          latestMachineAcceptanceOutcome?: string | null;
+          machineAcceptancePassed?: boolean;
+          machineAcceptanceIntegrityBound?: boolean;
+          trialFeedbackRecords?: number;
+          optimizationStatus?: string | null;
+        };
         evidenceItems?: Array<{
           id: string;
           label: string;
@@ -5895,6 +5914,17 @@ export function App() {
                       ))}
                     </div>
                   ) : null}
+                  {v3Job.result.summary.productionEvidenceDossier.crossChecks ? (
+                    <div className="v3-evidence-grid compact">
+                      {createProductionCrossCheckTiles(v3Job.result.summary.productionEvidenceDossier.crossChecks).map((item) => (
+                        <div className={item.level} key={item.label} title={item.detail}>
+                          <span>{item.label}</span>
+                          <strong>{item.value}</strong>
+                          <small>{item.detail}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </>
               )}
               {v3Job?.result?.summary.machineAcceptanceLog && (
@@ -7047,6 +7077,60 @@ function formatEvidenceItemStatus(status: "pass" | "review" | "block") {
   if (status === "pass") return "通过";
   if (status === "block") return "阻断";
   return "复核";
+}
+
+function createProductionCrossCheckTiles(crossChecks: NonNullable<NonNullable<TaskJob["result"]>["summary"]["productionEvidenceDossier"]>["crossChecks"]) {
+  if (!crossChecks) return [];
+  return [
+    {
+      label: "CAM交接",
+      value: crossChecks.camHandoffReady ? "就绪" : "待复核",
+      detail: crossChecks.realMaterialRemovalVerified ? "真实材料去除已绑定" : "仍需真实CAM/材料去除证据",
+      level: crossChecks.camHandoffReady && crossChecks.realMaterialRemovalVerified ? "ok" : "warning"
+    },
+    {
+      label: "Neutral源",
+      value: crossChecks.neutralSourceBindingPass ? "已绑定" : "未通过",
+      detail: `源绑定：${crossChecks.neutralSourceBindingStatus ?? "未知"}`,
+      level: crossChecks.neutralSourceBindingPass ? "ok" : "critical"
+    },
+    {
+      label: "CAMotics输入",
+      value: crossChecks.camoticsInputIdentityStatus === "matched" ? "匹配" : "不匹配",
+      detail: `输入身份：${crossChecks.camoticsInputIdentityStatus ?? "缺失"} / 包绑定：${crossChecks.camoticsCliRunPackageBindingStatus ?? "缺失"}`,
+      level: crossChecks.camoticsInputIdentityStatus === "matched" && crossChecks.camoticsCliRunPackageBindingStatus === "bound" ? "ok" : "critical"
+    },
+    {
+      label: "CAMotics运动",
+      value: crossChecks.camoticsMotionConsistencyStatus === "matched" ? "一致" : "待确认",
+      detail: `运动一致性：${crossChecks.camoticsMotionConsistencyStatus ?? "缺失"}`,
+      level: crossChecks.camoticsMotionConsistencyStatus === "matched" ? "ok" : "critical"
+    },
+    {
+      label: "仿真产物",
+      value: crossChecks.camoticsArtifactEvidenceStatus === "complete" ? "完整" : "不完整",
+      detail: `产物证据：${crossChecks.camoticsArtifactEvidenceStatus ?? "缺失"}`,
+      level: crossChecks.camoticsArtifactEvidenceStatus === "complete" ? "ok" : "critical"
+    },
+    {
+      label: "NC静态",
+      value: crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "通过" : "待复核",
+      detail: `静态检查 ${crossChecks.ncStaticReady ? "通过" : "未通过"} / 控制器方言 ${crossChecks.controllerDialectReady ? "匹配" : "待确认"}`,
+      level: crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "ok" : "warning"
+    },
+    {
+      label: "机床验收",
+      value: crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "通过" : "未解锁",
+      detail: `记录 ${crossChecks.machineAcceptanceRecords ?? 0} / 最新 ${crossChecks.latestMachineAcceptanceOutcome ?? "无"} / 完整性 ${crossChecks.machineAcceptanceIntegrityBound ? "已绑定" : "未绑定"}`,
+      level: crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "ok" : "critical"
+    },
+    {
+      label: "试雕反馈",
+      value: `${crossChecks.trialFeedbackRecords ?? 0} 条`,
+      detail: `优化状态：${crossChecks.optimizationStatus ?? "未生成"}`,
+      level: (crossChecks.trialFeedbackRecords ?? 0) > 0 ? "ok" : "warning"
+    }
+  ];
 }
 
 function calculateAverageActualMinutes(feedback: MachineFeedback[]) {
