@@ -43,12 +43,16 @@ async function main() {
   assert(full.externalCamHandoffs.requiredEngines.includes("freecad"), "external CAM handoff summary missing FreeCAD");
   assert(full.externalCamHandoffs.requiredEngines.includes("blendercam"), "external CAM handoff summary missing BlenderCAM");
   assert(full.externalCamHandoffs.requiredEngines.includes("opencamlib"), "external CAM handoff summary missing OpenCAMLib");
+  assert(Object.hasOwn(full, "latestTrialFeedback"), "full readiness artifact missing latest trial feedback field");
+  assert(Object.hasOwn(full, "latestMachineAcceptance"), "full readiness artifact missing latest machine acceptance field");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
   const markdown = await markdownArtifact.text();
   assert(markdown.includes("V3 Readiness Report"), "readiness markdown missing heading");
   assert(markdown.includes("CAM server config"), "readiness markdown missing CAM server config summary");
+  assert(markdown.includes("Latest trial feedback"), "readiness markdown missing trial feedback summary");
+  assert(markdown.includes("Latest machine acceptance"), "readiness markdown missing machine acceptance summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
 
   const camServerConfigArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.camServerConfig}`);
@@ -134,6 +138,16 @@ function validateReadiness(report, label) {
   if (report.camoticsImport) {
     assert(report.camoticsImport.schema === "hediao3d.camotics-import-contract.v1", `${label} camoticsImport schema mismatch`);
     assert(typeof report.camoticsImport.productionEvidenceEligible === "boolean", `${label} camoticsImport eligibility missing`);
+  }
+  assert(Object.hasOwn(report, "latestTrialFeedback"), `${label} missing latestTrialFeedback field`);
+  if (report.latestTrialFeedback) {
+    assert(report.latestTrialFeedback.schema === "hediao3d.trial-feedback-log.v1", `${label} latestTrialFeedback schema mismatch`);
+    assert(typeof report.latestTrialFeedback.recordCount === "number", `${label} latestTrialFeedback count missing`);
+  }
+  assert(Object.hasOwn(report, "latestMachineAcceptance"), `${label} missing latestMachineAcceptance field`);
+  if (report.latestMachineAcceptance) {
+    assert(report.latestMachineAcceptance.schema === "hediao3d.machine-acceptance-log.v1", `${label} latestMachineAcceptance schema mismatch`);
+    assert(typeof report.latestMachineAcceptance.recordCount === "number", `${label} latestMachineAcceptance count missing`);
   }
   assert(Object.hasOwn(report, "latestEvidenceDossier"), `${label} missing latestEvidenceDossier field`);
   if (report.latestEvidenceDossier) {

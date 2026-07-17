@@ -522,6 +522,8 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
   const latestJob = getLatestOrchestratorJobSummary();
   const latestEvidenceDossier = getLatestProductionEvidenceDossierSummary();
+  const latestTrialFeedback = getLatestJobLogSummary("trial-feedback-log.json", createTrialFeedbackLogPublicSummary);
+  const latestMachineAcceptance = getLatestJobLogSummary("machine-acceptance-log.json", createMachineAcceptanceLogPublicSummary);
   const camServerConfig = createDeploymentCamServerConfigReport(reportId);
   await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
   const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
@@ -545,6 +547,8 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     neutralImport,
     camoticsImport,
     latestJob,
+    latestTrialFeedback,
+    latestMachineAcceptance,
     latestEvidenceDossier,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
@@ -1044,6 +1048,61 @@ function createProductionEvidenceDossierSummaryFromJob(job) {
   };
 }
 
+function getLatestJobLogSummary(filename, summarizer) {
+  const candidates = [];
+  for (const job of orchestratorJobs.values()) {
+    const summary = createJobLogSummaryFromJob(job, filename, summarizer);
+    if (summary) candidates.push(summary);
+  }
+  const root = join(process.cwd(), "public", "orchestrator-jobs");
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = readJobManifest(entry.name);
+      const summary = manifest ? createJobLogSummaryFromJob(manifest, filename, summarizer) : null;
+      if (summary) candidates.push(summary);
+    }
+  }
+  return candidates
+    .sort((a, b) => new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() - new Date(a.updatedAt ?? a.createdAt ?? 0).getTime())[0] ?? null;
+}
+
+function createJobLogSummaryFromJob(job, filename, summarizer) {
+  const logPath = job?.workDir ? join(job.workDir, filename) : null;
+  if (!logPath || !existsSync(logPath)) return null;
+  const log = readJsonFileSafe(logPath);
+  if (!log) return null;
+  return summarizer(log, job);
+}
+
+function createTrialFeedbackLogPublicSummary(log, job) {
+  return {
+    schema: log.schema ?? "unknown",
+    jobId: log.jobId ?? job.id,
+    createdAt: log.createdAt ?? null,
+    updatedAt: log.updatedAt ?? null,
+    recordCount: Number(log.recordCount ?? (Array.isArray(log.records) ? log.records.length : 0)),
+    latestRecordId: log.latestRecordId ?? null,
+    latestOutcome: log.latestOutcome ?? null,
+    latestIssues: Array.isArray(log.records?.[0]?.issues) ? log.records[0].issues.slice(0, 8) : [],
+    artifact: publicArtifactUrl(log.jobId ?? job.id, "trial-feedback-log.json")
+  };
+}
+
+function createMachineAcceptanceLogPublicSummary(log, job) {
+  return {
+    schema: log.schema ?? "unknown",
+    jobId: log.jobId ?? job.id,
+    createdAt: log.createdAt ?? null,
+    updatedAt: log.updatedAt ?? null,
+    recordCount: Number(log.recordCount ?? (Array.isArray(log.records) ? log.records.length : 0)),
+    latestRecordId: log.latestRecordId ?? null,
+    latestOutcome: log.latestOutcome ?? null,
+    latestAllRequiredPassed: Boolean(log.latestAllRequiredPassed),
+    artifact: publicArtifactUrl(log.jobId ?? job.id, "machine-acceptance-log.json")
+  };
+}
+
 function createEngineHandoffStatus(externalCamHandoffs, engineId) {
   const handoff = externalCamHandoffs?.byEngine?.[engineId];
   if (!handoff) return "pending";
@@ -1257,6 +1316,8 @@ function createV3ReadinessPublicSummary(report, reportId) {
     neutralImport: report.neutralImport ?? null,
     camoticsImport: report.camoticsImport ?? null,
     latestJob: report.latestJob,
+    latestTrialFeedback: report.latestTrialFeedback ?? null,
+    latestMachineAcceptance: report.latestMachineAcceptance ?? null,
     latestEvidenceDossier: report.latestEvidenceDossier ?? null,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
@@ -1345,6 +1406,8 @@ function createV3ReadinessMarkdown(report) {
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
     `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
+    `- Latest trial feedback: ${report.latestTrialFeedback ? `${report.latestTrialFeedback.recordCount} records / ${report.latestTrialFeedback.latestOutcome ?? "unknown"}` : "missing"}`,
+    `- Latest machine acceptance: ${report.latestMachineAcceptance ? `${report.latestMachineAcceptance.recordCount} records / ${report.latestMachineAcceptance.latestOutcome ?? "unknown"} / required=${report.latestMachineAcceptance.latestAllRequiredPassed ? "pass" : "review"}` : "missing"}`,
     `- Production evidence dossier: ${report.latestEvidenceDossier ? `${report.latestEvidenceDossier.status} / pass=${report.latestEvidenceDossier.passedCount} review=${report.latestEvidenceDossier.reviewCount} block=${report.latestEvidenceDossier.blockedCount}` : "missing"}`,
     ""
   ];

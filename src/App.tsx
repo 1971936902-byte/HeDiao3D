@@ -1053,6 +1053,26 @@ type V3ReadinessSummary = {
     outputRoot: string | null;
   } | null;
   latestJob: V3JobSummary | null;
+  latestTrialFeedback: {
+    schema: string;
+    jobId: string;
+    updatedAt: string | null;
+    recordCount: number;
+    latestRecordId: string | null;
+    latestOutcome: MachineFeedback["outcome"] | string | null;
+    latestIssues: string[];
+    artifact: string;
+  } | null;
+  latestMachineAcceptance: {
+    schema: string;
+    jobId: string;
+    updatedAt: string | null;
+    recordCount: number;
+    latestRecordId: string | null;
+    latestOutcome: MachineFeedback["outcome"] | string | null;
+    latestAllRequiredPassed: boolean;
+    artifact: string;
+  } | null;
   apiArtifacts?: {
     json?: string;
     markdown?: string;
@@ -4511,6 +4531,14 @@ export function App() {
                   <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     CAMotics导入：{v3Readiness.camoticsImport ? `${v3Readiness.camoticsImport.status ?? "-"} · ${v3Readiness.camoticsImport.synthetic ? "synthetic" : "真实结果"}` : "未验证"}
                     {v3Readiness.camoticsImport?.riskLevel ? ` · ${v3Readiness.camoticsImport.riskLevel}` : ""}
+                  </small>
+                  <small className={v3Readiness.latestTrialFeedback ? v3Readiness.latestTrialFeedback.latestOutcome === "success" ? "v3-inline-ok" : v3Readiness.latestTrialFeedback.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
+                    最新试雕反馈：{v3Readiness.latestTrialFeedback ? `${v3Readiness.latestTrialFeedback.recordCount} 条 · ${v3Readiness.latestTrialFeedback.latestOutcome ?? "-"}` : "未回填"}
+                    {v3Readiness.latestTrialFeedback?.latestIssues?.length ? ` · ${v3Readiness.latestTrialFeedback.latestIssues.join("、")}` : ""}
+                  </small>
+                  <small className={v3Readiness.latestMachineAcceptance ? v3Readiness.latestMachineAcceptance.latestAllRequiredPassed ? "v3-inline-ok" : v3Readiness.latestMachineAcceptance.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
+                    最新机床验收：{v3Readiness.latestMachineAcceptance ? `${v3Readiness.latestMachineAcceptance.recordCount} 条 · ${v3Readiness.latestMachineAcceptance.latestOutcome ?? "-"}` : "未回填"}
+                    {v3Readiness.latestMachineAcceptance ? ` · 必需项 ${v3Readiness.latestMachineAcceptance.latestAllRequiredPassed ? "已通过" : "待复核"}` : ""}
                   </small>
                   <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
