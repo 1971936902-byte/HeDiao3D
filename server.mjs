@@ -546,6 +546,7 @@ async function createV3ReadinessReport(req, res) {
   const report = await buildV3ReadinessReport(reportId, outputRoot);
   await writeFile(join(outputRoot, "v3-readiness-report.json"), JSON.stringify(report, null, 2), "utf8");
   await writeFile(join(outputRoot, "v3-readiness-report.md"), createV3ReadinessMarkdown(report), "utf8");
+  await writeFile(join(outputRoot, "v3-goal-audit.md"), createV3GoalAuditMarkdown(report.goalAudit), "utf8");
   await writeFile(join(outputRoot, "v3-acceptance-runbook.sh"), createV3AcceptanceRunbookShell(report), "utf8");
   return json(res, 200, createV3ReadinessPublicSummary(report, reportId));
 }
@@ -586,6 +587,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
   const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const goalAudit = createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, postprocessHandoffReadiness, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -595,6 +597,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     summary: gates.summary,
     gates,
     acceptancePlan,
+    goalAudit,
     diagnostics,
     nativeCam,
     camServerConfig,
@@ -635,6 +638,221 @@ function createDeploymentCamServerConfigReport(reportId) {
     nativeCamReadiness,
     engineReadiness
   });
+}
+
+function createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, postprocessHandoffReadiness, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
+  const externalHandoffCount = externalCamHandoffs?.completedEngines?.length ?? 0;
+  const requiredExternalEngines = externalCamHandoffs?.requiredEngines ?? ["freecad", "blendercam", "opencamlib"];
+  const allExternalEnginesCovered = requiredExternalEngines.length > 0 && requiredExternalEngines.every((engineId) => externalCamHandoffs?.byEngine?.[engineId]?.status === "completed");
+  const handoffAudit = adapterValidation?.handoffClassificationAudit ?? null;
+  const adapterAuditClean = Boolean(handoffAudit && handoffAudit.unsafeCount === 0 && handoffAudit.productionCandidateCount > 0 && handoffAudit.unboundProductionCandidateCount === 0);
+  const nativeCamReady = nativeCam?.summary?.level === "ready";
+  const nativeRealOutputReady = nativeCamRealOutputAcceptance?.level === "ready" && (!nativeCamRealOutputAcceptance.sourceReportBindingRequired || nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched");
+  const realCamChainReady = nativeCamReady && nativeRealOutputReady && adapterAuditClean && allExternalEnginesCovered;
+  const camoticsReady = Boolean(
+    readinessCamoticsEvidence?.productionEvidenceEligible
+    && readinessCamoticsEvidence?.synthetic === false
+    && readinessCamoticsEvidence?.inputIdentityStatus === "matched"
+    && readinessCamoticsEvidence?.motionConsistencyStatus === "matched"
+    && readinessCamoticsEvidence?.machineContextStatus === "matched"
+  );
+  const postprocessReady = Boolean(
+    postprocessHandoffReadiness?.status === "ready"
+    || latestEvidenceDossier?.crossChecks?.neutralSourceBindingPass
+    || latestEvidenceDossier?.crossChecks?.externalGcodeSourceBindingPass
+  );
+  const trialFeedbackReady = Boolean(latestTrialFeedback?.latestOutcome === "success" && latestTrialFeedback?.latestDownloadIntegrityBound === "matched");
+  const machineAcceptanceReady = Boolean(latestMachineAcceptance?.latestOutcome === "success" && latestMachineAcceptance?.latestAllRequiredPassed && latestMachineAcceptance?.latestDownloadIntegrityBound === "matched");
+  const fieldReady = trialFeedbackReady && machineAcceptanceReady;
+  const productionAuditReady = Boolean(latestEvidenceDossier?.crossChecks?.productionReadinessAudit?.allowProductionPackage === true);
+
+  const layers = [
+    createV3GoalAuditLayer({
+      id: "frontend-hediao3d",
+      title: "前端 HeDiao3D",
+      status: latestJob ? "trial-ready" : "partial",
+      requiredCapabilities: ["素材/模型导入", "模型预览", "工艺参数", "中文流程", "报告", "安全下载"],
+      evidence: [
+        "V3 聚焦模式已收起旧版生产感按钮",
+        latestJob ? `最近 job: ${latestJob.id} / ${latestJob.status} / ${latestJob.packageLevel ?? "unknown"}` : "尚未找到最近 V3 job",
+        "安全试雕包、CAMotics Linux 包、证据审查包入口已归入 V3 主线"
+      ],
+      missing: latestJob ? [] : ["需要至少一个固定佛头样件 job 作为验收基线"],
+      nextActions: latestJob
+        ? ["继续把总门禁缺口直接显示成“下一步证据”，不要恢复旧版直接生产下载。"]
+        : ["导入固定佛头 STL/GLB，运行一次 V3 小闭环。"],
+      deferredOrHidden: ["旧版浮雕热力图主入口", "旧版直接 NC/精加工下载入口", "未验收生产包入口"]
+    }),
+    createV3GoalAuditLayer({
+      id: "backend-orchestrator",
+      title: "后端 Orchestrator",
+      status: latestJob && gates?.level !== "critical" ? "trial-ready" : "partial",
+      requiredCapabilities: ["任务队列", "文件缓存", "模型修复", "外部 CAM 调用", "证据索引", "下载包门禁"],
+      evidence: [
+        `诊断: ${diagnostics?.level ?? "unknown"}`,
+        latestJob ? `最近 job: ${latestJob.id}` : "缺少 job",
+        `总门禁: ${gates?.level ?? "unknown"} / production=${gates?.allowProductionNc ? "yes" : "no"}`,
+        latestEvidenceDossier ? `证据档案: ${latestEvidenceDossier.status}` : "缺少 production-evidence-dossier"
+      ],
+      missing: [
+        ...(!runbookResult?.identityValid ? ["Linux/部署侧 runbook 结果未绑定最新 readiness"] : []),
+        ...(!latestEvidenceDossier ? ["缺少可审计的 job 级 production-evidence-dossier"] : [])
+      ],
+      nextActions: [
+        "继续以 Orchestrator 为唯一下载包生成入口。",
+        "所有外部 CAM、仿真、试雕、机床验收结果都回填到同一 job。"
+      ]
+    }),
+    createV3GoalAuditLayer({
+      id: "cam-engine-layer",
+      title: "CAM 引擎层",
+      status: realCamChainReady ? "ready" : nativeRealOutputReady || externalHandoffCount > 0 ? "partial" : "blocked",
+      requiredCapabilities: ["FreeCAD CAM", "BlenderCAM/FabexCNC", "OpenCAMLib", "真实候选刀路", "输入哈希绑定"],
+      evidence: [
+        `Native CAM: ${nativeCam?.summary?.level ?? "missing"}`,
+        `CAM 服务配置: ${camServerConfig?.status ?? "missing"}`,
+        `真实输出验收: ${nativeCamRealOutputAcceptance?.level ?? "missing"}`,
+        `Adapter handoff audit: production=${handoffAudit?.productionCandidateCount ?? 0} / unsafe=${handoffAudit?.unsafeCount ?? "missing"} / unbound=${handoffAudit?.unboundProductionCandidateCount ?? "missing"}`,
+        `外部引擎闭环: ${externalHandoffCount}/${requiredExternalEngines.length}`
+      ],
+      missing: [
+        ...(!nativeCamReady ? ["Linux CAM 环境未全部就绪"] : []),
+        ...(!nativeRealOutputReady ? ["Native CAM 真实输出验收未 ready 或缺少源报告绑定"] : []),
+        ...(!adapterAuditClean ? ["Adapter handoff audit 仍有 unsafe、无 production-candidate 或输入未绑定"] : []),
+        ...(!allExternalEnginesCovered ? [`FreeCAD/BlenderCAM/OpenCAMLib 还未全部完成闭环：${externalHandoffCount}/${requiredExternalEngines.length}`] : [])
+      ],
+      nextActions: [
+        "在 Linux CAM 服务器运行真实 FreeCAD/BlenderCAM/OpenCAMLib 输出。",
+        "回填 native-cam-real-output-bundle.zip，确保与 adapter 验收报告同源。"
+      ]
+    }),
+    createV3GoalAuditLayer({
+      id: "simulation-layer",
+      title: "仿真层",
+      status: camoticsReady ? "ready" : readinessCamoticsEvidence?.realMaterialRemovalVerified ? "partial" : "blocked",
+      requiredCapabilities: ["CAMotics 材料去除仿真", "自研旋转包裹预览", "离料空跑验证", "机床上下文绑定"],
+      evidence: [
+        `CAMotics evidence: ${readinessCamoticsEvidence?.status ?? "missing"} / source=${readinessCamoticsEvidence?.source ?? "missing"}`,
+        `input=${readinessCamoticsEvidence?.inputIdentityStatus ?? "missing"} / motion=${readinessCamoticsEvidence?.motionConsistencyStatus ?? "missing"} / machine=${readinessCamoticsEvidence?.machineContextStatus ?? "missing"}`,
+        externalHandoff ? `自研旋转包裹/外部 handoff: ${externalHandoff.status} / synthetic=${externalHandoff.syntheticSimulation ? "yes" : "no"}` : "缺少外部 handoff 小闭环"
+      ],
+      missing: [
+        ...(!camoticsReady ? ["缺少非 synthetic 且绑定 input/motion/machine 的材料去除仿真证据"] : []),
+        ...(!externalHandoff || externalHandoff.syntheticSimulation ? ["需要真实 CAMotics/等效仿真替换 synthetic 协议验证"] : [])
+      ],
+      nextActions: [
+        "下载当前 job 的 CAMotics Linux 仿真包，在 Linux/CAMotics 侧生成 result bundle。",
+        "回填 camotics-result-bundle.zip 后重新生成 readiness。"
+      ]
+    }),
+    createV3GoalAuditLayer({
+      id: "postprocess-layer",
+      title: "后处理层",
+      status: postprocessReady ? "trial-ready" : "partial",
+      requiredCapabilities: ["三轴控制器 + Y轴旋转夹具", "X长度/Y旋转/Z刀深映射", "NC 静态分析", "空跑/试雕包"],
+      evidence: [
+        `后处理交接: ${postprocessHandoffReadiness?.status ?? "missing"} / ${postprocessHandoffReadiness?.source ?? "missing"}`,
+        latestEvidenceDossier ? `neutral=${latestEvidenceDossier.crossChecks?.neutralSourceBindingStatus ?? "missing"} / controller=${latestEvidenceDossier.crossChecks?.controllerDialectReady ? "ready" : "review"}` : "缺少 evidence dossier"
+      ],
+      missing: postprocessReady ? [] : ["需要真实 CAM 输出与后处理输入源绑定，而不是仅靠内置 fallback"],
+      nextActions: [
+        "保留自研后处理，但只处理已绑定来源的 neutral/G-code 候选。",
+        "生产 NC 前继续要求 NC 静态分析、控制器方言和包完整性检查。"
+      ]
+    }),
+    createV3GoalAuditLayer({
+      id: "field-evidence-closure",
+      title: "现场证据闭环",
+      status: productionAuditReady ? "ready" : fieldReady ? "partial" : "blocked",
+      requiredCapabilities: ["安全试雕包", "离料空跑", "软料试雕", "试雕反馈", "机床验收", "同包哈希绑定"],
+      evidence: [
+        `试雕反馈: ${latestTrialFeedback?.recordCount ?? 0} / ${latestTrialFeedback?.latestOutcome ?? "missing"} / bound=${latestTrialFeedback?.latestDownloadIntegrityBound ?? "missing"}`,
+        `机床验收: ${latestMachineAcceptance?.recordCount ?? 0} / ${latestMachineAcceptance?.latestOutcome ?? "missing"} / bound=${latestMachineAcceptance?.latestDownloadIntegrityBound ?? "missing"}`,
+        `productionReadinessAudit: ${latestEvidenceDossier?.crossChecks?.productionReadinessAudit?.status ?? "missing"} / allow=${productionAuditReady ? "yes" : "no"}`
+      ],
+      missing: [
+        ...(!trialFeedbackReady ? ["缺少成功且绑定当前下载包哈希的试雕反馈"] : []),
+        ...(!machineAcceptanceReady ? ["缺少成功且绑定当前下载包哈希的机床验收"] : []),
+        ...(!productionAuditReady ? ["productionReadinessAudit 尚未允许正式生产包"] : [])
+      ],
+      nextActions: [
+        "使用同一 job 的安全试雕包完成离料空跑和低风险试雕。",
+        "回填 trial-feedback 和 machine-acceptance，确认 package-integrity 匹配。"
+      ]
+    })
+  ];
+  const statusRank = { ready: 0, "trial-ready": 1, partial: 2, blocked: 3 };
+  const worst = layers.reduce((current, layer) => statusRank[layer.status] > statusRank[current.status] ? layer : current, layers[0]);
+  const blockedCount = layers.filter((layer) => layer.status === "blocked").length;
+  const partialCount = layers.filter((layer) => layer.status === "partial").length;
+  const readyCount = layers.filter((layer) => layer.status === "ready" || layer.status === "trial-ready").length;
+  return {
+    schema: "hediao3d.v3-goal-audit.v1",
+    createdAt: new Date().toISOString(),
+    objective: "前端 HeDiao3D + 后端 Orchestrator + FreeCAD/BlenderCAM/OpenCAMLib + CAMotics/旋转包裹预览 + 三轴控制器/Y轴旋转夹具后处理",
+    status: productionAuditReady && realCamChainReady && camoticsReady && postprocessReady && fieldReady ? "production-ready-evidence-complete" : blockedCount > 0 ? "blocked-for-production" : "trial-closure-in-progress",
+    productionAllowed: productionAuditReady && gates?.allowProductionNc === true,
+    trialOnly: !(productionAuditReady && gates?.allowProductionNc === true),
+    readyLayerCount: readyCount,
+    partialLayerCount: partialCount,
+    blockedLayerCount: blockedCount,
+    worstLayer: worst ? { id: worst.id, status: worst.status, title: worst.title } : null,
+    layers,
+    keepHiddenOrDeferred: [
+      "未验收正式生产 NC 下载",
+      "旧版二维浮雕/热力图主工作流",
+      "未绑定来源的精加工/清残下载",
+      "不经过 Orchestrator 证据链的外部文件下载"
+    ],
+    nextBestActions: layers.flatMap((layer) => layer.missing.length ? layer.nextActions.slice(0, 1) : []).slice(0, 8)
+  };
+}
+
+function createV3GoalAuditLayer({ id, title, status, requiredCapabilities, evidence, missing, nextActions, deferredOrHidden = [] }) {
+  return {
+    id,
+    title,
+    status,
+    requiredCapabilities,
+    evidence: evidence.filter(Boolean),
+    missing: missing.filter(Boolean),
+    nextActions: nextActions.filter(Boolean),
+    deferredOrHidden
+  };
+}
+
+function createV3GoalAuditMarkdown(audit) {
+  if (!audit) return "# HeDiao3D V3 Goal Audit\n\n- missing\n";
+  return [
+    "# HeDiao3D V3 Goal Audit",
+    "",
+    `Status: ${audit.status}`,
+    `Production allowed: ${audit.productionAllowed ? "yes" : "no"}`,
+    `Trial only: ${audit.trialOnly ? "yes" : "no"}`,
+    `Layers: ready=${audit.readyLayerCount} / partial=${audit.partialLayerCount} / blocked=${audit.blockedLayerCount}`,
+    audit.worstLayer ? `Worst layer: ${audit.worstLayer.title} (${audit.worstLayer.status})` : "Worst layer: none",
+    "",
+    "## Layers",
+    "",
+    ...audit.layers.flatMap((layer) => [
+      `### ${layer.title}`,
+      "",
+      `- Status: ${layer.status}`,
+      `- Required: ${layer.requiredCapabilities.join("; ")}`,
+      `- Evidence: ${layer.evidence.join(" / ") || "none"}`,
+      `- Missing: ${layer.missing.join(" / ") || "none"}`,
+      `- Next: ${layer.nextActions.join(" / ") || "none"}`,
+      layer.deferredOrHidden?.length ? `- Deferred/hidden: ${layer.deferredOrHidden.join("; ")}` : null,
+      ""
+    ].filter(Boolean)),
+    "## Keep Hidden Or Deferred",
+    "",
+    ...audit.keepHiddenOrDeferred.map((item) => `- ${item}`),
+    "",
+    "## Next Best Actions",
+    "",
+    ...(audit.nextBestActions.length ? audit.nextBestActions.map((item) => `- ${item}`) : ["- none"])
+  ].join("\n");
 }
 
 function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
@@ -1947,6 +2165,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     summary: report.summary,
     gates: report.gates,
     acceptancePlan: report.acceptancePlan ?? { steps: [], nextStep: null },
+    goalAudit: report.goalAudit ?? null,
     diagnostics: {
       level: report.diagnostics?.level ?? "unknown",
       summary: report.diagnostics?.summary ?? null
@@ -2029,6 +2248,7 @@ function createV3ReadinessArtifactLinks(reportId) {
   return {
     json: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.json`,
     markdown: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-readiness-report.md`,
+    goalAudit: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-goal-audit.md`,
     runbook: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/v3-acceptance-runbook.sh`,
     camServerConfig: `/api/orchestrator/readiness/${encodeURIComponent(reportId)}/cam-server-config.json`
   };
@@ -2092,6 +2312,7 @@ function createV3ReadinessMarkdown(report) {
     `- Production NC: ${report.gates.allowProductionNc ? "yes" : "no"}`,
     `- Trial NC: ${report.gates.allowTrialNc ? "yes" : "no"}`,
     `- Air run: ${report.gates.allowAirRun ? "yes" : "no"}`,
+    `- Goal audit: ${report.goalAudit ? `${report.goalAudit.status} / ready=${report.goalAudit.readyLayerCount} partial=${report.goalAudit.partialLayerCount} blocked=${report.goalAudit.blockedLayerCount}` : "missing"}`,
     "",
     "## Blockers",
     "",

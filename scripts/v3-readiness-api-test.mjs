@@ -30,6 +30,15 @@ async function main() {
   assert(full.schema === "hediao3d.v3-readiness-report.v1", "full readiness artifact schema mismatch");
   assert(full.diagnostics, "full readiness artifact missing diagnostics");
   assert(full.gates, "full readiness artifact missing gates");
+  assert(full.goalAudit?.schema === "hediao3d.v3-goal-audit.v1", "full readiness artifact missing goal audit");
+  assert(full.goalAudit.layers?.length >= 6, "goal audit should cover all V3 architecture layers");
+  assert(full.goalAudit.layers.some((layer) => layer.id === "frontend-hediao3d"), "goal audit missing frontend layer");
+  assert(full.goalAudit.layers.some((layer) => layer.id === "backend-orchestrator"), "goal audit missing backend layer");
+  assert(full.goalAudit.layers.some((layer) => layer.id === "cam-engine-layer"), "goal audit missing CAM engine layer");
+  assert(full.goalAudit.layers.some((layer) => layer.id === "simulation-layer"), "goal audit missing simulation layer");
+  assert(full.goalAudit.layers.some((layer) => layer.id === "postprocess-layer"), "goal audit missing postprocess layer");
+  assert(full.goalAudit.layers.some((layer) => layer.id === "field-evidence-closure"), "goal audit missing field evidence layer");
+  assert(full.goalAudit.keepHiddenOrDeferred?.some((item) => /正式生产/.test(item)), "goal audit should keep unsafe production functions hidden");
   assert(full.camServerConfig?.schema === "hediao3d.cam-server-config.v1", "full readiness artifact missing CAM server config");
   assert(full.camServerConfig.adapters?.some((adapter) => adapter.id === full.camServerConfig.selectedEngine), "CAM server config missing selected adapter");
   assert(full.acceptancePlan?.schema === "hediao3d.v3-deployment-acceptance-plan.v1", "full readiness artifact missing acceptance plan");
@@ -87,8 +96,18 @@ async function main() {
   assert(markdown.includes("Latest machine acceptance"), "readiness markdown missing machine acceptance summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
   assert(markdown.includes("Evidence cross checks"), "readiness markdown missing evidence cross-check summary");
+  assert(markdown.includes("Goal audit"), "readiness markdown missing goal audit summary");
   assert(markdown.includes("camoticsInput="), "readiness markdown missing CAMotics input cross-check status");
   assert(markdown.includes("productionAudit="), "readiness markdown missing production audit cross-check status");
+
+  const goalAuditArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.goalAudit}`);
+  assert(goalAuditArtifact.ok, `goal audit artifact failed: ${goalAuditArtifact.status}`);
+  const goalAuditMarkdown = await goalAuditArtifact.text();
+  assert(goalAuditMarkdown.includes("HeDiao3D V3 Goal Audit"), "goal audit markdown missing heading");
+  assert(goalAuditMarkdown.includes("CAM 引擎层"), "goal audit markdown missing CAM engine layer");
+  assert(goalAuditMarkdown.includes("仿真层"), "goal audit markdown missing simulation layer");
+  assert(goalAuditMarkdown.includes("现场证据闭环"), "goal audit markdown missing field evidence layer");
+  assert(goalAuditMarkdown.includes("Keep Hidden Or Deferred"), "goal audit markdown missing hidden/deferred policy");
 
   const camServerConfigArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.camServerConfig}`);
   assert(camServerConfigArtifact.ok, `CAM server config artifact failed: ${camServerConfigArtifact.status}`);
@@ -165,8 +184,15 @@ function validateReadiness(report, label) {
   assert(Array.isArray(report.gates.nextActions), `${label} gates.nextActions missing`);
   assert(report.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(report.apiArtifacts?.markdown, `${label} missing Markdown artifact`);
+  assert(report.apiArtifacts?.goalAudit, `${label} missing goal audit artifact`);
   assert(report.apiArtifacts?.runbook, `${label} missing runbook artifact`);
   assert(report.apiArtifacts?.camServerConfig, `${label} missing CAM server config artifact`);
+  assert(report.goalAudit?.schema === "hediao3d.v3-goal-audit.v1", `${label} missing V3 goal audit`);
+  assert(Array.isArray(report.goalAudit.layers), `${label} goal audit layers missing`);
+  assert(report.goalAudit.layers.some((layer) => layer.id === "cam-engine-layer"), `${label} goal audit missing CAM engine layer`);
+  assert(report.goalAudit.layers.some((layer) => layer.id === "simulation-layer"), `${label} goal audit missing simulation layer`);
+  assert(report.goalAudit.layers.some((layer) => layer.id === "postprocess-layer"), `${label} goal audit missing postprocess layer`);
+  assert(report.goalAudit.productionAllowed === report.gates.allowProductionNc, `${label} goal audit production flag must follow gates`);
   assert(Object.hasOwn(report, "camServerConfig"), `${label} missing camServerConfig field`);
   if (report.camServerConfig) {
     assert(report.camServerConfig.schema === "hediao3d.cam-server-config.v1", `${label} camServerConfig schema mismatch`);

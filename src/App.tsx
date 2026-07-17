@@ -1439,6 +1439,29 @@ type V3ReadinessSummary = {
       blocksProduction: boolean;
     }>;
   };
+  goalAudit?: {
+    schema: string;
+    status: string;
+    productionAllowed: boolean;
+    trialOnly: boolean;
+    readyLayerCount: number;
+    partialLayerCount: number;
+    blockedLayerCount: number;
+    worstLayer: null | {
+      id: string;
+      status: string;
+      title: string;
+    };
+    layers: Array<{
+      id: string;
+      title: string;
+      status: string;
+      missing: string[];
+      nextActions: string[];
+    }>;
+    keepHiddenOrDeferred: string[];
+    nextBestActions: string[];
+  } | null;
   diagnostics: {
     level: string;
     summary: string | null;
@@ -5679,6 +5702,19 @@ export function App() {
                     空跑 {v3Readiness.gates.allowAirRun ? "可用" : "不可用"}
                   </span>
                   <small>{v3Readiness.summary}</small>
+                  {v3Readiness.goalAudit && (
+                    <small className={v3Readiness.goalAudit.productionAllowed ? "v3-inline-ok" : v3Readiness.goalAudit.blockedLayerCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
+                      目标差距：{v3Readiness.goalAudit.status}
+                      {" · "}
+                      ready {v3Readiness.goalAudit.readyLayerCount}
+                      {" · "}
+                      partial {v3Readiness.goalAudit.partialLayerCount}
+                      {" · "}
+                      blocked {v3Readiness.goalAudit.blockedLayerCount}
+                      {v3Readiness.goalAudit.worstLayer ? ` · 最弱：${v3Readiness.goalAudit.worstLayer.title}` : ""}
+                      {v3Readiness.goalAudit.nextBestActions[0] ? ` · 下一步：${v3Readiness.goalAudit.nextBestActions[0]}` : ""}
+                    </small>
+                  )}
                   {!V3_TRIAL_FOCUSED_UI && <>
                   {v3Readiness.nativeCam && (
                     <>
