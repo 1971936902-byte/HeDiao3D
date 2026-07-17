@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
 const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
@@ -80,13 +84,26 @@ async function main() {
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
   assert(runScript.includes("camotics"), "Linux run script should mention camotics command");
   assert(runScript.includes(previewSha256), "Linux run script should echo expected SHA-256");
+  const validatorScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-validate.js`);
+  assert(validatorScript.includes("hediao3d.camotics-result-local-validation.v1"), "validator should emit local validation schema");
+  assert(validatorScript.includes(runPackageSha256), "validator should bind to current run package hash");
+  assert(validatorScript.includes(previewSha256), "validator should bind to current preview G-code hash");
+  runLocalValidatorFixture({
+    jobId: job.id,
+    validatorScript,
+    previewSha256,
+    runPackageSha256,
+    previewMotionProfile
+  });
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.camoticsCliPackage?.artifact === "camotics-cli-run-package.json", "job summary missing CLI package");
   assert(reloaded.result?.summary?.camoticsCliPackage?.productionUnlockEligible === false, "summary must keep production unlock false");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.exists), "delivery manifest missing run package");
+  assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.exists), "delivery manifest missing result validator");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.sha256), "package integrity missing run package hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-linux-run.sh" && file.sha256), "package integrity missing run script hash");
+  assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.sha256), "package integrity missing result validator hash");
 
   console.log(JSON.stringify({
     ok: true,
@@ -113,6 +130,56 @@ function createPreviewMotionProfile(gcodeText) {
     zMin: Math.min(...zValues),
     zMax: Math.max(...zValues)
   };
+}
+
+function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPackageSha256, previewMotionProfile }) {
+  const dir = join(tmpdir(), `hediao3d-camotics-validator-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  try {
+    const validatorPath = join(dir, "camotics-result-validate.js");
+    const resultPath = join(dir, "camotics-result.json");
+    writeFileSync(validatorPath, validatorScript, "utf8");
+    writeFileSync(join(dir, "camotics-preview.png"), "fixture-screenshot", "utf8");
+    writeFileSync(join(dir, "camotics-material-removal.stl"), "solid fixture\nendsolid fixture\n", "utf8");
+    writeFileSync(resultPath, JSON.stringify({
+      schema: "hediao3d.camotics-result.v1",
+      jobId,
+      engine: "camotics",
+      status: "completed",
+      synthetic: false,
+      riskLevel: "ready",
+      summary: "Local validator fixture for CAMotics run package.",
+      inputs: {
+        preferredGcode: "camotics-preview.nc",
+        preferredGcodeSha256: previewSha256,
+        camoticsCliRunPackage: "camotics-cli-run-package.json",
+        camoticsCliRunPackageSha256: runPackageSha256
+      },
+      metrics: {
+        motionLineCount: previewMotionProfile.motionLineCount,
+        zMin: previewMotionProfile.zMin,
+        zMax: previewMotionProfile.zMax,
+        materialRemovedMm3: 3.2
+      },
+      artifacts: {
+        screenshot: "camotics-preview.png",
+        materialMesh: "camotics-material-removal.stl"
+      }
+    }, null, 2), "utf8");
+    const run = spawnSync(process.execPath, [validatorPath, resultPath], {
+      cwd: dir,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    assert(!run.error, `validator spawn failed: ${run.error?.message}`);
+    assert(run.status === 0, `validator should pass fixture, exited ${run.status}: ${run.stderr || run.stdout}`);
+    const report = JSON.parse(run.stdout);
+    assert(report.ok === true, "validator report should be ok");
+    assert(report.checks?.some((check) => check.id === "run-package-hash" && check.ok), "validator should check run package hash");
+    assert(report.checks?.some((check) => check.id === "visual-or-material-artifact" && check.ok), "validator should check visual/material artifact");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function waitForJob(jobId, startedAt) {

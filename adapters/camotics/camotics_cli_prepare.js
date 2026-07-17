@@ -52,6 +52,7 @@ const runPackageIdentity = inspectWrittenRunPackage(runPackagePath);
 const resultTemplate = createResultTemplate(plan, preferred, motionProfile, runPackageIdentity);
 writeFileSync(join(outputDir, "camotics-result-template.json"), JSON.stringify(resultTemplate, null, 2), "utf8");
 writeFileSync(join(outputDir, "camotics-linux-run.sh"), createLinuxRunScript(packageJson), "utf8");
+writeFileSync(join(outputDir, "camotics-result-validate.js"), createResultValidatorScript(packageJson), "utf8");
 
 console.log(JSON.stringify({
   ok: ready,
@@ -60,6 +61,7 @@ console.log(JSON.stringify({
   package: join(outputDir, "camotics-cli-run-package.json"),
   resultTemplate: join(outputDir, "camotics-result-template.json"),
   runScript: join(outputDir, "camotics-linux-run.sh"),
+  validator: join(outputDir, "camotics-result-validate.js"),
   checks: checks.length
 }, null, 2));
 
@@ -151,14 +153,17 @@ function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
       resultJson: expectedResult.resultJson ?? "camotics-result.json",
       screenshot: expectedResult.screenshot ?? "camotics-preview.png",
       materialMesh: expectedResult.materialMesh ?? "camotics-material-removal.stl",
-      resultTemplate: "camotics-result-template.json"
+      resultTemplate: "camotics-result-template.json",
+      resultValidator: "camotics-result-validate.js"
     },
     importBack: {
       adapterCommand: `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true HEDIAO3D_CAMOTICS_RESULT_JSON=${shellQuote(join(outputDir, expectedResult.resultJson ?? "camotics-result.json"))} node adapters/camotics/camotics_job.js ${shellQuote(join(jobDir, "camotics-job.json"))} ${shellQuote(join(jobDir, "camotics-adapter-report.json"))}`,
       apiEndpoint: "/api/orchestrator/jobs/:jobId/camotics-result",
       requires: [
+        "先在 Linux CAM 服务器运行 node camotics-result-validate.js，通过后再回填",
         "camotics-result.json 使用 hediao3d.camotics-result.v1",
         "inputs.preferredGcodeSha256 等于 preferredGcodeIdentity.sha256",
+        "inputs.camoticsCliRunPackageSha256 等于 camotics-cli-run-package.json 的 SHA-256",
         "metrics.motionLineCount/zMin/zMax 与 preferredGcodeIdentity.motionProfile 匹配",
         "至少提供 camotics-preview.png 或 camotics-material-removal.stl"
       ]
@@ -209,6 +214,7 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
       materialMesh: "camotics-material-removal.stl"
     },
     notes: [
+      "Before importing, run: node camotics-result-validate.js",
       "materialRemovedMm3 must come from the real CAMotics/material-removal run.",
       "Do not import this template until the screenshot or material-removal STL exists.",
       "Synthetic or hand-edited fixture evidence must remain locked for production."
@@ -254,8 +260,117 @@ function createLinuxRunScript(packageJson) {
     "",
     `echo '[HeDiao3D] Fill ${resultJson} from real material-removal metrics, then import it back.'`,
     `echo '[HeDiao3D] Template: ${join(packageJson.outputDir, "camotics-result-template.json")}'`,
+    "echo '[HeDiao3D] Validate before import: node camotics-result-validate.js'",
     ""
   ].join("\n");
+}
+
+function createResultValidatorScript(packageJson) {
+  const expectedHash = packageJson.preferredGcodeIdentity?.sha256 ?? null;
+  const expectedMotion = packageJson.preferredGcodeIdentity?.motionProfile ?? null;
+  const expectedRunPackageHash = inspectWrittenRunPackage(join(outputDir, "camotics-cli-run-package.json")).sha256;
+  const expectedResult = packageJson.expectedOutputs ?? {};
+  const resultJson = expectedResult.resultJson ?? "camotics-result.json";
+  const screenshot = expectedResult.screenshot ?? "camotics-preview.png";
+  const materialMesh = expectedResult.materialMesh ?? "camotics-material-removal.stl";
+  return `#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const packageDir = dirname(fileURLToPath(import.meta.url));
+const resultPath = resolve(process.argv[2] ?? join(packageDir, ${JSON.stringify(resultJson)}));
+const expected = {
+  preferredGcodeSha256: ${JSON.stringify(expectedHash)},
+  camoticsCliRunPackageSha256: ${JSON.stringify(expectedRunPackageHash)},
+  motionProfile: ${JSON.stringify(expectedMotion)},
+  screenshot: ${JSON.stringify(screenshot)},
+  materialMesh: ${JSON.stringify(materialMesh)}
+};
+
+const checks = [];
+const result = readJson(resultPath);
+check("result-file", Boolean(result), "camotics-result.json must exist and be valid JSON.");
+check("schema", result?.schema === "hediao3d.camotics-result.v1", "schema must be hediao3d.camotics-result.v1.");
+check("status", result?.status === "completed", "status must be completed.");
+check("non-synthetic", result?.synthetic === false, "synthetic must be false for real CAMotics evidence.");
+check("risk-ready", result?.riskLevel === "ready", "riskLevel must be ready.");
+check("preferred-gcode-hash", Boolean(expected.preferredGcodeSha256) && result?.inputs?.preferredGcodeSha256 === expected.preferredGcodeSha256, "inputs.preferredGcodeSha256 must match camotics-preview.nc.");
+check("run-package-hash", Boolean(expected.camoticsCliRunPackageSha256) && result?.inputs?.camoticsCliRunPackageSha256 === expected.camoticsCliRunPackageSha256, "inputs.camoticsCliRunPackageSha256 must match this run package.");
+check("motion-line-count", Number(result?.metrics?.motionLineCount) === Number(expected.motionProfile?.motionLineCount), "metrics.motionLineCount must match camotics-preview.nc.");
+check("z-min", close(Number(result?.metrics?.zMin), Number(expected.motionProfile?.zMin), 0.05), "metrics.zMin must match camotics-preview.nc within 0.05mm.");
+check("z-max", close(Number(result?.metrics?.zMax), Number(expected.motionProfile?.zMax), 0.05), "metrics.zMax must match camotics-preview.nc within 0.05mm.");
+check("material-volume", Number.isFinite(Number(result?.metrics?.materialRemovedMm3)) && Number(result.metrics.materialRemovedMm3) >= 0, "metrics.materialRemovedMm3 must be a real non-negative number from CAMotics/equivalent simulation.");
+
+const artifactEvidence = inspectArtifacts(result, resultPath, expected);
+check("visual-or-material-artifact", artifactEvidence.hasScreenshot || artifactEvidence.hasMaterialMesh, "Provide at least one existing artifact: camotics-preview.png or camotics-material-removal.stl.");
+
+const ok = checks.every((item) => item.ok);
+const report = {
+  schema: "hediao3d.camotics-result-local-validation.v1",
+  createdAt: new Date().toISOString(),
+  ok,
+  resultPath,
+  checks,
+  artifactEvidence,
+  expected: {
+    preferredGcodeSha256: expected.preferredGcodeSha256,
+    camoticsCliRunPackageSha256: expected.camoticsCliRunPackageSha256,
+    motionProfile: expected.motionProfile
+  }
+};
+
+console.log(JSON.stringify(report, null, 2));
+if (!ok) process.exit(1);
+
+function readJson(path) {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function check(id, ok, message) {
+  checks.push({ id, ok: Boolean(ok), severity: ok ? "info" : "critical", message });
+}
+
+function close(actual, expectedValue, tolerance) {
+  return Number.isFinite(actual) && Number.isFinite(expectedValue) && Math.abs(actual - expectedValue) <= tolerance;
+}
+
+function inspectArtifacts(result, resultPath, expected) {
+  const sourceDir = dirname(resultPath);
+  const screenshotPath = resolveArtifact(result?.artifacts?.screenshot ?? expected.screenshot, sourceDir);
+  const materialMeshPath = resolveArtifact(result?.artifacts?.materialMesh ?? expected.materialMesh, sourceDir);
+  return {
+    screenshot: inspectFile(screenshotPath),
+    materialMesh: inspectFile(materialMeshPath),
+    hasScreenshot: Boolean(screenshotPath && existsSync(screenshotPath)),
+    hasMaterialMesh: Boolean(materialMeshPath && existsSync(materialMeshPath))
+  };
+}
+
+function resolveArtifact(value, sourceDir) {
+  if (!value || typeof value !== "string") return null;
+  if (isAbsolute(value)) return value;
+  return join(sourceDir, value);
+}
+
+function inspectFile(path) {
+  if (!path || !existsSync(path)) return { path, exists: false, sizeBytes: null, sha256: null };
+  const bytes = readFileSync(path);
+  const stats = statSync(path);
+  return {
+    path,
+    exists: true,
+    sizeBytes: stats.size,
+    sha256: createHash("sha256").update(bytes).digest("hex")
+  };
+}
+`;
 }
 
 function createGcodeMotionProfile(gcodeText) {

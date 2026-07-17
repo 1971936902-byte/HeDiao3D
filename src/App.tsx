@@ -839,6 +839,7 @@ type V3OrchestratorJob = {
         artifact: string;
         resultTemplate: string;
         linuxRunScript: string;
+        resultValidator?: string | null;
         report: string;
         productionUnlockEligible: boolean;
         preferredGcodeSha256: string | null;
@@ -5889,6 +5890,7 @@ export function App() {
                           v3Job.result.summary.camoticsCliPackage.artifact,
                           v3Job.result.summary.camoticsCliPackage.resultTemplate,
                           v3Job.result.summary.camoticsCliPackage.linuxRunScript,
+                          v3Job.result.summary.camoticsCliPackage.resultValidator,
                           v3Job.result.summary.camoticsCliPackage.report
                         ].filter((filename): filename is string => Boolean(filename)).map((filename) => (
                           <a
@@ -5899,7 +5901,7 @@ export function App() {
                             {formatV3ShortcutFileLabel(filename)}
                           </a>
                         ))}
-                        <small>该准备包只用于仿真服务器，不会解锁生产 NC。</small>
+                        <small>该准备包只用于仿真服务器；回填前先运行结果校验脚本，不会直接解锁生产 NC。</small>
                       </div>
                     )}
                     <label>
@@ -8050,6 +8052,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "camotics-cli-run-package.json") return "CAMotics运行包";
   if (filename === "camotics-result-template.json") return "结果回填模板";
   if (filename === "camotics-linux-run.sh") return "Linux运行脚本";
+  if (filename === "camotics-result-validate.js") return "结果校验脚本";
   if (filename === "camotics-cli-package-report.json") return "运行包报告";
   if (filename === "safe-trial-execution-plan.json") return "安全试雕执行计划";
   if (filename === "operator-download-checklist.md") return "下载核验清单";
@@ -9353,7 +9356,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `预览NC哈希: ${camoticsCliPackage?.preferredGcodeSha256 ?? "-"}`,
     `运动画像: ${camoticsCliPackage?.motionProfile ? `${camoticsCliPackage.motionProfile.motionLineCount} 行 / Z ${camoticsCliPackage.motionProfile.zMin ?? "-"} 到 ${camoticsCliPackage.motionProfile.zMax ?? "-"}` : "-"}`,
     `生产解锁: ${camoticsCliPackage?.productionUnlockEligible ? "异常：准备包不应直接解锁生产" : "否，准备包只用于真实材料去除仿真准备"}`,
-    "操作顺序: 下载 camotics-cli-run-package.json、camotics-linux-run.sh 和 camotics-result-template.json 到 Linux CAM 服务器；执行/复核 CAMotics 后填写真实 camotics-result.json，再回填到 V3 面板。",
+    "操作顺序: 下载 camotics-cli-run-package.json、camotics-linux-run.sh、camotics-result-template.json 和 camotics-result-validate.js 到 Linux CAM 服务器；执行/复核 CAMotics 后填写真实 camotics-result.json，先运行 node camotics-result-validate.js，通过后再回填到 V3 面板。",
     "注意: camotics-preview.nc 仅用于展开三轴仿真，禁止上机；toolpath.nc 仍受 production-gate.json 控制。",
     "",
     "## CAMotics 仿真结果",
