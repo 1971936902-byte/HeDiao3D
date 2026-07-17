@@ -9,6 +9,11 @@ async function main() {
   validateSummary(run, "POST /api/orchestrator/native-cam");
   assert(run.summary.requiredCount === 4, `expected 4 native CAM checks, got ${run.summary.requiredCount}`);
   assert(run.summary.capabilityMatrix?.length === 4, "native CAM summary should expose four capability matrix entries");
+  assert(run.summary.integrationStrategy?.schema === "hediao3d.opensource-cam-integration-strategy.v1", "native CAM summary should expose open-source CAM integration strategy");
+  assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "freecad" && item.handoff?.includes("Orchestrator")), "integration strategy should include FreeCAD handoff");
+  assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "opencamlib" && item.handoff?.includes("neutral-toolpath")), "integration strategy should include OpenCAMLib neutral handoff");
+  assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "camotics" && item.role === "material-removal-simulation"), "integration strategy should include CAMotics simulation role");
+  assert(run.summary.integrationStrategy.productionBoundary?.some((item) => item.includes("三轴控制器+Y轴旋转夹具")), "integration strategy should preserve rotary fixture production boundary");
   assert(run.summary.capabilityMatrix.some((item) => item.id === "opencamlib" && item.supportedWorkflows?.includes("drop-cutter")), "OpenCAMLib capability matrix should expose drop-cutter workflow");
   assert(run.summary.capabilityMatrix.some((item) => item.id === "camotics" && item.category === "simulation"), "CAMotics capability matrix should mark simulation role");
   assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
@@ -18,6 +23,7 @@ async function main() {
   assert(latest.latest, "latest native CAM check missing");
   validateSummary(latest.latest, "GET /api/orchestrator/native-cam/latest");
   assert(latest.latest.summary.capabilityMatrix?.length === 4, "latest native CAM summary should preserve capability matrix");
+  assert(latest.latest.summary.integrationStrategy?.recommendedStack?.length >= 4, "latest native CAM summary should preserve integration strategy");
   assert(Array.isArray(latest.checks), "checks history missing");
   assert(JSON.stringify(latest.latest).length < 50000, "latest native CAM summary is too large");
 
@@ -27,12 +33,14 @@ async function main() {
   assert(artifact.schema === "hediao3d.linux-native-cam-check.v1", "full native CAM artifact schema mismatch");
   assert(Array.isArray(artifact.checks), "full native CAM artifact missing checks[]");
   assert(artifact.summary?.capabilityMatrix?.some((item) => item.id === "blendercam" && item.supportedWorkflows.includes("artistic-relief")), "full artifact should include BlenderCAM capability matrix");
+  assert(artifact.summary?.integrationStrategy?.rolloutStages?.some((item) => item.includes("Linux CAM 服务器")), "full artifact should include rollout stages");
   assert(artifact.checks.some((check) => check.id === "camotics" && check.capabilities?.notEnoughFor?.includes("刀路生成")), "full artifact should state CAMotics does not generate toolpaths");
 
   const markdownResponse = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownResponse.ok, `native CAM markdown artifact failed: ${markdownResponse.status}`);
   const markdown = await markdownResponse.text();
   assert(markdown.includes("Linux Native CAM Readiness"), "native CAM markdown missing heading");
+  assert(markdown.includes("Integration Strategy"), "native CAM markdown missing integration strategy");
 
   console.log(JSON.stringify({
     ok: true,
@@ -48,6 +56,7 @@ function validateSummary(summary, label) {
   assert(summary.schema === "hediao3d.linux-native-cam-check.v1", `${label} schema mismatch`);
   assert(summary.summary, `${label} missing summary`);
   assert(Array.isArray(summary.summary.capabilityMatrix), `${label} missing capability matrix`);
+  assert(summary.summary.integrationStrategy, `${label} missing integration strategy`);
   assert(Array.isArray(summary.checks), `${label} missing checks[]`);
   assert(summary.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(summary.apiArtifacts?.markdown, `${label} missing Markdown artifact`);

@@ -1997,6 +1997,26 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
           productionGate: item.productionGate
         }))
         : [],
+      integrationStrategy: summary.integrationStrategy ? {
+        schema: summary.integrationStrategy.schema ?? null,
+        summary: summary.integrationStrategy.summary ?? null,
+        recommendedStack: Array.isArray(summary.integrationStrategy.recommendedStack)
+          ? summary.integrationStrategy.recommendedStack.slice(0, 6).map((item) => ({
+            id: item.id,
+            role: item.role,
+            priority: item.priority,
+            purpose: item.purpose,
+            handoff: item.handoff,
+            limits: item.limits
+          }))
+          : [],
+        rolloutStages: Array.isArray(summary.integrationStrategy.rolloutStages)
+          ? summary.integrationStrategy.rolloutStages.slice(0, 8)
+          : [],
+        productionBoundary: Array.isArray(summary.integrationStrategy.productionBoundary)
+          ? summary.integrationStrategy.productionBoundary.slice(0, 6)
+          : []
+      } : null,
       blockers: Array.isArray(summary.blockers) ? summary.blockers.slice(0, 8) : [],
       nextActions: Array.isArray(summary.nextActions) ? summary.nextActions.slice(0, 8) : []
     },

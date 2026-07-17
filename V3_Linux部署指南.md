@@ -97,6 +97,8 @@ public/native-cam-readiness/<timestamp>/
   native-cam-readiness.md
 ```
 
+`native-cam-readiness.json` 的 `summary.integrationStrategy` 会同时输出开源 CAM 接入策略，说明 FreeCAD、OpenCAMLib、CAMotics、BlenderCAM/FabexCNC 在 V3 中各自负责什么、如何交接到 Orchestrator、以及哪些 fixture/synthetic/preview 结果不能作为生产证据。
+
 部署 API 启动后，也可以在前端 V3 面板点击“验收Native CAM”，或直接调用：
 
 ```bash

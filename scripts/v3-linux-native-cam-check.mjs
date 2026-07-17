@@ -207,9 +207,63 @@ function createSummary(checks) {
     summary: readyCount === requiredCount
       ? "Linux Native CAM 环境已具备 V3 外部 CAM/仿真验收条件。"
       : `Linux Native CAM 环境未完整就绪：${readyCount}/${requiredCount}。`,
+    integrationStrategy: createOpenSourceCamIntegrationStrategy(),
     capabilityMatrix: createCapabilityMatrix(checks),
     blockers,
     nextActions: [...new Set(nextActions)]
+  };
+}
+
+function createOpenSourceCamIntegrationStrategy() {
+  return {
+    schema: "hediao3d.opensource-cam-integration-strategy.v1",
+    summary: "FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 可以接入 HeDiao3D，但必须按“外部 CAM 生成中间结果，HeDiao3D 负责核雕后处理和生产门禁”的边界落地。",
+    recommendedStack: [
+      {
+        id: "freecad",
+        role: "standard-cam-generator",
+        priority: "P0",
+        purpose: "三轴浮雕、规则实体、夹具/治具和标准 G-code 参考路线。",
+        handoff: "通过 FreeCADCmd 生成可审计 G-code 或 CAM plan；进入 Orchestrator 后继续做 NC 静态分析、CAMotics 仿真和 wrapY/wrapA 后处理复核。",
+        limits: "不直接输出三轴控制器+Y旋转夹具的最终专用 NC。"
+      },
+      {
+        id: "opencamlib",
+        role: "surface-contact-kernel",
+        priority: "P0",
+        purpose: "复杂佛头 Mesh 的 drop-cutter、水线、刀具接触点和精加工刀位点。",
+        handoff: "优先输出 hediao3d.neutral-toolpath.v1，中立点位再由 HeDiao3D 转成 Y/A 旋转夹具 NC。",
+        limits: "不是完整 CAM 软件，不能替代装夹、后处理、仿真和机床验收。"
+      },
+      {
+        id: "camotics",
+        role: "material-removal-simulation",
+        priority: "P0",
+        purpose: "正式下载前做三轴/展开刀路材料去除仿真、Z 深度和边界复核。",
+        handoff: "使用 camotics-preview.nc 和 camotics-project-template.json 运行，结果以 hediao3d.camotics-result.v1 回填并绑定输入 SHA-256。",
+        limits: "CAMotics 不生成刀路，也不能完全替代真实旋转夹具机床空跑。"
+      },
+      {
+        id: "blendercam",
+        role: "artistic-mesh-cam",
+        priority: "P1",
+        purpose: "艺术 Mesh、佛头、浮雕纹理和 Blender 修模流程联动。",
+        handoff: "通过 Blender 后台脚本生成 G-code/operation report，再进入统一安全门和后处理链路。",
+        limits: "插件 API 和版本差异较大，必须在目标服务器验证后才能用于实验输出。"
+      }
+    ],
+    rolloutStages: [
+      "保留内置 Mesh CAM fallback，只作为 V3 小闭环和对照基线。",
+      "先接 FreeCAD/OpenCAMLib 的计划产物和 adapter 合约，验证 Orchestrator 可摄取外部 G-code/neutral toolpath。",
+      "在 Linux CAM 服务器安装 Native 引擎，运行 native-cam、external-adapters、neutral-handoff 和 camotics-import 测试。",
+      "用真实佛头 STL/GLB 转换产物做小模型试算，人工复核刀路、仿真截图和材料去除网格。",
+      "通过离料空跑、软料试雕、真实机床验收后，才允许生产门禁从 trial-only 逐步解锁。"
+    ],
+    productionBoundary: [
+      "fixture、synthetic、heightfield preview 只能证明协议链路，不能作为生产证据。",
+      "外部 CAM 的输出必须包含源码快照、输入模型哈希、刀具参数、坐标系和非 synthetic 仿真结果。",
+      "三轴控制器+Y轴旋转夹具的最终 NC 永远由 HeDiao3D 后处理层负责，不能直接使用通用 CAM 默认后处理。"
+    ]
   };
 }
 
@@ -350,6 +404,23 @@ function createMarkdown(report) {
       `  - outputs: ${item.outputFormats.join(", ")}`,
       `  - production gate: ${item.productionGate}`
     ]),
+    "",
+    "## Integration Strategy",
+    "",
+    report.summary.integrationStrategy?.summary ?? "missing",
+    "",
+    ...((report.summary.integrationStrategy?.recommendedStack ?? []).flatMap((item) => [
+      `- ${item.id}: ${item.priority} / ${item.role}`,
+      `  - purpose: ${item.purpose}`,
+      `  - handoff: ${item.handoff}`,
+      `  - limits: ${item.limits}`
+    ])),
+    "",
+    "Rollout stages:",
+    ...((report.summary.integrationStrategy?.rolloutStages ?? []).map((item) => `- ${item}`)),
+    "",
+    "Production boundary:",
+    ...((report.summary.integrationStrategy?.productionBoundary ?? []).map((item) => `- ${item}`)),
     "",
     "## Blockers",
     "",
