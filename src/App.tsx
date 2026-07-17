@@ -1464,10 +1464,14 @@ type V3ReadinessSummary = {
   } | null;
   runbookResult: {
     schema: string;
+    readinessReportId?: string | null;
     createdAt: string | null;
     ok: boolean;
     exitCode: number | null;
     failedCount: number;
+    blockingFailedCount?: number;
+    productionSafe?: boolean;
+    identityValid?: boolean;
     failedSteps: Array<{
       id: string;
       title: string;
@@ -2031,6 +2035,7 @@ export function App() {
   const [isV3NativeCamChecking, setIsV3NativeCamChecking] = useState(false);
   const [isV3NativeCamAcceptanceImporting, setIsV3NativeCamAcceptanceImporting] = useState(false);
   const [isV3ReadinessChecking, setIsV3ReadinessChecking] = useState(false);
+  const [isV3RunbookResultImporting, setIsV3RunbookResultImporting] = useState(false);
   const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
   const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
   const [isV3CamoticsPackagePreparing, setIsV3CamoticsPackagePreparing] = useState(false);
@@ -2040,6 +2045,8 @@ export function App() {
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceFile, setV3NativeCamAcceptanceFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceZipFile, setV3NativeCamAcceptanceZipFile] = useState<File | null>(null);
+  const [v3RunbookResultFile, setV3RunbookResultFile] = useState<File | null>(null);
+  const [v3RunbookResultZipFile, setV3RunbookResultZipFile] = useState<File | null>(null);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -2472,6 +2479,50 @@ export function App() {
       setV3Status(error instanceof Error ? error.message : "V3 生产就绪总报告生成失败");
     } finally {
       setIsV3ReadinessChecking(false);
+    }
+  };
+
+  const handleImportV3RunbookResult = async () => {
+    if (!v3RunbookResultFile && !v3RunbookResultZipFile) {
+      setV3Status("请先选择 v3-acceptance-runbook-result.json，或选择 Linux/部署服务器回传的结果 ZIP。");
+      return;
+    }
+    setIsV3RunbookResultImporting(true);
+    try {
+      const resultZipDataUrl = v3RunbookResultZipFile ? await fileToDataUrl(v3RunbookResultZipFile) : null;
+      const result = v3RunbookResultFile ? JSON.parse(await v3RunbookResultFile.text()) : null;
+      const response = await fetch("/api/orchestrator/readiness/runbook-result", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(result ? { result } : {}),
+          ...(resultZipDataUrl ? { resultZipDataUrl } : {}),
+          sourceName: v3RunbookResultZipFile?.name ?? v3RunbookResultFile?.name ?? "v3-acceptance-runbook-result"
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "V3 验收脚本结果导入失败");
+      setV3Status(`验收脚本结果已导入：${data.ok ? "通过" : `失败 ${data.failedCount ?? 0} 项`}，身份 ${data.identityValid ? "已绑定" : "待复核"}`);
+      recordTask({
+        category: "cam",
+        status: data.ok ? "ok" : "warning",
+        title: "导入 V3 验收脚本结果",
+        detail: `${v3RunbookResultZipFile?.name ?? v3RunbookResultFile?.name ?? "runbook-result"} / failed=${data.failedCount ?? 0} / blocking=${data.blockingFailedCount ?? 0}`
+      });
+      setV3RunbookResultFile(null);
+      setV3RunbookResultZipFile(null);
+      await refreshV3Readiness();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "V3 验收脚本结果导入失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "导入 V3 验收脚本结果失败",
+        detail: message
+      });
+    } finally {
+      setIsV3RunbookResultImporting(false);
     }
   };
 
@@ -5685,12 +5736,12 @@ export function App() {
                     最新机床验收：{v3Readiness.latestMachineAcceptance ? `${v3Readiness.latestMachineAcceptance.recordCount} 条 · ${v3Readiness.latestMachineAcceptance.latestOutcome ?? "-"}` : "未回填"}
                     {v3Readiness.latestMachineAcceptance ? ` · 必需项 ${v3Readiness.latestMachineAcceptance.latestAllRequiredPassed ? "已通过" : "待复核"}` : ""}
                   </small>
-                  {!V3_TRIAL_FOCUSED_UI && <>
                   <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
+                    {v3Readiness.runbookResult ? ` · 阻断 ${v3Readiness.runbookResult.blockingFailedCount ?? "-"} · 身份 ${v3Readiness.runbookResult.identityValid ? "已绑定" : "待复核"} · safe ${v3Readiness.runbookResult.productionSafe ? "yes" : "no"}` : ""}
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
                   </small>
-                  {v3Readiness.acceptancePlan && (
+                  {!V3_TRIAL_FOCUSED_UI && v3Readiness.acceptancePlan && (
                     <>
                       <small>
                         部署验收 {v3Readiness.acceptancePlan.completed}/{v3Readiness.acceptancePlan.total}
@@ -5713,7 +5764,6 @@ export function App() {
                       )}
                     </>
                   )}
-                  </>}
                   {v3Readiness.gates.warnings[0] && (
                     <small>提示：{v3Readiness.gates.warnings[0]}</small>
                   )}
@@ -5738,6 +5788,37 @@ export function App() {
                         下载CAM服务器配置
                       </a>
                     )}
+                  </div>
+                  <div className="v3-server-package">
+                    <strong>验收脚本结果回填</strong>
+                    <small>在 Linux CAM/部署服务器运行 v3-acceptance-runbook.sh 后，上传 v3-acceptance-runbook-result.json 或结果 ZIP；它会进入总门禁证据链，但不会单独解锁生产 NC。</small>
+                    <label className="v3-file-picker">
+                      <UploadCloud size={16} />
+                      <span>{v3RunbookResultZipFile ? v3RunbookResultZipFile.name : "选择结果ZIP"}</span>
+                      <input
+                        accept=".zip,application/zip"
+                        type="file"
+                        onChange={(event) => setV3RunbookResultZipFile(event.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    <label className="v3-file-picker">
+                      <UploadCloud size={16} />
+                      <span>{v3RunbookResultFile ? v3RunbookResultFile.name : "选择结果JSON"}</span>
+                      <input
+                        accept="application/json,.json"
+                        type="file"
+                        onChange={(event) => setV3RunbookResultFile(event.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    <button
+                      className="demo-action package-action"
+                      disabled={(!v3RunbookResultFile && !v3RunbookResultZipFile) || isV3RunbookResultImporting}
+                      onClick={handleImportV3RunbookResult}
+                      type="button"
+                    >
+                      <ClipboardCheck size={17} />
+                      {isV3RunbookResultImporting ? "导入中..." : "导入验收脚本结果"}
+                    </button>
                   </div>
                 </>
               ) : (
