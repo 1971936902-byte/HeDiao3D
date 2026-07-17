@@ -938,6 +938,30 @@ type V3AdapterValidationSummary = {
   };
 };
 
+type V3NativeCamCapability = {
+  category: string;
+  integrationRole: string;
+  inputFormats?: string[];
+  outputFormats: string[];
+  supportedWorkflows: string[];
+  bestFor?: string[];
+  notEnoughFor?: string[];
+  projectUse?: string | null;
+  productionGate: string;
+};
+
+type V3NativeCamCapabilityMatrixItem = {
+  id: string;
+  name: string;
+  level: string;
+  ready: boolean;
+  category: string;
+  integrationRole: string;
+  supportedWorkflows: string[];
+  outputFormats: string[];
+  productionGate: string;
+};
+
 type V3NativeCamReadinessSummary = {
   id: string;
   schema: string;
@@ -953,6 +977,7 @@ type V3NativeCamReadinessSummary = {
     requiredCount: number;
     level: string;
     text: string;
+    capabilityMatrix?: V3NativeCamCapabilityMatrixItem[];
     blockers: string[];
     nextActions: string[];
   };
@@ -962,6 +987,7 @@ type V3NativeCamReadinessSummary = {
     role: string;
     level: string;
     ready: boolean;
+    capabilities?: V3NativeCamCapability | null;
     command: string | null;
     version: string | null;
     missing: string[];
@@ -4780,6 +4806,34 @@ export function App() {
                       </span>
                     ))}
                   </div>
+                  {v3NativeCamReadiness.summary.capabilityMatrix && v3NativeCamReadiness.summary.capabilityMatrix.length > 0 && (
+                    <div className="v3-capability-matrix">
+                      {v3NativeCamReadiness.summary.capabilityMatrix.map((item) => (
+                        <article className={`v3-capability-card ${item.ready ? "ready" : "missing"}`} key={item.id}>
+                          <div>
+                            <strong>{item.name}</strong>
+                            <span>{item.category} · {item.level}</span>
+                          </div>
+                          <p>{item.integrationRole}</p>
+                          <small>工艺：{item.supportedWorkflows.slice(0, 3).join(" / ")}</small>
+                          <small>输出：{item.outputFormats.join(" / ")}</small>
+                          <small>生产门禁：{item.productionGate}</small>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                  {v3NativeCamReadiness.checks.some((check) => check.capabilities?.notEnoughFor?.length) && (
+                    <div className="v3-capability-boundary">
+                      {v3NativeCamReadiness.checks
+                        .filter((check) => check.capabilities?.notEnoughFor?.length)
+                        .slice(0, 4)
+                        .map((check) => (
+                          <small key={check.id}>
+                            {check.name} 不能替代：{check.capabilities?.notEnoughFor?.slice(0, 2).join("、")}
+                          </small>
+                        ))}
+                    </div>
+                  )}
                   {v3NativeCamReadiness.summary.blockers[0] && (
                     <small>阻断项：{v3NativeCamReadiness.summary.blockers[0]}</small>
                   )}

@@ -2273,6 +2273,65 @@ button:disabled {
   border-left-color: var(--rose);
 }
 
+.v3-capability-matrix {
+  display: grid;
+  gap: 8px;
+}
+
+.v3-capability-card {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.v3-capability-card.ready {
+  border-left-color: var(--green);
+}
+
+.v3-capability-card.missing {
+  border-left-color: var(--rose);
+}
+
+.v3-capability-card div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.v3-capability-card strong {
+  color: #f3faf6;
+  font-size: 12px;
+}
+
+.v3-capability-card span,
+.v3-capability-card small,
+.v3-capability-boundary small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.v3-capability-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.v3-capability-boundary {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px dashed rgba(244, 185, 86, 0.45);
+  border-radius: 8px;
+  background: rgba(244, 185, 86, 0.055);
+}
+
 .v3-history-list {
   display: grid;
   gap: 6px;
