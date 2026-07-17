@@ -625,6 +625,7 @@ V3_ADAPTER_USE_NATIVE_COMMANDS=true V3_ADAPTER_VALIDATION_DIR="$OUT_DIR" npm run
 
 REPORT="$OUT_DIR/v3-external-adapter-validation.json"
 ACCEPTANCE_REPORT="$OUT_DIR/native-cam-real-output-acceptance.json"
+ACCEPTANCE_BUNDLE="$OUT_DIR/native-cam-real-output-bundle.zip"
 if [[ ! -s "$REPORT" ]]; then
   echo "[HeDiao3D] Missing validation report: $REPORT" >&2
   exit 2
@@ -713,10 +714,90 @@ if (strict && (unsafe.length || (expectProductionCandidate && candidates.length 
 }
 NODE
 
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" <<'NODE'
+const { readFileSync, writeFileSync } = require("fs");
+const [reportPath, acceptancePath, bundlePath] = process.argv.slice(2);
+const files = [
+  { name: "v3-external-adapter-validation.json", content: readFileSync(reportPath) },
+  { name: "native-cam-real-output-acceptance.json", content: readFileSync(acceptancePath) },
+  {
+    name: "README-NATIVE-CAM-REAL-OUTPUT.md",
+    content: Buffer.from([
+      "# HeDiao3D Native CAM Real Output Bundle",
+      "",
+      "Upload this ZIP in the HeDiao3D V3 Native CAM real-output import panel.",
+      "",
+      "Included files:",
+      "- native-cam-real-output-acceptance.json",
+      "- v3-external-adapter-validation.json",
+      "",
+      "This bundle is evidence for readiness gates only. It does not unlock production NC by itself.",
+      ""
+    ].join("\\n"), "utf8")
+  }
+];
+writeFileSync(bundlePath, createZip(files));
+console.log("[HeDiao3D] Wrote real-output import bundle: " + bundlePath);
+
+function createZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBytes = Buffer.from(file.name, "utf8");
+    const data = Buffer.isBuffer(file.content) ? file.content : Buffer.from(String(file.content), "utf8");
+    const crc = crc32(data);
+    const local = Buffer.concat([
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0),
+      nameBytes, data
+    ]);
+    chunks.push(local);
+    central.push(Buffer.concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes
+    ]));
+    offset += local.length;
+  }
+  const centralOffset = offset;
+  const centralBuffer = Buffer.concat(central);
+  const end = Buffer.concat([
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(centralBuffer.length), u32(centralOffset), u16(0)
+  ]);
+  return Buffer.concat([...chunks, centralBuffer, end]);
+}
+
+function u16(value) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(value & 0xffff, 0);
+  return b;
+}
+
+function u32(value) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(value >>> 0, 0);
+  return b;
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+NODE
+
 echo "[HeDiao3D] Acceptance artifacts:"
 echo "- $REPORT"
 echo "- $OUT_DIR/v3-external-adapter-validation.md"
 echo "- $ACCEPTANCE_REPORT"
+echo "- $ACCEPTANCE_BUNDLE"
 echo "[HeDiao3D] If this script exits 0 with production-candidate output, continue with CAMotics import, V3 readiness, air-run and machine acceptance."
 `;
 }
@@ -767,6 +848,7 @@ ${report.summary.integrationStrategy.productionBoundary.map((item) => `- ${item}
 - [ ] \`adapter-report.json\`
 - [ ] \`freecad-cam-plan.json\` or \`opencamlib-kernel-plan.json\`
 - [ ] \`native-cam-real-output-acceptance.json\`
+- [ ] \`native-cam-real-output-bundle.zip\` uploaded back to HeDiao3D V3 Native CAM import panel
 - [ ] \`neutral-toolpath.json\` or externally generated G-code source snapshot
 - [ ] \`camotics-result.json\` with non-synthetic flag and matching input hash
 - [ ] \`production-gate.json\`
