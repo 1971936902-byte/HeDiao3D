@@ -7389,6 +7389,13 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
     `机床: ${machineName}`,
     `轴映射: ${axisInstruction}`,
     "",
+    "## 证据状态",
+    "",
+    `- 生产门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
+    `- 仿真证据: ${productionGate?.simulationEvidence?.level ?? "missing"} / ${productionGate?.simulationEvidence?.summary ?? "未生成"}`,
+    `- 解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
+    `- 证据档案: ${productionEvidenceDossier?.status ?? "missing"} / ${productionEvidenceDossier?.summary ?? "未生成"}`,
+    "",
     "## 当前结论",
     "",
     productionAllowed
@@ -9211,6 +9218,7 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
 
 async function refreshEvidenceDeliveryArtifacts(job) {
   if (!job?.workDir) return null;
+  await refreshNextActionChecklistArtifact(job);
   const manifestPath = join(job.workDir, "delivery-manifest.json");
   const existingManifest = readJsonFile(manifestPath);
   if (!existingManifest?.files) return null;
@@ -9266,6 +9274,28 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-download-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
   return { deliveryManifest, packageIntegrity };
+}
+
+async function refreshNextActionChecklistArtifact(job) {
+  if (!job?.workDir) return false;
+  const productionGate = readJsonFile(join(job.workDir, "production-gate.json"));
+  const productionUnlockMatrix = readJsonFile(join(job.workDir, "production-unlock-matrix.json"));
+  const productionEvidenceDossier = readJsonFile(join(job.workDir, "production-evidence-dossier.json"));
+  const safeTrialExecutionPlan = readJsonFile(join(job.workDir, "safe-trial-execution-plan.json"));
+  const postprocessProfile = readJsonFile(join(job.workDir, "postprocess-profile.json"));
+  const machineControllerProfile = readJsonFile(join(job.workDir, "machine-controller-profile.json"));
+  if (!productionGate && !productionUnlockMatrix && !productionEvidenceDossier && !safeTrialExecutionPlan) return false;
+  await writeFile(join(job.workDir, "next-action-checklist.md"), createNextActionChecklistMarkdown({
+    job,
+    productionGate,
+    productionUnlockMatrix,
+    productionEvidenceDossier,
+    safeTrialExecutionPlan,
+    postprocessProfile,
+    machineControllerProfile
+  }), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "next-action-checklist.md"));
+  return true;
 }
 
 function upsertDeliveryManifestFile(deliveryManifest, nextFile) {

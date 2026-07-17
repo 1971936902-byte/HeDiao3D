@@ -94,10 +94,14 @@ async function main() {
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.exists), "delivery manifest should expose local validation report");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.sha256), "package integrity should hash local validation report");
+  assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "next-action-checklist.md" && file.sha256), "package integrity should hash refreshed next action checklist");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
   const localValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-local-validation.json`);
+  const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   assert(localValidationArtifact.productionEvidenceEligible === true, "local validation artifact should preserve production evidence eligibility");
   assert(localValidationArtifact.importedVia === "api-camotics-result", "local validation artifact should record API import");
+  assert(nextActionChecklist.includes("## 证据状态"), "next action checklist should be refreshed with evidence status");
+  assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next action checklist should show imported CAMotics evidence level");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");

@@ -276,6 +276,7 @@ async function main() {
   assert(operatorRunbook.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "operator runbook should state exact wrapY axis mapping");
   assert(!operatorRunbook.includes("X/Y或A/Z"), "operator runbook should not use ambiguous axis wording");
   assert(nextActionChecklist.includes("HeDiao3D V3 下一步行动清单"), "next action checklist missing title");
+  assert(nextActionChecklist.includes("## 证据状态"), "next action checklist missing evidence status section");
   assert(nextActionChecklist.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "next action checklist should state exact wrapY axis mapping");
   assert(nextActionChecklist.includes("禁止上机文件"), "next action checklist should list forbidden machine files");
   assert(operatorDownloadChecklist.includes("HeDiao3D V3 操作员下载核验清单"), "operator download checklist missing title");
