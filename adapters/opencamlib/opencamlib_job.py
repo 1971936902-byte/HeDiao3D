@@ -362,10 +362,12 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
     heightfield_preview = bool(neutral.get("experimentalHeightfield")) or "heightfield" in runner_mode.lower()
     preview_scaffold = heightfield_preview or "preview" in runner_mode.lower() or "scaffold" in runner_mode.lower()
     fixture = bool(neutral.get("fixture")) or "fixture" in runner_mode.lower()
+    cutter_envelope_report_path = resolve_cutter_envelope_report_path(neutral_path, neutral)
     return {
         "status": "completed",
         "error": None,
         "neutralToolpathPath": str(neutral_path),
+        "cutterEnvelopeReportPath": cutter_envelope_report_path,
         "synthetic": False,
         "imported": False,
         "pointCount": len(neutral.get("points") or []),
@@ -463,6 +465,20 @@ def validate_imported_neutral_toolpath(neutral: Dict[str, Any]) -> List[str]:
         elif "x" not in first or "z" not in first:
             errors.append("points must include at least x and z values")
     return errors
+
+
+def resolve_cutter_envelope_report_path(neutral_path: Path, neutral: Dict[str, Any]) -> Optional[str]:
+    runner = neutral.get("runner") if isinstance(neutral.get("runner"), dict) else {}
+    heightfield = runner.get("heightfield") if isinstance(runner.get("heightfield"), dict) else {}
+    reported = heightfield.get("cutterEnvelopeReport")
+    if isinstance(reported, str) and reported:
+        path = Path(reported)
+        if path.exists():
+            return str(path)
+    sibling = neutral_path.with_name("opencamlib-cutter-envelope-report.json")
+    if sibling.exists():
+        return str(sibling)
+    return None
 
 
 def write_synthetic_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any]) -> str:
@@ -593,6 +609,7 @@ def main() -> int:
                 "neutralToolpath": {
                     "status": "generated" if attempt.get("neutralToolpathPath") else "not_generated",
                     "path": attempt.get("neutralToolpathPath"),
+                    "cutterEnvelopeReportPath": attempt.get("cutterEnvelopeReportPath"),
                     "synthetic": bool(attempt.get("synthetic")),
                     "imported": bool(attempt.get("imported")),
                     "fixture": bool(attempt.get("fixture")),

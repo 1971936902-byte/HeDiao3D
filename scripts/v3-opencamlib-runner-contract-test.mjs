@@ -69,6 +69,15 @@ try {
   assert(heightfield.points.some((point) => point.contactSamples > 1), "heightfield should include multi-contact cutter envelope samples");
   assert(heightfield.points.some((point) => point.source === "stl-heightfield-preview"), "heightfield point source missing");
   assert(new Set(heightfield.points.map((point) => point.depth)).size > 1, "heightfield should contain varying depths from STL Z interpolation");
+  assert(heightfield.runner?.heightfield?.cutterEnvelopeReport, "heightfield should reference cutter envelope report");
+  assert(existsSync(heightfield.runner.heightfield.cutterEnvelopeReport), "cutter envelope report should be written beside neutral output");
+  const envelopeReport = JSON.parse(readFileSync(heightfield.runner.heightfield.cutterEnvelopeReport, "utf8"));
+  assert(envelopeReport.schema === "hediao3d.opencamlib-cutter-envelope-report.v1", "cutter envelope report schema mismatch");
+  assert(envelopeReport.sampling?.pointCount === heightfield.points.length, "cutter envelope report point count mismatch");
+  assert(envelopeReport.sampling?.hitRate === 1, "cutter envelope report hit rate mismatch");
+  assert(envelopeReport.tool?.previewCutterRadiusMm === heightfield.runner.heightfield.cutterRadiusMm, "cutter envelope report radius mismatch");
+  assert(envelopeReport.quality?.productionCandidate === false, "heightfield envelope report must not be production candidate");
+  assert(/preview/i.test(envelopeReport.quality?.level ?? ""), "cutter envelope report should remain preview-scaffold");
 
   const noFixtureOutput = join(workDir, "neutral-no-fixture.json");
   const noFixtureRun = spawnSync(python, [runnerPath, jobPath, planPath, noFixtureOutput], {

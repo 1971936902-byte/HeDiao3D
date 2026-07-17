@@ -3005,6 +3005,7 @@ async function processOrchestratorJob(job, settings) {
     pushIfArtifactExists(job, "blendercam-run-template.py");
     pushIfArtifactExists(job, "opencamlib-kernel-plan.json");
     pushIfArtifactExists(job, "opencamlib-run-template.py");
+    pushIfArtifactExists(job, "opencamlib-cutter-envelope-report.json");
     pushIfArtifactExists(job, "neutral-toolpath.json");
     pushIfArtifactExists(job, "camotics-simulation-plan.json");
     pushIfArtifactExists(job, "camotics-project-template.json");
@@ -7467,6 +7468,9 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
   }
   if (existsSync(join(job.workDir, "opencamlib-run-template.py"))) {
     files.push(createDeliveryFile(job.id, "opencamlib-run-template.py", "OpenCAMLib 运行模板", "report", true, "外部 OpenCAMLib adapter 生成的中性 cutter-contact 输出模板，用于服务器端二次验证。"));
+  }
+  if (existsSync(join(job.workDir, "opencamlib-cutter-envelope-report.json"))) {
+    files.push(createDeliveryFile(job.id, "opencamlib-cutter-envelope-report.json", "OpenCAMLib 刀具包络采样报告", "report", true, "记录 STL 几何采样、刀具半径包络、命中率和 preview scaffold 生产边界。"));
   }
   for (const output of repairExecution?.outputs ?? []) {
     if (!output?.filename || !output.exists) continue;

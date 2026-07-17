@@ -60,14 +60,19 @@ def main() -> int:
         if neutral is None:
             print("STL heightfield output requested, but no valid surface samples could be generated.", file=sys.stderr)
             return 5
+        envelope_report = create_cutter_envelope_report(job, plan, neutral, detection, geometry)
+        envelope_path = output_path.with_name("opencamlib-cutter-envelope-report.json")
+        neutral["runner"]["heightfield"]["cutterEnvelopeReport"] = str(envelope_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+        envelope_path.write_text(json.dumps(envelope_report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({
             "ok": True,
             "mode": "stl-heightfield-preview",
             "schema": neutral["schema"],
             "points": len(neutral["points"]),
             "missCount": neutral["runner"]["heightfield"]["missCount"],
+            "cutterEnvelopeReport": str(envelope_path),
             "output": str(output_path),
             "opencamlibAvailable": detection["available"],
         }, ensure_ascii=False))
@@ -380,6 +385,80 @@ def compute_preview_cutter_radius(tool: Dict[str, Any], settings: Dict[str, Any]
     scale = float(os.environ.get("HEDIAO3D_OPENCAMLIB_CUTTER_RADIUS_SCALE") or 0.5)
     radius = max(flat_tip / 2, diameter / 2 * max(0.0, scale))
     return max(0.0, radius)
+
+
+def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any]) -> Dict[str, Any]:
+    points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
+    heightfield = ((neutral.get("runner") or {}).get("heightfield") or {})
+    depths = [float(point.get("depth")) for point in points if is_number(point.get("depth"))]
+    contact_samples = [int(point.get("contactSamples") or 0) for point in points]
+    fallback_count = int(heightfield.get("fallbackCount") or 0)
+    miss_count = int(heightfield.get("missCount") or 0)
+    point_count = len(points)
+    total_sites = point_count + miss_count
+    hit_rate = point_count / total_sites if total_sites else 0
+    fallback_rate = fallback_count / point_count if point_count else 0
+    return {
+        "schema": "hediao3d.opencamlib-cutter-envelope-report.v1",
+        "jobId": job.get("jobId"),
+        "engine": "opencamlib",
+        "mode": "stl-heightfield-preview",
+        "createdBy": "adapters/opencamlib/opencamlib_runner.py",
+        "opencamlib": detection,
+        "model": {
+            "path": (plan.get("model") or {}).get("path"),
+            "format": (plan.get("model") or {}).get("format"),
+            "geometry": geometry,
+        },
+        "tool": {
+            "toolProfileId": ((plan.get("tool") or {}).get("toolProfileId") or (job.get("settings") or {}).get("toolProfileId")),
+            "diameterMm": (plan.get("tool") or {}).get("diameterMm") or (job.get("settings") or {}).get("toolDiameter"),
+            "flatTipMm": (plan.get("tool") or {}).get("flatTipMm"),
+            "angleDeg": (plan.get("tool") or {}).get("angleDeg"),
+            "previewCutterRadiusMm": heightfield.get("cutterRadiusMm"),
+            "envelopeSamplePattern": "center + 8 offsets at 0.5R + 8 offsets at 1.0R",
+        },
+        "sampling": {
+            "rows": heightfield.get("rows"),
+            "cols": heightfield.get("cols"),
+            "pointCount": point_count,
+            "missCount": miss_count,
+            "hitRate": round(hit_rate, 6),
+            "fallbackCount": fallback_count,
+            "fallbackRate": round(fallback_rate, 6),
+            "fallbackRadius": heightfield.get("fallbackRadius"),
+            "cutterSampleCount": heightfield.get("cutterSampleCount"),
+            "contactSamplesMin": min(contact_samples) if contact_samples else 0,
+            "contactSamplesMax": max(contact_samples) if contact_samples else 0,
+            "contactSamplesAvg": round(sum(contact_samples) / len(contact_samples), 6) if contact_samples else 0,
+        },
+        "depth": {
+            "zMin": min((float(point.get("z")) for point in points if is_number(point.get("z"))), default=None),
+            "zMax": max((float(point.get("z")) for point in points if is_number(point.get("z"))), default=None),
+            "depthMin": min(depths) if depths else None,
+            "depthMax": max(depths) if depths else None,
+            "depthAvg": round(sum(depths) / len(depths), 6) if depths else None,
+        },
+        "quality": {
+            "level": "preview-scaffold",
+            "postprocessEligible": False,
+            "productionCandidate": False,
+            "summary": "Geometry-derived STL heightfield envelope was generated for trial visualization, but it is not validated OpenCAMLib drop-cutter output.",
+            "requiredUpgrade": "Replace heightfield preview with real OpenCAMLib/ocl cutter-contact or drop-cutter sampling before production unlock.",
+        },
+        "productionBoundary": [
+            "This report audits preview cutter-envelope sampling only.",
+            "It must not unlock production NC without non-preview neutral-toolpath, CAMotics material-removal evidence, air-run, trial feedback and machine acceptance.",
+        ],
+    }
+
+
+def is_number(value: Any) -> bool:
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def sample_cutter_envelope_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float, cutter_radius: float) -> Optional[Dict[str, Any]]:

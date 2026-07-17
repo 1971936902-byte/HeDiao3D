@@ -108,6 +108,11 @@ async function main() {
   assert(neutralToolpath.experimentalHeightfield === true, "neutral output should mark heightfield mode");
   assert(Array.isArray(neutralToolpath.points) && neutralToolpath.points.length === 192, "neutral point count mismatch");
   assert(neutralToolpath.runner?.heightfield?.missCount === 0, "heightfield runner should sample the closed STL");
+  assert(neutralToolpath.runner?.heightfield?.cutterEnvelopeReport, "neutral output should reference cutter envelope report");
+  const cutterEnvelopeReport = await getArtifactJson(job.id, "opencamlib-cutter-envelope-report.json");
+  assert(cutterEnvelopeReport.schema === "hediao3d.opencamlib-cutter-envelope-report.v1", "cutter envelope report schema mismatch");
+  assert(cutterEnvelopeReport.sampling?.pointCount === neutralToolpath.points.length, "cutter envelope report point count mismatch");
+  assert(cutterEnvelopeReport.quality?.productionCandidate === false, "preview cutter envelope report must not unlock production");
 
   const camInputPlan = await getArtifactJson(job.id, "cam-input-plan.json");
   assert(camInputPlan.status === "ready", `closed STL CAM input should be ready, got ${camInputPlan.status}`);
@@ -126,6 +131,9 @@ async function main() {
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.gates?.allowTrialNc === true, "package index should expose trial NC availability");
   assert(packageIndex.gates?.allowProductionNc === false, "package index must keep production locked");
+  assert(packageIndex.filesByPurpose?.reports?.some((file) => file.filename === "opencamlib-cutter-envelope-report.json"), "package index should include cutter envelope report");
+  const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  assert(packageIntegrity.files?.some((file) => file.filename === "opencamlib-cutter-envelope-report.json" && file.sha256), "package integrity should hash cutter envelope report");
 
   console.log(JSON.stringify({
     ok: true,
