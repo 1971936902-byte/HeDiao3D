@@ -178,9 +178,13 @@ async function main() {
   assert(camServerPrepChecklist.includes("HeDiao3D V3 CAM Server Prep Checklist"), "CAM server prep checklist missing title");
   assert(camServerPrepChecklist.includes("npm run test:v3:native-cam"), "CAM server prep checklist missing native CAM command");
   assert(camServerPrepChecklist.includes("Fixture, synthetic and preview scaffold outputs are contract evidence only."), "CAM server prep checklist missing production boundary");
+  const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
+  assert(camHandoffQuality.adapterHandoffEvidence?.schema === "hediao3d.adapter-handoff-evidence.v1", "CAM handoff quality missing adapter handoff evidence");
+  assert(camHandoffQuality.adapterHandoffEvidence.classification, "CAM handoff quality missing adapter handoff classification");
   const camHandoffEvidence = await getArtifactText(job.id, "cam-handoff-evidence.md");
   assert(camHandoffEvidence.includes("HeDiao3D V3 CAM Handoff Evidence"), "CAM handoff evidence missing title");
   assert(camHandoffEvidence.includes("Source Classification"), "CAM handoff evidence missing source classification");
+  assert(camHandoffEvidence.includes("Adapter Handoff Classification"), "CAM handoff evidence missing adapter classification");
   assert(camHandoffEvidence.includes("Production Boundary"), "CAM handoff evidence missing production boundary");
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
