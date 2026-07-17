@@ -138,6 +138,11 @@ const server = createServer(async (req, res) => {
       return createOrchestratorCamoticsCliPackage(orchestratorCamoticsCliPackageMatch[1], res);
     }
 
+    const orchestratorCamoticsExecutionPreflightMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/camotics-execution-preflight$/);
+    if (req.method === "POST" && orchestratorCamoticsExecutionPreflightMatch) {
+      return createOrchestratorCamoticsExecutionPreflight(orchestratorCamoticsExecutionPreflightMatch[1], res);
+    }
+
     const orchestratorCamoticsLinuxPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/camotics-linux-package$/);
     if (req.method === "GET" && orchestratorCamoticsLinuxPackageMatch) {
       return getOrchestratorCamoticsLinuxPackage(orchestratorCamoticsLinuxPackageMatch[1], res);
@@ -734,10 +739,12 @@ function createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, ada
       evidence: [
         `CAMotics evidence: ${readinessCamoticsEvidence?.status ?? "missing"} / source=${readinessCamoticsEvidence?.source ?? "missing"}`,
         `input=${readinessCamoticsEvidence?.inputIdentityStatus ?? "missing"} / motion=${readinessCamoticsEvidence?.motionConsistencyStatus ?? "missing"} / machine=${readinessCamoticsEvidence?.machineContextStatus ?? "missing"}`,
+        latestJob?.camoticsExecutionPreflight?.artifactExists ? `CAMotics执行预检: ${latestJob.camoticsExecutionPreflight.status ?? "unknown"} / currentHost=${latestJob.camoticsExecutionPreflight.canRunOnCurrentHost ? "ready" : "not-ready"}` : "缺少 CAMotics 执行预检",
         externalHandoff ? `自研旋转包裹/外部 handoff: ${externalHandoff.status} / synthetic=${externalHandoff.syntheticSimulation ? "yes" : "no"}` : "缺少外部 handoff 小闭环"
       ],
       missing: [
         ...(!camoticsReady ? ["缺少非 synthetic 且绑定 input/motion/machine 的材料去除仿真证据"] : []),
+        ...(!latestJob?.camoticsExecutionPreflight?.artifactExists ? ["缺少当前 job 的 CAMotics 执行预检报告"] : []),
         ...(!externalHandoff || externalHandoff.syntheticSimulation ? ["需要真实 CAMotics/等效仿真替换 synthetic 协议验证"] : [])
       ],
       nextActions: [
@@ -1387,6 +1394,24 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 14,
+      id: "camotics-execution-preflight",
+      title: "CAMotics 执行预检",
+      status: !latestJob
+        ? "pending"
+        : !latestJob.camoticsExecutionPreflight?.artifactExists
+          ? "pending"
+          : latestJob.camoticsExecutionPreflight.status === "material-removal-result-imported" || latestJob.camoticsExecutionPreflight.status === "ready-to-run-current-host"
+            ? "done"
+            : "blocked",
+      command: "POST /api/orchestrator/jobs/:id/camotics-execution-preflight",
+      evidence: ["camotics-execution-preflight.json", "camotics-execution-preflight.md", "camotics-cli-run-package.json"],
+      detail: latestJob?.camoticsExecutionPreflight?.artifactExists
+        ? `${latestJob.camoticsExecutionPreflight.status ?? "unknown"} / currentHost=${latestJob.camoticsExecutionPreflight.canRunOnCurrentHost ? "ready" : "not-ready"} / command=${latestJob.camoticsExecutionPreflight.command ?? "-"}`
+        : "尚未对最近任务执行 CAMotics 当前主机/服务器预检。",
+      blocksProduction: !latestJob?.camoticsExecutionPreflight?.artifactExists
+    }),
+    createAcceptanceStep({
+      order: 15,
       id: "production-evidence-dossier",
       title: "生产证据档案",
       status: !latestEvidenceDossier
@@ -1404,7 +1429,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestEvidenceDossier || latestEvidenceDossier.status !== "production-evidence-complete"
     }),
     createAcceptanceStep({
-      order: 15,
+      order: 16,
       id: "trial-feedback",
       title: "真实试雕反馈回填",
       status: !latestTrialFeedback
@@ -1422,7 +1447,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestTrialFeedback || latestTrialFeedback.latestOutcome !== "success" || latestTrialFeedback.latestDownloadIntegrityBound !== "matched"
     }),
     createAcceptanceStep({
-      order: 16,
+      order: 17,
       id: "machine-acceptance",
       title: "机床现场验收回填",
       status: !latestMachineAcceptance
@@ -1440,7 +1465,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !latestMachineAcceptance || latestMachineAcceptance.latestOutcome !== "success" || !latestMachineAcceptance.latestAllRequiredPassed
     }),
     createAcceptanceStep({
-      order: 17,
+      order: 18,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -4418,6 +4443,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
   await writeFile(join(job.workDir, "rotary-calibration-airrun.nc"), rotaryCalibrationAirRunGcode, "utf8");
   const camoticsCliPackage = await prepareCamoticsCliPackageForJob(job, job.workDir);
+  const camoticsExecutionPreflight = await createCamoticsExecutionPreflightReport(job, job.workDir);
   const camoticsAdapterReport = await runCamoticsSimulationAdapter(job, settings, camoticsInput, camoticsSimulationPlan);
   pushIfArtifactExists(job, "camotics-adapter-report.json");
   pushIfArtifactExists(job, "camotics-result.json");
@@ -4642,6 +4668,8 @@ async function processOrchestratorJob(job, settings) {
   pushIfArtifactExists(job, "camotics-result-validate.js");
   pushIfArtifactExists(job, "camotics-linux-operator-checklist.md");
   pushIfArtifactExists(job, "camotics-cli-package-report.json");
+  pushIfArtifactExists(job, "camotics-execution-preflight.json");
+  pushIfArtifactExists(job, "camotics-execution-preflight.md");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-trace-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
@@ -4707,10 +4735,21 @@ async function processOrchestratorJob(job, settings) {
         artifact: "camotics-cli-run-package.json",
         resultTemplate: "camotics-result-template.json",
         linuxRunScript: "camotics-linux-run.sh",
+        resultValidator: "camotics-result-validate.js",
+        operatorChecklist: "camotics-linux-operator-checklist.md",
         report: "camotics-cli-package-report.json",
         productionUnlockEligible: false,
         preferredGcodeSha256: camoticsCliPackage.preferredGcodeIdentity?.sha256 ?? null,
         motionProfile: camoticsCliPackage.preferredGcodeIdentity?.motionProfile ?? null
+      } : null,
+      camoticsExecutionPreflight: camoticsExecutionPreflight ? {
+        status: camoticsExecutionPreflight.status,
+        canRunOnCurrentHost: camoticsExecutionPreflight.canRunOnCurrentHost,
+        command: camoticsExecutionPreflight.command?.command ?? null,
+        artifact: "camotics-execution-preflight.json",
+        report: "camotics-execution-preflight.md",
+        productionUnlockEligible: false,
+        nextActions: camoticsExecutionPreflight.nextActions
       } : null,
       rotaryWrapPreviewReport,
       postprocessTraceReport,
@@ -9472,6 +9511,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("camotics-linux-run.sh"),
         getFile("camotics-linux-operator-checklist.md"),
         getFile("camotics-cli-package-report.json"),
+        getFile("camotics-execution-preflight.json"),
+        getFile("camotics-execution-preflight.md"),
         getFile("camotics-adapter-report.json"),
         getFile("camotics-result.json"),
         getFile("camotics-run.md"),
@@ -9638,6 +9679,13 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         operatorChecklist: getFile("camotics-linux-operator-checklist.md")?.exists ? "camotics-linux-operator-checklist.md" : null,
         report: getFile("camotics-cli-package-report.json")?.exists ? "camotics-cli-package-report.json" : null
       } : null,
+      executionPreflight: getFile("camotics-execution-preflight.json")?.exists ? {
+        artifact: "camotics-execution-preflight.json",
+        report: getFile("camotics-execution-preflight.md")?.exists ? "camotics-execution-preflight.md" : null,
+        status: readJsonFileSafe(join(job.workDir, "camotics-execution-preflight.json"))?.status ?? "unknown",
+        canRunOnCurrentHost: Boolean(readJsonFileSafe(join(job.workDir, "camotics-execution-preflight.json"))?.canRunOnCurrentHost),
+        command: readJsonFileSafe(join(job.workDir, "camotics-execution-preflight.json"))?.command?.command ?? null
+      } : null,
       compatibility: camoticsInput.compatibility,
       resultFile: fileByName.has("camotics-result.json") ? "camotics-result.json" : null,
       evidenceLevel: productionGate.simulationEvidence?.level ?? null,
@@ -9693,6 +9741,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-result-validate.js", "CAMotics结果本地校验脚本", "report", existsSync(join(job.workDir, "camotics-result-validate.js")), "Linux CAM 服务器回填前校验 camotics-result.json、输入哈希、运动画像和截图/STL 证据。"),
     createDeliveryFile(job.id, "camotics-linux-operator-checklist.md", "CAMotics Linux操作清单", "report", existsSync(join(job.workDir, "camotics-linux-operator-checklist.md")), "Linux CAM 操作员按此完成输入核验、真实仿真、结果校验和回填步骤。"),
     createDeliveryFile(job.id, "camotics-cli-package-report.json", "CAMotics运行包报告", "report", existsSync(join(job.workDir, "camotics-cli-package-report.json")), "记录 CAMotics Linux 准备包生成状态、检查项和安全锁。"),
+    createDeliveryFile(job.id, "camotics-execution-preflight.json", "CAMotics执行预检", "report", existsSync(join(job.workDir, "camotics-execution-preflight.json")), "检查当前主机/CAM服务器是否具备运行真实 CAMotics 材料去除仿真的条件；不解锁生产。"),
+    createDeliveryFile(job.id, "camotics-execution-preflight.md", "CAMotics执行预检说明", "report", existsSync(join(job.workDir, "camotics-execution-preflight.md")), "解释 CAMotics 执行预检状态、阻断原因和下一步回填动作。"),
     createDeliveryFile(job.id, "camotics-job.json", "CAMotics Adapter 任务", "report", existsSync(join(job.workDir, "camotics-job.json")), "CAMotics adapter 的独立输入快照。"),
     createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
     createDeliveryFile(job.id, "camotics-result-local-validation.json", "CAMotics本地结果校验报告", "report", existsSync(join(job.workDir, "camotics-result-local-validation.json")), "Linux CAM 服务器运行 camotics-result-validate.js 生成的本地校验报告，说明是否可作为材料去除证据回填。"),
@@ -10011,6 +10061,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "camotics-result-validate.js", "CAMotics结果本地校验脚本", "report", existsSync(join(job.workDir, "camotics-result-validate.js")), "Linux CAM 服务器回填前校验 camotics-result.json、输入哈希、运动画像和截图/STL 证据。"),
     createDeliveryFile(job.id, "camotics-linux-operator-checklist.md", "CAMotics Linux操作清单", "report", existsSync(join(job.workDir, "camotics-linux-operator-checklist.md")), "Linux CAM 操作员按此完成输入核验、真实仿真、结果校验和回填步骤。"),
     createDeliveryFile(job.id, "camotics-cli-package-report.json", "CAMotics运行包报告", "report", existsSync(join(job.workDir, "camotics-cli-package-report.json")), "记录 CAMotics Linux 准备包生成状态、检查项和安全锁。"),
+    createDeliveryFile(job.id, "camotics-execution-preflight.json", "CAMotics执行预检", "report", existsSync(join(job.workDir, "camotics-execution-preflight.json")), "检查当前主机/CAM服务器是否具备运行真实 CAMotics 材料去除仿真的条件；不解锁生产。"),
+    createDeliveryFile(job.id, "camotics-execution-preflight.md", "CAMotics执行预检说明", "report", existsSync(join(job.workDir, "camotics-execution-preflight.md")), "解释 CAMotics 执行预检状态、阻断原因和下一步回填动作。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", existsSync(join(job.workDir, "simulation-summary.json")), "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", existsSync(join(job.workDir, "production-gate.json")), "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", existsSync(join(job.workDir, "production-unlock-matrix.json")), "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
@@ -10919,6 +10971,223 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
     deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
     packageIntegrity: refreshedDelivery?.packageIntegrity ?? null
   });
+}
+
+async function createOrchestratorCamoticsExecutionPreflight(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  if (!existsSync(join(workDir, "camotics-cli-run-package.json")) && existsSync(join(workDir, "camotics-cli-execution-plan.json"))) {
+    await prepareCamoticsCliPackageForJob(job, workDir);
+  }
+  const report = await createCamoticsExecutionPreflightReport(job, workDir);
+  job.workDir = workDir;
+  job.updatedAt = report.createdAt;
+  appendOrchestratorLog(job, `CAMotics 执行预检：${report.status}。`);
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  job.result = job.result ?? {};
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    camoticsExecutionPreflight: {
+      status: report.status,
+      canRunOnCurrentHost: report.canRunOnCurrentHost,
+      command: report.command?.command ?? null,
+      artifact: "camotics-execution-preflight.json",
+      report: "camotics-execution-preflight.md",
+      productionUnlockEligible: false,
+      nextActions: report.nextActions
+    },
+    ...(refreshedDelivery ? {
+      deliveryManifest: refreshedDelivery.deliveryManifest,
+      packageIntegrity: {
+        schema: refreshedDelivery.packageIntegrity.schema,
+        status: refreshedDelivery.packageIntegrity.status,
+        summary: refreshedDelivery.packageIntegrity.summary,
+        fileCount: refreshedDelivery.packageIntegrity.fileCount,
+        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
+        files: refreshedDelivery.packageIntegrity.files
+      }
+    } : {})
+  };
+  for (const filename of [
+    "camotics-execution-preflight.json",
+    "camotics-execution-preflight.md",
+    "delivery-manifest.json",
+    "operator-download-checklist.md",
+    "package-integrity.json"
+  ]) {
+    pushIfArtifactExists(job, filename);
+  }
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+  return json(res, 200, {
+    ok: report.status === "ready-to-run-current-host" || report.status === "material-removal-result-imported",
+    status: report.status,
+    report,
+    artifacts: {
+      json: publicArtifactUrl(safeJobId, "camotics-execution-preflight.json"),
+      markdown: publicArtifactUrl(safeJobId, "camotics-execution-preflight.md")
+    },
+    deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
+    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null
+  });
+}
+
+async function createCamoticsExecutionPreflightReport(job, workDir) {
+  const runPackage = readJsonFileSafe(join(workDir, "camotics-cli-run-package.json"));
+  const cliPackageReport = readJsonFileSafe(join(workDir, "camotics-cli-package-report.json"));
+  const result = readJsonFileSafe(join(workDir, "camotics-result.json"));
+  const localValidation = readJsonFileSafe(join(workDir, "camotics-result-local-validation.json"));
+  const previewExists = existsSync(join(workDir, "camotics-preview.nc"));
+  const templateExists = existsSync(join(workDir, "camotics-result-template.json"));
+  const validatorExists = existsSync(join(workDir, "camotics-result-validate.js"));
+  const operatorChecklistExists = existsSync(join(workDir, "camotics-linux-operator-checklist.md"));
+  const command = detectCamEngines().find((engine) => engine.id === "camotics") ?? null;
+  const resultImported = Boolean(result?.evidenceQuality?.productionEvidenceEligible && result?.synthetic === false);
+  const packageReady = runPackage?.status === "ready-for-linux-camotics" && Boolean(runPackage?.preferredGcodeIdentity?.sha256);
+  const requiredMissing = [
+    ...(!previewExists ? ["camotics-preview.nc"] : []),
+    ...(!runPackage ? ["camotics-cli-run-package.json"] : []),
+    ...(!templateExists ? ["camotics-result-template.json"] : []),
+    ...(!validatorExists ? ["camotics-result-validate.js"] : []),
+    ...(!operatorChecklistExists ? ["camotics-linux-operator-checklist.md"] : [])
+  ];
+  const canRunOnCurrentHost = Boolean(packageReady && previewExists && command?.available);
+  const status = resultImported
+    ? "material-removal-result-imported"
+    : requiredMissing.length > 0
+      ? "blocked-missing-package-files"
+      : !packageReady
+        ? "blocked-package-not-ready"
+        : !command?.available
+          ? "blocked-current-host-missing-camotics"
+          : "ready-to-run-current-host";
+  const blockers = [
+    ...requiredMissing.map((filename) => `缺少 ${filename}`),
+    ...(!packageReady && requiredMissing.length === 0 ? [`CAMotics 运行包状态不是 ready-for-linux-camotics：${runPackage?.status ?? "missing"}`] : []),
+    ...(!command?.available && !resultImported ? ["当前主机未检测到 camotics-cli/camotics 命令"] : [])
+  ];
+  const warnings = [
+    "本预检不会执行材料去除仿真，也不会解锁生产 NC。",
+    ...(!localValidation && result ? ["已有 camotics-result.json，但缺少 camotics-result-local-validation.json，建议补齐 Linux 本地校验报告。"] : []),
+    ...(command?.available ? ["当前主机检测到 CAMotics 命令，但仍需操作者运行真实材料去除并回填结果。"] : [])
+  ];
+  const nextActions = resultImported
+    ? ["重新生成 readiness，确认仿真层从 blocked 变为 ready/partial。"]
+    : canRunOnCurrentHost
+      ? [
+        "在当前主机或 Linux CAM 服务器运行 camotics-linux-run.sh。",
+        "按 camotics-result-template.json 填写真实 camotics-result.json。",
+        "运行 node camotics-result-validate.js camotics-result.json，通过后回填结果包。"
+      ]
+      : [
+        ...(requiredMissing.length > 0 ? ["先调用 POST /api/orchestrator/jobs/:id/camotics-cli-package 生成 CAMotics Linux 准备包。"] : []),
+        ...(!command?.available ? ["把 CAMotics Linux 仿真包下载到已安装 camotics-cli/camotics 的 Linux CAM 服务器执行。"] : []),
+        "回填 camotics-result-bundle.zip 或 camotics-result.json + 截图/STL + 本地校验报告。"
+      ];
+  const report = {
+    schema: "hediao3d.camotics-execution-preflight.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status,
+    canRunOnCurrentHost,
+    productionUnlockEligible: false,
+    currentHost: {
+      platform: process.platform,
+      nodeVersion: process.version,
+      cwd: process.cwd()
+    },
+    command: command ? {
+      available: Boolean(command.available),
+      command: command.command ?? null,
+      version: command.version ?? null,
+      notes: command.notes ?? null
+    } : null,
+    package: {
+      ready: packageReady,
+      status: runPackage?.status ?? null,
+      reportStatus: cliPackageReport?.status ?? null,
+      preferredGcodeSha256: runPackage?.preferredGcodeIdentity?.sha256 ?? null,
+      motionLineCount: runPackage?.preferredGcodeIdentity?.motionProfile?.motionLineCount ?? null,
+      machineContext: runPackage?.preferredGcodeIdentity?.machineContext ?? null
+    },
+    files: {
+      previewExists,
+      runPackageExists: Boolean(runPackage),
+      templateExists,
+      validatorExists,
+      operatorChecklistExists,
+      resultExists: Boolean(result),
+      localValidationExists: Boolean(localValidation),
+      screenshotExists: existsSync(join(workDir, "camotics-preview.png")),
+      materialMeshExists: existsSync(join(workDir, "camotics-material-removal.stl"))
+    },
+    resultEvidence: result ? {
+      status: result.status ?? null,
+      synthetic: Boolean(result.synthetic),
+      productionEvidenceEligible: Boolean(result.evidenceQuality?.productionEvidenceEligible),
+      inputIdentityStatus: result.evidenceQuality?.inputIdentity?.status ?? "missing",
+      motionConsistencyStatus: result.evidenceQuality?.motionConsistency?.status ?? "missing",
+      machineContextStatus: result.evidenceQuality?.machineContext?.status ?? "missing",
+      artifactEvidenceStatus: result.evidenceQuality?.status ?? "missing"
+    } : null,
+    blockers,
+    warnings,
+    nextActions,
+    safetyLocks: {
+      productionUnlockFromPreflight: false,
+      requiresRealMaterialRemovalResult: true,
+      syntheticResultAllowedForProduction: false
+    }
+  };
+  await writeFile(join(workDir, "camotics-execution-preflight.json"), JSON.stringify(report, null, 2), "utf8");
+  await writeFile(join(workDir, "camotics-execution-preflight.md"), createCamoticsExecutionPreflightMarkdown(report), "utf8");
+  return report;
+}
+
+function createCamoticsExecutionPreflightMarkdown(report) {
+  return [
+    "# HeDiao3D CAMotics Execution Preflight",
+    "",
+    `Job: ${report.jobId}`,
+    `Status: ${report.status}`,
+    `Can run on current host: ${report.canRunOnCurrentHost ? "yes" : "no"}`,
+    `Production unlock: ${report.productionUnlockEligible ? "yes" : "no"}`,
+    "",
+    "## Command",
+    "",
+    `- Available: ${report.command?.available ? "yes" : "no"}`,
+    `- Command: ${report.command?.command ?? "-"}`,
+    `- Version: ${report.command?.version ?? "-"}`,
+    "",
+    "## Package",
+    "",
+    `- Ready: ${report.package.ready ? "yes" : "no"}`,
+    `- Status: ${report.package.status ?? "-"}`,
+    `- Preview SHA-256: ${report.package.preferredGcodeSha256 ?? "-"}`,
+    `- Motion lines: ${report.package.motionLineCount ?? "-"}`,
+    `- Machine context: ${report.package.machineContext ? JSON.stringify(report.package.machineContext) : "-"}`,
+    "",
+    "## Result Evidence",
+    "",
+    report.resultEvidence
+      ? `- eligible=${report.resultEvidence.productionEvidenceEligible} / input=${report.resultEvidence.inputIdentityStatus} / motion=${report.resultEvidence.motionConsistencyStatus} / machine=${report.resultEvidence.machineContextStatus} / artifacts=${report.resultEvidence.artifactEvidenceStatus}`
+      : "- missing",
+    "",
+    "## Blockers",
+    "",
+    ...(report.blockers.length ? report.blockers.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Next Actions",
+    "",
+    ...report.nextActions.map((item) => `- ${item}`)
+  ].join("\n");
 }
 
 async function prepareCamoticsCliPackageForJob(job, workDir) {
@@ -12252,6 +12521,10 @@ function createOrchestratorJobSummary(job) {
   const camoticsCliPackageReport = camoticsCliPackageReportPath && existsSync(camoticsCliPackageReportPath)
     ? readJsonFileSafe(camoticsCliPackageReportPath)
     : null;
+  const camoticsExecutionPreflightPath = job.workDir ? join(job.workDir, "camotics-execution-preflight.json") : null;
+  const camoticsExecutionPreflight = camoticsExecutionPreflightPath && existsSync(camoticsExecutionPreflightPath)
+    ? readJsonFileSafe(camoticsExecutionPreflightPath)
+    : null;
   const camoticsCliPackageArtifactExists = Boolean(camoticsCliPackagePath && existsSync(camoticsCliPackagePath));
   return {
     id: job.id,
@@ -12286,6 +12559,15 @@ function createOrchestratorJobSummary(job) {
       motionLineCount: camoticsCliPackageSummary?.motionProfile?.motionLineCount
         ?? camoticsCliPackageReport?.preferredGcodeIdentity?.motionProfile?.motionLineCount
         ?? null
+    },
+    camoticsExecutionPreflight: {
+      artifactExists: Boolean(camoticsExecutionPreflight),
+      status: summary.camoticsExecutionPreflight?.status ?? camoticsExecutionPreflight?.status ?? null,
+      canRunOnCurrentHost: Boolean(summary.camoticsExecutionPreflight?.canRunOnCurrentHost ?? camoticsExecutionPreflight?.canRunOnCurrentHost),
+      command: summary.camoticsExecutionPreflight?.command ?? camoticsExecutionPreflight?.command?.command ?? null,
+      artifact: camoticsExecutionPreflight ? "camotics-execution-preflight.json" : null,
+      report: job.workDir && existsSync(join(job.workDir, "camotics-execution-preflight.md")) ? "camotics-execution-preflight.md" : null,
+      nextActions: summary.camoticsExecutionPreflight?.nextActions ?? camoticsExecutionPreflight?.nextActions ?? []
     }
   };
 }
@@ -12409,6 +12691,8 @@ function getOrchestratorCamoticsLinuxPackage(jobId, res) {
     "camotics-input.json",
     "camotics-run.md",
     "camotics-cli-package-report.json",
+    "camotics-execution-preflight.json",
+    "camotics-execution-preflight.md",
     "toolpath.nc",
     "air-run.nc",
     "rotary-calibration-airrun.nc",
@@ -12657,6 +12941,8 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "camotics-input.json",
     "camotics-simulation-plan.json",
     "camotics-cli-execution-plan.json",
+    "camotics-execution-preflight.json",
+    "camotics-execution-preflight.md",
     "simulation-summary.json"
   ]).has(file.filename);
 }
@@ -12698,7 +12984,9 @@ function createCamoticsLinuxPackageFile(workDir, filename, required) {
     "rotary-wrap-preview-report.json",
     "postprocess-trace-report.json",
     "machine-controller-profile.json",
-    "package-integrity.json"
+    "package-integrity.json",
+    "camotics-execution-preflight.json",
+    "camotics-execution-preflight.md"
   ]);
   const folder = simulationInputs.has(filename)
     ? "inputs"

@@ -868,6 +868,13 @@ type V3OrchestratorJob = {
             interpretation: string;
             reason: string;
           };
+          executionPreflight?: {
+            artifact: string;
+            report: string | null;
+            status: string;
+            canRunOnCurrentHost: boolean;
+            command: string | null;
+          } | null;
           inputIdentityStatus?: string | null;
           cliRunPackageBindingStatus?: string | null;
           motionConsistencyStatus?: string | null;
@@ -893,6 +900,15 @@ type V3OrchestratorJob = {
           zMax: number | null;
         } | null;
       };
+      camoticsExecutionPreflight?: {
+        status: string;
+        canRunOnCurrentHost: boolean;
+        command: string | null;
+        artifact: string;
+        report: string;
+        productionUnlockEligible: boolean;
+        nextActions: string[];
+      } | null;
       deliveryManifest?: {
         packageLevel: string;
         allowProductionNc: boolean;
@@ -1160,6 +1176,15 @@ type V3JobSummary = {
   allowProductionNc: boolean;
   allowTrialNc: boolean;
   allowAirRun: boolean;
+  camoticsExecutionPreflight?: {
+    artifactExists: boolean;
+    status: string | null;
+    canRunOnCurrentHost: boolean;
+    command: string | null;
+    artifact: string | null;
+    report: string | null;
+    nextActions: string[];
+  };
 };
 
 type V3Diagnostics = {
@@ -3005,6 +3030,45 @@ export function App() {
         category: "cam",
         status: "error",
         title: "生成 CAMotics Linux 准备包失败",
+        detail: message
+      });
+    } finally {
+      setIsV3CamoticsPackagePreparing(false);
+    }
+  };
+
+  const handleRunV3CamoticsExecutionPreflight = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再执行 CAMotics 预检。");
+      return;
+    }
+    setIsV3CamoticsPackagePreparing(true);
+    try {
+      setV3Status("正在执行 CAMotics 当前主机/服务器预检");
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-execution-preflight`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "CAMotics 执行预检失败");
+      const status = data.status ?? data.report?.status ?? "unknown";
+      const currentHost = data.report?.canRunOnCurrentHost ? "当前主机可执行" : "需转到Linux CAM服务器";
+      setV3Status(`CAMotics 执行预检：${status}，${currentHost}`);
+      recordTask({
+        category: "cam",
+        status: data.report?.canRunOnCurrentHost ? "ok" : "warning",
+        title: "CAMotics 执行预检",
+        detail: `${status} / ${currentHost}`
+      });
+      await handleLoadV3Job(v3Job.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "CAMotics 执行预检失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "CAMotics 执行预检失败",
         detail: message
       });
     } finally {
@@ -6274,6 +6338,23 @@ export function App() {
                       <Download size={17} />
                       {isV3PackageDownloading ? "打包中..." : "下载Linux仿真包"}
                     </button>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handleRunV3CamoticsExecutionPreflight}
+                      disabled={!v3Job?.id || isV3CamoticsPackagePreparing}
+                      title="检查当前主机是否具备直接运行 CAMotics 的条件；不执行材料去除仿真"
+                    >
+                      <ClipboardCheck size={17} />
+                      {isV3CamoticsPackagePreparing ? "检查中..." : "执行仿真预检"}
+                    </button>
+                    {v3Job.result.summary.camoticsExecutionPreflight && (
+                      <small className={v3Job.result.summary.camoticsExecutionPreflight.canRunOnCurrentHost ? "v3-inline-ok" : "v3-inline-warning"}>
+                        仿真预检：{v3Job.result.summary.camoticsExecutionPreflight.status}
+                        {v3Job.result.summary.camoticsExecutionPreflight.command ? ` · ${v3Job.result.summary.camoticsExecutionPreflight.command}` : " · 需Linux CAM服务器"}
+                        {v3Job.result.summary.camoticsExecutionPreflight.nextActions[0] ? ` · ${v3Job.result.summary.camoticsExecutionPreflight.nextActions[0]}` : ""}
+                      </small>
+                    )}
                     {v3Job.result.summary.camoticsCliPackage && (
                       <div className="v3-camotics-package-links">
                         <span>
@@ -6288,7 +6369,9 @@ export function App() {
                           v3Job.result.summary.camoticsCliPackage.linuxRunScript,
                           v3Job.result.summary.camoticsCliPackage.resultValidator,
                           v3Job.result.summary.camoticsCliPackage.operatorChecklist,
-                          v3Job.result.summary.camoticsCliPackage.report
+                          v3Job.result.summary.camoticsCliPackage.report,
+                          v3Job.result.summary.camoticsExecutionPreflight?.artifact,
+                          v3Job.result.summary.camoticsExecutionPreflight?.report
                         ].filter((filename): filename is string => Boolean(filename)).map((filename) => (
                           <a
                             href={`/orchestrator-jobs/${v3Job.id}/${filename}`}
@@ -8494,6 +8577,8 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "camotics-result-validate.js") return "结果校验脚本";
   if (filename === "camotics-linux-operator-checklist.md") return "Linux操作清单";
   if (filename === "camotics-cli-package-report.json") return "运行包报告";
+  if (filename === "camotics-execution-preflight.json") return "仿真预检JSON";
+  if (filename === "camotics-execution-preflight.md") return "仿真预检说明";
   if (filename === "safe-trial-execution-plan.json") return "安全试雕执行计划";
   if (filename === "next-action-checklist.md") return "下一步清单";
   if (filename === "linux-cam-closed-loop-handoff.md") return "闭环交接说明";
@@ -9622,6 +9707,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
   const camoticsCliPackage = summary?.camoticsCliPackage;
+  const camoticsExecutionPreflight = summary?.camoticsExecutionPreflight ?? packageIndex?.camotics?.executionPreflight;
   const simulation = summary?.simulation;
   const camoticsAdapter = simulation?.camoticsAdapter;
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
@@ -9799,6 +9885,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `结果模板: ${camoticsCliPackage?.resultTemplate ?? packageIndex?.camotics?.cliRunPackage?.resultTemplate ?? "未生成"}`,
     `Linux脚本: ${camoticsCliPackage?.linuxRunScript ?? packageIndex?.camotics?.cliRunPackage?.linuxRunScript ?? "未生成"}`,
     `准备包报告: ${camoticsCliPackage?.report ?? packageIndex?.camotics?.cliRunPackage?.report ?? "未生成"}`,
+    `执行预检: ${camoticsExecutionPreflight?.status ?? "未生成"} / 当前主机${camoticsExecutionPreflight?.canRunOnCurrentHost ? "可执行" : "需Linux CAM服务器"}`,
+    `预检报告: ${camoticsExecutionPreflight?.artifact ?? "未生成"} / ${camoticsExecutionPreflight?.report ?? "未生成"}`,
     `预览NC哈希: ${camoticsCliPackage?.preferredGcodeSha256 ?? "-"}`,
     `运动画像: ${camoticsCliPackage?.motionProfile ? `${camoticsCliPackage.motionProfile.motionLineCount} 行 / Z ${camoticsCliPackage.motionProfile.zMin ?? "-"} 到 ${camoticsCliPackage.motionProfile.zMax ?? "-"}` : "-"}`,
     `生产解锁: ${camoticsCliPackage?.productionUnlockEligible ? "异常：准备包不应直接解锁生产" : "否，准备包只用于真实材料去除仿真准备"}`,

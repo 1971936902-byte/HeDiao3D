@@ -107,17 +107,30 @@ async function main() {
     previewMotionProfile
   });
 
+  const preflight = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-execution-preflight`, {});
+  assert(preflight.report?.schema === "hediao3d.camotics-execution-preflight.v1", "preflight report schema mismatch");
+  assert(preflight.report?.productionUnlockEligible === false, "preflight must not unlock production");
+  assert(preflight.report?.package?.preferredGcodeSha256 === previewSha256, "preflight should bind preferred G-code hash");
+  assert(preflight.report?.files?.runPackageExists === true, "preflight should see run package");
+  assert(preflight.report?.files?.validatorExists === true, "preflight should see result validator");
+  assert(Array.isArray(preflight.report?.nextActions), "preflight should expose next actions");
+  const preflightMarkdown = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-execution-preflight.md`);
+  assert(preflightMarkdown.includes("HeDiao3D CAMotics Execution Preflight"), "preflight markdown missing heading");
+
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.camoticsCliPackage?.artifact === "camotics-cli-run-package.json", "job summary missing CLI package");
   assert(reloaded.result?.summary?.camoticsCliPackage?.operatorChecklist === "camotics-linux-operator-checklist.md", "job summary missing operator checklist");
   assert(reloaded.result?.summary?.camoticsCliPackage?.productionUnlockEligible === false, "summary must keep production unlock false");
+  assert(reloaded.result?.summary?.camoticsExecutionPreflight?.artifact === "camotics-execution-preflight.json", "job summary missing CAMotics execution preflight");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.exists), "delivery manifest missing run package");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.exists), "delivery manifest missing operator checklist");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.exists), "delivery manifest missing result validator");
+  assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-execution-preflight.json" && file.exists), "delivery manifest missing execution preflight");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.sha256), "package integrity missing run package hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-linux-run.sh" && file.sha256), "package integrity missing run script hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.sha256), "package integrity missing result validator hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.sha256), "package integrity missing operator checklist hash");
+  assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-execution-preflight.json" && file.sha256), "package integrity missing execution preflight hash");
 
   const linuxPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-linux-package`);
   assert(linuxPackage.bytes[0] === 0x50 && linuxPackage.bytes[1] === 0x4b, "CAMotics Linux package should be a ZIP file");
@@ -129,6 +142,7 @@ async function main() {
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-linux-run.sh"), "CAMotics Linux package missing run script");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-validate.js"), "CAMotics Linux package missing result validator");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-linux-operator-checklist.md"), "CAMotics Linux package missing operator checklist");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/references/camotics-execution-preflight.json"), "CAMotics Linux package missing execution preflight report");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-template.json"), "CAMotics Linux package missing result template");
 
   console.log(JSON.stringify({

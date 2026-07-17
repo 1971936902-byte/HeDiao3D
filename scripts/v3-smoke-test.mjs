@@ -224,9 +224,11 @@ async function main() {
   assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-cli-execution-plan.json"), "simulationOnly missing CAMotics CLI execution plan");
   assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-cli-run-package.json"), "simulationOnly missing CAMotics CLI run package");
   assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-linux-operator-checklist.md"), "simulationOnly missing CAMotics Linux operator checklist");
+  assert(packageIndex.filesByPurpose?.simulationOnly?.some((file) => file.filename === "camotics-execution-preflight.json"), "simulationOnly missing CAMotics execution preflight");
   assert(packageIndex.camotics?.cliExecutionPlan?.artifact === "camotics-cli-execution-plan.json", "package index missing CAMotics CLI execution summary");
   assert(packageIndex.camotics?.cliRunPackage?.artifact === "camotics-cli-run-package.json", "package index missing CAMotics CLI run package summary");
   assert(packageIndex.camotics?.cliRunPackage?.operatorChecklist === "camotics-linux-operator-checklist.md", "package index missing CAMotics operator checklist summary");
+  assert(packageIndex.camotics?.executionPreflight?.artifact === "camotics-execution-preflight.json", "package index missing CAMotics execution preflight summary");
   assert(packageIndex.filesByPurpose?.airRun?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "airRun group missing rotary calibration air-run");
   assert(packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "camotics-preview.nc"), "neverRunOnMachine missing camotics preview");
   assert(!packageIndex.filesByPurpose?.neverRunOnMachine?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "neverRunOnMachine should not include rotary calibration air-run");
@@ -320,6 +322,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "camotics-linux-run.sh" && file.sha256), "package integrity missing CAMotics Linux script hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.sha256), "package integrity missing CAMotics operator checklist hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "camotics-cli-package-report.json" && file.sha256), "package integrity missing CAMotics package report hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "camotics-execution-preflight.json" && file.sha256), "package integrity missing CAMotics execution preflight hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");
   assert(createV3SmokeReadmeProbe(job).includes("CAM选择"), "V3 package readme should include CAM engine selection");
 
@@ -422,6 +425,8 @@ function isSafeTrialPackageFile(file, allowTrialNc) {
     "camotics-input.json",
     "camotics-simulation-plan.json",
     "camotics-cli-execution-plan.json",
+    "camotics-execution-preflight.json",
+    "camotics-execution-preflight.md",
     "simulation-summary.json"
   ]).has(file.filename);
 }
