@@ -951,6 +951,8 @@ type V3OrchestratorJob = {
         recordCount: number;
         latestOutcome: MachineFeedback["outcome"];
         latestRecordId: string;
+        latestDownloadIntegrityBound?: string | null;
+        latestAllRequiredHashesVerified?: boolean;
         recommendations: string[];
       };
       machineAcceptanceLog?: {
@@ -1717,6 +1719,13 @@ type V3EvidenceLoopSummary = {
   nextActions: string[];
 };
 
+type V3TrialWorkflowStep = {
+  id: string;
+  title: string;
+  status: "done" | "active" | "locked" | "review";
+  detail: string;
+};
+
 type MachineAcceptanceStep = "airRun" | "softTrial" | "formalTrial";
 type MachineAcceptanceRecord = {
   machineId: string;
@@ -2105,6 +2114,15 @@ export function App() {
   const v3EvidenceLoopSummary = useMemo(
     () => createV3EvidenceLoopSummary(v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance),
     [v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
+  );
+  const v3TrialWorkflow = useMemo(
+    () => createV3TrialWorkflowSummary({
+      hasModel: Boolean(aiMeshStlUrl),
+      job: v3Job,
+      checklist: v3DownloadChecklistSummary,
+      acceptance: selectedMachineAcceptance
+    }),
+    [aiMeshStlUrl, v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
   );
   const v3CamoticsPackageAcceptanceStep = useMemo(
     () => v3Readiness?.acceptancePlan?.steps.find((step) => step.id === "camotics-cli-package") ?? null,
@@ -2925,6 +2943,41 @@ export function App() {
 
   const handleMachineProfileChange = (machineId: string) => {
     applySettingsPreset(applyMachineProfile(settings, getMachineProfile(machineId)));
+  };
+
+  const applyRotaryYTrialPreset = () => {
+    const nextSettings = normalizeSettings({
+      ...settings,
+      toolProfileId: "vflat-4mm-25deg",
+      materialProfileId: "olive-core",
+      machineProfileId: "desktop-3axis-rotary-y",
+      camMode: "rotaryWrap",
+      rotaryOutputAxis: "Y",
+      rotaryWrapPerRevolutionMm: 100,
+      postProcessor: "wrapY",
+      safeZ: 22,
+      toolDiameter: 4,
+      maxCutDepth: 0.16,
+      stockAllowance: 0.08,
+      stepoverMm: 0.28,
+      stepoverDeg: 1.2,
+      feedRate: 180,
+      spindleRpm: 12000,
+      leftHoldMm: 2,
+      rightHoldMm: 2,
+      endTransitionMm: 1.2,
+      finishingStrategy: "x-scan"
+    });
+    applySettingsPreset(nextSettings);
+    setToolpath(null);
+    setIsSimulationMode(false);
+    setWorkbenchView("model");
+    recordTask({
+      category: "process",
+      status: "ok",
+      title: "应用三轴+Y旋转夹具试雕参数",
+      detail: "X=长度，Y=夹具旋转等效行程，Z=刀深；4mm 25° 平底尖刀，保守试雕进给。"
+    });
   };
 
   const handleCamModeChange = (camMode: ModelSettings["camMode"]) => {
@@ -4793,6 +4846,24 @@ export function App() {
               <span>材料：{selectedMaterial.notes}</span>
               <span>机床：{selectedMachine.notes}</span>
             </div>
+            {V3_TRIAL_FOCUSED_UI && (
+              <div className="v3-machine-preset-card">
+                <div>
+                  <strong>当前目标机床：三轴控制器 + Y轴旋转夹具</strong>
+                  <small>X 走核胚长度，Z 控制刀深，Y 输出夹具旋转等效行程；正式生产 NC 仍由 V3 证据链锁定。</small>
+                </div>
+                <div className="v3-machine-preset-grid">
+                  <span>刀具 <strong>4mm / 25° / 平底尖刀</strong></span>
+                  <span>后处理 <strong>{settings.postProcessor}</strong></span>
+                  <span>每圈距离 <strong>{settings.rotaryWrapPerRevolutionMm.toFixed(0)} mm</strong></span>
+                  <span>安全高度 <strong>{settings.safeZ.toFixed(1)} mm</strong></span>
+                </div>
+                <button className="demo-action package-action" type="button" onClick={applyRotaryYTrialPreset}>
+                  <SlidersHorizontal size={17} />
+                  应用保守试雕预设
+                </button>
+              </div>
+            )}
           </section>
         )}
 
@@ -5145,12 +5216,52 @@ export function App() {
 
         {activeStage === "cam" && (
           <section className="panel">
-            <div className="panel-title">
-              <Cloud size={18} />
-              <h2>V3 Orchestrator 小闭环</h2>
-            </div>
-            <p className="panel-note">当前主线是三轴控制器 + Y轴旋转夹具：先跑 V3 小闭环，再下载安全试雕包做标定、空跑和低风险试雕。</p>
-            <div className="v3-engine-grid">
+          <div className="panel-title">
+            <Cloud size={18} />
+            <h2>V3 Orchestrator 小闭环</h2>
+          </div>
+          <p className="panel-note">当前主线是三轴控制器 + Y轴旋转夹具：先跑 V3 小闭环，再下载安全试雕包做标定、空跑和低风险试雕。</p>
+            {V3_TRIAL_FOCUSED_UI && (
+              <div className={`v3-trial-workflow ${v3TrialWorkflow.level}`}>
+                <div className="v3-trial-workflow-head">
+                  <div>
+                    <strong>安全试雕向导</strong>
+                    <small>{v3TrialWorkflow.doneCount}/{v3TrialWorkflow.total} 已完成 · 当前：{v3TrialWorkflow.activeStep.title}</small>
+                  </div>
+                  <span>{v3TrialWorkflow.level === "ok" ? "证据已齐" : v3TrialWorkflow.level === "warning" ? "继续试雕" : "先补前置"}</span>
+                </div>
+                <div className="v3-trial-steps">
+                  {v3TrialWorkflow.steps.map((step) => (
+                    <div className={step.status} key={step.id}>
+                      <strong>{step.title}</strong>
+                      <small>{step.detail}</small>
+                    </div>
+                  ))}
+                </div>
+                <div className="v3-action-row">
+                  <button
+                    className="primary-action package-action"
+                    onClick={handleRunV3OrchestratorLoop}
+                    disabled={isV3JobRunning || !aiMeshStlUrl}
+                    type="button"
+                  >
+                    <Cloud size={17} />
+                    {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    onClick={handleDownloadV3TrialPackage}
+                    disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
+                    type="button"
+                  >
+                    <Download size={17} />
+                    {isV3PackageDownloading ? "打包中..." : "下载安全试雕包"}
+                  </button>
+                </div>
+                <small>{v3TrialWorkflow.summary}</small>
+              </div>
+            )}
+            {!V3_TRIAL_FOCUSED_UI && <div className="v3-engine-grid">
               {v3Engines.map((engine) => (
                 <div className={`v3-engine ${engine.available ? "ok" : ""} ${engine.adapterReady ? "ready" : ""}`} key={engine.id}>
                   <div>
@@ -5160,7 +5271,7 @@ export function App() {
                   <small>{engine.notes}</small>
                 </div>
               ))}
-            </div>
+            </div>}
             {v3Diagnostics && (
               <div className={`v3-diagnostics ${v3Diagnostics.level}`}>
                 <div className="v3-history-heading">
@@ -5191,6 +5302,7 @@ export function App() {
                     空跑 {v3Readiness.gates.allowAirRun ? "可用" : "不可用"}
                   </span>
                   <small>{v3Readiness.summary}</small>
+                  {!V3_TRIAL_FOCUSED_UI && <>
                   {v3Readiness.nativeCam && (
                     <>
                       <small>Native CAM {v3Readiness.nativeCam.readyCount}/{v3Readiness.nativeCam.requiredCount} · {v3Readiness.nativeCam.level}</small>
@@ -5280,6 +5392,7 @@ export function App() {
                     {v3Readiness.camoticsImport?.riskLevel ? ` · ${v3Readiness.camoticsImport.riskLevel}` : ""}
                     {v3Readiness.camoticsImport ? ` · input ${v3Readiness.camoticsImport.inputIdentityStatus ?? "missing"} · cli ${v3Readiness.camoticsImport.cliRunPackageBindingStatus ?? "not-required"} · motion ${v3Readiness.camoticsImport.motionConsistencyStatus ?? "missing"}` : ""}
                   </small>
+                  </>}
                   <small className={v3Readiness.latestTrialFeedback ? v3Readiness.latestTrialFeedback.latestOutcome === "success" ? "v3-inline-ok" : v3Readiness.latestTrialFeedback.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     最新试雕反馈：{v3Readiness.latestTrialFeedback ? `${v3Readiness.latestTrialFeedback.recordCount} 条 · ${v3Readiness.latestTrialFeedback.latestOutcome ?? "-"}` : "未回填"}
                     {v3Readiness.latestTrialFeedback?.latestIssues?.length ? ` · ${v3Readiness.latestTrialFeedback.latestIssues.join("、")}` : ""}
@@ -5289,6 +5402,7 @@ export function App() {
                     最新机床验收：{v3Readiness.latestMachineAcceptance ? `${v3Readiness.latestMachineAcceptance.recordCount} 条 · ${v3Readiness.latestMachineAcceptance.latestOutcome ?? "-"}` : "未回填"}
                     {v3Readiness.latestMachineAcceptance ? ` · 必需项 ${v3Readiness.latestMachineAcceptance.latestAllRequiredPassed ? "已通过" : "待复核"}` : ""}
                   </small>
+                  {!V3_TRIAL_FOCUSED_UI && <>
                   <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
@@ -5316,6 +5430,7 @@ export function App() {
                       )}
                     </>
                   )}
+                  </>}
                   {v3Readiness.gates.warnings[0] && (
                     <small>提示：{v3Readiness.gates.warnings[0]}</small>
                   )}
@@ -5343,7 +5458,7 @@ export function App() {
                   </div>
                 </>
               ) : (
-                <small>还没有 V3 总门禁报告；建议在 Native CAM、Adapter 验证和 V3 小闭环后生成。</small>
+                <small>{V3_TRIAL_FOCUSED_UI ? "还没有 V3 总门禁报告；先完成安全试雕小闭环，再生成总门禁复核。" : "还没有 V3 总门禁报告；建议在 Native CAM、Adapter 验证和 V3 小闭环后生成。"}</small>
               )}
               {!V3_TRIAL_FOCUSED_UI && (
                 <button className="demo-action package-action" onClick={handleRunV3Readiness} disabled={isV3ReadinessChecking} type="button">
@@ -5352,7 +5467,7 @@ export function App() {
                 </button>
               )}
             </div>
-            <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
+            {!V3_TRIAL_FOCUSED_UI && <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
               <div className="v3-history-heading">
                 <strong>Native CAM 环境验收</strong>
                 <button type="button" onClick={refreshV3NativeCamReadiness}>刷新</button>
@@ -5516,8 +5631,8 @@ export function App() {
                   </button>
                 </div>
               )}
-            </div>
-            <div className={`v3-diagnostics ${v3AdapterValidation?.overall.failed ? "warning" : "ok"}`}>
+            </div>}
+            {!V3_TRIAL_FOCUSED_UI && <div className={`v3-diagnostics ${v3AdapterValidation?.overall.failed ? "warning" : "ok"}`}>
               <div className="v3-history-heading">
                 <strong>外部 Adapter 验证</strong>
                 <button type="button" onClick={refreshV3AdapterValidation}>刷新</button>
@@ -5616,7 +5731,7 @@ export function App() {
                   </button>
                 </div>
               )}
-            </div>
+            </div>}
             <div className="v3-status-card">
               <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
               <span>{v3Status}</span>
@@ -5660,7 +5775,7 @@ export function App() {
                       <small key={action}>{action}</small>
                     ))}
                   </div>
-                  <div className="v3-camotics-import">
+                  {!V3_TRIAL_FOCUSED_UI && <div className="v3-camotics-import">
                     <div>
                       <strong>CAMotics 真实仿真闭环</strong>
                       <small>先生成 Linux 准备包，在 CAM 服务器执行材料去除仿真，再回填 camotics-result.json、截图或材料去除 STL。</small>
@@ -5735,7 +5850,7 @@ export function App() {
                       <UploadCloud size={17} />
                       {isV3CamoticsImporting ? "回填中..." : "回填CAMotics结果"}
                     </button>
-                  </div>
+                  </div>}
                   <div className="v3-action-row">
                     <button className="demo-action package-action" type="button" onClick={() => setActiveStage("feedback")}>
                       <ClipboardCheck size={17} />
@@ -6383,20 +6498,24 @@ export function App() {
                 ))}
               </div>
             )}
-            <button className="primary-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
-              <Cloud size={17} />
-              {isV3JobRunning ? "闭环运行中..." : "生成安全试雕数据"}
-            </button>
+            {!V3_TRIAL_FOCUSED_UI && (
+              <button className="primary-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
+                <Cloud size={17} />
+                {isV3JobRunning ? "闭环运行中..." : "生成安全试雕数据"}
+              </button>
+            )}
             {v3Job && (v3Job.status === "queued" || v3Job.status === "running") && (
               <button className="demo-action package-action" onClick={handleCancelV3Job} type="button">
                 <Trash2 size={17} />
                 取消 V3 任务
               </button>
             )}
-            <button className="primary-action package-action" onClick={handleDownloadV3TrialPackage} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button" title="只包含空跑、标定、说明、报告，以及被 V3 试雕门禁允许的 toolpath.nc">
-              <Download size={17} />
-              {isV3PackageDownloading ? "正在打包..." : "下载安全试雕包"}
-            </button>
+            {!V3_TRIAL_FOCUSED_UI && (
+              <button className="primary-action package-action" onClick={handleDownloadV3TrialPackage} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button" title="只包含空跑、标定、说明、报告，以及被 V3 试雕门禁允许的 toolpath.nc">
+                <Download size={17} />
+                {isV3PackageDownloading ? "正在打包..." : "下载安全试雕包"}
+              </button>
+            )}
             {!V3_TRIAL_FOCUSED_UI && (
               <button className="demo-action package-action" onClick={handleDownloadV3Package} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button">
                 <Download size={17} />
@@ -7096,7 +7215,13 @@ export function App() {
           {!toolpath && (
             <div className="hint">
               <ImagePlus size={17} />
-              {aiMeshUrl ? "Meshy模型已加载，右侧可拖动查看" : images.length > 0 && !generatedDepth ? "先点击左侧“3D生成”" : "调好模型后点击左侧“生成刀路”"}
+              {aiMeshUrl
+                ? "Meshy模型已加载，右侧可拖动查看"
+                : images.length > 0 && !generatedDepth
+                  ? "先点击左侧“3D生成”"
+                  : V3_TRIAL_FOCUSED_UI
+                    ? "导入3D模型后在 CAM 面板生成安全试雕数据"
+                    : "调好模型后点击左侧“生成刀路”"}
             </div>
           )}
         </footer>
@@ -7601,6 +7726,83 @@ function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
     neverMachineCount: keyFiles.filter((file) => !file.allowedOnMachine).length,
     checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null,
     camHandoffEvidenceUrl: deliveryByName.get("cam-handoff-evidence.md")?.url ?? null
+  };
+}
+
+function createV3TrialWorkflowSummary({
+  hasModel,
+  job,
+  checklist,
+  acceptance
+}: {
+  hasModel: boolean;
+  job: V3OrchestratorJob | null;
+  checklist: ReturnType<typeof createV3DownloadChecklistSummary>;
+  acceptance: MachineAcceptanceRecord;
+}) {
+  const jobCompleted = job?.status === "completed" && Boolean(job.result);
+  const manifest = job?.result?.summary.deliveryManifest;
+  const allowTrial = Boolean(manifest?.allowTrialNc);
+  const allowAirRun = Boolean(manifest?.allowAirRun);
+  const keyFilesReady = Boolean(checklist && checklist.verifiedKeyCount === checklist.keyFiles.length);
+  const trialLog = job?.result?.summary.trialFeedbackLog;
+  const feedbackBound = trialLog?.latestDownloadIntegrityBound === "matched";
+  const feedbackOk = trialLog?.latestOutcome === "success" && feedbackBound;
+  const acceptanceLog = job?.result?.summary.machineAcceptanceLog;
+  const acceptanceOk = Boolean(acceptanceLog?.allRequiredPassed);
+  const localAcceptanceReady = acceptance.airRun && acceptance.softTrial;
+  const steps: V3TrialWorkflowStep[] = [
+    {
+      id: "model",
+      title: "1. 导入 3D 佛头模型",
+      status: hasModel ? "done" : "active",
+      detail: hasModel ? "已加载 GLB/STL，可进入 Orchestrator 小闭环。" : "先用 Meshy 生成或直接导入 GLB/STL，避免继续使用二维浮雕代替真实 3D。"
+    },
+    {
+      id: "orchestrator",
+      title: "2. 生成安全试雕数据",
+      status: !hasModel ? "locked" : jobCompleted ? "done" : "active",
+      detail: jobCompleted
+        ? `任务 ${job?.id.slice(0, 8)} 已完成，包级别 ${job?.result?.summary.productionGate?.level ?? "trial-only"}。`
+        : hasModel
+          ? "提交后端队列，生成模型体检、修复计划、Y轴旋转后处理、空跑和安全试雕包。"
+          : "等待模型加载。"
+    },
+    {
+      id: "download",
+      title: "3. 下载并核验试雕包",
+      status: !jobCompleted ? "locked" : keyFilesReady && (allowTrial || allowAirRun) ? "done" : "active",
+      detail: keyFilesReady
+        ? `关键文件 ${checklist?.verifiedKeyCount ?? 0}/${checklist?.keyFiles.length ?? 0} 已记录 SHA-256；${allowTrial ? "包含候选试雕 NC" : "当前仅允许空跑和报告"}。`
+        : jobCompleted
+          ? "下载安全试雕包后，按 operator-download-checklist.md 核验 SHA-256 和文件用途。"
+          : "等待 Orchestrator 生成交付清单。"
+    },
+    {
+      id: "acceptance",
+      title: "4. 空跑/软料试雕并回填",
+      status: !jobCompleted ? "locked" : feedbackOk && acceptanceOk ? "done" : localAcceptanceReady || trialLog ? "review" : "active",
+      detail: feedbackOk && acceptanceOk
+        ? "试雕反馈和机床验收均已绑定当前下载包，可作为后续生产解锁证据。"
+        : trialLog && !feedbackBound
+          ? "已有试雕反馈，但未绑定当前下载包哈希，需要重新按本包回填。"
+          : localAcceptanceReady
+            ? "本地已记录空跑/软料试雕，建议同步到 V3 证据链。"
+            : "先做旋转标定空跑、整条离料空跑，再用软材料或废料试雕。"
+    }
+  ];
+  const activeStep = steps.find((step) => step.status === "active" || step.status === "review") ?? steps[steps.length - 1];
+  const lockedCount = steps.filter((step) => step.status === "locked").length;
+  const doneCount = steps.filter((step) => step.status === "done").length;
+  return {
+    level: lockedCount > 0 ? "critical" : doneCount === steps.length ? "ok" : "warning",
+    doneCount,
+    total: steps.length,
+    activeStep,
+    summary: doneCount === steps.length
+      ? "安全试雕闭环已完成，生产 NC 仍需真实 CAM/CAMotics/机床验收总门禁放行。"
+      : activeStep.detail,
+    steps
   };
 }
 
