@@ -516,8 +516,9 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const neutralImport = readLatestFromDirectory("public/orchestrator-neutral-import", "neutral-import-contract.json", createNeutralImportContractPublicSummary);
   const camoticsImport = readLatestFromDirectory("public/orchestrator-camotics-import", "camotics-import-contract.json", createCamoticsImportContractPublicSummary);
   const latestJob = getLatestOrchestratorJobSummary();
-  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob });
-  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob });
+  const latestEvidenceDossier = getLatestProductionEvidenceDossierSummary();
+  const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
+  const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier });
   return {
     schema: "hediao3d.v3-readiness-report.v1",
     id: reportId,
@@ -536,11 +537,12 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     neutralImport,
     camoticsImport,
     latestJob,
+    latestEvidenceDossier,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
 }
 
-function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob }) {
+function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
   const blockers = [];
   const warnings = [];
   const nextActions = [];
@@ -632,6 +634,18 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
     if (!latestJob.allowProductionNc) warnings.push(`最近任务生产 NC 未解锁，包级别 ${latestJob.packageLevel ?? "unknown"}。`);
   }
 
+  if (!latestEvidenceDossier) {
+    warnings.push("尚未生成生产证据档案。");
+    nextActions.push("运行 V3 小闭环生成 production-evidence-dossier.json，并查看证据缺口。");
+  } else {
+    if (latestEvidenceDossier.status === "blocked" || latestEvidenceDossier.blockedCount > 0) {
+      blockers.push(`生产证据档案存在 ${latestEvidenceDossier.blockedCount} 个阻断项：${latestEvidenceDossier.summary}`);
+    } else if (latestEvidenceDossier.status !== "production-evidence-complete" || latestEvidenceDossier.reviewCount > 0) {
+      warnings.push(`生产证据档案未完整：通过 ${latestEvidenceDossier.passedCount}，复核 ${latestEvidenceDossier.reviewCount}，阻断 ${latestEvidenceDossier.blockedCount}。`);
+      nextActions.push("查看 production-evidence-dossier.json，按 missingEvidence 补齐真实 CAM/仿真/试雕证据。");
+    }
+  }
+
   const level = blockers.length > 0 ? "blocked" : warnings.length > 0 ? "trial-only" : "production-ready";
   return {
     level,
@@ -649,7 +663,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, run
   };
 }
 
-function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob }) {
+function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, latestJob, latestEvidenceDossier }) {
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -812,6 +826,24 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
     }),
     createAcceptanceStep({
       order: 12,
+      id: "production-evidence-dossier",
+      title: "生产证据档案",
+      status: !latestEvidenceDossier
+        ? "pending"
+        : latestEvidenceDossier.status === "production-evidence-complete"
+          ? "done"
+          : latestEvidenceDossier.blockedCount > 0
+            ? "blocked"
+            : "pending",
+      command: "npm run test:v3",
+      evidence: ["production-evidence-dossier.json", "production-unlock-matrix.json", "trial-feedback-log.json", "process-optimization-plan.json"],
+      detail: latestEvidenceDossier
+        ? `${latestEvidenceDossier.status} / pass=${latestEvidenceDossier.passedCount} review=${latestEvidenceDossier.reviewCount} block=${latestEvidenceDossier.blockedCount}`
+        : "尚未生成生产证据档案。",
+      blocksProduction: !latestEvidenceDossier || latestEvidenceDossier.status !== "production-evidence-complete"
+    }),
+    createAcceptanceStep({
+      order: 13,
       id: "production-gate",
       title: "生产 NC 门禁",
       status: gates.allowProductionNc ? "done" : gates.blockers.length > 0 ? "blocked" : "pending",
@@ -909,6 +941,47 @@ function getExternalCamHandoffSummaries() {
     }),
     byEngine,
     latest: handoffs.slice(0, 8)
+  };
+}
+
+function getLatestProductionEvidenceDossierSummary() {
+  const candidates = [];
+  for (const job of orchestratorJobs.values()) {
+    const summary = createProductionEvidenceDossierSummaryFromJob(job);
+    if (summary) candidates.push(summary);
+  }
+  const root = join(process.cwd(), "public", "orchestrator-jobs");
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = readJobManifest(entry.name);
+      const summary = manifest ? createProductionEvidenceDossierSummaryFromJob(manifest) : null;
+      if (summary) candidates.push(summary);
+    }
+  }
+  return candidates
+    .sort((a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime())[0] ?? null;
+}
+
+function createProductionEvidenceDossierSummaryFromJob(job) {
+  const dossierPath = job?.workDir ? join(job.workDir, "production-evidence-dossier.json") : null;
+  if (!dossierPath || !existsSync(dossierPath)) return null;
+  const dossier = readJsonFileSafe(dossierPath);
+  if (!dossier) return null;
+  return {
+    schema: dossier.schema ?? "unknown",
+    jobId: dossier.jobId ?? job.id,
+    updatedAt: dossier.createdAt ?? job.updatedAt ?? job.createdAt,
+    status: dossier.status ?? "unknown",
+    packageLevel: dossier.packageLevel ?? null,
+    allowProductionNc: Boolean(dossier.allowProductionNc),
+    allowTrialNc: Boolean(dossier.allowTrialNc),
+    passedCount: Number(dossier.passedCount ?? 0),
+    reviewCount: Number(dossier.reviewCount ?? 0),
+    blockedCount: Number(dossier.blockedCount ?? 0),
+    missingEvidenceCount: Array.isArray(dossier.missingEvidence) ? dossier.missingEvidence.length : 0,
+    summary: dossier.summary ?? null,
+    artifact: publicArtifactUrl(dossier.jobId ?? job.id, "production-evidence-dossier.json")
   };
 }
 
@@ -1117,6 +1190,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     neutralImport: report.neutralImport ?? null,
     camoticsImport: report.camoticsImport ?? null,
     latestJob: report.latestJob,
+    latestEvidenceDossier: report.latestEvidenceDossier ?? null,
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
   };
 }
@@ -1202,6 +1276,7 @@ function createV3ReadinessMarkdown(report) {
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
     `- CAMotics import: ${report.camoticsImport ? `${report.camoticsImport.status} / synthetic=${report.camoticsImport.synthetic} / eligible=${report.camoticsImport.productionEvidenceEligible}` : "missing"}`,
     `- Latest job: ${report.latestJob ? `${report.latestJob.id} ${report.latestJob.status} ${report.latestJob.packageLevel ?? ""}` : "missing"}`,
+    `- Production evidence dossier: ${report.latestEvidenceDossier ? `${report.latestEvidenceDossier.status} / pass=${report.latestEvidenceDossier.passedCount} review=${report.latestEvidenceDossier.reviewCount} block=${report.latestEvidenceDossier.blockedCount}` : "missing"}`,
     ""
   ];
   return `${lines.join("\n")}\n`;

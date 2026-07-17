@@ -35,6 +35,7 @@ async function main() {
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-external-neutral-handoff"), "acceptance plan missing OpenCAMLib external handoff step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "opencamlib-neutral-import"), "acceptance plan missing OpenCAMLib neutral import step");
   assert(full.acceptancePlan.steps.some((step) => step.id === "camotics-result-import"), "acceptance plan missing CAMotics import step");
+  assert(full.acceptancePlan.steps.some((step) => step.id === "production-evidence-dossier"), "acceptance plan missing production evidence dossier step");
   assert(full.externalCamHandoffs?.schema === "hediao3d.external-cam-handoffs.v1", "full readiness artifact missing external CAM handoff summary");
   assert(full.externalCamHandoffs.requiredEngines.includes("freecad"), "external CAM handoff summary missing FreeCAD");
   assert(full.externalCamHandoffs.requiredEngines.includes("blendercam"), "external CAM handoff summary missing BlenderCAM");
@@ -44,6 +45,7 @@ async function main() {
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);
   const markdown = await markdownArtifact.text();
   assert(markdown.includes("V3 Readiness Report"), "readiness markdown missing heading");
+  assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
 
   const runbookArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.runbook}`);
   assert(runbookArtifact.ok, `readiness runbook artifact failed: ${runbookArtifact.status}`);
@@ -57,6 +59,7 @@ async function main() {
   assert(runbook.includes("npm run test:v3:closed-neutral-handoff"), "readiness runbook missing OpenCAMLib external handoff command");
   assert(runbook.includes("npm run test:v3:neutral-import"), "readiness runbook missing neutral import command");
   assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
+  assert(runbook.includes("production-evidence-dossier"), "readiness runbook missing evidence dossier step");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
   assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
 
@@ -112,6 +115,12 @@ function validateReadiness(report, label) {
   if (report.camoticsImport) {
     assert(report.camoticsImport.schema === "hediao3d.camotics-import-contract.v1", `${label} camoticsImport schema mismatch`);
     assert(typeof report.camoticsImport.productionEvidenceEligible === "boolean", `${label} camoticsImport eligibility missing`);
+  }
+  assert(Object.hasOwn(report, "latestEvidenceDossier"), `${label} missing latestEvidenceDossier field`);
+  if (report.latestEvidenceDossier) {
+    assert(report.latestEvidenceDossier.schema === "hediao3d.production-evidence-dossier.v1", `${label} evidence dossier schema mismatch`);
+    assert(typeof report.latestEvidenceDossier.reviewCount === "number", `${label} evidence dossier reviewCount missing`);
+    assert(report.acceptancePlan.steps.some((step) => step.id === "production-evidence-dossier"), `${label} acceptance plan missing evidence dossier step`);
   }
 }
 
