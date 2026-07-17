@@ -3748,6 +3748,15 @@ async function processOrchestratorJob(job, settings) {
     productionEvidenceDossier
   });
   await writeFile(join(job.workDir, "safe-trial-execution-plan.json"), JSON.stringify(safeTrialExecutionPlan, null, 2), "utf8");
+  await writeFile(join(job.workDir, "next-action-checklist.md"), createNextActionChecklistMarkdown({
+    job,
+    productionGate,
+    productionUnlockMatrix,
+    productionEvidenceDossier,
+    safeTrialExecutionPlan,
+    postprocessProfile,
+    machineControllerProfile
+  }), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -3801,6 +3810,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "safe-trial-execution-plan.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "next-action-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "open-source-cam-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
@@ -7230,6 +7240,78 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
   };
 }
 
+function createNextActionChecklistMarkdown({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, safeTrialExecutionPlan, postprocessProfile, machineControllerProfile }) {
+  const axisInstruction = createOperatorAxisInstruction(postprocessProfile);
+  const blockedRows = Array.isArray(productionUnlockMatrix?.rows)
+    ? productionUnlockMatrix.rows.filter((row) => row.status === "block" || row.blocksProduction)
+    : [];
+  const reviewRows = Array.isArray(productionUnlockMatrix?.rows)
+    ? productionUnlockMatrix.rows.filter((row) => row.status === "review" || row.status === "warning")
+    : [];
+  const dossierItems = Array.isArray(productionEvidenceDossier?.evidenceItems)
+    ? productionEvidenceDossier.evidenceItems.filter((item) => item.status !== "pass")
+    : [];
+  const allowedFiles = safeTrialExecutionPlan?.filePolicy?.allowedOnMachine ?? ["air-run.nc", "rotary-calibration-airrun.nc"];
+  const neverFiles = safeTrialExecutionPlan?.filePolicy?.neverRunOnMachine ?? ["camotics-preview.nc"];
+  const nextActions = safeTrialExecutionPlan?.nextActions ?? [];
+  const machineName = machineControllerProfile?.name ?? "三轴控制器 + Y轴旋转夹具";
+  const gateLevel = productionGate?.level ?? "unknown";
+  const productionAllowed = Boolean(productionGate?.allowProductionNc);
+  const trialAllowed = Boolean(productionGate?.allowTrialNc);
+  const lines = [
+    "# HeDiao3D V3 下一步行动清单",
+    "",
+    `任务: ${job.id}`,
+    `生成时间: ${new Date().toISOString()}`,
+    `当前级别: ${gateLevel}`,
+    `机床: ${machineName}`,
+    `轴映射: ${axisInstruction}`,
+    "",
+    "## 当前结论",
+    "",
+    productionAllowed
+      ? "- [ ] 已允许正式生产包下载；正式上机前仍要核验 package-integrity.json、生产门禁和现场验收记录。"
+      : trialAllowed
+        ? "- [ ] 当前只进入安全试雕阶段；toolpath.nc 只能低倍率试雕，不能当成成品生产 NC。"
+        : "- [ ] 当前只适合空跑、旋转标定和报告复核；toolpath.nc 不应上机切削。",
+    `- [ ] 生产门禁摘要: ${productionGate?.summary ?? "未生成"}`,
+    "",
+    "## 立即执行",
+    "",
+    ...(nextActions.length ? nextActions.map((item) => `- [ ] ${item}`) : ["- [ ] 重新生成 V3 小闭环，确认安全试雕数据和交付清单存在。"]),
+    "",
+    "## 允许上机文件",
+    "",
+    ...allowedFiles.map((filename) => `- ${filename}`),
+    "",
+    "## 禁止上机文件",
+    "",
+    ...neverFiles.map((filename) => `- ${filename}`),
+    "",
+    "## 正式生产仍需补齐",
+    "",
+    ...(productionAllowed
+      ? ["- 当前 production-gate 已放行，但仍应保留空跑、试雕、验收和哈希核验记录。"]
+      : [
+        ...((productionGate?.blockers ?? []).slice(0, 8).map((item) => `- 阻断: ${item}`)),
+        ...((productionGate?.warnings ?? []).slice(0, 8).map((item) => `- 复核: ${item}`)),
+        ...(blockedRows.slice(0, 8).map((row) => `- 矩阵阻断: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
+        ...(reviewRows.slice(0, 6).map((row) => `- 矩阵复核: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
+        ...(dossierItems.slice(0, 8).map((item) => `- 证据缺口: ${item.label ?? item.id} / ${item.summary ?? item.status}`))
+      ]),
+    "",
+    "## 操作提醒",
+    "",
+    "- [ ] 先核验 operator-download-checklist.md 和 package-integrity.json 中的 SHA-256。",
+    "- [ ] 先跑 rotary-calibration-airrun.nc，再跑 air-run.nc。",
+    "- [ ] 首次切削只用软料/废料，进给倍率建议 30%-50%。",
+    "- [ ] 试雕后回填 trial-feedback-template.json 和 machine-acceptance-checklist.json。",
+    "- [ ] 未完成真实 CAM、CAMotics 材料去除仿真、试雕反馈和机床验收前，不解锁正式生产 NC。",
+    ""
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function createTrialFeedbackTemplate({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist }) {
   const issueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "旋转错位", "耗时异常", "刀路停顿"];
   return {
@@ -8455,6 +8537,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("postprocess-trace-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
+        getFile("next-action-checklist.md"),
         getFile("operator-runbook.md"),
         getFile("safe-trial-execution-plan.json"),
         getFile("trial-feedback-template.json"),
@@ -8511,6 +8594,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     },
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
+      "先阅读 next-action-checklist.md，只执行当前允许的下一步，未放行的生产 NC 不要上机。",
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
       "阅读 postprocess-trace-report.json，确认 toolpath.nc 的 X/Y/A/Z 输出与源刀路点逐点一致。",
@@ -8723,6 +8807,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", true, "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", true, "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
+    createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", true, "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
     createDeliveryFile(job.id, "safe-trial-execution-plan.json", "安全试雕执行计划", "report", true, "结构化记录导入模型、生成安全数据、下载核验、空跑/软料试雕和证据回填步骤。"),
     createDeliveryFile(job.id, "trial-feedback-template.json", "试雕反馈回填模板", "report", true, "记录空跑/试雕结果、实际耗时、缺陷标签和参数调整建议。"),
@@ -9029,6 +9114,7 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", existsSync(join(job.workDir, "production-gate.json")), "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", existsSync(join(job.workDir, "production-unlock-matrix.json")), "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", existsSync(join(job.workDir, "machining-package-index.json")), "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
+    createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", existsSync(join(job.workDir, "next-action-checklist.md")), "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
     createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
     createDeliveryFile(job.id, "trial-feedback-log.json", "试雕反馈日志", "report", existsSync(join(job.workDir, "trial-feedback-log.json")), "按时间保存现场反馈记录，用于工艺参数优化闭环。"),
     createDeliveryFile(job.id, "process-optimization-plan.json", "工艺优化建议", "report", existsSync(join(job.workDir, "process-optimization-plan.json")), "根据试雕反馈生成的下一轮参数复核和调整建议。"),
@@ -11532,6 +11618,7 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "production-evidence-dossier.json",
     "delivery-manifest.json",
     "package-integrity.json",
+    "next-action-checklist.md",
     "operator-runbook.md",
     "operator-download-checklist.md",
     "machine-controller-profile.json",
