@@ -467,12 +467,14 @@ function toGcode(points: ToolpathPoint[], settings: ModelSettings, estimatedMinu
     ...postStart(settings)
   ];
 
-  if (points.length > 0) {
-    lines.push(`G0 X${fmt(points[0].x)} A${fmt(points[0].a, 3)}`);
-    lines.push(`G1 Z${fmt(points[0].z)} F${fmt(settings.feedRate * 0.45, 1)}`);
+  const outputPoints = unwrapRotaryAngles(points);
+
+  if (outputPoints.length > 0) {
+    lines.push(`G0 X${fmt(outputPoints[0].x)} A${fmt(outputPoints[0].a, 3)}`);
+    lines.push(`G1 Z${fmt(outputPoints[0].z)} F${fmt(settings.feedRate * 0.45, 1)}`);
   }
 
-  for (const point of points) {
+  for (const point of outputPoints) {
     lines.push(`G1 X${fmt(point.x)} A${fmt(point.a, 3)} Z${fmt(point.z)} F${fmt(settings.feedRate, 1)}`);
   }
 
@@ -529,11 +531,13 @@ function toAirRunGcode(points: ToolpathPoint[], settings: ModelSettings, estimat
     ...postAirRunStart(settings)
   ];
 
-  if (points.length > 0) {
-    lines.push(`G0 X${fmt(points[0].x)} A${fmt(points[0].a, 3)} Z${fmt(settings.safeZ)}`);
+  const outputPoints = unwrapRotaryAngles(points);
+
+  if (outputPoints.length > 0) {
+    lines.push(`G0 X${fmt(outputPoints[0].x)} A${fmt(outputPoints[0].a, 3)} Z${fmt(settings.safeZ)}`);
   }
 
-  for (const point of points) {
+  for (const point of outputPoints) {
     lines.push(`G1 X${fmt(point.x)} A${fmt(point.a, 3)} Z${fmt(settings.safeZ)} F${fmt(Math.min(settings.feedRate, 180), 1)}`);
   }
 
@@ -541,6 +545,15 @@ function toAirRunGcode(points: ToolpathPoint[], settings: ModelSettings, estimat
   lines.push(...postEnd(settings));
   lines.push("%");
   return `${lines.join("\n")}\n`;
+}
+
+function unwrapRotaryAngles(points: ToolpathPoint[]): ToolpathPoint[] {
+  return points.map((point) => ({ ...point, a: normalizeRotaryAngle(point.a) }));
+}
+
+function normalizeRotaryAngle(angle: number) {
+  const normalized = ((Number(angle) || 0) + 360) % 360;
+  return Math.abs(normalized - 360) < 0.000001 ? 0 : normalized;
 }
 
 function postStart(settings: ModelSettings): string[] {

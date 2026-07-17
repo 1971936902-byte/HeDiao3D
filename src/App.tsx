@@ -80,6 +80,11 @@ type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks
 type ModelSubStage = "local" | "ai" | "inspection";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
 type UserRole = "designer" | "process" | "operator" | "admin";
+type SuggestedControlValue = {
+  value: number;
+  reason: string;
+};
+type SuggestedSettings = Partial<Record<keyof ModelSettings, SuggestedControlValue>>;
 type TaskEvent = {
   id: string;
   title: string;
@@ -572,6 +577,11 @@ export function App() {
     () => createCostEstimate(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
     [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
   );
+  const suggestedSettings = useMemo(
+    () => createSuggestedSettings(settings, toolpath, selectedTool, selectedMaterial, selectedMachine),
+    [settings, toolpath, selectedTool, selectedMaterial, selectedMachine]
+  );
+  const hasSuggestedSettings = useMemo(() => Object.values(suggestedSettings).some(Boolean), [suggestedSettings]);
   const costCalibration = useMemo(
     () => createCostCalibrationReport(costEstimate, machineFeedback, selectedMachine.name, selectedTool.name),
     [costEstimate, machineFeedback, selectedMachine.name, selectedTool.name]
@@ -720,6 +730,32 @@ export function App() {
       },
       ...current
     ].slice(0, 80));
+  };
+
+  const applySuggestedSettings = () => {
+    const nextSettings = normalizeSettings(Object.entries(suggestedSettings).reduce(
+      (next, [key, suggestion]) => {
+        if (!suggestion) return next;
+        return { ...next, [key]: suggestion.value };
+      },
+      settings
+    ));
+    setSettings(nextSettings);
+    setToolpath(null);
+    setIsSimulationMode(false);
+    setWorkbenchView("model");
+    recordTask({
+      category: "cam",
+      status: "ok",
+      title: "已应用建议参数",
+      detail: "根据上一版刀路摘要、刀具和材料上限更新切深、步距、余量和进给。"
+    });
+  };
+
+  const applySuggestedSetting = <K extends keyof ModelSettings>(key: K) => {
+    const suggestion = suggestedSettings[key];
+    if (!suggestion) return;
+    setSettings((current) => normalizeSettings({ ...current, [key]: suggestion.value } as ModelSettings));
   };
 
   const startTaskJob = (job: Pick<TaskJob, "title" | "detail" | "category" | "retryAction">) => {
@@ -2706,7 +2742,7 @@ export function App() {
           </div>
           <Control label="核长" value={settings.lengthMm} min={18} max={70} step={0.5} suffix="mm" onChange={(v) => updateSetting("lengthMm", v)} />
           <Control label="最大直径" value={settings.diameterMm} min={8} max={28} step={0.2} suffix="mm" onChange={(v) => updateSetting("diameterMm", v)} />
-          <Control label="浮雕深度" value={settings.depthMm} min={0.1} max={2.5} step={0.05} suffix="mm" onChange={(v) => updateSetting("depthMm", v)} />
+          <Control label="浮雕深度" value={settings.depthMm} min={0.1} max={2.5} step={0.05} suffix="mm" suggested={suggestedSettings.depthMm} onApplySuggested={() => applySuggestedSetting("depthMm")} onChange={(v) => updateSetting("depthMm", v)} />
           <Control label="包覆角度" value={settings.reliefAngleDeg} min={60} max={360} step={5} suffix="°" onChange={(v) => updateSetting("reliefAngleDeg", v)} />
           <Control label="图像对比" value={settings.contrast} min={0.5} max={3} step={0.05} suffix="x" onChange={(v) => updateSetting("contrast", v)} />
           <Control label="平滑次数" value={settings.smoothPasses} min={0} max={5} step={1} suffix="" onChange={(v) => updateSetting("smoothPasses", v)} />
@@ -2812,6 +2848,15 @@ export function App() {
             <Hammer size={18} />
             <h2>刀路参数</h2>
           </div>
+          {hasSuggestedSettings && (
+            <div className="suggested-params-bar">
+              <div>
+                <strong>建议参数</strong>
+                <span>基于上一版刀路最大深度、当前刀具、材料和机床上限计算</span>
+              </div>
+              <button className="mini-action" type="button" onClick={applySuggestedSettings}>应用建议</button>
+            </div>
+          )}
           <label className="select-row">
             <span>CAM模式</span>
             <select value={settings.camMode} onChange={(event) => handleCamModeChange(event.target.value as ModelSettings["camMode"])}>
@@ -2854,12 +2899,12 @@ export function App() {
               <Control label="端部过渡" value={settings.endTransitionMm} min={0} max={6} step={0.1} suffix="mm" onChange={(v) => updateSetting("endTransitionMm", v)} />
             </>
           )}
-          <Control label="X步距" value={settings.stepoverMm} min={0.03} max={0.8} step={0.01} suffix="mm" onChange={(v) => updateSetting("stepoverMm", v)} />
-          {settings.camMode !== "3axis" && <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" onChange={(v) => updateSetting("stepoverDeg", v)} />}
-          <Control label="最大单层切深" value={settings.maxCutDepth} min={0.02} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("maxCutDepth", v)} />
-          <Control label="粗加工余量" value={settings.stockAllowance} min={0} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("stockAllowance", v)} />
-          <Control label="进给" value={settings.feedRate} min={30} max={600} step={10} suffix="mm/min" onChange={(v) => updateSetting("feedRate", v)} />
-          <Control label="主轴" value={settings.spindleRpm} min={3000} max={24000} step={500} suffix="rpm" onChange={(v) => updateSetting("spindleRpm", v)} />
+          <Control label="X步距" value={settings.stepoverMm} min={0.03} max={0.8} step={0.01} suffix="mm" suggested={suggestedSettings.stepoverMm} onApplySuggested={() => applySuggestedSetting("stepoverMm")} onChange={(v) => updateSetting("stepoverMm", v)} />
+          {settings.camMode !== "3axis" && <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" suggested={suggestedSettings.stepoverDeg} onApplySuggested={() => applySuggestedSetting("stepoverDeg")} onChange={(v) => updateSetting("stepoverDeg", v)} />}
+          <Control label="最大单层切深" value={settings.maxCutDepth} min={0.02} max={0.5} step={0.01} suffix="mm" suggested={suggestedSettings.maxCutDepth} onApplySuggested={() => applySuggestedSetting("maxCutDepth")} onChange={(v) => updateSetting("maxCutDepth", v)} />
+          <Control label="粗加工余量" value={settings.stockAllowance} min={0} max={0.5} step={0.01} suffix="mm" suggested={suggestedSettings.stockAllowance} onApplySuggested={() => applySuggestedSetting("stockAllowance")} onChange={(v) => updateSetting("stockAllowance", v)} />
+          <Control label="进给" value={settings.feedRate} min={30} max={600} step={10} suffix="mm/min" suggested={suggestedSettings.feedRate} onApplySuggested={() => applySuggestedSetting("feedRate")} onChange={(v) => updateSetting("feedRate", v)} />
+          <Control label="主轴" value={settings.spindleRpm} min={3000} max={24000} step={500} suffix="rpm" suggested={suggestedSettings.spindleRpm} onApplySuggested={() => applySuggestedSetting("spindleRpm")} onChange={(v) => updateSetting("spindleRpm", v)} />
           <label className="select-row">
             <span>精修策略</span>
             <select value={settings.finishingStrategy} onChange={(event) => updateSetting("finishingStrategy", event.target.value as ModelSettings["finishingStrategy"])}>
@@ -3981,6 +4026,84 @@ function normalizeSettings(settings: ModelSettings): ModelSettings {
   };
 }
 
+function createSuggestedSettings(
+  settings: ModelSettings,
+  toolpath: GeneratedToolpath | null,
+  tool: ToolProfile,
+  material: MaterialProfile,
+  machine: MachineProfile
+): SuggestedSettings {
+  if (!toolpath) return {};
+
+  const maxDepth = Math.max(0.01, toolpath.summary.maxDepth);
+  const cutDepthLimit = Math.min(tool.maxCutDepthMm, material.maxCutDepthMm, 0.5);
+  const recommendedCutDepth = roundToStep(clamp(cutDepthLimit * 0.86, 0.02, 0.5), 0.01);
+  const recommendedStock = roundToStep(clamp(Math.max(tool.stockAllowanceMm, tool.diameterMm * 0.18), 0, 0.5), 0.01);
+  const recommendedXStep = roundToStep(clamp(Math.min(tool.recommendedStepoverMm, tool.diameterMm * 0.28), 0.03, 0.8), 0.01);
+  const recommendedAStep = roundToStep(clamp(settings.camMode === "3axis" ? settings.stepoverDeg : Math.min(settings.stepoverDeg, 0.6), 0.2, 5), 0.1);
+  const recommendedFeed = roundToStep(clamp(Math.min(material.finishFeed, tool.recommendedFeed, machine.maxFeed), 30, 600), 10);
+  const recommendedRpm = roundToStep(clamp(Math.min(material.spindleRpm, tool.recommendedRpm, machine.maxRpm), 3000, 24000), 500);
+  const depthSuggestion = maxDepth >= 0.05
+    ? {
+      depthMm: {
+        value: roundToStep(clamp(maxDepth * 1.08, 0.1, 2.5), 0.05),
+        reason: `上一版刀路最大雕刻深度 ${maxDepth.toFixed(2)}mm，建议留约 8% 余量。`
+      }
+    }
+    : {};
+
+  return {
+    ...depthSuggestion,
+    maxCutDepth: {
+      value: recommendedCutDepth,
+      reason: `按 ${tool.name} 和 ${material.name} 的单层切深上限折减。`
+    },
+    stockAllowance: {
+      value: recommendedStock,
+      reason: "按当前刀具直径和刀具预设保留粗加工余量。"
+    },
+    stepoverMm: {
+      value: recommendedXStep,
+      reason: `按 ${tool.name} 的推荐步距和刀径比例计算。`
+    },
+    ...(settings.camMode !== "3axis"
+      ? {
+        stepoverDeg: {
+          value: recommendedAStep,
+          reason: "四轴精细预览建议 A 步距不超过 0.6°，减少环向刀痕。"
+        }
+      }
+      : {}),
+    feedRate: {
+      value: recommendedFeed,
+      reason: `按 ${material.name} 精加工进给、刀具建议和机床上限取保守值。`
+    },
+    spindleRpm: {
+      value: recommendedRpm,
+      reason: "按材料、刀具和机床转速上限取保守值。"
+    }
+  };
+}
+
+function roundToStep(value: number, step: number) {
+  const decimals = countStepDecimals(step);
+  return Number((Math.round(value / step) * step).toFixed(decimals));
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function countStepDecimals(step: number) {
+  if (!Number.isFinite(step)) return 0;
+  const normalized = step.toString().toLowerCase();
+  if (!normalized.includes("e")) {
+    return normalized.includes(".") ? normalized.split(".")[1].length : 0;
+  }
+  const [, exponent = "0"] = normalized.split("e-");
+  return Number(exponent) || 0;
+}
+
 function getBlankProfileDiameters(settings: ModelSettings) {
   const normalized = normalizeSettings(settings);
   return [
@@ -4782,19 +4905,59 @@ type ControlProps = {
   max: number;
   step: number;
   suffix: string;
+  suggested?: SuggestedControlValue;
+  onApplySuggested?: () => void;
   onChange: (value: number) => void;
 };
 
-function Control({ label, value, min, max, step, suffix, onChange }: ControlProps) {
+function Control({ label, value, min, max, step, suffix, suggested, onApplySuggested, onChange }: ControlProps) {
+  const suggestedRatio = suggested ? clamp((suggested.value - min) / Math.max(0.001, max - min), 0, 1) : null;
+  const markerLeft = suggestedRatio !== null ? createRangeMarkerPosition(suggestedRatio) : undefined;
   return (
     <label className="control">
       <span>
         {label}
-        <strong>{value}{suffix}</strong>
+        <strong>{formatControlValue(value, step, suffix)}</strong>
       </span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <div className="control-slider-wrap">
+        {suggested && suggestedRatio !== null && (
+          <button
+            className="suggested-marker"
+            style={{ left: markerLeft }}
+            type="button"
+            title={`建议参数：${formatControlValue(suggested.value, step, suffix)}。${suggested.reason}`}
+            aria-label={`${label}建议参数 ${formatControlValue(suggested.value, step, suffix)}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (onApplySuggested) {
+                onApplySuggested();
+              } else {
+                onChange(suggested.value);
+              }
+            }}
+          />
+        )}
+        <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      </div>
+      {suggested && (
+        <small className="suggested-control-copy">
+          建议 {formatControlValue(suggested.value, step, suffix)}
+        </small>
+      )}
     </label>
   );
+}
+
+function createRangeMarkerPosition(ratio: number) {
+  const thumbSizePx = 14;
+  const percent = ratio * 100;
+  const offsetPx = thumbSizePx / 2 - ratio * thumbSizePx;
+  return `calc(${percent}% + ${offsetPx}px)`;
+}
+
+function formatControlValue(value: number, step: number, suffix: string) {
+  return `${Number(roundToStep(value, step).toFixed(countStepDecimals(step)))}${suffix}`;
 }
 
 function getToolpathProgram(toolpath: GeneratedToolpath, kind: ToolpathKind) {

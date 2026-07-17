@@ -1233,12 +1233,14 @@ function toGcode(points, settings, estimatedMinutes, sourceName) {
     ...postStart(settings)
   ];
 
-  if (points.length > 0) {
-    lines.push(`G0 X${fmt(points[0].x)} A${fmt(points[0].a, 3)}`);
-    lines.push(`G1 Z${fmt(points[0].z)} F${fmt(Number(settings.feedRate) * 0.45, 1)}`);
+  const outputPoints = unwrapRotaryAngles(points);
+
+  if (outputPoints.length > 0) {
+    lines.push(`G0 X${fmt(outputPoints[0].x)} A${fmt(outputPoints[0].a, 3)}`);
+    lines.push(`G1 Z${fmt(outputPoints[0].z)} F${fmt(Number(settings.feedRate) * 0.45, 1)}`);
   }
 
-  for (const point of points) {
+  for (const point of outputPoints) {
     lines.push(`G1 X${fmt(point.x)} A${fmt(point.a, 3)} Z${fmt(point.z)} F${fmt(settings.feedRate, 1)}`);
   }
 
@@ -1246,6 +1248,15 @@ function toGcode(points, settings, estimatedMinutes, sourceName) {
   lines.push(...postEnd(settings));
   lines.push("%");
   return `${lines.join("\n")}\n`;
+}
+
+function unwrapRotaryAngles(points) {
+  return points.map((point) => ({ ...point, a: normalizeRotaryAngle(point.a) }));
+}
+
+function normalizeRotaryAngle(angle) {
+  const normalized = ((Number(angle) || 0) + 360) % 360;
+  return Math.abs(normalized - 360) < 0.000001 ? 0 : normalized;
 }
 
 function toThreeAxisGcode(points, settings, estimatedMinutes, sourceName) {

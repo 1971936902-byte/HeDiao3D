@@ -706,7 +706,7 @@ export function validateGcodeProgram(settings: ModelSettings, toolpath: Generate
       issues.push(createGcodeIssue("critical", "G-code 主轴超限", lineNumber, trimmed, `S=${spindle.toFixed(0)}rpm，机床上限 ${machine.maxRpm}rpm。`));
     }
 
-    if (settings.camMode !== "3axis" && a !== null && previousA !== null && Math.abs(a - previousA) > 120) {
+    if (settings.camMode !== "3axis" && a !== null && previousA !== null && Math.abs(shortestAngleDelta(a, previousA)) > 120) {
       issues.push(createGcodeIssue("warning", "A 轴角度跳变较大", lineNumber, trimmed, `上一 A=${previousA.toFixed(2)}°，当前 A=${a.toFixed(2)}°。请空跑确认旋转方向和连续性。`));
     }
     if (a !== null) previousA = a;
@@ -742,6 +742,13 @@ export function hasCriticalIssue(issues: SafetyIssue[]) {
 function readAxis(line: string, axis: string) {
   const match = line.match(new RegExp(`(?:^|\\s)${axis}(-?\\d+(?:\\.\\d+)?)`, "i"));
   return match ? Number(match[1]) : null;
+}
+
+function shortestAngleDelta(current: number, previous: number) {
+  let delta = current - previous;
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  return delta;
 }
 
 function createGcodeIssue(level: SafetyIssue["level"], title: string, line: number, command: string, detail: string): SafetyIssue {
