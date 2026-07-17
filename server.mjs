@@ -3146,7 +3146,10 @@ async function attachCamSourceConversion(job, repairExecution) {
         exportedTriangleCount: conversion.exportedTriangleCount,
         decimated: conversion.decimated,
         stride: conversion.stride,
-        maxTriangles: conversion.maxTriangles
+        maxTriangles: conversion.maxTriangles,
+        strategy: conversion.strategy,
+        baseKeptCount: conversion.baseKeptCount,
+        curvatureKeptCount: conversion.curvatureKeptCount
       };
     } finally {
       geometry.dispose?.();
@@ -8516,18 +8519,16 @@ function geometryToAsciiStl(geometry, name = "hediao3d_mesh", options = {}) {
   }
   const originalTriangleCount = Math.floor(position.count / 3);
   const maxTriangles = Number(options.maxTriangles ?? Infinity);
-  const stride = Number.isFinite(maxTriangles) && maxTriangles > 0
-    ? Math.max(1, Math.ceil(originalTriangleCount / maxTriangles))
-    : 1;
-  const exportedTriangleCount = Math.ceil(originalTriangleCount / stride);
-  const normal = new THREE.Vector3();
+  const selection = selectCamStlTriangleIndices(position, originalTriangleCount, maxTriangles);
+  const selectedTriangles = selection.indices;
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
   const cb = new THREE.Vector3();
   const ab = new THREE.Vector3();
+  const normal = new THREE.Vector3();
   const lines = [`solid ${sanitizeStlName(name)}`];
-  for (let triangleIndex = 0; triangleIndex < originalTriangleCount; triangleIndex += stride) {
+  for (const triangleIndex of selectedTriangles) {
     const index = triangleIndex * 3;
     a.fromBufferAttribute(position, index);
     b.fromBufferAttribute(position, index + 1);
@@ -8553,11 +8554,103 @@ function geometryToAsciiStl(geometry, name = "hediao3d_mesh", options = {}) {
   return {
     stl: lines.join("\n"),
     originalTriangleCount,
-    exportedTriangleCount,
-    decimated: stride > 1,
-    stride,
-    maxTriangles: Number.isFinite(maxTriangles) ? maxTriangles : null
+    exportedTriangleCount: selectedTriangles.length,
+    decimated: selectedTriangles.length < originalTriangleCount,
+    stride: selection.stride,
+    maxTriangles: Number.isFinite(maxTriangles) ? maxTriangles : null,
+    strategy: selection.strategy,
+    baseKeptCount: selection.baseKeptCount,
+    curvatureKeptCount: selection.curvatureKeptCount
   };
+}
+
+function selectCamStlTriangleIndices(position, triangleCount, maxTriangles) {
+  if (!Number.isFinite(maxTriangles) || maxTriangles <= 0 || triangleCount <= maxTriangles) {
+    return {
+      indices: Array.from({ length: triangleCount }, (_value, index) => index),
+      stride: 1,
+      strategy: "full",
+      baseKeptCount: triangleCount,
+      curvatureKeptCount: 0
+    };
+  }
+  const budget = Math.max(1, Math.floor(maxTriangles));
+  const baseBudget = Math.max(1, Math.floor(budget * 0.55));
+  const stride = Math.max(1, Math.ceil(triangleCount / baseBudget));
+  const selected = new Set();
+  for (let triangleIndex = 0; triangleIndex < triangleCount; triangleIndex += stride) {
+    selected.add(triangleIndex);
+  }
+  const baseKeptCount = selected.size;
+  const curvatureBudget = Math.max(0, budget - baseKeptCount);
+  if (curvatureBudget <= 0) {
+    return {
+      indices: Array.from(selected).sort((a, b) => a - b),
+      stride,
+      strategy: "uniform-stride",
+      baseKeptCount,
+      curvatureKeptCount: 0
+    };
+  }
+  const curvatureScores = computeTriangleCurvatureScores(position, triangleCount);
+  const highCurvature = curvatureScores
+    .filter((item) => !selected.has(item.index))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, curvatureBudget);
+  for (const item of highCurvature) selected.add(item.index);
+  return {
+    indices: Array.from(selected).sort((a, b) => a - b),
+    stride,
+    strategy: "uniform-plus-curvature",
+    baseKeptCount,
+    curvatureKeptCount: highCurvature.length
+  };
+}
+
+function computeTriangleCurvatureScores(position, triangleCount) {
+  const normals = [];
+  const centers = [];
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const cb = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  for (let triangleIndex = 0; triangleIndex < triangleCount; triangleIndex += 1) {
+    const index = triangleIndex * 3;
+    a.fromBufferAttribute(position, index);
+    b.fromBufferAttribute(position, index + 1);
+    c.fromBufferAttribute(position, index + 2);
+    const normal = cb.subVectors(c, b).cross(ab.subVectors(a, b)).normalize().clone();
+    if (!Number.isFinite(normal.x) || !Number.isFinite(normal.y) || !Number.isFinite(normal.z)) normal.set(0, 0, 0);
+    normals.push(normal);
+    centers.push(new THREE.Vector3(
+      (a.x + b.x + c.x) / 3,
+      (a.y + b.y + c.y) / 3,
+      (a.z + b.z + c.z) / 3
+    ));
+  }
+  const neighborWindow = 3;
+  const scores = [];
+  for (let triangleIndex = 0; triangleIndex < triangleCount; triangleIndex += 1) {
+    const normal = normals[triangleIndex];
+    const center = centers[triangleIndex];
+    let normalDelta = 0;
+    let distancePenalty = 0;
+    let samples = 0;
+    const start = Math.max(0, triangleIndex - neighborWindow);
+    const end = Math.min(triangleCount - 1, triangleIndex + neighborWindow);
+    for (let neighborIndex = start; neighborIndex <= end; neighborIndex += 1) {
+      if (neighborIndex === triangleIndex) continue;
+      normalDelta += 1 - Math.max(-1, Math.min(1, normal.dot(normals[neighborIndex])));
+      distancePenalty += center.distanceToSquared(centers[neighborIndex]);
+      samples += 1;
+    }
+    const score = samples > 0
+      ? normalDelta / samples + 1 / (1 + distancePenalty / samples)
+      : 0;
+    scores.push({ index: triangleIndex, score });
+  }
+  return scores;
 }
 
 function sanitizeStlName(name) {

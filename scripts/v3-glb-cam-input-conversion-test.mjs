@@ -88,6 +88,8 @@ async function main() {
   assert(repairExecution.camSourceConversion.stats?.exportedTriangleCount <= 20000, `converted STL should honor triangle cap, got ${repairExecution.camSourceConversion.stats?.exportedTriangleCount}`);
   assert(repairExecution.camSourceConversion.stats?.originalTriangleCount > repairExecution.camSourceConversion.stats?.exportedTriangleCount, "conversion should decimate high-poly GLB for CAM input");
   assert(repairExecution.camSourceConversion.stats?.decimated === true, "conversion stats should mark decimation");
+  assert(repairExecution.camSourceConversion.stats?.strategy === "uniform-plus-curvature", `conversion should use curvature-aware sampling, got ${repairExecution.camSourceConversion.stats?.strategy}`);
+  assert(repairExecution.camSourceConversion.stats?.curvatureKeptCount > 0, "conversion should preserve high-curvature triangles");
   assert(repairExecution.outputs?.some((candidate) => candidate.id === "camSourceConvertedStl" && candidate.exists), "repair outputs should expose converted STL candidate");
 
   const camInputPlan = await getArtifactJson(job.id, "cam-input-plan.json");
