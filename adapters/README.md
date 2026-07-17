@@ -156,6 +156,7 @@ npm run test:v3:neutral-adapter          # synthetic protocol handoff only
 npm run test:v3:real-neutral-handoff     # non-synthetic neutral + CAMotics result import
 npm run test:v3:opencamlib-runner        # external runner contract and fail-closed behavior
 npm run test:v3:camotics-cli-prepare     # Linux CAMotics prepare-package contract
+npm run test:v3:camotics-cli-package-api # Orchestrator API generates downloadable CAMotics package
 ```
 
 Run the deployment validation suite on a CAM server when you want to keep each
