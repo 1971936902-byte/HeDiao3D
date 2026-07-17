@@ -2341,6 +2341,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "mesh-quality", meshQuality.verdict === "ready" ? "completed" : "review", `Mesh 评分 ${meshQuality.score.toFixed(1)}，结论 ${meshQuality.verdict}。`);
   appendOrchestratorLog(job, `Mesh 体检完成：评分 ${meshQuality.score.toFixed(1)}，${repairPlan.statusText}`);
   const repairExecution = createRepairExecutionReport(job, meshQuality, repairPlan, settings);
+  await attachCamSourceConversion(job, repairExecution);
   await attachRepairedMeshQuality(job, repairExecution);
   await writeFile(join(job.workDir, "repair-execution.json"), JSON.stringify(repairExecution, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "repair-execution.json"));
@@ -3029,6 +3030,18 @@ function createRepairOutputCandidates(job, sourceModelPath) {
       note: "用于边界边、非流形边修复后的外部 CAM 输入。"
     },
     {
+      id: "camSourceConvertedStl",
+      role: "format-conversion",
+      label: "外部CAM转换STL",
+      filename: "cam-source-converted.stl",
+      path: join(job.workDir, "cam-source-converted.stl"),
+      url: publicArtifactUrl(job.id, "cam-source-converted.stl"),
+      exists: existsSync(join(job.workDir, "cam-source-converted.stl")),
+      priority: 25,
+      productionEligible: false,
+      note: "由 Orchestrator 从 GLB/GLTF 转换为 STL，优先供 OpenCAMLib/FreeCAD 等外部 CAM 小闭环使用。"
+    },
+    {
       id: "remeshedGlb",
       role: "remesh",
       label: "重网格后的 GLB",
@@ -3113,7 +3126,61 @@ async function attachRepairedMeshQuality(job, repairExecution) {
   }
 }
 
+async function attachCamSourceConversion(job, repairExecution) {
+  const conversionEnabled = enableExternalCamAdapters || String(process.env.ORCHESTRATOR_PREPARE_CAM_STL ?? "").toLowerCase() === "true";
+  if (!conversionEnabled) return;
+  const sourceModelPath = repairExecution?.sourceModelPath ?? localModelUrlToPath(job.modelUrl);
+  if (!/\.(glb|gltf)$/i.test(sourceModelPath)) return;
+  const targetPath = join(job.workDir, "cam-source-converted.stl");
+  const targetUrl = publicArtifactUrl(job.id, "cam-source-converted.stl");
+  const output = repairExecution?.outputs?.find((candidate) => candidate.id === "camSourceConvertedStl");
+  try {
+    const geometry = await loadModelGeometry(sourceModelPath);
+    try {
+      const stl = geometryToAsciiStl(geometry, "hediao3d_cam_source_converted");
+      await writeFile(targetPath, stl, "utf8");
+    } finally {
+      geometry.dispose?.();
+    }
+    if (output) {
+      output.exists = true;
+      output.conversionStatus = "completed";
+      output.note = "由 Orchestrator 从 GLB/GLTF 自动转换，用于 FreeCAD/OpenCAMLib 等外部 CAM 输入。";
+    }
+    repairExecution.camSourceConversion = {
+      schema: "hediao3d.cam-source-conversion.v1",
+      status: "completed",
+      sourcePath: sourceModelPath,
+      sourceUrl: job.modelUrl,
+      targetPath,
+      targetUrl,
+      format: "stl",
+      summary: "已将 GLB/GLTF 转换为 STL，供外部 CAM adapter 使用。"
+    };
+  } catch (error) {
+    if (output) {
+      output.exists = false;
+      output.conversionStatus = "failed";
+      output.note = error instanceof Error ? error.message : "GLB/GLTF 转 STL 失败。";
+    }
+    repairExecution.camSourceConversion = {
+      schema: "hediao3d.cam-source-conversion.v1",
+      status: "failed",
+      sourcePath: sourceModelPath,
+      sourceUrl: job.modelUrl,
+      targetPath,
+      targetUrl,
+      format: "stl",
+      error: error instanceof Error ? error.message : "GLB/GLTF 转 STL 失败。",
+      summary: "未能生成外部 CAM STL 输入，adapter 可能需要直接处理源模型或降级。"
+    };
+  }
+}
+
 function pushRepairOutputArtifacts(job, repairExecution) {
+  if (repairExecution?.camSourceConversion?.status === "completed") {
+    pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-source-converted.stl"));
+  }
   if (repairExecution?.repairedMeshQuality?.artifact) {
     pushUnique(job.artifacts, repairExecution.repairedMeshQuality.artifact);
   }
@@ -8416,6 +8483,60 @@ async function loadModelGeometry(modelPath) {
   if (lower.endsWith(".stl")) return new STLLoader().parse(buffer);
   if (lower.endsWith(".glb") || lower.endsWith(".gltf")) return loadGltfGeometry(buffer);
   throw new Error("不支持的 Mesh 格式，当前支持 STL/GLB/GLTF");
+}
+
+function geometryToAsciiStl(geometry, name = "hediao3d_mesh") {
+  let working = geometry;
+  let disposeWorking = false;
+  if (working.index) {
+    working = working.toNonIndexed();
+    disposeWorking = true;
+  }
+  const position = working.getAttribute("position");
+  if (!position || position.count < 3) {
+    if (disposeWorking) working.dispose();
+    throw new Error("模型没有可导出的三角面。");
+  }
+  const normal = new THREE.Vector3();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const cb = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const lines = [`solid ${sanitizeStlName(name)}`];
+  for (let index = 0; index + 2 < position.count; index += 3) {
+    a.fromBufferAttribute(position, index);
+    b.fromBufferAttribute(position, index + 1);
+    c.fromBufferAttribute(position, index + 2);
+    cb.subVectors(c, b);
+    ab.subVectors(a, b);
+    normal.crossVectors(cb, ab).normalize();
+    if (!Number.isFinite(normal.x) || !Number.isFinite(normal.y) || !Number.isFinite(normal.z)) {
+      normal.set(0, 0, 0);
+    }
+    lines.push(
+      `  facet normal ${formatStlNumber(normal.x)} ${formatStlNumber(normal.y)} ${formatStlNumber(normal.z)}`,
+      "    outer loop",
+      `      vertex ${formatStlNumber(a.x)} ${formatStlNumber(a.y)} ${formatStlNumber(a.z)}`,
+      `      vertex ${formatStlNumber(b.x)} ${formatStlNumber(b.y)} ${formatStlNumber(b.z)}`,
+      `      vertex ${formatStlNumber(c.x)} ${formatStlNumber(c.y)} ${formatStlNumber(c.z)}`,
+      "    endloop",
+      "  endfacet"
+    );
+  }
+  lines.push(`endsolid ${sanitizeStlName(name)}`, "");
+  if (disposeWorking) working.dispose();
+  return lines.join("\n");
+}
+
+function sanitizeStlName(name) {
+  return String(name ?? "mesh").replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 64) || "mesh";
+}
+
+function formatStlNumber(value) {
+  if (!Number.isFinite(value)) return "0";
+  if (Math.abs(value) < 1e-9) return "0";
+  return Number(value).toFixed(6).replace(/\.?0+$/, "");
 }
 
 function loadGltfGeometry(buffer) {
