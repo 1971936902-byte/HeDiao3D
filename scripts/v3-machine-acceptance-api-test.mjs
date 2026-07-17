@@ -28,7 +28,7 @@ const settings = {
   stepoverMm: 0.28,
   toolProfileId: "vflat-4mm-25deg",
   materialProfileId: "olive-core",
-  machineProfileId: "desktop-rotary-y-wrap",
+  machineProfileId: "desktop-3axis-rotary-y",
   camMode: "rotaryWrap",
   rotaryOutputAxis: "Y",
   rotaryWrapPerRevolutionMm: 100,
@@ -38,7 +38,7 @@ const settings = {
   stockAllowance: 0.08,
   finishingStrategy: "x-scan",
   generationMode: "active",
-  postProcessor: "rotary-y-wrap"
+  postProcessor: "wrapY"
 };
 
 main().catch((error) => {
@@ -72,7 +72,7 @@ async function main() {
     id: "machine-acceptance-api-test-mismatch",
     outcome: "success",
     operator: "API test operator",
-    machineSerial: "desktop-rotary-y-wrap-test",
+    machineSerial: "desktop-3axis-rotary-y-test",
     fixtureType: "三轴控制器 + Y轴旋转夹具",
     materialBatch: "soft-trial-block",
     programName: "toolpath.nc",
@@ -106,7 +106,7 @@ async function main() {
     id: "machine-acceptance-api-test",
     outcome: "success",
     operator: "API test operator",
-    machineSerial: "desktop-rotary-y-wrap-test",
+    machineSerial: "desktop-3axis-rotary-y-test",
     fixtureType: "三轴控制器 + Y轴旋转夹具",
     materialBatch: "soft-trial-block",
     programName: "toolpath.nc",

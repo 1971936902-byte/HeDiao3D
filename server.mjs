@@ -584,7 +584,7 @@ function createDeploymentCamServerConfigReport(reportId) {
     rotaryOutputAxis: "Y",
     postProcessor: "wrapY",
     rotaryWrapPerRevolutionMm: 100,
-    machineProfileId: "desktop-rotary-y-wrap"
+    machineProfileId: "desktop-3axis-rotary-y"
   });
   const engines = detectCamEngines();
   const selected = selectCamEngine(engines, "auto", settings);
@@ -7196,7 +7196,7 @@ function createMachineControllerProfile(settings) {
   return {
     schema: "hediao3d.machine-controller-profile.v1",
     createdAt: new Date().toISOString(),
-    id: settings.machineProfileId ?? (settings.camMode === "rotaryWrap" ? "desktop-rotary-y-wrap" : "desktop-3axis-relief"),
+    id: settings.machineProfileId ?? (settings.camMode === "rotaryWrap" ? "desktop-3axis-rotary-y" : "desktop-3axis-relief"),
     name: settings.camMode === "rotaryWrap"
       ? `三轴控制器 + ${rotaryAxis}轴旋转夹具`
       : "常规三轴平面浮雕控制器",
@@ -10704,6 +10704,7 @@ function normalizeServerCamSettings(settings) {
   if (!settings || typeof settings !== "object") return settings;
   const normalized = { ...settings };
   if (normalized.camMode === "rotaryWrap") {
+    if (normalized.machineProfileId === "desktop-rotary-y-wrap") normalized.machineProfileId = "desktop-3axis-rotary-y";
     if (normalized.postProcessor === "rotary-y-wrap" || normalized.postProcessor === "wrap-y") normalized.postProcessor = "wrapY";
     if (normalized.postProcessor === "rotary-x-wrap" || normalized.postProcessor === "wrap-x") normalized.postProcessor = "wrapX";
     if (!normalized.postProcessor || normalized.postProcessor === "generic") {

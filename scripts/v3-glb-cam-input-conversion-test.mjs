@@ -33,7 +33,7 @@ const settings = {
   stepoverMm: 0.28,
   toolProfileId: "vflat-4mm-25deg",
   materialProfileId: "olive-core",
-  machineProfileId: "desktop-rotary-y-wrap",
+  machineProfileId: "desktop-3axis-rotary-y",
   camMode: "rotaryWrap",
   rotaryOutputAxis: "Y",
   rotaryWrapPerRevolutionMm: 100,
@@ -43,7 +43,7 @@ const settings = {
   stockAllowance: 0.08,
   finishingStrategy: "x-scan",
   generationMode: "active",
-  postProcessor: "rotary-y-wrap"
+  postProcessor: "wrapY"
 };
 
 let server;
