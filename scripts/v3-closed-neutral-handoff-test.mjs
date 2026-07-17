@@ -115,7 +115,8 @@ async function main() {
   assert(camInputPlan.gate?.allowProductionNc === true, "closed STL CAM input gate should allow production candidate");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
-  assert(productionGate.simulationEvidence?.level === "material-removal-verified", `expected material-removal-verified evidence, got ${productionGate.simulationEvidence?.level}`);
+  assert(productionGate.simulationEvidence?.level === "material-removal-incomplete", `expected material-removal-incomplete evidence, got ${productionGate.simulationEvidence?.level}`);
+  assert(productionGate.simulationEvidence?.productionUnlockEligible === false, "CAMotics result without input identity hash must not be production eligible");
   assert(productionGate.allowAirRun === true, "closed neutral handoff should allow air-run");
   assert(productionGate.allowTrialNc === true, `closed neutral handoff should allow trial NC; blockers: ${(productionGate.blockers ?? []).join("; ")}`);
   assert(productionGate.allowProductionNc === false, "heightfield preview must not unlock production NC");

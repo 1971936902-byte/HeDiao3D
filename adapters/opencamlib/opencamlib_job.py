@@ -44,6 +44,7 @@ def detect_opencamlib() -> Dict[str, Any]:
         "origin": selected["origin"] if selected else None,
         "modules": modules,
         "experimentalOutputEnabled": is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT")),
+        "heightfieldPreviewEnabled": is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW")),
         "externalCommand": os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND"),
         "externalCommandJson": os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON"),
     }
@@ -211,6 +212,18 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
         commanded = run_external_neutral_command(job, plan, job_path, Path(plan_path), external_command)
         if commanded is not None:
             return commanded
+    if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW")):
+        preview_command = resolve_bundled_heightfield_runner_command()
+        if preview_command is not None:
+            os.environ["HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT"] = "true"
+            commanded = run_external_neutral_command(job, plan, job_path, Path(plan_path), preview_command)
+            if commanded is not None:
+                return {
+                    **commanded,
+                    "heightfieldPreview": commanded.get("status") == "completed",
+                    "previewScaffold": commanded.get("status") == "completed",
+                    "autoRunner": True,
+                }
     imported = try_import_neutral_toolpath(job)
     if imported is not None:
         return imported
@@ -247,6 +260,14 @@ def resolve_external_command() -> Optional[List[str]]:
     if not command:
         return None
     return shlex.split(command, posix=os.name != "nt")
+
+
+def resolve_bundled_heightfield_runner_command() -> Optional[List[str]]:
+    runner_path = Path(__file__).with_name("opencamlib_runner.py")
+    if not runner_path.exists():
+        return None
+    python = os.environ.get("PYTHON") or sys.executable or "python"
+    return [python, str(runner_path)]
 
 
 def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_path: Path, plan_path: Path, command_parts: List[str]) -> Optional[Dict[str, Any]]:
@@ -319,12 +340,20 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
         "generatedByExternalCommand": True,
     }
     neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+    runner = neutral.get("runner") if isinstance(neutral.get("runner"), dict) else {}
+    runner_mode = str(runner.get("mode") or "")
+    heightfield_preview = bool(neutral.get("experimentalHeightfield")) or "heightfield" in runner_mode.lower()
+    preview_scaffold = heightfield_preview or "preview" in runner_mode.lower() or "scaffold" in runner_mode.lower()
+    fixture = bool(neutral.get("fixture")) or "fixture" in runner_mode.lower()
     return {
         "status": "completed",
         "error": None,
         "neutralToolpathPath": str(neutral_path),
         "synthetic": False,
         "imported": False,
+        "heightfieldPreview": heightfield_preview,
+        "previewScaffold": preview_scaffold,
+        "fixture": fixture,
         "externalCommand": {
             "command": " ".join(command_parts),
             "commandParts": command_parts,
@@ -532,7 +561,11 @@ def main() -> int:
                     "path": attempt.get("neutralToolpathPath"),
                     "synthetic": bool(attempt.get("synthetic")),
                     "imported": bool(attempt.get("imported")),
+                    "fixture": bool(attempt.get("fixture")),
+                    "heightfieldPreview": bool(attempt.get("heightfieldPreview")),
+                    "previewScaffold": bool(attempt.get("previewScaffold")),
                     "generatedByExternalCommand": bool(attempt.get("externalCommand")),
+                    "autoRunner": bool(attempt.get("autoRunner")),
                     "schema": "hediao3d.neutral-toolpath.v1" if attempt.get("neutralToolpathPath") else None,
                 },
                 "externalCommand": attempt.get("externalCommand"),

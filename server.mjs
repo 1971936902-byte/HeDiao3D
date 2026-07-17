@@ -3729,7 +3729,7 @@ function createCamServerConfigReport({ job, settings, engines, selectedEngine, n
 function createCamServerDeploymentValidation(adapterConfigs, settings) {
   const requiredAdapters = adapterConfigs.filter((config) => config.requiredForCurrentMode);
   const fixtureEnvNames = adapterConfigs
-    .map((config) => config.env.fixtureOrSynthetic)
+    .flatMap((config) => [config.env.fixtureOrSynthetic, config.env.previewScaffold])
     .filter(Boolean);
   return {
     schema: "hediao3d.cam-server-deployment-validation.v1",
@@ -3828,6 +3828,9 @@ function createCamServerAdapterConfig(engineId, engine, settings) {
     opencamlib: "HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT",
     camotics: "HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT"
   }[engineId];
+  const previewEnv = {
+    opencamlib: "HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW"
+  }[engineId];
   const status = engine?.available && engine?.adapterReady ? "ready" : engine?.available ? "command-detected-adapter-locked" : "missing-command";
   return {
     id: engineId,
@@ -3842,13 +3845,17 @@ function createCamServerAdapterConfig(engineId, engine, settings) {
       commandJson: commandJsonEnv,
       experimentalOutput: experimentalEnv,
       timeoutSec: timeoutEnv,
-      fixtureOrSynthetic: fixtureEnv
+      fixtureOrSynthetic: fixtureEnv,
+      previewScaffold: previewEnv
     },
     commandTemplate: createCamServerCommandTemplate(engineId),
     validationCommand: createCamServerValidationCommand(engineId),
-    productionPolicy: fixtureEnv
-      ? `${fixtureEnv} 必须关闭；真实生产证据要求 ${experimentalEnv}=true 且输出非 synthetic/fixture。`
-      : `真实生产证据要求 ${experimentalEnv}=true 且 adapter 返回 completed。`
+    productionPolicy: [
+      fixtureEnv
+        ? `${fixtureEnv} 必须关闭；真实生产证据要求 ${experimentalEnv}=true 且输出非 synthetic/fixture。`
+        : `真实生产证据要求 ${experimentalEnv}=true 且 adapter 返回 completed。`,
+      previewEnv ? `${previewEnv}=true 只允许用于 STL heightfield 小闭环预览，不允许解锁生产 NC。` : null
+    ].filter(Boolean).join(" ")
   };
 }
 
@@ -3880,6 +3887,7 @@ function createCamServerLinuxEnvExample(adapterConfigs) {
   for (const config of adapterConfigs) {
     if (config.env.command) lines.push(`# ${config.env.command}="${config.commandTemplate}"`);
     if (config.env.timeoutSec) lines.push(`${config.env.timeoutSec}=240`);
+    if (config.env.previewScaffold) lines.push(`${config.env.previewScaffold}=false`);
   }
   return `${lines.join("\n")}\n`;
 }

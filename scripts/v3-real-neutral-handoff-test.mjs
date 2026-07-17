@@ -12,7 +12,6 @@ const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? `/imported-models/${importedM
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 const fixtureDir = mkdtempSync(join(tmpdir(), "hediao3d-real-neutral-handoff-"));
 const camoticsFixturePath = join(fixtureDir, "camotics-real-result-fixture.json");
-const runnerPath = resolve("adapters", "opencamlib", "opencamlib_runner.py");
 
 const settings = {
   lengthMm: 38,
@@ -68,8 +67,7 @@ async function main() {
       HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER: "true",
       HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
       HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "false",
-      HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", runnerPath]),
-      HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW: "true",
       HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS: "6",
       HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS: "8",
       HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
@@ -100,6 +98,9 @@ async function main() {
   const adapterReport = await getArtifactJson(job.id, "adapter-report.json");
   assert(adapterReport.status === "completed", `adapter report expected completed, got ${adapterReport.status}`);
   assert(adapterReport.metrics?.neutralToolpath?.generatedByExternalCommand === true, "adapter should run external neutral command");
+  assert(adapterReport.metrics?.neutralToolpath?.autoRunner === true, "adapter should use bundled heightfield runner automatically");
+  assert(adapterReport.metrics?.neutralToolpath?.heightfieldPreview === true, "adapter should classify heightfield preview output");
+  assert(adapterReport.metrics?.neutralToolpath?.previewScaffold === true, "adapter should classify preview scaffold output");
   assert(adapterReport.metrics?.neutralToolpath?.imported === false, "external command output should not be classified as imported fixture");
   assert(adapterReport.metrics?.neutralToolpath?.synthetic === false, "adapter neutral output must not be synthetic");
 
