@@ -320,10 +320,11 @@ function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTem
     "- [ ] `camotics-result-local-validation.json` 中 `ok=true`。",
     "- [ ] `productionEvidenceEligible=true`。",
     "- [ ] `missing=[]`。",
+    "- [ ] `camotics-result-bundle.zip` 已生成，可直接上传到 HeDiao3D V3 CAMotics 回填面板。",
     "",
     "## 5. 回填到 HeDiao3D",
     "",
-    "- [ ] 将 `camotics-result.json`、`camotics-result-local-validation.json`、截图或材料网格回填到当前 job。",
+    "- [ ] 优先上传 `camotics-result-bundle.zip`；如需手工回填，再分别选择 `camotics-result.json`、`camotics-result-local-validation.json`、截图或材料网格。",
     "- [ ] 回填后检查 `simulation-summary.json`、`production-gate.json`、`production-evidence-dossier.json`。",
     "- [ ] 未完成空跑、软料试雕、试雕反馈和机床验收前，不允许下载正式生产包。",
     "",
@@ -351,7 +352,7 @@ function createResultValidatorScript(packageJson) {
   const materialMesh = expectedResult.materialMesh ?? "camotics-material-removal.stl";
   return `#!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -413,6 +414,18 @@ const report = {
     : "CAMotics local validation failed: " + missing.join(", ")
 };
 
+const resultDir = dirname(resultPath);
+const localValidationPath = join(resultDir, "camotics-result-local-validation.json");
+const resultBundlePath = join(resultDir, "camotics-result-bundle.zip");
+writeFileSync(localValidationPath, JSON.stringify(report, null, 2), "utf8");
+if (ok) {
+  writeFileSync(resultBundlePath, createResultBundle({
+    resultPath,
+    localValidationPath,
+    artifactEvidence
+  }));
+}
+
 console.log(JSON.stringify(report, null, 2));
 if (!ok) process.exit(1);
 
@@ -461,6 +474,89 @@ function inspectFile(path) {
     sizeBytes: stats.size,
     sha256: createHash("sha256").update(bytes).digest("hex")
   };
+}
+
+function createResultBundle({ resultPath, localValidationPath, artifactEvidence }) {
+  const files = [
+    { name: "camotics-result.json", content: readFileSync(resultPath) },
+    { name: "camotics-result-local-validation.json", content: readFileSync(localValidationPath) },
+    {
+      name: "README-CAMOTICS-RESULT.md",
+      content: Buffer.from([
+        "# HeDiao3D CAMotics Result Bundle",
+        "",
+        "Upload this ZIP in the HeDiao3D V3 CAMotics result import panel.",
+        "",
+        "Included files:",
+        "- camotics-result.json",
+        "- camotics-result-local-validation.json",
+        "- camotics-preview.png and/or camotics-material-removal.stl when available",
+        "",
+        "This bundle is material-removal evidence for readiness gates only. It does not unlock production NC by itself.",
+        ""
+      ].join("\\n"), "utf8")
+    }
+  ];
+  if (artifactEvidence?.hasScreenshot && artifactEvidence.screenshot?.path) {
+    files.push({ name: "camotics-preview.png", content: readFileSync(artifactEvidence.screenshot.path) });
+  }
+  if (artifactEvidence?.hasMaterialMesh && artifactEvidence.materialMesh?.path) {
+    files.push({ name: "camotics-material-removal.stl", content: readFileSync(artifactEvidence.materialMesh.path) });
+  }
+  return createZip(files);
+}
+
+function createZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBytes = Buffer.from(file.name, "utf8");
+    const data = Buffer.isBuffer(file.content) ? file.content : Buffer.from(String(file.content), "utf8");
+    const crc = crc32(data);
+    const local = Buffer.concat([
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0),
+      nameBytes, data
+    ]);
+    chunks.push(local);
+    central.push(Buffer.concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes
+    ]));
+    offset += local.length;
+  }
+  const centralOffset = offset;
+  const centralBuffer = Buffer.concat(central);
+  const end = Buffer.concat([
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(centralBuffer.length), u32(centralOffset), u16(0)
+  ]);
+  return Buffer.concat([...chunks, centralBuffer, end]);
+}
+
+function u16(value) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(value & 0xffff, 0);
+  return b;
+}
+
+function u32(value) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(value >>> 0, 0);
+  return b;
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 `;
 }

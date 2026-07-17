@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -91,6 +91,8 @@ async function main() {
   assert(operatorChecklist.includes("productionEvidenceEligible=true"), "operator checklist should require production evidence validation");
   const validatorScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-validate.js`);
   assert(validatorScript.includes("hediao3d.camotics-result-local-validation.v1"), "validator should emit local validation schema");
+  assert(validatorScript.includes("camotics-result-bundle.zip"), "validator should write uploadable CAMotics result bundle");
+  assert(validatorScript.includes("README-CAMOTICS-RESULT.md"), "validator bundle should include README");
   assert(validatorScript.includes(runPackageSha256), "validator should bind to current run package hash");
   assert(validatorScript.includes(previewSha256), "validator should bind to current preview G-code hash");
   runLocalValidatorFixture({
@@ -200,6 +202,14 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(/eligible to be imported/.test(report.summary), "passing validator should include import-ready summary");
     assert(report.checks?.some((check) => check.id === "run-package-hash" && check.ok), "validator should check run package hash");
     assert(report.checks?.some((check) => check.id === "visual-or-material-artifact" && check.ok), "validator should check visual/material artifact");
+    const bundlePath = join(dir, "camotics-result-bundle.zip");
+    assert(existsSync(bundlePath), "validator should write camotics-result-bundle.zip for passing fixture");
+    const bundleNames = listZipFilenames(readFileSync(bundlePath));
+    assert(bundleNames.includes("camotics-result.json"), "CAMotics result bundle missing result JSON");
+    assert(bundleNames.includes("camotics-result-local-validation.json"), "CAMotics result bundle missing local validation");
+    assert(bundleNames.includes("camotics-preview.png"), "CAMotics result bundle missing screenshot");
+    assert(bundleNames.includes("camotics-material-removal.stl"), "CAMotics result bundle missing material mesh");
+    assert(bundleNames.includes("README-CAMOTICS-RESULT.md"), "CAMotics result bundle missing README");
 
     writeFileSync(resultPath, JSON.stringify({
       schema: "hediao3d.camotics-result.v1",
