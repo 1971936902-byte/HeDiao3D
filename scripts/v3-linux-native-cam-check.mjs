@@ -350,6 +350,7 @@ function createOpenSourceCamExecutionPlan(checks) {
     stages,
     globalAcceptanceCommands: [
       "npm run test:v3:native-cam",
+      "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
       "bash native-cam-real-output-check.sh",
       "npm run test:v3:real-neutral-handoff",
@@ -468,6 +469,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
       "cp native-cam-env.template .env.cam",
       "npm run test:v3:native-cam",
+      "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
       "bash native-cam-real-output-check.sh"
     ],
@@ -551,6 +553,7 @@ PY
 
 echo "[HeDiao3D] Next commands:"
 echo "npm run test:v3:native-cam"
+echo "npm run test:v3:freecad-proof-handoff"
 echo "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters"
 `;
 }
@@ -614,7 +617,10 @@ mkdir -p "$OUT_DIR"
 echo "[HeDiao3D] Step 1/2 native readiness"
 npm run test:v3:native-cam
 
-echo "[HeDiao3D] Step 2/2 external adapter validation with native commands"
+echo "[HeDiao3D] Step 2/3 proof-backed FreeCAD handoff"
+npm run test:v3:freecad-proof-handoff
+
+echo "[HeDiao3D] Step 3/3 external adapter validation with native commands"
 V3_ADAPTER_USE_NATIVE_COMMANDS=true V3_ADAPTER_VALIDATION_DIR="$OUT_DIR" npm run test:v3:external-adapters
 
 REPORT="$OUT_DIR/v3-external-adapter-validation.json"
@@ -738,6 +744,7 @@ ${rows.join("\n")}
 ## 2. Required Commands
 
 - [ ] \`npm run test:v3:native-cam\`
+- [ ] \`npm run test:v3:freecad-proof-handoff\`
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
 - [ ] \`bash native-cam-real-output-check.sh\`
 - [ ] \`npm run test:v3:freecad-external-handoff\` for 3-axis/regular-solid route
