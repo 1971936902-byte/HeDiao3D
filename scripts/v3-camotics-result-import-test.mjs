@@ -124,7 +124,9 @@ assert(result.metrics?.materialRemovedMm3 === 1.2, "imported metrics were not pr
 assert(result.evidenceQuality?.productionEvidenceEligible === true, "complete imported CAMotics evidence should be production eligible");
 assert(result.evidenceQuality?.status === "complete", `evidence quality should be complete, got ${result.evidenceQuality?.status}`);
 assert(result.evidenceQuality?.inputIdentity?.status === "matched", `input identity should match, got ${result.evidenceQuality?.inputIdentity?.status}`);
+assert(result.evidenceQuality?.motionConsistency?.status === "matched", `motion profile should match, got ${result.evidenceQuality?.motionConsistency?.status}`);
 assert(result.inputs?.expectedPreferredGcodeSha256 === previewSha256, "expected preview hash missing from imported result");
+assert(result.evidenceQuality?.inputIdentity?.previewMotionProfile?.motionLineCount === 2, "preview motion profile should be recorded");
 assert(result.artifactEvidence?.files?.screenshot?.sha256 === screenshotSha256, "screenshot artifact hash missing or mismatched");
 assert(result.artifactEvidence?.files?.materialMesh?.sha256 === materialMeshSha256, "material mesh artifact hash missing or mismatched");
 assert(result.artifacts?.screenshot === "camotics-preview.png", "screenshot should be copied to standard job artifact name");
@@ -186,6 +188,35 @@ assert(missingArtifactReport.status === "completed", "missing artifact import sh
 const missingArtifactResult = JSON.parse(readFileSync(join(workDir, "camotics-result.json"), "utf8"));
 assert(missingArtifactResult.evidenceQuality?.productionEvidenceEligible === false, "missing visual/material artifacts must not be production eligible");
 assert(missingArtifactResult.evidenceQuality?.missing?.includes("visualOrMeshArtifact"), "missing artifact should be reported in evidence quality");
+
+const motionMismatchPath = join(workDir, "motion-mismatch-camotics-result.json");
+const motionMismatchReportPath = join(workDir, "motion-mismatch-camotics-adapter-report.json");
+writeFileSync(motionMismatchPath, JSON.stringify({
+  ...JSON.parse(readFileSync(importedPath, "utf8")),
+  metrics: {
+    motionLineCount: 22,
+    zMin: -9,
+    zMax: 9,
+    materialRemovedMm3: 1.2
+  }
+}, null, 2));
+const motionMismatchRun = spawnSync(process.execPath, ["adapters/camotics/camotics_job.js", jobPath, motionMismatchReportPath], {
+  cwd: root,
+  encoding: "utf8",
+  windowsHide: true,
+  env: {
+    ...process.env,
+    HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
+    HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "false",
+    HEDIAO3D_CAMOTICS_RESULT_JSON: motionMismatchPath
+  }
+});
+assert(!motionMismatchRun.error, `motion mismatch adapter spawn failed: ${motionMismatchRun.error?.message}`);
+assert(motionMismatchRun.status === 0, `motion mismatch adapter exited ${motionMismatchRun.status}: ${motionMismatchRun.stderr}`);
+const motionMismatchResult = JSON.parse(readFileSync(join(workDir, "camotics-result.json"), "utf8"));
+assert(motionMismatchResult.evidenceQuality?.productionEvidenceEligible === false, "motion mismatch must not be production eligible");
+assert(motionMismatchResult.evidenceQuality?.missing?.includes("motionProfile"), "motion mismatch should be reported in evidence quality");
+assert(motionMismatchResult.evidenceQuality?.motionConsistency?.status === "mismatch", "motion mismatch status should be mismatch");
 
 const contract = {
   schema: "hediao3d.camotics-import-contract.v1",

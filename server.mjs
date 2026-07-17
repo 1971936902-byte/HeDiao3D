@@ -7633,6 +7633,8 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
   const deliveryManifest = refreshedDelivery?.deliveryManifest ?? readJsonFile(join(workDir, "delivery-manifest.json"));
   const postprocessProfile = readJsonFile(join(workDir, "postprocess-profile.json"));
   const camoticsInput = readJsonFile(join(workDir, "camotics-input.json"));
+  const camoticsSimulationPlan = readJsonFile(join(workDir, "camotics-simulation-plan.json"));
+  const rotaryWrapPreviewReport = readJsonFile(join(workDir, "rotary-wrap-preview-report.json"));
   const machiningPackageIndex = deliveryManifest && postprocessProfile && camoticsInput
     ? createMachiningPackageIndex({
       job,
@@ -7641,6 +7643,8 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
       postprocessProfile,
       simulationSummary,
       camoticsInput,
+      camoticsSimulationPlan,
+      rotaryWrapPreviewReport,
       camHandoffQuality: readJsonFile(join(workDir, "cam-handoff-quality.json")),
       camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
       productionEvidenceDossier,
@@ -7825,9 +7829,22 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
 
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selectedEngine);
   const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selectedEngine, camoticsInput);
+  const rotaryWrapPreviewReport = createRotaryWrapPreviewReport({
+    job,
+    settings,
+    toolpath,
+    machineGcode: toolpath.gcode,
+    airRunGcode,
+    camoticsPreviewGcode,
+    ncStaticAnalysis,
+    controllerDialectReport,
+    machineControllerProfile,
+    camoticsInput
+  });
   await writeFile(join(workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
+  await writeFile(join(workDir, "rotary-wrap-preview-report.json"), JSON.stringify(rotaryWrapPreviewReport, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
 
   const simulationSummary = createSimulationSummary(toolpath, settings, selectedEngine);
@@ -7915,6 +7932,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     simulationSummary,
     camoticsInput,
     camoticsSimulationPlan,
+    rotaryWrapPreviewReport,
     camHandoffQuality,
     camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
     productionEvidenceDossier,
@@ -7950,6 +7968,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       camHandoffQuality,
       camoticsInput,
       camoticsSimulationPlan,
+      rotaryWrapPreviewReport,
       ncStaticAnalysis,
       controllerDialectReport,
       machineControllerProfile,

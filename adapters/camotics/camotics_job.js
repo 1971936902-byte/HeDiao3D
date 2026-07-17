@@ -387,10 +387,12 @@ function createCamoticsInputIdentity(adapterJob, simulationPlan) {
     };
   }
   const bytes = readFileSync(previewPath);
+  const text = bytes.toString("utf8");
   return {
     preferredGcode,
     previewPath,
     expectedPreferredGcodeSha256: createHash("sha256").update(bytes).digest("hex"),
+    previewMotionProfile: createGcodeMotionProfile(text),
     status: "ready",
     message: "Preferred CAMotics preview G-code identity hash computed."
   };
@@ -400,6 +402,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
   const metrics = result?.metrics ?? {};
   const importedHash = result?.inputs?.preferredGcodeSha256;
   const expectedHash = inputIdentity?.expectedPreferredGcodeSha256 ?? null;
+  const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
   const identityOk = nonEmptyString(expectedHash) && importedHash === expectedHash;
   const hasVerifiedArtifact = Boolean(artifactEvidence?.files?.screenshot || artifactEvidence?.files?.materialMesh);
   const identityStatus = !inputIdentity || inputIdentity.status !== "ready"
@@ -426,6 +429,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       message: "metrics.zMin/zMax must be finite and ordered."
     },
     {
+      id: "motionProfile",
+      ok: motionConsistency.ok,
+      message: motionConsistency.message
+    },
+    {
       id: "visualOrMeshArtifact",
       ok: hasVerifiedArtifact,
       message: "A screenshot or material-removal mesh file must exist, be copied into the job package and have a SHA-256 hash."
@@ -449,6 +457,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       preferredGcode: inputIdentity?.preferredGcode ?? null,
       expectedPreferredGcodeSha256: expectedHash,
       importedPreferredGcodeSha256: importedHash ?? null,
+      previewMotionProfile: inputIdentity?.previewMotionProfile ?? null,
       message: identityStatus === "matched"
         ? "Imported CAMotics result matches the current preview G-code."
         : identityStatus === "mismatch"
@@ -457,10 +466,79 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
             ? "Imported CAMotics result is missing inputs.preferredGcodeSha256."
             : inputIdentity?.message ?? "Preview G-code identity could not be verified."
     },
+    motionConsistency,
     artifactEvidence,
     summary: missing.length === 0
       ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."
       : `CAMotics result imported, but evidence is incomplete: ${missing.join(", ")}.`
+  };
+}
+
+function evaluateCamoticsMotionConsistency(metrics, previewProfile) {
+  if (!previewProfile || !Number.isFinite(Number(previewProfile.motionLineCount))) {
+    return {
+      ok: false,
+      status: "missing-preview-profile",
+      message: "camotics-preview.nc motion profile could not be computed."
+    };
+  }
+  const importedMotionCount = Number(metrics.motionLineCount);
+  const importedZMin = Number(metrics.zMin);
+  const importedZMax = Number(metrics.zMax);
+  const expectedMotionCount = Number(previewProfile.motionLineCount);
+  const expectedZMin = Number(previewProfile.zMin);
+  const expectedZMax = Number(previewProfile.zMax);
+  const motionTolerance = Math.max(2, Math.ceil(expectedMotionCount * 0.05));
+  const zTolerance = 0.05;
+  const motionDelta = Math.abs(importedMotionCount - expectedMotionCount);
+  const zMinDelta = Math.abs(importedZMin - expectedZMin);
+  const zMaxDelta = Math.abs(importedZMax - expectedZMax);
+  const ok = Number.isFinite(importedMotionCount)
+    && Number.isFinite(importedZMin)
+    && Number.isFinite(importedZMax)
+    && motionDelta <= motionTolerance
+    && zMinDelta <= zTolerance
+    && zMaxDelta <= zTolerance;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    expected: {
+      motionLineCount: expectedMotionCount,
+      zMin: expectedZMin,
+      zMax: expectedZMax
+    },
+    imported: {
+      motionLineCount: Number.isFinite(importedMotionCount) ? importedMotionCount : null,
+      zMin: Number.isFinite(importedZMin) ? importedZMin : null,
+      zMax: Number.isFinite(importedZMax) ? importedZMax : null
+    },
+    tolerance: {
+      motionLineCount: motionTolerance,
+      zMm: zTolerance
+    },
+    delta: {
+      motionLineCount: Number.isFinite(importedMotionCount) ? motionDelta : null,
+      zMin: Number.isFinite(importedZMin) ? zMinDelta : null,
+      zMax: Number.isFinite(importedZMax) ? zMaxDelta : null
+    },
+    message: ok
+      ? "Imported CAMotics motion metrics match the current camotics-preview.nc profile."
+      : "Imported CAMotics motion metrics do not match the current camotics-preview.nc profile."
+  };
+}
+
+function createGcodeMotionProfile(gcodeText) {
+  const motionLines = String(gcodeText ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\([^)]*\)/g, "").trim().toUpperCase())
+    .filter((line) => /\bG0?0\b|\bG0?1\b/.test(line));
+  const zValues = motionLines
+    .map((line) => parseWord(line, "Z"))
+    .filter(Number.isFinite);
+  return {
+    motionLineCount: motionLines.length,
+    zMin: zValues.length ? Math.min(...zValues) : null,
+    zMax: zValues.length ? Math.max(...zValues) : null
   };
 }
 

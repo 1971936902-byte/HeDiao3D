@@ -52,8 +52,9 @@ async function main() {
 
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
   const previewSha256 = createHash("sha256").update(previewText).digest("hex");
+  const previewMotionProfile = createPreviewMotionProfile(previewText);
   const completeImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(previewSha256),
+    result: createCamoticsResult(previewSha256, previewMotionProfile),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: [
       "solid camotics_material_removal",
@@ -80,11 +81,12 @@ async function main() {
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
+  assert(resultArtifact.evidenceQuality?.motionConsistency?.status === "matched", "camotics result motion profile should match");
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult("0".repeat(64)),
+    result: createCamoticsResult("0".repeat(64), previewMotionProfile),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -92,15 +94,28 @@ async function main() {
   assert(mismatchImport.simulationEvidence?.level === "material-removal-incomplete", `expected incomplete evidence, got ${mismatchImport.simulationEvidence?.level}`);
   assert(mismatchImport.simulationEvidence?.productionUnlockEligible === false, "hash mismatch must not be production eligible");
 
+  const motionMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    result: createCamoticsResult(previewSha256, {
+      ...previewMotionProfile,
+      motionLineCount: Math.max(0, previewMotionProfile.motionLineCount - 100),
+      zMin: previewMotionProfile.zMin + 0.5
+    }),
+    screenshotDataUrl: toDataUrl("fake-camotics-png"),
+    materialMeshText: "solid material\nendsolid material\n"
+  });
+  assert(motionMismatchImport.ok === true, "motion mismatch import should complete as review evidence");
+  assert(motionMismatchImport.simulationEvidence?.productionUnlockEligible === false, "motion mismatch must not be production eligible");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
     completeEvidence: completeImport.simulationEvidence.level,
-    mismatchEvidence: mismatchImport.simulationEvidence.level
+    mismatchEvidence: mismatchImport.simulationEvidence.level,
+    motionMismatchEvidence: motionMismatchImport.simulationEvidence.level
   }, null, 2));
 }
 
-function createCamoticsResult(preferredGcodeSha256) {
+function createCamoticsResult(preferredGcodeSha256, motionProfile) {
   return {
     schema: "hediao3d.camotics-result.v1",
     engine: "camotics",
@@ -113,11 +128,29 @@ function createCamoticsResult(preferredGcodeSha256) {
       preferredGcodeSha256
     },
     metrics: {
-      motionLineCount: 18,
-      zMin: -1.25,
-      zMax: 22,
+      motionLineCount: motionProfile.motionLineCount,
+      zMin: motionProfile.zMin,
+      zMax: motionProfile.zMax,
       materialRemovedMm3: 8.4
     }
+  };
+}
+
+function createPreviewMotionProfile(gcodeText) {
+  const motionLines = String(gcodeText ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\([^)]*\)/g, "").trim().toUpperCase())
+    .filter((line) => /\bG0?0\b|\bG0?1\b/.test(line));
+  const zValues = motionLines
+    .map((line) => {
+      const match = line.match(/\bZ\s*(-?\d+(?:\.\d+)?)/);
+      return match ? Number(match[1]) : NaN;
+    })
+    .filter(Number.isFinite);
+  return {
+    motionLineCount: motionLines.length,
+    zMin: Math.min(...zValues),
+    zMax: Math.max(...zValues)
   };
 }
 
