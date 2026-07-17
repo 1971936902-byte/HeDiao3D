@@ -1779,7 +1779,8 @@ export function App() {
       byName.get("rotary-calibration-airrun.nc"),
       byName.get("air-run.nc"),
       byName.get("operator-runbook.md"),
-      byName.get("machining-package-index.json")
+      byName.get("machining-package-index.json"),
+      byName.get("cam-handoff-evidence.md")
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
@@ -5602,6 +5603,11 @@ export function App() {
                       下载操作员核验清单
                     </a>
                   )}
+                  {v3DownloadChecklistSummary.camHandoffEvidenceUrl && (
+                    <a href={v3DownloadChecklistSummary.camHandoffEvidenceUrl} download>
+                      下载CAM交接证据
+                    </a>
+                  )}
                 </div>
               )}
               {v3Job?.result?.summary.operatorRunbook && (
@@ -6839,7 +6845,8 @@ function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
     keyFiles,
     verifiedKeyCount: keyFiles.filter((file) => file.verified).length,
     neverMachineCount: keyFiles.filter((file) => !file.allowedOnMachine).length,
-    checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null
+    checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null,
+    camHandoffEvidenceUrl: deliveryByName.get("cam-handoff-evidence.md")?.url ?? null
   };
 }
 
@@ -6954,6 +6961,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "operator-download-checklist.md") return "下载核验清单";
   if (filename === "operator-runbook.md") return "操作员说明";
   if (filename === "machining-package-index.json") return "加工包索引";
+  if (filename === "cam-handoff-evidence.md") return "CAM交接证据";
   return filename;
 }
 
@@ -8072,6 +8080,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "证据档案报告: production-evidence-dossier.json",
     `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     "CAM交接报告: cam-handoff-quality.json",
+    "CAM交接证据: cam-handoff-evidence.md",
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",
     `外部摄取源: ${camHandoffQuality?.sourceSnapshot ? `${camHandoffQuality.sourceSnapshot.kind} / ${camHandoffQuality.sourceSnapshot.sha256.slice(0, 12)}` : "无"}`,
