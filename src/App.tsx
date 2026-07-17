@@ -1045,6 +1045,31 @@ type V3AdapterValidationSummary = {
     requiredCount: number;
     nextActions: string[];
   } | null;
+  handoffClassificationAudit?: {
+    schema: string;
+    readyForProduction: boolean;
+    productionCandidateCount: number;
+    unsafeCount: number;
+    missingCount: number;
+    fixtureCount: number;
+    syntheticCount: number;
+    previewScaffoldCount: number;
+    notGeneratedCount: number;
+    summary: string;
+    nextActions: string[];
+    adapters: Array<{
+      id: string;
+      classification: string;
+      outputKind: string | null;
+      productionCandidate: boolean;
+      fixture: boolean;
+      synthetic: boolean;
+      previewScaffold: boolean;
+      notGenerated: boolean;
+      unsafe: boolean;
+      generatedByExternalCommand: boolean;
+    }>;
+  } | null;
   adapters: Array<{
     id: string;
     name: string;
@@ -1063,6 +1088,8 @@ type V3AdapterValidationSummary = {
       error?: string | null;
       durationMs?: number | null;
     };
+    handoffClassification?: string;
+    productionCandidate?: boolean;
   }>;
   apiArtifacts?: {
     json?: string;
@@ -5298,10 +5325,31 @@ export function App() {
                       {v3AdapterValidation.productionGuardrails.summary}
                     </small>
                   )}
+                  {v3AdapterValidation.handoffClassificationAudit && (
+                    <>
+                      <small className={v3AdapterValidation.handoffClassificationAudit.productionCandidateCount > 0 && v3AdapterValidation.handoffClassificationAudit.unsafeCount === 0 ? "v3-inline-ok" : v3AdapterValidation.handoffClassificationAudit.unsafeCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
+                        Handoff分类：生产候选 {v3AdapterValidation.handoffClassificationAudit.productionCandidateCount}
+                        {" · "}
+                        unsafe {v3AdapterValidation.handoffClassificationAudit.unsafeCount}
+                        {" · "}
+                        未生成 {v3AdapterValidation.handoffClassificationAudit.notGeneratedCount}
+                        {" · "}
+                        缺失 {v3AdapterValidation.handoffClassificationAudit.missingCount}
+                      </small>
+                      <div className="v3-handoff-audit-list">
+                        {v3AdapterValidation.handoffClassificationAudit.adapters.map((adapter) => (
+                          <span className={adapter.productionCandidate ? "ok" : adapter.unsafe ? "critical" : "warning"} key={adapter.id} title={adapter.outputKind ?? ""}>
+                            {adapter.id} · {formatHandoffClassification(adapter.classification)}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
                   <div className="v3-adapter-list">
                     {v3AdapterValidation.adapters.map((adapter) => (
-                      <span className={adapter.report?.status === "completed" || adapter.plan.generated ? "ok" : "warning"} key={adapter.id}>
+                      <span className={adapter.productionCandidate ? "ok" : adapter.handoffClassification === "missing" || adapter.handoffClassification === "not-generated" ? "warning" : adapter.report?.status === "completed" || adapter.plan.generated ? "ok" : "warning"} key={adapter.id}>
                         {adapter.name} · {adapter.report?.status ?? adapter.run?.status ?? adapter.run?.exitCode ?? "待验证"}
+                        {adapter.handoffClassification ? ` · ${formatHandoffClassification(adapter.handoffClassification)}` : ""}
                       </span>
                     ))}
                   </div>
@@ -7061,6 +7109,16 @@ function formatExternalCamEngineLabel(engineId: string) {
   if (engineId === "blendercam") return "BlenderCAM";
   if (engineId === "opencamlib") return "OpenCAMLib";
   return engineId;
+}
+
+function formatHandoffClassification(classification: string) {
+  if (classification === "production-candidate") return "生产候选";
+  if (classification === "fixture-contract") return "Fixture测试";
+  if (classification === "synthetic-contract") return "Synthetic测试";
+  if (/preview|scaffold/i.test(classification)) return "预览脚手架";
+  if (classification === "not-generated") return "未生成";
+  if (classification === "missing") return "缺少证据";
+  return classification;
 }
 
 function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
