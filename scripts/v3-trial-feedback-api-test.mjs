@@ -72,10 +72,15 @@ async function main() {
   assert(feedback.record?.schema === "hediao3d.trial-feedback-record.v1", "record schema mismatch");
   assert(feedback.record.recommendations?.some((item) => item.includes("旋转")), "feedback should recommend rotary calibration");
   assert(feedback.log?.recordCount >= 1, "feedback log count missing");
+  assert(feedback.optimizationPlan?.schema === "hediao3d.process-optimization-plan.v1", "optimization plan schema mismatch");
+  assert(feedback.optimizationPlan.actions?.some((action) => action.id === "rotary-misalignment"), "optimization plan should include rotary action");
+  assert(feedback.optimizationPlan.nextRunProfile?.requiresRegeneration === true, "optimization plan should require regeneration");
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.trialFeedbackLog?.schema === "hediao3d.trial-feedback-log.v1", "job summary missing feedback log");
   assert(reloaded.result.summary.trialFeedbackLog.recordCount >= 1, "job summary feedback count missing");
+  assert(reloaded.result?.summary?.processOptimizationPlan?.schema === "hediao3d.process-optimization-plan.v1", "job summary missing optimization plan");
+  assert(reloaded.result.summary.processOptimizationPlan.actionCount >= 1, "job summary optimization action count missing");
 
   const recordArtifact = await getArtifactJson(job.id, "trial-feedback-record.json");
   assert(recordArtifact.id === feedback.record.id, "record artifact id mismatch");
@@ -84,13 +89,17 @@ async function main() {
 
   const logArtifact = await getArtifactJson(job.id, "trial-feedback-log.json");
   assert(logArtifact.records?.some((record) => record.id === feedback.record.id), "log artifact missing record");
+  const optimizationArtifact = await getArtifactJson(job.id, "process-optimization-plan.json");
+  assert(optimizationArtifact.actions?.some((action) => action.id === "under-cut-detail-loss"), "optimization artifact missing under-cut action");
+  assert(optimizationArtifact.nextRunProfile?.settingsPatch?.stepoverMm, "optimization artifact should suggest stepover patch");
 
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
     recordId: feedback.record.id,
     recordCount: feedback.log.recordCount,
-    recommendationCount: feedback.record.recommendations.length
+    recommendationCount: feedback.record.recommendations.length,
+    optimizationActions: feedback.optimizationPlan.actions.length
   }, null, 2));
 }
 

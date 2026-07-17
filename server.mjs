@@ -5594,6 +5594,7 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
 
   const input = await readJson(req);
   const record = createTrialFeedbackRecord(job, input);
+  const optimizationPlan = createProcessOptimizationPlan(job, record);
   const logPath = join(workDir, "trial-feedback-log.json");
   const existingLog = readJsonFile(logPath) ?? {
     schema: "hediao3d.trial-feedback-log.v1",
@@ -5615,6 +5616,7 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
 
   await writeFile(join(workDir, "trial-feedback-record.json"), JSON.stringify(record, null, 2), "utf8");
   await writeFile(logPath, JSON.stringify(updatedLog, null, 2), "utf8");
+  await writeFile(join(workDir, "process-optimization-plan.json"), JSON.stringify(optimizationPlan, null, 2), "utf8");
   await writeTrialFeedbackGlobalRecord(record);
 
   job.workDir = workDir;
@@ -5634,10 +5636,18 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       latestOutcome: record.outcome,
       latestRecordId: record.id,
       recommendations: record.recommendations
+    },
+    processOptimizationPlan: {
+      schema: optimizationPlan.schema,
+      artifact: "process-optimization-plan.json",
+      status: optimizationPlan.status,
+      actionCount: optimizationPlan.actions.length,
+      nextRunProfile: optimizationPlan.nextRunProfile
     }
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-record.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-log.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "process-optimization-plan.json"));
   orchestratorJobs.set(safeJobId, job);
   await writeJobManifest(job);
 
@@ -5650,7 +5660,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       recordCount: updatedLog.recordCount,
       latestRecordId: record.id,
       artifact: publicArtifactUrl(safeJobId, "trial-feedback-log.json")
-    }
+    },
+    optimizationPlan
   });
 }
 
@@ -5726,6 +5737,155 @@ function createTrialFeedbackRecommendations({ outcome, issues, actualMinutes, es
     recommendations.push("CAM handoff 质量仍需复核，查看 cam-handoff-quality.json 后再扩大试雕。");
   }
   return dedupeStrings(recommendations);
+}
+
+function createProcessOptimizationPlan(job, record) {
+  const summary = job.result?.summary ?? {};
+  const sourceSettings = readJobSettings(job);
+  const actions = [];
+  const issueText = record.issues.join(" ");
+  const outcome = record.outcome;
+  const nextSettingsPatch = {};
+
+  if (record.actualMinutes && record.estimatedMinutes) {
+    if (record.timeRatio > 1.35) {
+      actions.push(createOptimizationAction({
+        id: "runtime-too-long",
+        priority: "medium",
+        target: "feed-stepover",
+        reason: `实际耗时是估算的 ${record.timeRatio.toFixed(2)} 倍，需要减少空走或提高材料允许范围内的效率。`,
+        recommendation: "先确认未漏跑空走；若表面质量可接受，下次试雕可将进给提高 5%-10% 或精加工步距提高 5%。"
+      }));
+      if (sourceSettings.feedRate) nextSettingsPatch.feedRate = roundClamp(Number(sourceSettings.feedRate) * 1.06, 30, 1200, 1);
+    } else if (record.timeRatio < 0.65) {
+      actions.push(createOptimizationAction({
+        id: "runtime-too-short",
+        priority: "high",
+        target: "controller-units",
+        reason: `实际耗时只有估算的 ${record.timeRatio.toFixed(2)} 倍，可能存在单位、进给解释或漏跑刀路问题。`,
+        recommendation: "优先检查控制器单位、进给倍率、程序是否完整执行；不要因为耗时短而直接提高切深。"
+      }));
+    }
+  }
+
+  if (/欠切|浅|细节|纹理丢失/.test(issueText)) {
+    actions.push(createOptimizationAction({
+      id: "under-cut-detail-loss",
+      priority: "high",
+      target: "z-depth-finishing",
+      reason: "反馈包含欠切或细节不足，优先从 Z 零点、刀尖和精加工密度排查。",
+      recommendation: "复核 Z 零点和刀尖磨损；若确认机床正常，下次将精加工步距降低 5%-10%，不要一次性大幅加深。"
+    }));
+    if (sourceSettings.stepoverMm) nextSettingsPatch.stepoverMm = roundClamp(Number(sourceSettings.stepoverMm) * 0.92, 0.03, 2, 3);
+    if (sourceSettings.stepoverDeg) nextSettingsPatch.stepoverDeg = roundClamp(Number(sourceSettings.stepoverDeg) * 0.92, 0.2, 30, 2);
+  }
+
+  if (/过切|断刀|毛刺/.test(issueText)) {
+    actions.push(createOptimizationAction({
+      id: "overcut-burr-tool-risk",
+      priority: "high",
+      target: "cut-depth-feed",
+      reason: "反馈包含过切、毛刺或断刀风险，需要优先保护刀具和核胚。",
+      recommendation: "下次试雕降低最大单刀切深 10%-15%，进给降低 5%-10%，并复核平底尖刀伸出量。"
+    }));
+    if (sourceSettings.maxCutDepth) nextSettingsPatch.maxCutDepth = roundClamp(Number(sourceSettings.maxCutDepth) * 0.88, 0.03, 2, 3);
+    if (sourceSettings.feedRate) nextSettingsPatch.feedRate = roundClamp(Number(sourceSettings.feedRate) * 0.92, 30, 1200, 1);
+  }
+
+  if (/旋转|A轴|Y轴|错位|接缝/.test(issueText)) {
+    actions.push(createOptimizationAction({
+      id: "rotary-misalignment",
+      priority: "critical",
+      target: "rotary-calibration",
+      reason: "反馈包含旋转错位，说明 Y/A 旋转映射、每圈距离或反向间隙可能不准。",
+      recommendation: "先按 rotary-calibration-sheet.json 做 90/180/360 度标定；修正每圈等效距离后再重新生成刀路。"
+    }));
+  }
+
+  if (/端部|夹持|两端|残料/.test(issueText)) {
+    actions.push(createOptimizationAction({
+      id: "end-hold-residue",
+      priority: "medium",
+      target: "hold-margin",
+      reason: "反馈包含端部或夹持区问题，需要明确不可达区域和过渡区。",
+      recommendation: "增大端部过渡区或夹持余量，检查刀路是否进入真实夹具不可达范围。"
+    }));
+    if (sourceSettings.endTransitionMm) nextSettingsPatch.endTransitionMm = roundClamp(Number(sourceSettings.endTransitionMm) * 1.15, 0, 8, 2);
+  }
+
+  if (outcome === "success") {
+    actions.push(createOptimizationAction({
+      id: "promote-success-profile",
+      priority: "medium",
+      target: "process-library",
+      reason: "本次反馈标记为成功，可作为候选工艺参数沉淀。",
+      recommendation: "保存为成功参数样本；至少再完成一次同材质复雕或更高价值材料试雕后，再申请生产门禁。"
+    }));
+  }
+
+  if (summary.camHandoffQuality?.level && summary.camHandoffQuality.level !== "ready") {
+    actions.push(createOptimizationAction({
+      id: "handoff-quality-review",
+      priority: "high",
+      target: "cam-handoff",
+      reason: `当前 CAM handoff 质量为 ${summary.camHandoffQuality.level}。`,
+      recommendation: "先解决 cam-handoff-quality.json 的复核项，再扩大试雕范围。"
+    }));
+  }
+
+  const uniqueActions = dedupeOptimizationActions(actions);
+  return {
+    schema: "hediao3d.process-optimization-plan.v1",
+    jobId: job.id,
+    feedbackRecordId: record.id,
+    createdAt: new Date().toISOString(),
+    status: outcome === "success" && uniqueActions.every((action) => action.priority !== "critical")
+      ? "candidate-success-profile"
+      : uniqueActions.some((action) => action.priority === "critical")
+        ? "requires-calibration"
+        : "requires-parameter-review",
+    sourceEvidence: {
+      trialFeedbackRecord: "trial-feedback-record.json",
+      trialFeedbackLog: "trial-feedback-log.json",
+      camHandoffQuality: "cam-handoff-quality.json",
+      rotaryCalibration: "rotary-calibration-sheet.json",
+      toolSetup: "tool-setup-sheet.json"
+    },
+    nextRunProfile: {
+      mode: "suggested-patch-only",
+      reason: "这些是下一次试雕建议值，不会自动覆盖当前参数。",
+      settingsPatch: nextSettingsPatch,
+      requiresRegeneration: Object.keys(nextSettingsPatch).length > 0 || uniqueActions.some((action) => action.target.includes("rotary") || action.target.includes("cam"))
+    },
+    actions: uniqueActions,
+    summary: uniqueActions.length > 0
+      ? `根据试雕反馈生成 ${uniqueActions.length} 条工艺优化动作。`
+      : "本次反馈未触发参数调整动作；继续按操作员说明书复核。"
+  };
+}
+
+function createOptimizationAction({ id, priority, target, reason, recommendation }) {
+  return { id, priority, target, reason, recommendation };
+}
+
+function dedupeOptimizationActions(actions) {
+  const byId = new Map();
+  for (const action of actions) {
+    if (!byId.has(action.id)) byId.set(action.id, action);
+  }
+  return [...byId.values()];
+}
+
+function readJobSettings(job) {
+  const jobPath = job.workDir ? join(job.workDir, "job.json") : null;
+  if (!jobPath || !existsSync(jobPath)) return {};
+  const spec = readJsonFile(jobPath);
+  return spec?.settings && typeof spec.settings === "object" ? spec.settings : {};
+}
+
+function roundClamp(value, min, max, digits) {
+  const clamped = Math.max(min, Math.min(max, Number(value)));
+  return Number(clamped.toFixed(digits));
 }
 
 async function writeTrialFeedbackGlobalRecord(record) {

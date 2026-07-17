@@ -673,6 +673,17 @@ type V3OrchestratorJob = {
         latestRecordId: string;
         recommendations: string[];
       };
+      processOptimizationPlan?: {
+        schema: string;
+        artifact: string;
+        status: string;
+        actionCount: number;
+        nextRunProfile: {
+          mode: string;
+          requiresRegeneration: boolean;
+          settingsPatch: Partial<ModelSettings>;
+        };
+      };
       toolSetupSheet?: {
         schema: string;
         summary: string;
@@ -4808,6 +4819,15 @@ export function App() {
                   最新 {formatFeedbackOutcome(v3Job.result.summary.trialFeedbackLog.latestOutcome)}
                   {" · "}
                   {v3Job.result.summary.trialFeedbackLog.artifact}
+                </small>
+              )}
+              {v3Job?.result?.summary.processOptimizationPlan && (
+                <small className={v3Job.result.summary.processOptimizationPlan.status === "candidate-success-profile" ? "v3-inline-ok" : v3Job.result.summary.processOptimizationPlan.status === "requires-calibration" ? "v3-inline-critical" : "v3-inline-warning"}>
+                  工艺优化：{v3Job.result.summary.processOptimizationPlan.actionCount} 项
+                  {" · "}
+                  {v3Job.result.summary.processOptimizationPlan.status}
+                  {" · "}
+                  {v3Job.result.summary.processOptimizationPlan.nextRunProfile.requiresRegeneration ? "需重新生成" : "无需重算"}
                 </small>
               )}
               {v3Job?.result?.summary.toolSetupSheet && (
