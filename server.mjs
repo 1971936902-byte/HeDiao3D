@@ -1927,6 +1927,9 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
   const adapters = Array.isArray(report.adapters) ? report.adapters : [];
   const blockers = Array.isArray(report.blockers) ? report.blockers : [];
   const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+  const targetMachineBoundaryStatus = report.targetMachineBoundaryStatus && typeof report.targetMachineBoundaryStatus === "object"
+    ? report.targetMachineBoundaryStatus
+    : createNativeCamTargetMachineBoundaryStatus(report.targetMachineBoundary);
   const sourceReportSnapshot = report.sourceReportSnapshot && typeof report.sourceReportSnapshot === "object"
     ? report.sourceReportSnapshot
     : null;
@@ -1955,6 +1958,16 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
     missingCount: Number(report.missingCount ?? 0),
     strict: Boolean(report.strict),
     expectProductionCandidate: Boolean(report.expectProductionCandidate),
+    targetMachineBoundaryStatus,
+    targetMachineBoundary: report.targetMachineBoundary ? {
+      schema: report.targetMachineBoundary.schema ?? "hediao3d.target-machine-boundary.v1",
+      controllerClass: report.targetMachineBoundary.controllerClass ?? null,
+      machineProfileId: report.targetMachineBoundary.machineProfileId ?? null,
+      camMode: report.targetMachineBoundary.camMode ?? null,
+      postProcessor: report.targetMachineBoundary.postProcessor ?? null,
+      rotaryOutputAxis: report.targetMachineBoundary.rotaryOutputAxis ?? null,
+      toolProfileId: report.targetMachineBoundary.tool?.toolProfileId ?? null
+    } : null,
     blockers: blockers.slice(0, 8),
     warnings: warnings.slice(0, 8),
     nextActions: Array.isArray(report.nextActions) ? report.nextActions.slice(0, 8) : [],
@@ -3073,6 +3086,15 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
     createdAt: report.createdAt,
     outputRoot: report.outputRoot,
     host: report.host ?? null,
+    targetMachineBoundary: report.targetMachineBoundary ? {
+      schema: report.targetMachineBoundary.schema ?? "hediao3d.target-machine-boundary.v1",
+      controllerClass: report.targetMachineBoundary.controllerClass ?? null,
+      machineProfileId: report.targetMachineBoundary.machineProfileId ?? null,
+      camMode: report.targetMachineBoundary.camMode ?? null,
+      postProcessor: report.targetMachineBoundary.postProcessor ?? null,
+      rotaryOutputAxis: report.targetMachineBoundary.rotaryOutputAxis ?? null,
+      tool: report.targetMachineBoundary.tool ?? null
+    } : null,
     summary: {
       readyCount: Number(summary.readyCount ?? 0),
       requiredCount: Number(summary.requiredCount ?? 0),
@@ -3179,7 +3201,14 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
           url: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/${encodeURIComponent(file.filename)}`
         }))
         : [],
-      commands: Array.isArray(report.artifacts.commands) ? report.artifacts.commands.slice(0, 8) : []
+      commands: Array.isArray(report.artifacts.commands) ? report.artifacts.commands.slice(0, 8) : [],
+      targetMachineBoundary: report.artifacts.targetMachineBoundary ? {
+        schema: report.artifacts.targetMachineBoundary.schema ?? "hediao3d.target-machine-boundary.v1",
+        controllerClass: report.artifacts.targetMachineBoundary.controllerClass ?? null,
+        machineProfileId: report.artifacts.targetMachineBoundary.machineProfileId ?? null,
+        postProcessor: report.artifacts.targetMachineBoundary.postProcessor ?? null,
+        rotaryOutputAxis: report.artifacts.targetMachineBoundary.rotaryOutputAxis ?? null
+      } : null
     } : null,
     run: {
       exitCode: report.run?.exitCode ?? null,
@@ -3332,6 +3361,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       sourceReportBinding
     });
   }
+  const targetMachineBoundaryStatus = createNativeCamTargetMachineBoundaryStatus(acceptance.targetMachineBoundary);
 
   const importId = `imported-real-output-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
   const outputRoot = join(process.cwd(), "public", "orchestrator-adapter-validation", importId);
@@ -3346,6 +3376,12 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself.",
       zipBundle: zipBundle ? "imported-native-cam-real-output-bundle.zip" : null
     },
+    level: acceptance.level === "ready" && targetMachineBoundaryStatus.status !== "matched" ? "review" : acceptance.level,
+    targetMachineBoundaryStatus,
+    warnings: [
+      ...(Array.isArray(acceptance.warnings) ? acceptance.warnings : []),
+      ...(targetMachineBoundaryStatus.status === "matched" ? [] : [targetMachineBoundaryStatus.summary])
+    ],
     sourceReportBinding,
     sourceReportSnapshot: createNativeCamSourceReportSnapshot(
       bindingInput.validationReport,
@@ -3366,6 +3402,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     acceptanceSchema: imported.schema,
     acceptanceLevel: imported.level ?? null,
     sourceReportBinding,
+    targetMachineBoundaryStatus,
     productionCandidateCount: Number(imported.productionCandidateCount ?? 0),
     unsafeCount: Number(imported.unsafeCount ?? 0),
     missingCount: Number(imported.missingCount ?? 0)
@@ -3515,6 +3552,53 @@ function validateNativeCamRealOutputAcceptance(acceptance) {
     }
   }
   return { ok: true };
+}
+
+function createNativeCamTargetMachineBoundaryStatus(boundary) {
+  const required = {
+    controllerClass: "3axis-controller-with-rotary-fixture",
+    machineProfileId: "desktop-3axis-rotary-y",
+    camMode: "rotaryWrap",
+    postProcessor: "wrapY",
+    rotaryOutputAxis: "Y",
+    toolProfileId: "vflat-4mm-25deg"
+  };
+  if (!boundary || typeof boundary !== "object") {
+    return {
+      schema: "hediao3d.native-cam-target-machine-boundary-status.v1",
+      status: "missing",
+      matched: false,
+      required,
+      mismatches: ["targetMachineBoundary missing"],
+      summary: "Native CAM 真实输出验收缺少目标机型/刀具/后处理边界，只能作为待复核证据。"
+    };
+  }
+  const actual = {
+    controllerClass: boundary.controllerClass ?? null,
+    machineProfileId: boundary.machineProfileId ?? null,
+    camMode: boundary.camMode ?? null,
+    postProcessor: boundary.postProcessor ?? null,
+    rotaryOutputAxis: boundary.rotaryOutputAxis ?? null,
+    toolProfileId: boundary.tool?.toolProfileId ?? null
+  };
+  const mismatches = Object.entries(required)
+    .filter(([key, value]) => actual[key] !== value)
+    .map(([key, value]) => `${key}: expected ${value}, got ${actual[key] ?? "missing"}`);
+  const axisMapping = boundary.axisMapping && typeof boundary.axisMapping === "object" ? boundary.axisMapping : {};
+  if (axisMapping.X !== "length-mm") mismatches.push(`axisMapping.X: expected length-mm, got ${axisMapping.X ?? "missing"}`);
+  if (axisMapping.Y !== "rotary-fixture-linearized-angle-or-wrap-mm") mismatches.push(`axisMapping.Y: expected rotary-fixture-linearized-angle-or-wrap-mm, got ${axisMapping.Y ?? "missing"}`);
+  if (axisMapping.Z !== "tool-depth-and-safe-height") mismatches.push(`axisMapping.Z: expected tool-depth-and-safe-height, got ${axisMapping.Z ?? "missing"}`);
+  return {
+    schema: "hediao3d.native-cam-target-machine-boundary-status.v1",
+    status: mismatches.length ? "mismatch" : "matched",
+    matched: mismatches.length === 0,
+    required,
+    actual,
+    mismatches,
+    summary: mismatches.length
+      ? `Native CAM 真实输出边界与目标三轴控制器+Y轴旋转夹具不一致：${mismatches.slice(0, 3).join("；")}`
+      : "Native CAM 真实输出边界匹配目标三轴控制器+Y轴旋转夹具、wrapY 后处理和 4mm 25度平底尖刀。"
+  };
 }
 
 function createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine) {

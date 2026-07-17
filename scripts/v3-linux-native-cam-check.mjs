@@ -19,6 +19,7 @@ const checks = [
   checkCamotics()
 ];
 const summary = createSummary(checks);
+const targetMachineBoundary = createTargetMachineBoundary();
 const report = {
   schema: "hediao3d.linux-native-cam-check.v1",
   createdAt: new Date().toISOString(),
@@ -40,6 +41,7 @@ const report = {
     V3_BLENDER_CMD: process.env.V3_BLENDER_CMD ?? null,
     V3_PYTHON_CMD: process.env.V3_PYTHON_CMD ?? null
   },
+  targetMachineBoundary,
   summary,
   checks
 };
@@ -438,6 +440,38 @@ function createCapabilityMatrix(checks) {
   }));
 }
 
+function createTargetMachineBoundary() {
+  return {
+    schema: "hediao3d.target-machine-boundary.v1",
+    controllerClass: "3axis-controller-with-rotary-fixture",
+    machineProfileId: "desktop-3axis-rotary-y",
+    camMode: "rotaryWrap",
+    postProcessor: "wrapY",
+    axisMapping: {
+      X: "length-mm",
+      Y: "rotary-fixture-linearized-angle-or-wrap-mm",
+      Z: "tool-depth-and-safe-height"
+    },
+    rotaryOutputAxis: "Y",
+    rotaryWrapPerRevolutionMm: 100,
+    lengthAxis: "X",
+    depthAxis: "Z",
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      angleDeg: 25,
+      tip: "flat"
+    },
+    requiredPostprocessOwner: "HeDiao3D",
+    forbiddenDirectOutputs: [
+      "generic-freecad-postprocessor-as-final-machine-nc",
+      "generic-blendercam-postprocessor-as-final-machine-nc",
+      "unverified-a-axis-output-for-y-fixture"
+    ],
+    productionRule: "External CAM may produce G-code or neutral toolpath evidence, but final machine NC for this controller must pass HeDiao3D wrapY postprocess, NC static analysis, controller dialect checks, CAMotics/material-removal review, air-run, trial feedback and machine acceptance."
+  };
+}
+
 function writeNativeCamServerPackageArtifacts(report) {
   const artifacts = {
     schema: "hediao3d.native-cam-server-package.v1",
@@ -479,7 +513,8 @@ function writeNativeCamServerPackageArtifacts(report) {
       "bash native-cam-real-output-check.sh",
       "npm run test:v3:readiness-api"
     ],
-    productionBoundary: report.summary.integrationStrategy.productionBoundary
+    productionBoundary: report.summary.integrationStrategy.productionBoundary,
+    targetMachineBoundary: report.targetMachineBoundary
   };
   writeFileSync(join(outputRoot, "native-cam-server-bootstrap.sh"), createNativeCamBootstrapShell(report), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-env.template"), createNativeCamEnvTemplate(report), "utf8");
@@ -696,8 +731,11 @@ echo "[HeDiao3D] Output: $OUT_DIR"
 echo "[HeDiao3D] Generated package time: ${report.createdAt}"
 
 mkdir -p "$OUT_DIR"
+cat > "$OUT_DIR/target-machine-boundary.json" <<'JSON'
+${JSON.stringify(report.targetMachineBoundary, null, 2)}
+JSON
 
-echo "[HeDiao3D] Step 1/2 native readiness"
+echo "[HeDiao3D] Step 1/3 native readiness"
 npm run test:v3:native-cam
 
 echo "[HeDiao3D] Step 2/3 proof-backed FreeCAD handoff"
@@ -709,20 +747,23 @@ V3_ADAPTER_USE_NATIVE_COMMANDS=true V3_ADAPTER_VALIDATION_DIR="$OUT_DIR" npm run
 REPORT="$OUT_DIR/v3-external-adapter-validation.json"
 ACCEPTANCE_REPORT="$OUT_DIR/native-cam-real-output-acceptance.json"
 ACCEPTANCE_BUNDLE="$OUT_DIR/native-cam-real-output-bundle.zip"
+TARGET_BOUNDARY="$OUT_DIR/target-machine-boundary.json"
 if [[ ! -s "$REPORT" ]]; then
   echo "[HeDiao3D] Missing validation report: $REPORT" >&2
   exit 2
 fi
 
-node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" <<'NODE'
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" "$TARGET_BOUNDARY" <<'NODE'
 const { readFileSync, writeFileSync } = require("fs");
 const { createHash } = require("crypto");
-const [reportPath, acceptancePath, strictValue, expectValue] = process.argv.slice(2);
+const [reportPath, acceptancePath, strictValue, expectValue, targetBoundaryPath] = process.argv.slice(2);
 const strict = /^(1|true|yes|on)$/i.test(strictValue || "");
 const expectProductionCandidate = /^(1|true|yes|on)$/i.test(expectValue || "");
 const reportBytes = readFileSync(reportPath);
 const reportText = reportBytes.toString("utf8");
 const report = JSON.parse(reportText);
+const targetMachineBoundaryBytes = readFileSync(targetBoundaryPath);
+const targetMachineBoundary = JSON.parse(targetMachineBoundaryBytes.toString("utf8"));
 const adapters = Array.isArray(report.adapters) ? report.adapters : [];
 const rows = adapters.map((adapter) => ({
   id: adapter.id,
@@ -758,6 +799,15 @@ const acceptance = {
     sha256: createHash("sha256").update(reportBytes).digest("hex"),
     schema: report.schema || null,
     createdAt: report.createdAt || null
+  },
+  targetMachineBoundary,
+  targetMachineBoundaryIdentity: {
+    filename: "target-machine-boundary.json",
+    path: targetBoundaryPath,
+    sha256: createHash("sha256").update(targetMachineBoundaryBytes).digest("hex"),
+    schema: targetMachineBoundary.schema || null,
+    machineProfileId: targetMachineBoundary.machineProfileId || null,
+    postProcessor: targetMachineBoundary.postProcessor || null
   },
   strict,
   expectProductionCandidate,
@@ -797,12 +847,13 @@ if (strict && (unsafe.length || (expectProductionCandidate && candidates.length 
 }
 NODE
 
-node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" <<'NODE'
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" "$TARGET_BOUNDARY" <<'NODE'
 const { readFileSync, writeFileSync } = require("fs");
-const [reportPath, acceptancePath, bundlePath] = process.argv.slice(2);
+const [reportPath, acceptancePath, bundlePath, targetBoundaryPath] = process.argv.slice(2);
 const files = [
   { name: "v3-external-adapter-validation.json", content: readFileSync(reportPath) },
   { name: "native-cam-real-output-acceptance.json", content: readFileSync(acceptancePath) },
+  { name: "target-machine-boundary.json", content: readFileSync(targetBoundaryPath) },
   {
     name: "README-NATIVE-CAM-REAL-OUTPUT.md",
     content: Buffer.from([
@@ -813,6 +864,13 @@ const files = [
       "Included files:",
       "- native-cam-real-output-acceptance.json",
       "- v3-external-adapter-validation.json",
+      "- target-machine-boundary.json",
+      "",
+      "Target machine boundary:",
+      "- 3-axis controller + Y-axis rotary fixture",
+      "- X=length, Y=rotary fixture linearized axis, Z=depth/safe height",
+      "- Tool=4mm 25-degree flat-tip V cutter",
+      "- Final machine NC must be produced/checked by HeDiao3D wrapY postprocess",
       "",
       "This bundle is evidence for readiness gates only. It does not unlock production NC by itself.",
       ""

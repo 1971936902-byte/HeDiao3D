@@ -14,6 +14,8 @@ async function main() {
   assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "opencamlib" && item.handoff?.includes("neutral-toolpath")), "integration strategy should include OpenCAMLib neutral handoff");
   assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "camotics" && item.role === "material-removal-simulation"), "integration strategy should include CAMotics simulation role");
   assert(run.summary.integrationStrategy.productionBoundary?.some((item) => item.includes("三轴控制器+Y轴旋转夹具")), "integration strategy should preserve rotary fixture production boundary");
+  assert(run.targetMachineBoundary?.machineProfileId === "desktop-3axis-rotary-y", "native CAM summary should expose target machine boundary");
+  assert(run.targetMachineBoundary?.tool?.toolProfileId === "vflat-4mm-25deg", "native CAM target boundary should expose 4mm 25deg tool");
   assert(run.summary.executionPlan?.schema === "hediao3d.opensource-cam-execution-plan.v1", "native CAM summary should expose open-source CAM execution plan");
   assert(run.summary.executionPlan.stages?.some((stage) => stage.id === "opencamlib-neutral-core" && stage.output.includes("neutral-toolpath")), "execution plan should include OpenCAMLib neutral core stage");
   assert(run.summary.executionPlan.stages?.some((stage) => stage.id === "camotics-material-removal" && stage.productionBoundary.includes("synthetic")), "execution plan should include CAMotics production lock");
@@ -83,6 +85,8 @@ async function main() {
   assert(realOutputCheck.includes("production-candidate"), "real output check should require production-candidate output");
   assert(realOutputCheck.includes("native-cam-real-output-acceptance.json"), "real output check should write machine-readable acceptance report");
   assert(realOutputCheck.includes("native-cam-real-output-bundle.zip"), "real output check should write uploadable ZIP bundle");
+  assert(realOutputCheck.includes("target-machine-boundary.json"), "real output check should write target machine boundary artifact");
+  assert(realOutputCheck.includes("targetMachineBoundary"), "real output check should include target machine boundary in acceptance report");
   assert(realOutputCheck.includes("README-NATIVE-CAM-REAL-OUTPUT.md"), "real output check bundle should include README");
   assert(realOutputCheck.includes("hediao3d.native-cam-real-output-acceptance.v1"), "real output check should write acceptance schema");
   assert(realOutputCheck.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true"), "real output check should run native adapter validation");
@@ -91,6 +95,7 @@ async function main() {
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM package manifest missing real output check");
   assert(packageManifest.files?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "native CAM package manifest missing closed-loop handoff");
+  assert(packageManifest.targetMachineBoundary?.machineProfileId === "desktop-3axis-rotary-y", "native CAM package manifest missing target machine boundary");
   const packageZip = await getBinary(latest.latest.apiArtifacts.packageZip);
   assert((packageZip.contentType ?? "").includes("application/zip"), "native CAM server package should use application/zip content type");
   assert(packageZip.bytes[0] === 0x50 && packageZip.bytes[1] === 0x4b, "native CAM server package should be a ZIP file");

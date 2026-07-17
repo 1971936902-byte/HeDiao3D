@@ -64,6 +64,7 @@ async function main() {
   });
   assert(nativeCamImport.level === "ready", `native CAM acceptance should be ready, got ${nativeCamImport.level}`);
   assert(nativeCamImport.sourceReportBindingStatus === "matched", "native CAM acceptance should bind to adapter validation report");
+  assert(nativeCamImport.targetMachineBoundaryStatus?.status === "matched", "native CAM acceptance should bind target machine boundary");
   assert(nativeCamImport.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "native CAM import should preserve source ZIP");
 
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
@@ -167,6 +168,7 @@ function createAcceptanceFixture(sourceReportSha256) {
     level: "ready",
     strict: true,
     expectProductionCandidate: true,
+    targetMachineBoundary: createTargetMachineBoundaryFixture(),
     productionCandidateCount: 1,
     unsafeCount: 0,
     missingCount: 0,
@@ -185,6 +187,32 @@ function createAcceptanceFixture(sourceReportSha256) {
         generatedByExternalCommand: true
       }
     ]
+  };
+}
+
+function createTargetMachineBoundaryFixture() {
+  return {
+    schema: "hediao3d.target-machine-boundary.v1",
+    controllerClass: "3axis-controller-with-rotary-fixture",
+    machineProfileId: "desktop-3axis-rotary-y",
+    camMode: "rotaryWrap",
+    postProcessor: "wrapY",
+    axisMapping: {
+      X: "length-mm",
+      Y: "rotary-fixture-linearized-angle-or-wrap-mm",
+      Z: "tool-depth-and-safe-height"
+    },
+    rotaryOutputAxis: "Y",
+    rotaryWrapPerRevolutionMm: 100,
+    lengthAxis: "X",
+    depthAxis: "Z",
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      angleDeg: 25,
+      tip: "flat"
+    },
+    requiredPostprocessOwner: "HeDiao3D"
   };
 }
 

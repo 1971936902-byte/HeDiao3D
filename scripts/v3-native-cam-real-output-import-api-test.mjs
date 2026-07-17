@@ -39,6 +39,7 @@ async function main() {
   assert(imported.productionCandidateCount === 1, "imported acceptance should report one production candidate");
   assert(imported.unsafeCount === 0, "imported acceptance should report zero unsafe outputs");
   assert(imported.sourceReportBindingStatus === "matched", "imported acceptance should bind to supplied validation report");
+  assert(imported.targetMachineBoundaryStatus?.status === "matched", "imported acceptance should match target machine boundary");
   assert(imported.sourceReportSha256 === validationReportSha256, "imported acceptance should expose source report hash");
   assert(imported.sourceReportHandoffAudit?.productionCandidateCount === 1, "imported acceptance should expose source report production candidate audit");
   assert(imported.sourceReportHandoffAudit?.unsafeCount === 0, "imported acceptance should expose source report unsafe audit");
@@ -48,7 +49,16 @@ async function main() {
   assert(artifact.importSource?.sourceName === "native-cam-real-output-acceptance.json", "artifact should preserve import source name");
   assert(artifact.adapters?.some((adapter) => adapter.classification === "production-candidate"), "artifact should preserve production-candidate classification");
   assert(artifact.sourceReportBinding?.status === "matched", "artifact should preserve source report binding");
+  assert(artifact.targetMachineBoundaryStatus?.status === "matched", "artifact should preserve target machine boundary status");
   assert(artifact.sourceReportSnapshot?.handoffClassificationAudit?.productionCandidateCount === 1, "artifact should preserve source report handoff audit snapshot");
+
+  const missingBoundary = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
+    sourceName: "native-cam-real-output-acceptance-missing-boundary.json",
+    validationReport,
+    acceptance: createAcceptanceFixture(validationReportSha256, { includeTargetMachineBoundary: false })
+  });
+  assert(missingBoundary.level === "review", "missing target machine boundary should downgrade ready acceptance to review");
+  assert(missingBoundary.targetMachineBoundaryStatus?.status === "missing", "missing boundary import should expose missing status");
 
   const zipImported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-bundle.zip",
@@ -59,6 +69,7 @@ async function main() {
   });
   assert(zipImported.schema === "hediao3d.native-cam-real-output-acceptance.v1", "zip imported acceptance schema mismatch");
   assert(zipImported.sourceReportBindingStatus === "matched", "zip imported acceptance should bind validation report");
+  assert(zipImported.targetMachineBoundaryStatus?.status === "matched", "zip import should preserve matched target boundary");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
   assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
@@ -70,15 +81,23 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.id === zipImported.id, "readiness should pick latest imported acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.level === "ready", "readiness should preserve acceptance level");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose matched source report binding");
+  assert(readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus?.status === "matched", "readiness should expose matched target machine boundary");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
   assert(!readiness.gates?.blockers?.some((item) => /真实输出验收为 ready.*handoff 审计仍不一致/.test(item)), "readiness should not compare matched real-output acceptance against a later unrelated adapter audit");
   const camLayer = readiness.goalAudit?.layers?.find((layer) => layer.id === "cam-engine-layer");
   assert(camLayer?.evidence?.some((item) => /bound-native-source-report/.test(item)), "CAM layer should use bound source report handoff audit when available");
-  assert(readiness.postprocessHandoffReadiness?.status === "blocked", `readiness should block production candidate CAM evidence without neutral postprocess handoff, got ${readiness.postprocessHandoffReadiness?.status}`);
-  assert(readiness.gates?.blockers?.some((item) => /Y\/A 旋转夹具后处理/.test(item)), "readiness should explain missing self-developed rotary fixture postprocess handoff");
-  if (!readiness.camoticsImport || !readiness.camoticsImport.productionEvidenceEligible) {
+  assert(readiness.gates?.allowProductionNc === false, "native CAM real-output import alone must not unlock production NC");
+  if (readiness.postprocessHandoffReadiness?.source !== "latest-job-evidence-dossier") {
+    assert(readiness.postprocessHandoffReadiness?.status === "blocked", `readiness should block production candidate CAM evidence without neutral postprocess handoff, got ${readiness.postprocessHandoffReadiness?.status}`);
+    assert(readiness.gates?.blockers?.some((item) => /Y\/A 旋转夹具后处理/.test(item)), "readiness should explain missing self-developed rotary fixture postprocess handoff");
+  }
+  const hasEligibleCamoticsEvidence = Boolean(
+    readiness.readinessCamoticsEvidence?.productionEvidenceEligible
+    || readiness.camoticsImport?.productionEvidenceEligible
+  );
+  if (!hasEligibleCamoticsEvidence) {
     assert(readiness.gates?.blockers?.some((item) => /真实 CAM 生产候选证据.*CAMotics/.test(item)), "readiness should block production candidate CAM evidence without eligible CAMotics material-removal evidence");
   }
 
@@ -114,7 +133,8 @@ function createValidationReportFixture() {
   };
 }
 
-function createAcceptanceFixture(sourceReportSha256) {
+function createAcceptanceFixture(sourceReportSha256, options = {}) {
+  const includeTargetMachineBoundary = options.includeTargetMachineBoundary !== false;
   return {
     schema: "hediao3d.native-cam-real-output-acceptance.v1",
     createdAt: new Date().toISOString(),
@@ -128,6 +148,7 @@ function createAcceptanceFixture(sourceReportSha256) {
     level: "ready",
     strict: true,
     expectProductionCandidate: true,
+    ...(includeTargetMachineBoundary ? { targetMachineBoundary: createTargetMachineBoundaryFixture() } : {}),
     productionCandidateCount: 1,
     unsafeCount: 0,
     missingCount: 0,
@@ -146,6 +167,32 @@ function createAcceptanceFixture(sourceReportSha256) {
         generatedByExternalCommand: true
       }
     ]
+  };
+}
+
+function createTargetMachineBoundaryFixture() {
+  return {
+    schema: "hediao3d.target-machine-boundary.v1",
+    controllerClass: "3axis-controller-with-rotary-fixture",
+    machineProfileId: "desktop-3axis-rotary-y",
+    camMode: "rotaryWrap",
+    postProcessor: "wrapY",
+    axisMapping: {
+      X: "length-mm",
+      Y: "rotary-fixture-linearized-angle-or-wrap-mm",
+      Z: "tool-depth-and-safe-height"
+    },
+    rotaryOutputAxis: "Y",
+    rotaryWrapPerRevolutionMm: 100,
+    lengthAxis: "X",
+    depthAxis: "Z",
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      angleDeg: 25,
+      tip: "flat"
+    },
+    requiredPostprocessOwner: "HeDiao3D"
   };
 }
 
