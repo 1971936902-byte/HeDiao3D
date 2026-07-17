@@ -5651,15 +5651,28 @@ export function App() {
                 </small>
               )}
               {v3Job?.result?.summary.productionEvidenceDossier && (
-                <small className={v3Job.result.summary.productionEvidenceDossier.status === "production-evidence-complete" ? "v3-inline-ok" : v3Job.result.summary.productionEvidenceDossier.blockedCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
-                  证据档案：{v3Job.result.summary.productionEvidenceDossier.status}
-                  {" · "}
-                  通过 {v3Job.result.summary.productionEvidenceDossier.passedCount}
-                  {" · "}
-                  复核 {v3Job.result.summary.productionEvidenceDossier.reviewCount}
-                  {" · "}
-                  阻断 {v3Job.result.summary.productionEvidenceDossier.blockedCount}
-                </small>
+                <>
+                  <small className={v3Job.result.summary.productionEvidenceDossier.status === "production-evidence-complete" ? "v3-inline-ok" : v3Job.result.summary.productionEvidenceDossier.blockedCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
+                    证据档案：{v3Job.result.summary.productionEvidenceDossier.status}
+                    {" · "}
+                    通过 {v3Job.result.summary.productionEvidenceDossier.passedCount}
+                    {" · "}
+                    复核 {v3Job.result.summary.productionEvidenceDossier.reviewCount}
+                    {" · "}
+                    阻断 {v3Job.result.summary.productionEvidenceDossier.blockedCount}
+                  </small>
+                  {v3Job.result.summary.productionEvidenceDossier.evidenceItems?.length ? (
+                    <div className="v3-evidence-grid compact">
+                      {v3Job.result.summary.productionEvidenceDossier.evidenceItems.slice(0, 6).map((item) => (
+                        <div className={item.status === "pass" ? "ok" : item.status === "block" ? "critical" : "warning"} key={item.id} title={item.summary}>
+                          <span>{item.label}</span>
+                          <strong>{formatEvidenceItemStatus(item.status)}</strong>
+                          <small>{item.summary}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
               )}
               {v3Job?.result?.summary.machineAcceptanceLog && (
                 <small className={v3Job.result.summary.machineAcceptanceLog.allRequiredPassed ? "v3-inline-ok" : v3Job.result.summary.machineAcceptanceLog.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning"}>
@@ -6745,6 +6758,12 @@ function formatFeedbackOutcome(outcome: MachineFeedback["outcome"]) {
   if (outcome === "success") return "试雕成功";
   if (outcome === "review") return "需复核";
   return "失败/断刀";
+}
+
+function formatEvidenceItemStatus(status: "pass" | "review" | "block") {
+  if (status === "pass") return "通过";
+  if (status === "block") return "阻断";
+  return "复核";
 }
 
 function calculateAverageActualMinutes(feedback: MachineFeedback[]) {
