@@ -6163,14 +6163,21 @@ export function App() {
                     {" · "}
                     禁止上机 {v3DownloadChecklistSummary.neverMachineCount}
                   </small>
-                  <div className="v3-adapter-list">
+                  <div className="v3-machine-file-grid">
                     {v3DownloadChecklistSummary.keyFiles.map((file) => (
-                      <span className={file.verified ? file.allowedOnMachine ? "ok" : "warning" : "critical"} key={file.filename} title={file.sha256 ?? "缺少 SHA-256"}>
-                        {formatV3ShortcutFileLabel(file.filename)}
-                        {" · "}
-                        {file.verified ? "已哈希" : "缺哈希"}
-                        {!file.allowedOnMachine ? " · 禁止上机" : ""}
-                      </span>
+                      <div className={`v3-machine-file-card ${getV3MachineFileCardClass(file)}`} key={file.filename}>
+                        <div>
+                          <strong>{formatV3ShortcutFileLabel(file.filename)}</strong>
+                          <span>{formatV3MachineUseClass(file.machineUseClass)}</span>
+                        </div>
+                        <p>{file.summary}</p>
+                        <small>
+                          {file.verified ? "SHA-256 已记录" : "缺少 SHA-256"}
+                          {" · "}
+                          {file.allowedOnMachine ? file.spindleExpected ? "可能启动主轴" : "仅空跑" : "禁止上机"}
+                          {file.requiresGate ? " · 受门禁控制" : ""}
+                        </small>
+                      </div>
                     ))}
                   </div>
                   {v3DownloadChecklistSummary.checklistUrl && (
@@ -6354,6 +6361,24 @@ export function App() {
               <h2>加工包交付</h2>
             </div>
             <p className="panel-note">下载完整加工包，包含 NC/TAP/TXT/CSV、质量报告、安全校验、成本估算和上机说明。</p>
+            {v3DownloadChecklistSummary && (
+              <div className="v3-download-checklist package-safety-summary">
+                <small>
+                  V3 上机文件核验：先看用途，再下载；CAMotics 预览文件永远不要上机。
+                </small>
+                <div className="v3-machine-file-grid">
+                  {v3DownloadChecklistSummary.keyFiles.map((file) => (
+                    <div className={`v3-machine-file-card ${getV3MachineFileCardClass(file)}`} key={`package-${file.filename}`}>
+                      <div>
+                        <strong>{file.filename}</strong>
+                        <span>{formatV3MachineUseClass(file.machineUseClass)}</span>
+                      </div>
+                      <p>{file.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="package-list">
               <span>离料空跑 NC</span>
               <span>合并 NC</span>
@@ -7498,12 +7523,18 @@ function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
   const keyFiles = keyFileNames.map((filename) => {
     const file = byName.get(filename);
     const delivery = deliveryByName.get(filename);
+    const machineUse = file?.machineUse ?? delivery?.machineUse;
     return {
       filename,
+      url: delivery?.url ?? null,
       sha256: file?.sha256 ?? null,
       verified: Boolean(file?.sha256 && file.exists),
-      allowedOnMachine: Boolean(file?.machineUse?.allowedOnMachine ?? delivery?.machineUse?.allowedOnMachine),
-      machineUseClass: file?.machineUse?.class ?? delivery?.machineUse?.class ?? "unknown"
+      downloadable: Boolean(delivery?.downloadable),
+      allowedOnMachine: Boolean(machineUse?.allowedOnMachine),
+      requiresGate: Boolean(machineUse?.requiresGate),
+      spindleExpected: Boolean(machineUse?.spindleExpected),
+      machineUseClass: machineUse?.class ?? "unknown",
+      summary: machineUse?.summary ?? delivery?.note ?? "未生成用途说明。"
     };
   });
   return {
@@ -7648,6 +7679,28 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "opencamlib-cutter-envelope-report.json") return "OpenCAMLib包络报告";
   if (filename === "postprocess-trace-report.json") return "后处理追溯";
   return filename;
+}
+
+function formatV3MachineUseClass(machineUseClass: string) {
+  if (machineUseClass === "trial-or-production-candidate") return "候选上机 NC";
+  if (machineUseClass === "locked-machine-nc") return "锁定 NC";
+  if (machineUseClass === "air-run-no-cut") return "离料空跑";
+  if (machineUseClass === "simulation-only-never-machine") return "仅仿真";
+  if (machineUseClass === "cam-input-only") return "CAM 输入";
+  if (machineUseClass === "report-only") return "报告";
+  return machineUseClass;
+}
+
+function getV3MachineFileCardClass(file: {
+  allowedOnMachine: boolean;
+  machineUseClass: string;
+  verified: boolean;
+}) {
+  if (!file.verified) return "critical";
+  if (file.machineUseClass === "simulation-only-never-machine") return "never-machine";
+  if (file.machineUseClass === "air-run-no-cut") return "air-run";
+  if (file.allowedOnMachine) return "machine";
+  return "locked";
 }
 
 function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: boolean, exportGateReady: boolean) {
