@@ -1562,6 +1562,10 @@ export function App() {
   const [isV3NativeCamChecking, setIsV3NativeCamChecking] = useState(false);
   const [isV3ReadinessChecking, setIsV3ReadinessChecking] = useState(false);
   const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
+  const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
+  const [v3CamoticsResultFile, setV3CamoticsResultFile] = useState<File | null>(null);
+  const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
+  const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -2237,6 +2241,58 @@ export function App() {
       });
     } finally {
       setIsV3MachineAcceptanceSyncing(false);
+    }
+  };
+
+  const handleImportV3CamoticsResult = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再回填 CAMotics 仿真结果。");
+      return;
+    }
+    if (!v3CamoticsResultFile) {
+      setV3Status("请先选择 camotics-result.json。");
+      return;
+    }
+    setIsV3CamoticsImporting(true);
+    try {
+      const result = JSON.parse(await v3CamoticsResultFile.text());
+      const screenshotDataUrl = v3CamoticsScreenshotFile ? await fileToDataUrl(v3CamoticsScreenshotFile) : null;
+      const materialMeshText = v3CamoticsMaterialMeshFile ? await v3CamoticsMaterialMeshFile.text() : null;
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-result`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          result,
+          screenshotDataUrl,
+          materialMeshText
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "CAMotics 结果回填失败");
+      const level = data.simulationEvidence?.level ?? "unknown";
+      const eligible = data.simulationEvidence?.productionUnlockEligible ? "可作为生产仿真证据" : "仍需复核，未解锁生产";
+      setV3Status(`CAMotics 结果已回填：${level}，${eligible}`);
+      recordTask({
+        category: "cam",
+        status: data.simulationEvidence?.productionUnlockEligible ? "ok" : "warning",
+        title: "回填 CAMotics 材料去除结果",
+        detail: `${v3CamoticsResultFile.name} / ${level} / ${eligible}`
+      });
+      setV3CamoticsResultFile(null);
+      setV3CamoticsScreenshotFile(null);
+      setV3CamoticsMaterialMeshFile(null);
+      await handleLoadV3Job(v3Job.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "CAMotics 结果回填失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "回填 CAMotics 结果失败",
+        detail: message
+      });
+    } finally {
+      setIsV3CamoticsImporting(false);
     }
   };
 
@@ -4867,6 +4923,48 @@ export function App() {
                     {v3EvidenceLoopSummary.nextActions.slice(0, 3).map((action) => (
                       <small key={action}>{action}</small>
                     ))}
+                  </div>
+                  <div className="v3-camotics-import">
+                    <div>
+                      <strong>CAMotics 真实结果回填</strong>
+                      <small>导入 camotics-result.json，并可附带仿真截图和材料去除 STL；缺少附件会按证据不完整处理。</small>
+                    </div>
+                    <label>
+                      <span>结果JSON</span>
+                      <input
+                        accept=".json,application/json"
+                        type="file"
+                        onChange={(event) => setV3CamoticsResultFile(event.target.files?.[0] ?? null)}
+                      />
+                      <small>{v3CamoticsResultFile?.name ?? "未选择"}</small>
+                    </label>
+                    <label>
+                      <span>截图</span>
+                      <input
+                        accept="image/*"
+                        type="file"
+                        onChange={(event) => setV3CamoticsScreenshotFile(event.target.files?.[0] ?? null)}
+                      />
+                      <small>{v3CamoticsScreenshotFile?.name ?? "可选"}</small>
+                    </label>
+                    <label>
+                      <span>材料STL</span>
+                      <input
+                        accept=".stl,model/stl,text/plain"
+                        type="file"
+                        onChange={(event) => setV3CamoticsMaterialMeshFile(event.target.files?.[0] ?? null)}
+                      />
+                      <small>{v3CamoticsMaterialMeshFile?.name ?? "可选"}</small>
+                    </label>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handleImportV3CamoticsResult}
+                      disabled={!v3Job?.id || !v3CamoticsResultFile || isV3CamoticsImporting}
+                    >
+                      <UploadCloud size={17} />
+                      {isV3CamoticsImporting ? "回填中..." : "回填CAMotics结果"}
+                    </button>
                   </div>
                   <div className="v3-action-row">
                     <button className="demo-action package-action" type="button" onClick={() => setActiveStage("feedback")}>

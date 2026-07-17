@@ -2125,6 +2125,51 @@ button:disabled {
   border-left: 2px solid rgba(234, 181, 88, 0.6);
 }
 
+.v3-camotics-import {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(25, 199, 180, 0.22);
+  border-radius: 7px;
+  background: rgba(25, 199, 180, 0.045);
+}
+
+.v3-camotics-import > div {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 3px;
+}
+
+.v3-camotics-import label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.v3-camotics-import label span {
+  color: #dffbf6;
+  font-size: 11px;
+}
+
+.v3-camotics-import input[type="file"] {
+  width: 100%;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.v3-camotics-import label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-camotics-import .package-action {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
 .v3-log-list {
   display: grid;
   gap: 5px;
