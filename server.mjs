@@ -83,6 +83,10 @@ const server = createServer(async (req, res) => {
       return runNativeCamReadinessCheck(req, res);
     }
 
+    if (req.method === "POST" && req.url === "/api/orchestrator/native-cam/real-output-acceptance") {
+      return importNativeCamRealOutputAcceptance(req, res);
+    }
+
     if (req.method === "GET" && req.url === "/api/orchestrator/jobs") {
       return listOrchestratorJobs(res);
     }
@@ -2186,6 +2190,87 @@ function getNativeCamReadinessArtifact(checkId, filename, res) {
     "Cache-Control": "no-store"
   });
   res.end(content);
+}
+
+async function importNativeCamRealOutputAcceptance(req, res) {
+  const input = await readJson(req, 5_000_000).catch((error) => ({ error }));
+  if (input.error) {
+    return json(res, 400, { error: input.error instanceof Error ? input.error.message : "native CAM 真实输出验收 JSON 无法解析" });
+  }
+  const acceptance = input.acceptance ?? input;
+  const validation = validateNativeCamRealOutputAcceptance(acceptance);
+  if (!validation.ok) {
+    return json(res, 400, { error: validation.error });
+  }
+
+  const importId = `imported-real-output-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+  const outputRoot = join(process.cwd(), "public", "orchestrator-adapter-validation", importId);
+  await mkdir(outputRoot, { recursive: true });
+
+  const imported = {
+    ...acceptance,
+    importedAt: new Date().toISOString(),
+    importSource: {
+      sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : "native-cam-real-output-acceptance.json",
+      route: "/api/orchestrator/native-cam/real-output-acceptance",
+      note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself."
+    }
+  };
+  await writeFile(join(outputRoot, "native-cam-real-output-acceptance.json"), JSON.stringify(imported, null, 2), "utf8");
+  await writeFile(join(outputRoot, "native-cam-real-output-import.json"), JSON.stringify({
+    schema: "hediao3d.native-cam-real-output-import.v1",
+    id: importId,
+    createdAt: imported.importedAt,
+    sourceName: imported.importSource.sourceName,
+    acceptanceSchema: imported.schema,
+    acceptanceLevel: imported.level ?? null,
+    productionCandidateCount: Number(imported.productionCandidateCount ?? 0),
+    unsafeCount: Number(imported.unsafeCount ?? 0),
+    missingCount: Number(imported.missingCount ?? 0)
+  }, null, 2), "utf8");
+
+  const summary = createNativeCamRealOutputAcceptancePublicSummary(imported, importId);
+  return json(res, 200, {
+    ...summary,
+    apiArtifacts: {
+      json: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/native-cam-real-output-acceptance.json`,
+      importJson: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/native-cam-real-output-import.json`
+    }
+  });
+}
+
+function validateNativeCamRealOutputAcceptance(acceptance) {
+  if (!acceptance || typeof acceptance !== "object") {
+    return { ok: false, error: "native CAM 真实输出验收必须是 JSON object。" };
+  }
+  if (acceptance.schema !== "hediao3d.native-cam-real-output-acceptance.v1") {
+    return { ok: false, error: "schema 必须是 hediao3d.native-cam-real-output-acceptance.v1。" };
+  }
+  if (!Array.isArray(acceptance.adapters)) {
+    return { ok: false, error: "native CAM 真实输出验收缺少 adapters[]。" };
+  }
+  const allowedLevels = new Set(["ready", "review", "critical", "missing"]);
+  if (acceptance.level && !allowedLevels.has(String(acceptance.level))) {
+    return { ok: false, error: "native CAM 真实输出验收 level 必须是 ready/review/critical/missing。" };
+  }
+  const allowedClassifications = new Set([
+    "production-candidate",
+    "fixture-contract",
+    "synthetic-contract",
+    "preview-scaffold",
+    "not-generated",
+    "internal-fallback",
+    "missing"
+  ]);
+  for (const adapter of acceptance.adapters) {
+    if (!adapter || typeof adapter !== "object" || typeof adapter.id !== "string" || !adapter.id.trim()) {
+      return { ok: false, error: "adapters[] 中每项必须包含 id。" };
+    }
+    if (adapter.classification && !allowedClassifications.has(String(adapter.classification))) {
+      return { ok: false, error: `adapter ${adapter.id} 的 classification 不受支持：${adapter.classification}` };
+    }
+  }
+  return { ok: true };
 }
 
 function createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine) {

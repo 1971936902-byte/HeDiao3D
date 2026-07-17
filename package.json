@@ -29,6 +29,7 @@
     "test:v3:external-adapters": "node scripts/v3-external-adapter-validation.mjs",
     "test:v3:native-cam": "node scripts/v3-linux-native-cam-check.mjs",
     "test:v3:native-cam-api": "node scripts/v3-native-cam-api-test.mjs",
+    "test:v3:native-cam-real-output-import-api": "node scripts/v3-native-cam-real-output-import-api-test.mjs",
     "test:v3:readiness-api": "node scripts/v3-readiness-api-test.mjs",
     "test:v3:trial-feedback-api": "node scripts/v3-trial-feedback-api-test.mjs",
     "test:v3:machine-acceptance-api": "node scripts/v3-machine-acceptance-api-test.mjs",

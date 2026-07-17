@@ -1702,6 +1702,7 @@ export function App() {
   const [isV3PackageDownloading, setIsV3PackageDownloading] = useState(false);
   const [isV3AdapterValidating, setIsV3AdapterValidating] = useState(false);
   const [isV3NativeCamChecking, setIsV3NativeCamChecking] = useState(false);
+  const [isV3NativeCamAcceptanceImporting, setIsV3NativeCamAcceptanceImporting] = useState(false);
   const [isV3ReadinessChecking, setIsV3ReadinessChecking] = useState(false);
   const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
   const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
@@ -1709,6 +1710,7 @@ export function App() {
   const [v3CamoticsResultFile, setV3CamoticsResultFile] = useState<File | null>(null);
   const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
+  const [v3NativeCamAcceptanceFile, setV3NativeCamAcceptanceFile] = useState<File | null>(null);
   const [v3Status, setV3Status] = useState("等待引擎探测");
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
@@ -2037,6 +2039,47 @@ export function App() {
       setV3Status(error instanceof Error ? error.message : "Native CAM 环境验收失败");
     } finally {
       setIsV3NativeCamChecking(false);
+    }
+  };
+
+  const handleImportV3NativeCamRealOutputAcceptance = async () => {
+    if (!v3NativeCamAcceptanceFile) {
+      setV3Status("请先选择 native-cam-real-output-acceptance.json。");
+      return;
+    }
+    setIsV3NativeCamAcceptanceImporting(true);
+    try {
+      const acceptance = JSON.parse(await v3NativeCamAcceptanceFile.text());
+      const response = await fetch("/api/orchestrator/native-cam/real-output-acceptance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          acceptance,
+          sourceName: v3NativeCamAcceptanceFile.name
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "真实 CAM 输出验收导入失败");
+      setV3Status(`真实 CAM 输出验收已导入：${data.level ?? "unknown"}，候选 ${data.productionCandidateCount ?? 0}，不安全 ${data.unsafeCount ?? 0}`);
+      recordTask({
+        category: "cam",
+        status: data.level === "ready" ? "ok" : data.level === "critical" ? "error" : "warning",
+        title: "导入真实 CAM 输出验收",
+        detail: `${v3NativeCamAcceptanceFile.name} / ${data.summary ?? data.level ?? "unknown"}`
+      });
+      setV3NativeCamAcceptanceFile(null);
+      await refreshV3Readiness();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "真实 CAM 输出验收导入失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "导入真实 CAM 输出验收失败",
+        detail: message
+      });
+    } finally {
+      setIsV3NativeCamAcceptanceImporting(false);
     }
   };
 
@@ -5063,6 +5106,28 @@ export function App() {
                       )}
                     </div>
                   )}
+                  <div className="v3-server-package">
+                    <strong>真实输出验收回填</strong>
+                    <small>Linux CAM 服务器执行 native-cam-real-output-check.sh 后，选择生成的 native-cam-real-output-acceptance.json 回填到总门禁。</small>
+                    <label className="v3-file-picker">
+                      <UploadCloud size={16} />
+                      <span>{v3NativeCamAcceptanceFile ? v3NativeCamAcceptanceFile.name : "选择验收JSON"}</span>
+                      <input
+                        accept="application/json,.json"
+                        type="file"
+                        onChange={(event) => setV3NativeCamAcceptanceFile(event.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    <button
+                      className="demo-action package-action"
+                      disabled={!v3NativeCamAcceptanceFile || isV3NativeCamAcceptanceImporting}
+                      onClick={handleImportV3NativeCamRealOutputAcceptance}
+                      type="button"
+                    >
+                      <ClipboardCheck size={17} />
+                      {isV3NativeCamAcceptanceImporting ? "导入中..." : "导入真实输出验收"}
+                    </button>
+                  </div>
                 </>
               ) : (
                 <small>还没有 Native CAM 环境验收记录；Linux CAM 服务器部署后建议先跑此检查。</small>

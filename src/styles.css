@@ -1959,6 +1959,31 @@ button:disabled {
   font-size: 12px;
 }
 
+.v3-file-picker {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 8px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #dcebe5;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.v3-file-picker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-file-picker input {
+  display: none;
+}
+
 .v3-engine div {
   display: flex;
   justify-content: space-between;
