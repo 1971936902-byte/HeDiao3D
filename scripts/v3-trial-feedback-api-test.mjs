@@ -98,6 +98,13 @@ async function main() {
   const dossierArtifact = await getArtifactJson(job.id, "production-evidence-dossier.json");
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "trial-feedback" && item.summary.includes("1 条")), "dossier missing feedback evidence item");
   assert(dossierArtifact.missingEvidence?.some((item) => item.id === "process-optimization"), "dossier should still require process optimization review");
+  const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
+  assert(deliveryManifest.files?.some((file) => file.filename === "trial-feedback-record.json" && file.downloadable), "delivery manifest should expose trial feedback record");
+  assert(deliveryManifest.files?.some((file) => file.filename === "trial-feedback-log.json" && file.downloadable), "delivery manifest should expose trial feedback log");
+  assert(deliveryManifest.files?.some((file) => file.filename === "process-optimization-plan.json" && file.downloadable), "delivery manifest should expose optimization plan");
+  const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-record.json" && file.sha256), "package integrity missing feedback record hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "process-optimization-plan.json" && file.sha256), "package integrity missing optimization plan hash");
 
   console.log(JSON.stringify({
     ok: true,

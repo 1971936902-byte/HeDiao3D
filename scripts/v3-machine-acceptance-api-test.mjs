@@ -100,6 +100,12 @@ async function main() {
   const dossierArtifact = await getArtifactJson(job.id, "production-evidence-dossier.json");
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.summary.includes("机床验收记录")), "dossier missing machine acceptance evidence item");
   assert(dossierArtifact.crossChecks?.machineAcceptancePassed === true, "dossier should mark machine acceptance passed");
+  const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
+  assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.downloadable), "delivery manifest should expose machine acceptance record");
+  assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-log.json" && file.downloadable), "delivery manifest should expose machine acceptance log");
+  const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  assert(packageIntegrity.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.sha256), "package integrity missing machine acceptance record hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "machine-acceptance-log.json" && file.sha256), "package integrity missing machine acceptance log hash");
 
   console.log(JSON.stringify({
     ok: true,

@@ -5610,9 +5610,14 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
     createDeliveryFile(job.id, "trial-feedback-template.json", "试雕反馈回填模板", "report", true, "记录空跑/试雕结果、实际耗时、缺陷标签和参数调整建议。"),
+    createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
+    createDeliveryFile(job.id, "trial-feedback-log.json", "试雕反馈日志", "report", existsSync(join(job.workDir, "trial-feedback-log.json")), "按时间保存现场反馈记录，用于工艺参数优化闭环。"),
+    createDeliveryFile(job.id, "process-optimization-plan.json", "工艺优化建议", "report", existsSync(join(job.workDir, "process-optimization-plan.json")), "根据试雕反馈生成的下一轮参数复核和调整建议。"),
     createDeliveryFile(job.id, "tool-setup-sheet.json", "刀具装夹与切削参数核验单", "report", true, "核验 4mm 25度平底尖刀、切深、步距、进给和主轴转速。"),
     createDeliveryFile(job.id, "rotary-calibration-sheet.json", "旋转夹具标定单", "report", true, "核验旋转轴方向、每圈等效距离、反向间隙和夹持余量。"),
     createDeliveryFile(job.id, "machine-acceptance-checklist.json", "机床现场验收清单", "report", existsSync(join(job.workDir, "machine-acceptance-checklist.json")), "操作员按此记录离料空跑、软材料试雕和正式试雕验收结果。"),
+    createDeliveryFile(job.id, "machine-acceptance-record.json", "最新机床验收记录", "report", existsSync(join(job.workDir, "machine-acceptance-record.json")), "现场离料空跑、软料试雕和正式试雕的最新验收记录。"),
+    createDeliveryFile(job.id, "machine-acceptance-log.json", "机床验收日志", "report", existsSync(join(job.workDir, "machine-acceptance-log.json")), "按时间保存机床现场验收记录，用于生产证据链。"),
     createDeliveryFile(job.id, "postprocess-profile.json", "后处理配置", "report", true, "说明 X/Z/旋转轴映射、刀具、胚料和 G-code 输出约定。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "package-integrity.json", "加工包完整性清单", "report", true, "记录交付文件大小和 SHA-256，用于下载后核验。"),
@@ -5726,6 +5731,53 @@ function createPackageIntegrityReport(job, deliveryManifest) {
     summary: missingDownloadable.length === 0
       ? "所有可下载交付文件均已生成并记录 SHA-256。"
       : `存在 ${missingDownloadable.length} 个可下载文件缺失，请重新生成加工包。`,
+    files
+  };
+}
+
+async function refreshEvidenceDeliveryArtifacts(job) {
+  if (!job?.workDir) return null;
+  const manifestPath = join(job.workDir, "delivery-manifest.json");
+  const existingManifest = readJsonFile(manifestPath);
+  if (!existingManifest?.files) return null;
+  let deliveryManifest = {
+    ...existingManifest,
+    updatedAt: new Date().toISOString(),
+    files: [...existingManifest.files]
+  };
+  const evidenceFiles = [
+    createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
+    createDeliveryFile(job.id, "trial-feedback-log.json", "试雕反馈日志", "report", existsSync(join(job.workDir, "trial-feedback-log.json")), "按时间保存现场反馈记录，用于工艺参数优化闭环。"),
+    createDeliveryFile(job.id, "process-optimization-plan.json", "工艺优化建议", "report", existsSync(join(job.workDir, "process-optimization-plan.json")), "根据试雕反馈生成的下一轮参数复核和调整建议。"),
+    createDeliveryFile(job.id, "machine-acceptance-record.json", "最新机床验收记录", "report", existsSync(join(job.workDir, "machine-acceptance-record.json")), "现场离料空跑、软料试雕和正式试雕的最新验收记录。"),
+    createDeliveryFile(job.id, "machine-acceptance-log.json", "机床验收日志", "report", existsSync(join(job.workDir, "machine-acceptance-log.json")), "按时间保存机床现场验收记录，用于生产证据链。"),
+    createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", existsSync(join(job.workDir, "production-evidence-dossier.json")), "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。")
+  ];
+  for (const file of evidenceFiles) {
+    deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, file);
+  }
+  await writeFile(manifestPath, JSON.stringify(deliveryManifest, null, 2), "utf8");
+  const packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
+  await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
+  return { deliveryManifest, packageIntegrity };
+}
+
+function upsertDeliveryManifestFile(deliveryManifest, nextFile) {
+  const files = Array.isArray(deliveryManifest.files) ? [...deliveryManifest.files] : [];
+  const index = files.findIndex((file) => file.filename === nextFile.filename);
+  if (index >= 0) {
+    files[index] = {
+      ...files[index],
+      ...nextFile,
+      downloadable: Boolean(nextFile.downloadable)
+    };
+  } else {
+    files.push(nextFile);
+  }
+  return {
+    ...deliveryManifest,
     files
   };
 }
@@ -6128,8 +6180,9 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
     await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
   }
   await writeTrialFeedbackGlobalRecord(record);
-
   job.workDir = workDir;
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+
   job.updatedAt = record.createdAt;
   job.trialFeedback = {
     latestRecord: record,
@@ -6154,6 +6207,18 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       actionCount: optimizationPlan.actions.length,
       nextRunProfile: optimizationPlan.nextRunProfile
     },
+    ...(refreshedDelivery ? {
+      deliveryManifest: refreshedDelivery.deliveryManifest,
+      packageIntegrity: {
+        schema: refreshedDelivery.packageIntegrity.schema,
+        status: refreshedDelivery.packageIntegrity.status,
+        summary: refreshedDelivery.packageIntegrity.summary,
+        fileCount: refreshedDelivery.packageIntegrity.fileCount,
+        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedDelivery.packageIntegrity.totalBytes
+      }
+    } : {}),
     ...(productionEvidenceDossier ? {
       productionEvidenceDossier: {
         schema: productionEvidenceDossier.schema,
@@ -6168,6 +6233,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-record.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-log.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "process-optimization-plan.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "delivery-manifest.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "package-integrity.json"));
   if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "production-evidence-dossier.json"));
   orchestratorJobs.set(safeJobId, job);
   await writeJobManifest(job);
@@ -6227,8 +6294,9 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
     await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
   }
   await writeMachineAcceptanceGlobalRecord(record);
-
   job.workDir = workDir;
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+
   job.updatedAt = record.createdAt;
   job.machineAcceptance = {
     latestRecord: record,
@@ -6247,6 +6315,18 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
       allRequiredPassed: record.allRequiredPassed,
       recommendations: record.recommendations
     },
+    ...(refreshedDelivery ? {
+      deliveryManifest: refreshedDelivery.deliveryManifest,
+      packageIntegrity: {
+        schema: refreshedDelivery.packageIntegrity.schema,
+        status: refreshedDelivery.packageIntegrity.status,
+        summary: refreshedDelivery.packageIntegrity.summary,
+        fileCount: refreshedDelivery.packageIntegrity.fileCount,
+        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedDelivery.packageIntegrity.totalBytes
+      }
+    } : {}),
     ...(productionEvidenceDossier ? {
       productionEvidenceDossier: {
         schema: productionEvidenceDossier.schema,
@@ -6260,6 +6340,8 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-record.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-log.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "delivery-manifest.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "package-integrity.json"));
   if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "production-evidence-dossier.json"));
   orchestratorJobs.set(safeJobId, job);
   await writeJobManifest(job);
