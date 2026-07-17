@@ -233,6 +233,17 @@ async function main() {
   assert(safeTrialPackageFiles.some((file) => file.filename === "operator-runbook.md"), "safe trial package should include operator runbook");
   assert(safeTrialPackageFiles.some((file) => file.filename === "toolpath.nc") === deliveryManifest.allowTrialNc, "safe trial package should include toolpath.nc only when trial NC is allowed");
   assert(!safeTrialPackageFiles.some((file) => file.filename === "camotics-preview.nc"), "safe trial package must not include camotics-preview.nc");
+  const safeTrialPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-package`);
+  assert(safeTrialPackage.bytes.byteLength > 1000, "safe trial package zip should not be empty");
+  assert(safeTrialPackage.bytes[0] === 0x50 && safeTrialPackage.bytes[1] === 0x4b, "safe trial package should be a ZIP file");
+  assert((safeTrialPackage.contentType ?? "").includes("application/zip"), "safe trial package should use application/zip content type");
+  const safeTrialZipNames = listZipFilenames(safeTrialPackage.bytes);
+  assert(safeTrialZipNames.includes("hediao3d-v3-trial/README-TRIAL.md"), "safe trial package missing README");
+  assert(safeTrialZipNames.includes("hediao3d-v3-trial/safe-trial-package-manifest.json"), "safe trial package missing package manifest");
+  assert(safeTrialZipNames.some((name) => name.endsWith("/air-run.nc")), "safe trial package zip missing air-run.nc");
+  assert(safeTrialZipNames.some((name) => name.endsWith("/rotary-calibration-airrun.nc")), "safe trial package zip missing rotary calibration air-run");
+  assert(!safeTrialZipNames.some((name) => name.endsWith("/camotics-preview.nc")), "safe trial package zip must exclude camotics-preview.nc");
+  assert(safeTrialZipNames.some((name) => name.endsWith("/toolpath.nc")) === deliveryManifest.allowTrialNc, "safe trial package zip should include toolpath.nc only when trial NC is allowed");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
   const operatorDownloadChecklist = await getArtifactText(job.id, "operator-download-checklist.md");
@@ -322,6 +333,16 @@ async function getArtifactText(jobId, filename) {
   return text;
 }
 
+async function getBinary(path) {
+  const response = await fetch(`${baseUrl}${path}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  assert(response.ok, `binary ${path} failed: ${response.status}`);
+  return {
+    bytes,
+    contentType: response.headers.get("content-type")
+  };
+}
+
 function isSafeTrialPackageFile(file, allowTrialNc) {
   if (!file.downloadable) return false;
   if (file.filename === "toolpath.nc") return allowTrialNc;
@@ -353,6 +374,24 @@ function isSafeTrialPackageFile(file, allowTrialNc) {
     "camotics-cli-execution-plan.json",
     "simulation-summary.json"
   ]).has(file.filename);
+}
+
+function listZipFilenames(bytes) {
+  const buffer = Buffer.from(bytes);
+  const names = [];
+  let offset = 0;
+  while (offset + 30 <= buffer.length) {
+    const signature = buffer.readUInt32LE(offset);
+    if (signature !== 0x04034b50) break;
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const filenameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + filenameLength;
+    names.push(buffer.subarray(nameStart, nameEnd).toString("utf8"));
+    offset = nameEnd + extraLength + compressedSize;
+  }
+  return names;
 }
 
 async function getJson(path) {

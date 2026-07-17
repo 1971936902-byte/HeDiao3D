@@ -3509,25 +3509,15 @@ export function App() {
     setIsV3PackageDownloading(true);
     setV3Status("正在打包 V3 安全试雕包");
     try {
-      const trialFiles = manifest.files.filter((file) => isV3TrialPackageFile(file, manifest.allowTrialNc));
-      const files: ZipFile[] = [];
-      for (const file of trialFiles) {
-        const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/artifacts/${encodeURIComponent(file.filename)}`);
-        if (!response.ok) throw new Error(`${file.filename} 下载失败：${response.status}`);
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        files.push({
-          name: `hediao3d-v3-trial/${file.kind}/${file.filename}`,
-          content: bytes
-        });
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/trial-package`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? `安全试雕包下载失败：${response.status}`);
       }
-      files.push({
-        name: "hediao3d-v3-trial/README-TRIAL.md",
-        content: createV3TrialPackageReadme(v3Job, trialFiles),
-        mime: "text/markdown"
-      });
+      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-safe-trial-${stamp}.zip`, createZipBlob(files));
-      setV3Status(`V3 安全试雕包已打包：${trialFiles.length} 个产物`);
+      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-safe-trial-${stamp}.zip`, blob);
+      setV3Status("V3 安全试雕包已由 Orchestrator 打包");
       recordTask({
         category: "cam",
         status: manifest.allowTrialNc ? "ok" : "warning",
@@ -7618,88 +7608,6 @@ function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
     checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null,
     camHandoffEvidenceUrl: deliveryByName.get("cam-handoff-evidence.md")?.url ?? null
   };
-}
-
-function isV3TrialPackageFile(
-  file: NonNullable<V3OrchestratorJob["result"]>["summary"]["deliveryManifest"]["files"][number],
-  allowTrialNc: boolean
-) {
-  if (!file.downloadable) return false;
-  if (file.filename === "toolpath.nc") return allowTrialNc;
-  if (file.machineUse?.class === "air-run-no-cut") return true;
-  if (file.machineUse?.class === "simulation-only-never-machine") return false;
-
-  const requiredReports = new Set([
-    "README-V3.md",
-    "machining-package-index.json",
-    "production-gate.json",
-    "production-unlock-matrix.json",
-    "production-evidence-dossier.json",
-    "delivery-manifest.json",
-    "package-integrity.json",
-    "operator-runbook.md",
-    "operator-download-checklist.md",
-    "machine-controller-profile.json",
-    "postprocess-profile.json",
-    "postprocess-trace-report.json",
-    "nc-static-analysis.json",
-    "controller-dialect-report.json",
-    "rotary-wrap-preview-report.json",
-    "rotary-calibration-sheet.json",
-    "tool-setup-sheet.json",
-    "machine-acceptance-checklist.json",
-    "trial-feedback-template.json",
-    "cam-handoff-evidence.md",
-    "cam-handoff-quality.json",
-    "camotics-input.json",
-    "camotics-simulation-plan.json",
-    "camotics-cli-execution-plan.json",
-    "simulation-summary.json"
-  ]);
-  return requiredReports.has(file.filename);
-}
-
-function createV3TrialPackageReadme(
-  job: V3OrchestratorJob,
-  files: Array<NonNullable<V3OrchestratorJob["result"]>["summary"]["deliveryManifest"]["files"][number]>
-) {
-  const manifest = job.result?.summary.deliveryManifest;
-  const gate = job.result?.summary.productionGate;
-  const includedToolpath = files.some((file) => file.filename === "toolpath.nc");
-  const included = files.map((file) => `- ${file.filename}: ${file.label} / ${file.machineUse?.summary ?? file.note}`).join("\n");
-  return [
-    "# HeDiao3D V3 安全试雕包",
-    "",
-    `Job ID: ${job.id}`,
-    `包级别: ${manifest?.packageLevel ?? "unknown"}`,
-    `允许试雕 NC: ${manifest?.allowTrialNc ? "是" : "否"}`,
-    `允许生产 NC: ${manifest?.allowProductionNc ? "是" : "否"}`,
-    "",
-    "## 使用边界",
-    "",
-    "- 本包用于离料空跑、旋转夹具标定、低风险试雕和现场记录。",
-    "- 本包不是正式生产包；正式生产 NC 必须由 production-gate 放行。",
-    "- camotics-preview.nc 不会放入本包，因为它只用于 CAMotics 展开仿真，禁止上机。",
-    includedToolpath
-      ? "- toolpath.nc 已放入本包，但仅可按试雕流程使用；首次建议 30%-50% 进给倍率。"
-      : "- toolpath.nc 未放入本包；当前仅允许空跑、标定和报告复核。",
-    "",
-    "## 推荐顺序",
-    "",
-    "1. 阅读 operator-runbook.md、operator-download-checklist.md 和 production-gate.json。",
-    "2. 运行 rotary-calibration-airrun.nc，确认 Y 轴旋转夹具方向和每圈距离。",
-    "3. 运行 air-run.nc，确认 X=长度、Y=旋转夹具、Z=安全高度。",
-    "4. 若本包包含 toolpath.nc，使用废料或低价值核胚低进给试雕。",
-    "5. 回填 trial-feedback-template.json 和 machine-acceptance-checklist.json。",
-    "",
-    "## 文件清单",
-    "",
-    included || "- 无文件。",
-    "",
-    "## 当前门禁结论",
-    "",
-    gate?.summary ?? "未生成 production-gate 摘要。"
-  ].join("\n");
 }
 
 function createV3EvidenceLoopSummary(

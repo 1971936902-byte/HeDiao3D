@@ -133,6 +133,11 @@ const server = createServer(async (req, res) => {
       return createOrchestratorCamoticsCliPackage(orchestratorCamoticsCliPackageMatch[1], res);
     }
 
+    const orchestratorTrialPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/trial-package$/);
+    if (req.method === "GET" && orchestratorTrialPackageMatch) {
+      return getOrchestratorTrialPackage(orchestratorTrialPackageMatch[1], res);
+    }
+
     const orchestratorNeutralToolpathMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/neutral-toolpath$/);
     if (req.method === "POST" && orchestratorNeutralToolpathMatch) {
       return importOrchestratorNeutralToolpath(req, orchestratorNeutralToolpathMatch[1], res);
@@ -10481,6 +10486,255 @@ function getOrchestratorArtifact(jobId, filename, res) {
     "Cache-Control": "no-store"
   });
   res.end(content);
+}
+
+function getOrchestratorTrialPackage(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
+    return json(res, 400, { error: "非法 job 路径" });
+  }
+  const workDir = join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  const manifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
+  if (!manifest?.files?.length) {
+    return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
+  }
+
+  const trialFiles = manifest.files.filter((file) => isSafeTrialPackageDeliveryFile(file, manifest.allowTrialNc));
+  const missing = trialFiles.filter((file) => !existsSync(join(workDir, file.filename)));
+  if (missing.length > 0) {
+    return json(res, 409, {
+      error: "安全试雕包存在缺失文件，请重新运行 V3 小闭环",
+      missing: missing.map((file) => file.filename)
+    });
+  }
+
+  const packageManifest = createSafeTrialPackageManifest(safeJobId, manifest, trialFiles);
+  const files = trialFiles.map((file) => ({
+    name: `hediao3d-v3-trial/${file.kind}/${file.filename}`,
+    content: readFileSync(join(workDir, file.filename))
+  }));
+  files.push({
+    name: "hediao3d-v3-trial/safe-trial-package-manifest.json",
+    content: JSON.stringify(packageManifest, null, 2)
+  });
+  files.push({
+    name: "hediao3d-v3-trial/README-TRIAL.md",
+    content: createSafeTrialPackageReadme(packageManifest)
+  });
+
+  const zip = createServerZipBuffer(files);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `hediao3d-v3-${safeJobId.slice(0, 8)}-safe-trial-${stamp}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
+function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
+  if (!file?.downloadable) return false;
+  if (file.filename === "toolpath.nc") return Boolean(allowTrialNc);
+  if (file.machineUse?.class === "air-run-no-cut") return true;
+  if (file.machineUse?.class === "simulation-only-never-machine") return false;
+  return new Set([
+    "machining-package-index.json",
+    "production-gate.json",
+    "production-unlock-matrix.json",
+    "production-evidence-dossier.json",
+    "delivery-manifest.json",
+    "package-integrity.json",
+    "operator-runbook.md",
+    "operator-download-checklist.md",
+    "machine-controller-profile.json",
+    "postprocess-profile.json",
+    "postprocess-trace-report.json",
+    "nc-static-analysis.json",
+    "controller-dialect-report.json",
+    "rotary-wrap-preview-report.json",
+    "rotary-calibration-sheet.json",
+    "tool-setup-sheet.json",
+    "machine-acceptance-checklist.json",
+    "trial-feedback-template.json",
+    "cam-handoff-evidence.md",
+    "cam-handoff-quality.json",
+    "camotics-input.json",
+    "camotics-simulation-plan.json",
+    "camotics-cli-execution-plan.json",
+    "simulation-summary.json"
+  ]).has(file.filename);
+}
+
+function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
+  return {
+    schema: "hediao3d.v3-safe-trial-package.v1",
+    jobId,
+    createdAt: new Date().toISOString(),
+    sourceManifest: "delivery-manifest.json",
+    packageLevel: deliveryManifest.packageLevel ?? "unknown",
+    allowTrialNc: Boolean(deliveryManifest.allowTrialNc),
+    allowProductionNc: Boolean(deliveryManifest.allowProductionNc),
+    policy: {
+      toolpathNcIncluded: files.some((file) => file.filename === "toolpath.nc"),
+      camoticsPreviewNcIncluded: false,
+      productionUseAllowed: false,
+      recommendedFirstCutFeedOverride: "30%-50%",
+      machineModel: "三轴控制器 + Y轴旋转夹具",
+      axisMapping: "X=长度方向，Y=旋转夹具，Z=刀深/安全高度"
+    },
+    files: files.map((file) => ({
+      filename: file.filename,
+      label: file.label,
+      kind: file.kind,
+      machineUse: file.machineUse,
+      note: file.note
+    })),
+    excludedByPolicy: (deliveryManifest.files ?? [])
+      .filter((file) => file.filename === "camotics-preview.nc" || file.machineUse?.class === "simulation-only-never-machine")
+      .map((file) => ({
+        filename: file.filename,
+        reason: "simulation-only-never-machine"
+      })),
+    recommendedOrder: [
+      "阅读 operator-runbook.md、operator-download-checklist.md 和 production-gate.json。",
+      "运行 rotary-calibration-airrun.nc，确认 Y 轴旋转夹具方向和每圈距离。",
+      "运行 air-run.nc，确认 X=长度方向，Y=旋转夹具，Z=安全高度。",
+      "若本包包含 toolpath.nc，仅用于低风险试雕，首次建议 30%-50% 进给倍率。",
+      "回填 trial-feedback-template.json 和 machine-acceptance-checklist.json。"
+    ]
+  };
+}
+
+function createSafeTrialPackageReadme(packageManifest) {
+  const included = packageManifest.files.map((file) => `- ${file.filename}: ${file.label} / ${file.machineUse?.summary ?? file.note}`).join("\n");
+  return [
+    "# HeDiao3D V3 安全试雕包",
+    "",
+    `Job ID: ${packageManifest.jobId}`,
+    `包级别: ${packageManifest.packageLevel}`,
+    `允许试雕 NC: ${packageManifest.allowTrialNc ? "是" : "否"}`,
+    `允许生产 NC: ${packageManifest.allowProductionNc ? "是" : "否"}`,
+    "",
+    "## 使用边界",
+    "",
+    "- 本包用于离料空跑、旋转夹具标定、低风险试雕和现场记录。",
+    "- 本包不是正式生产包；正式生产 NC 必须由 production-gate 放行。",
+    "- camotics-preview.nc 不会放入本包，因为它只用于 CAMotics 展开仿真，禁止上机。",
+    packageManifest.policy.toolpathNcIncluded
+      ? "- toolpath.nc 已放入本包，但仅可按试雕流程使用；首次建议 30%-50% 进给倍率。"
+      : "- toolpath.nc 未放入本包；当前仅允许空跑、标定和报告复核。",
+    "",
+    "## 推荐顺序",
+    "",
+    ...packageManifest.recommendedOrder.map((item, index) => `${index + 1}. ${item}`),
+    "",
+    "## 文件清单",
+    "",
+    included || "- 无文件。"
+  ].join("\n");
+}
+
+function createServerZipBuffer(files) {
+  const chunks = [];
+  const centralDirectory = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBytes = Buffer.from(file.name.replace(/\\/g, "/"), "utf8");
+    const data = Buffer.isBuffer(file.content)
+      ? file.content
+      : file.content instanceof Uint8Array
+        ? Buffer.from(file.content)
+        : Buffer.from(String(file.content), "utf8");
+    const crc = crc32Buffer(data);
+    const dosTime = dateToDosTimeParts(new Date());
+    const localHeader = Buffer.concat([
+      zipUint32(0x04034b50),
+      zipUint16(20),
+      zipUint16(0x0800),
+      zipUint16(0),
+      zipUint16(dosTime.time),
+      zipUint16(dosTime.date),
+      zipUint32(crc),
+      zipUint32(data.length),
+      zipUint32(data.length),
+      zipUint16(nameBytes.length),
+      zipUint16(0),
+      nameBytes
+    ]);
+    chunks.push(localHeader, data);
+
+    const centralHeader = Buffer.concat([
+      zipUint32(0x02014b50),
+      zipUint16(20),
+      zipUint16(20),
+      zipUint16(0x0800),
+      zipUint16(0),
+      zipUint16(dosTime.time),
+      zipUint16(dosTime.date),
+      zipUint32(crc),
+      zipUint32(data.length),
+      zipUint32(data.length),
+      zipUint16(nameBytes.length),
+      zipUint16(0),
+      zipUint16(0),
+      zipUint16(0),
+      zipUint16(0),
+      zipUint32(0),
+      zipUint32(offset),
+      nameBytes
+    ]);
+    centralDirectory.push(centralHeader);
+    offset += localHeader.length + data.length;
+  }
+
+  const centralOffset = offset;
+  const centralSize = centralDirectory.reduce((sum, chunk) => sum + chunk.length, 0);
+  const endRecord = Buffer.concat([
+    zipUint32(0x06054b50),
+    zipUint16(0),
+    zipUint16(0),
+    zipUint16(files.length),
+    zipUint16(files.length),
+    zipUint32(centralSize),
+    zipUint32(centralOffset),
+    zipUint16(0)
+  ]);
+  return Buffer.concat([...chunks, ...centralDirectory, endRecord]);
+}
+
+function zipUint16(value) {
+  const bytes = Buffer.alloc(2);
+  bytes.writeUInt16LE(value & 0xffff, 0);
+  return bytes;
+}
+
+function zipUint32(value) {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32LE(value >>> 0, 0);
+  return bytes;
+}
+
+function dateToDosTimeParts(date) {
+  const year = Math.max(1980, date.getFullYear());
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()
+  };
+}
+
+function crc32Buffer(data) {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function artifactContentType(filename) {
