@@ -62,6 +62,8 @@ async function main() {
   const realOutputCheck = await fetchText(latest.latest.apiArtifacts.realOutputCheck);
   assert(realOutputCheck.includes("handoffEvidence"), "real output check should parse handoffEvidence");
   assert(realOutputCheck.includes("production-candidate"), "real output check should require production-candidate output");
+  assert(realOutputCheck.includes("native-cam-real-output-acceptance.json"), "real output check should write machine-readable acceptance report");
+  assert(realOutputCheck.includes("hediao3d.native-cam-real-output-acceptance.v1"), "real output check should write acceptance schema");
   assert(realOutputCheck.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true"), "real output check should run native adapter validation");
   const packageManifest = await getJson(latest.latest.apiArtifacts.packageManifest);
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");

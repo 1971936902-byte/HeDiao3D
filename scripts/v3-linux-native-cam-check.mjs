@@ -523,14 +523,15 @@ echo "[HeDiao3D] Step 2/2 external adapter validation with native commands"
 V3_ADAPTER_USE_NATIVE_COMMANDS=true V3_ADAPTER_VALIDATION_DIR="$OUT_DIR" npm run test:v3:external-adapters
 
 REPORT="$OUT_DIR/v3-external-adapter-validation.json"
+ACCEPTANCE_REPORT="$OUT_DIR/native-cam-real-output-acceptance.json"
 if [[ ! -s "$REPORT" ]]; then
   echo "[HeDiao3D] Missing validation report: $REPORT" >&2
   exit 2
 fi
 
-node - "$REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" <<'NODE'
-const { readFileSync } = require("fs");
-const [reportPath, strictValue, expectValue] = process.argv.slice(2);
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" <<'NODE'
+const { readFileSync, writeFileSync } = require("fs");
+const [reportPath, acceptancePath, strictValue, expectValue] = process.argv.slice(2);
 const strict = /^(1|true|yes|on)$/i.test(strictValue || "");
 const expectProductionCandidate = /^(1|true|yes|on)$/i.test(expectValue || "");
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
@@ -545,7 +546,6 @@ const rows = adapters.map((adapter) => ({
   previewScaffold: Boolean(adapter.handoffEvidence?.previewScaffold),
   generatedByExternalCommand: Boolean(adapter.handoffEvidence?.generatedByExternalCommand)
 }));
-console.log(JSON.stringify({ reportPath, rows }, null, 2));
 
 const unsafe = rows.filter((row) =>
   row.fixture ||
@@ -555,6 +555,37 @@ const unsafe = rows.filter((row) =>
 );
 const missing = rows.filter((row) => ["missing", "not-generated"].includes(row.classification));
 const candidates = rows.filter((row) => row.productionCandidate && row.classification === "production-candidate");
+const blockers = [
+  ...unsafe.map((row) => row.id + " uses unsafe " + row.classification),
+  ...(expectProductionCandidate && candidates.length === 0 ? ["no production-candidate adapter output found"] : [])
+];
+const warnings = missing.map((row) => row.id + " did not generate real output: " + row.classification);
+const acceptance = {
+  schema: "hediao3d.native-cam-real-output-acceptance.v1",
+  createdAt: new Date().toISOString(),
+  sourceReport: reportPath,
+  strict,
+  expectProductionCandidate,
+  level: blockers.length ? "critical" : warnings.length ? "review" : "ready",
+  productionCandidateCount: candidates.length,
+  unsafeCount: unsafe.length,
+  missingCount: missing.length,
+  adapters: rows,
+  blockers,
+  warnings,
+  nextActions: blockers.length
+    ? [
+      "Disable fixture/synthetic/preview switches.",
+      "Run real FreeCAD/BlenderCAM/OpenCAMLib commands until handoffEvidence.classification is production-candidate.",
+      "Continue with CAMotics material-removal import, V3 readiness, air-run and machine acceptance only after this report is ready."
+    ]
+    : [
+      "Import non-synthetic CAMotics material-removal result.",
+      "Regenerate V3 readiness and complete air-run, trial feedback and machine acceptance."
+    ]
+};
+writeFileSync(acceptancePath, JSON.stringify(acceptance, null, 2));
+console.log(JSON.stringify(acceptance, null, 2));
 
 if (unsafe.length) {
   console.error("[HeDiao3D] Unsafe fixture/synthetic/preview handoff detected:", unsafe.map((row) => row.id).join(", "));
@@ -574,6 +605,7 @@ NODE
 echo "[HeDiao3D] Acceptance artifacts:"
 echo "- $REPORT"
 echo "- $OUT_DIR/v3-external-adapter-validation.md"
+echo "- $ACCEPTANCE_REPORT"
 echo "[HeDiao3D] If this script exits 0 with production-candidate output, continue with CAMotics import, V3 readiness, air-run and machine acceptance."
 `;
 }
@@ -608,6 +640,7 @@ ${report.summary.integrationStrategy.productionBoundary.map((item) => `- ${item}
 - [ ] \`v3-external-adapter-validation.json\`
 - [ ] \`adapter-report.json\`
 - [ ] \`freecad-cam-plan.json\` or \`opencamlib-kernel-plan.json\`
+- [ ] \`native-cam-real-output-acceptance.json\`
 - [ ] \`neutral-toolpath.json\` or externally generated G-code source snapshot
 - [ ] \`camotics-result.json\` with non-synthetic flag and matching input hash
 - [ ] \`production-gate.json\`
