@@ -1757,14 +1757,15 @@ const toolpathColors = {
   simulation: 0x00a676
 };
 
+const V3_TRIAL_FOCUSED_UI = true;
+
 const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> = [
-  { id: "project", label: "项目", hint: "客户/权限" },
+  ...(!V3_TRIAL_FOCUSED_UI ? [{ id: "project" as const, label: "项目", hint: "客户/权限" }] : []),
   { id: "source", label: "素材", hint: "上传/载入" },
   { id: "model", label: "建模", hint: "3D/Meshy" },
   { id: "process", label: "工艺", hint: "刀具/机床" },
   { id: "cam", label: "CAM", hint: "刀路/导出" }
 ];
-const V3_TRIAL_FOCUSED_UI = true;
 
 const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
 const MACHINE_FEEDBACK_STORAGE_KEY = "hediao3d.machineFeedback.v1";
@@ -1977,7 +1978,7 @@ export function App() {
   const [images, setImages] = useState<CarvingImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
-  const [activeStage, setActiveStage] = useState<WorkflowStage>("project");
+  const [activeStage, setActiveStage] = useState<WorkflowStage>(V3_TRIAL_FOCUSED_UI ? "source" : "project");
   const [modelSubStage, setModelSubStage] = useState<ModelSubStage>(V3_TRIAL_FOCUSED_UI ? "ai" : "local");
   const [wireframe, setWireframe] = useState(false);
   const [toolpath, setToolpath] = useState<GeneratedToolpath | null>(null);
@@ -2063,6 +2064,10 @@ export function App() {
   const selectedMaterial = useMemo(() => getMaterialProfile(settings.materialProfileId), [settings.materialProfileId]);
   const selectedMachine = useMemo(() => getMachineProfile(settings.machineProfileId), [settings.machineProfileId]);
   const selectedAiProvider = useMemo(() => getAi3dProvider(aiProviderId), [aiProviderId]);
+  const visibleAiProviders = useMemo(
+    () => V3_TRIAL_FOCUSED_UI ? ai3dProviders.filter((provider) => provider.status === "available") : ai3dProviders,
+    []
+  );
   const allProcessTemplates = useMemo(
     () => [...processTemplates, ...customProcessTemplates],
     [customProcessTemplates]
@@ -4315,10 +4320,12 @@ export function App() {
                 <Save size={17} />
                 保存项目档案
               </button>
-              <button className="demo-action package-action" type="button" onClick={handleArchiveProject}>
-                <Library size={17} />
-                归档当前项目
-              </button>
+              {!V3_TRIAL_FOCUSED_UI && (
+                <button className="demo-action package-action" type="button" onClick={handleArchiveProject}>
+                  <Library size={17} />
+                  归档当前项目
+                </button>
+              )}
             </section>
 
             <section className="panel">
@@ -4334,7 +4341,7 @@ export function App() {
               </div>
             </section>
 
-            <section className="panel">
+            {!V3_TRIAL_FOCUSED_UI && <section className="panel">
               <div className="panel-title">
                 <Clock3 size={18} />
                 <h2>项目归档</h2>
@@ -4355,7 +4362,7 @@ export function App() {
                   ))}
                 </div>
               )}
-            </section>
+            </section>}
           </>
         )}
 
@@ -4366,10 +4373,12 @@ export function App() {
               <span>{isReading ? "正在读取图片..." : "上传一张或多张核雕图片"}</span>
               <input type="file" accept="image/*" multiple onChange={handleFiles} disabled={isReading} />
             </label>
-            <button className="demo-action" onClick={handleLoadDemoImages} type="button">
-              <Sparkles size={17} />
-              载入示例图案
-            </button>
+            {!V3_TRIAL_FOCUSED_UI && (
+              <button className="demo-action" onClick={handleLoadDemoImages} type="button">
+                <Sparkles size={17} />
+                载入示例图案
+              </button>
+            )}
             <button className="demo-action material-action" onClick={handleLoadMaterial01} type="button" disabled={isReading}>
               <FileImage size={17} />
               载入素材01
@@ -4506,16 +4515,16 @@ export function App() {
                 <h2>推荐：真实3D网格</h2>
               </div>
               <p className="panel-note">主流程只保留 Meshy 多图生成和原始 GLB/STL 导入，生成真正三维网格后进入 V3 安全试雕闭环。</p>
-              <label className="select-row">
+              {!V3_TRIAL_FOCUSED_UI && <label className="select-row">
                 <span>AI Provider</span>
                 <select value={aiProviderId} onChange={(event) => setAiProviderId(event.target.value as Ai3dProviderId)}>
-                  {ai3dProviders.map((provider) => (
+                  {visibleAiProviders.map((provider) => (
                     <option value={provider.id} key={provider.id}>
                       {provider.name}{provider.status === "available" ? "（已接入）" : provider.status === "local" ? "（本地预留）" : "（预留）"}
                     </option>
                   ))}
                 </select>
-              </label>
+              </label>}
               <div className={`provider-card ${selectedAiProvider.status}`}>
                 <strong>{selectedAiProvider.name}</strong>
                 <span>{selectedAiProvider.note}</span>

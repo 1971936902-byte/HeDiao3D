@@ -162,6 +162,29 @@ async function main() {
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.summary.includes("机床验收记录")), "dossier missing machine acceptance evidence item");
   assert(dossierArtifact.crossChecks?.machineAcceptancePassed === true, "dossier should mark machine acceptance passed");
   assert(dossierArtifact.crossChecks?.machineAcceptanceIntegrityBound === true, "dossier should mark machine acceptance package binding passed");
+  assert(dossierArtifact.crossChecks?.fieldEvidencePackageBinding?.status === "partial", "dossier should mark field package binding partial before trial feedback");
+
+  const feedback = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
+    id: "machine-acceptance-api-test-feedback",
+    outcome: "success",
+    operator: "API test operator",
+    material: "soft-trial-block",
+    actualMinutes: 1.2,
+    surfaceQuality: "good",
+    rotaryAlignment: "ok",
+    depthAccuracy: "ok",
+    notes: "Trial feedback after machine acceptance should bind the same package files.",
+    downloadIntegrity: {
+      packageIntegrityReviewed: true,
+      operatorChecklistReviewed: true,
+      neverMachineConfirmed: true,
+      files: integrityEvidenceFiles
+    },
+    settings
+  });
+  assert(feedback.productionEvidenceDossier?.crossChecks?.fieldEvidencePackageBinding?.status === "matched", "trial feedback and machine acceptance should bind the same package files");
+  assert(feedback.productionEvidenceDossier.crossChecks.fieldEvidencePackageBinding.sharedFiles?.some((file) => file.filename === "toolpath.nc" && file.status === "matched"), "field package binding should include matched toolpath.nc");
+
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.downloadable), "delivery manifest should expose machine acceptance record");
   assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-log.json" && file.downloadable), "delivery manifest should expose machine acceptance log");

@@ -6702,6 +6702,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   const externalGcodeBinding = createExternalGcodeBindingGateStatus(externalGcodeImportValidation, camHandoffQuality);
   const machineAcceptanceIntegrityBound = latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const trialFeedbackIntegrityBound = latestTrialFeedbackRecord?.downloadIntegrity?.packageBinding?.status === "matched";
+  const fieldEvidencePackageBinding = createFieldEvidencePackageBinding(latestMachineAcceptanceRecord, latestTrialFeedbackRecord);
   const trialFeedbackPassed = trialFeedbackLog?.recordCount > 0
     && trialFeedbackLog.latestOutcome === "success"
     && trialFeedbackIntegrityBound;
@@ -6869,6 +6870,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       latestTrialFeedbackOutcome: trialFeedbackLog?.latestOutcome ?? null,
       trialFeedbackPassed,
       trialFeedbackIntegrityBound,
+      fieldEvidencePackageBinding,
       optimizationStatus: processOptimizationPlan?.status ?? null
     },
     requiredActions: dedupeStrings([
@@ -6880,6 +6882,74 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       : status === "blocked"
         ? `生产证据档案存在 ${blockedCount} 个阻断项。`
         : `生产证据仍不完整：${reviewCount} 个复核项。`
+  };
+}
+
+function createFieldEvidencePackageBinding(machineRecord, trialRecord) {
+  const machineBinding = machineRecord?.downloadIntegrity?.packageBinding ?? null;
+  const trialBinding = trialRecord?.downloadIntegrity?.packageBinding ?? null;
+  if (!machineRecord && !trialRecord) {
+    return {
+      schema: "hediao3d.field-evidence-package-binding.v1",
+      status: "missing",
+      machineBindingStatus: "missing",
+      trialBindingStatus: "missing",
+      matchedSharedFileCount: 0,
+      mismatchCount: 0,
+      sharedFiles: [],
+      summary: "尚未回填试雕反馈或机床验收记录。"
+    };
+  }
+  if (!machineRecord || !trialRecord) {
+    return {
+      schema: "hediao3d.field-evidence-package-binding.v1",
+      status: "partial",
+      machineBindingStatus: machineBinding?.status ?? "missing",
+      trialBindingStatus: trialBinding?.status ?? "missing",
+      matchedSharedFileCount: 0,
+      mismatchCount: 0,
+      sharedFiles: [],
+      summary: !machineRecord ? "已回填试雕反馈，但尚未回填机床验收记录。" : "已回填机床验收，但尚未回填试雕反馈。"
+    };
+  }
+  const machineFiles = Array.isArray(machineBinding?.files) ? machineBinding.files : [];
+  const trialFiles = Array.isArray(trialBinding?.files) ? trialBinding.files : [];
+  const trialByName = new Map(trialFiles.map((file) => [file.filename, file]));
+  const sharedFiles = machineFiles
+    .filter((file) => trialByName.has(file.filename))
+    .map((machineFile) => {
+      const trialFile = trialByName.get(machineFile.filename);
+      const machineSha = machineFile.expectedSha256 ?? machineFile.submittedSha256 ?? null;
+      const trialSha = trialFile.expectedSha256 ?? trialFile.submittedSha256 ?? null;
+      const issues = [];
+      if (machineFile.status !== "matched") issues.push("machine-binding-not-matched");
+      if (trialFile.status !== "matched") issues.push("trial-binding-not-matched");
+      if (!machineSha || !trialSha) issues.push("missing-sha256");
+      if (machineSha && trialSha && machineSha !== trialSha) issues.push("sha256-mismatch");
+      return {
+        filename: machineFile.filename,
+        status: issues.length === 0 ? "matched" : "mismatch",
+        machineSha256: machineSha,
+        trialSha256: trialSha,
+        issues
+      };
+    });
+  const mismatches = sharedFiles.filter((file) => file.status !== "matched");
+  const bothBindingsMatched = machineBinding?.status === "matched" && trialBinding?.status === "matched";
+  const status = bothBindingsMatched && sharedFiles.length > 0 && mismatches.length === 0
+    ? "matched"
+    : "review";
+  return {
+    schema: "hediao3d.field-evidence-package-binding.v1",
+    status,
+    machineBindingStatus: machineBinding?.status ?? "missing",
+    trialBindingStatus: trialBinding?.status ?? "missing",
+    matchedSharedFileCount: sharedFiles.length - mismatches.length,
+    mismatchCount: mismatches.length,
+    sharedFiles,
+    summary: status === "matched"
+      ? "试雕反馈和机床验收记录绑定到同一组关键加工包文件哈希。"
+      : "试雕反馈与机床验收的加工包绑定需要复核。"
   };
 }
 
