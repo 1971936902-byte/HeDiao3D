@@ -2106,7 +2106,9 @@ function createExternalHandoffSourceSnapshot(filePath, kind, context = {}) {
         runner: neutral.runner
           ? {
               mode: neutral.runner.mode ?? null,
-              heightfieldMode: neutral.runner.mode === "heightfield-preview" || Boolean(neutral.experimentalHeightfield),
+              heightfieldMode: /heightfield/i.test(String(neutral.runner.mode ?? "")) || Boolean(neutral.experimentalHeightfield),
+              fixtureMode: /fixture/i.test(String(neutral.runner.mode ?? "")) || Boolean(neutral.fixture),
+              previewScaffold: /preview|scaffold/i.test(String(neutral.runner.mode ?? "")) || Boolean(neutral.experimentalHeightfield),
               warning: neutral.runner.warning ?? null
             }
           : null
@@ -2124,6 +2126,7 @@ function createExternalHandoffSourceSnapshot(filePath, kind, context = {}) {
       motionLineCount,
       parsedPointCount: Array.isArray(context.points) ? context.points.length : 0,
       containsFixtureMarker: /fixture/i.test(text),
+      containsPreviewScaffoldMarker: /fixture|contract|scaffold|preview/i.test(text.slice(0, 12000)),
       containsRotaryMarker: /ROTARY_WRAP_AXIS|A[-+]?\d|Y[-+]?\d/i.test(text.slice(0, 12000))
     }
   };
@@ -4105,6 +4108,15 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
   const adapterImportedFixture = Boolean(adapterReport?.imported || adapterReport?.metrics?.neutralToolpath?.imported);
   const externalCommandGenerated = Boolean(adapterReport?.externalCommand || adapterReport?.metrics?.neutralToolpath?.generatedByExternalCommand);
   const sourceSnapshot = toolpath?.externalSourceSnapshot ?? null;
+  const sourceSnapshotFixture = Boolean(
+    sourceSnapshot?.neutral?.fixture
+      || sourceSnapshot?.neutral?.runner?.fixtureMode
+      || sourceSnapshot?.gcode?.containsFixtureMarker
+  );
+  const sourceSnapshotPreviewScaffold = Boolean(
+    sourceSnapshot?.neutral?.runner?.previewScaffold
+      || sourceSnapshot?.gcode?.containsPreviewScaffoldMarker
+  );
 
   if (points.length <= 0) {
     criticalIssues.push("未生成任何可解析刀路点。");
@@ -4138,8 +4150,13 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
     warningIssues.push("外部 adapter 输出带 synthetic 标记，只能用于合约测试。");
     requiredActions.push("关闭 synthetic/fixture 模式，使用真实外部 CAM 命令输出。");
   }
-  if (adapterImportedFixture) {
-    warningIssues.push("外部 adapter 输出来自导入 fixture，需要确认它不是测试样例。");
+  if (adapterImportedFixture || sourceSnapshotFixture) {
+    warningIssues.push("外部 adapter 输出带 fixture/测试样例标记，只能用于合约或小闭环验证。");
+    requiredActions.push("关闭 runner fixture 输出，并接入 FreeCAD/BlenderCAM/OpenCAMLib 的真实刀路生成命令。");
+  }
+  if (sourceSnapshotPreviewScaffold) {
+    warningIssues.push("外部 adapter 输出仍带 preview/scaffold 标记，不能作为生产级 CAM 精度证据。");
+    requiredActions.push("替换 scaffold/heightfield 预览为经过验证的真实刀具接触算法输出。");
   }
   if (externalToolpathUsed && !externalCommandGenerated && !adapterImportedFixture) {
     warningIssues.push("未检测到外部命令生成记录，需复核 adapter-report.json。");
@@ -4162,7 +4179,8 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
     externalToolpathUsed,
     sourceSnapshot,
     synthetic: adapterSynthetic,
-    importedFixture: adapterImportedFixture,
+    importedFixture: adapterImportedFixture || sourceSnapshotFixture,
+    previewScaffold: sourceSnapshotPreviewScaffold,
     externalCommandGenerated,
     metrics: {
       pointCount: points.length,

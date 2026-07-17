@@ -94,10 +94,15 @@ async function main() {
   assert(toolpathSummary.externalSourceSnapshot?.kind === "gcode", "toolpath summary should snapshot G-code source");
   assert(/^[a-f0-9]{64}$/.test(toolpathSummary.externalSourceSnapshot.sha256 ?? ""), "G-code source snapshot should include SHA-256");
   assert(toolpathSummary.externalSourceSnapshot.gcode?.motionLineCount > 0, "G-code source snapshot should count motion lines");
+  assert(toolpathSummary.externalSourceSnapshot.gcode?.containsFixtureMarker === true, "G-code source snapshot should classify fixture runner output");
+  assert(toolpathSummary.externalSourceSnapshot.gcode?.containsPreviewScaffoldMarker === true, "G-code source snapshot should classify scaffold/contract output");
 
   const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
   assert(camHandoffQuality.sourceSnapshot?.kind === "gcode", "CAM handoff quality should include G-code source snapshot");
   assert(camHandoffQuality.sourceSnapshot?.sha256 === toolpathSummary.externalSourceSnapshot.sha256, "CAM handoff snapshot hash should match toolpath summary");
+  assert(camHandoffQuality.importedFixture === true, "CAM handoff quality should mark FreeCAD fixture output");
+  assert(camHandoffQuality.previewScaffold === true, "CAM handoff quality should mark FreeCAD scaffold output");
+  assert((camHandoffQuality.warningIssues ?? []).some((item) => /fixture|scaffold|预览|测试样例/i.test(item)), "CAM handoff quality should warn about fixture/scaffold output");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowAirRun === true, "FreeCAD external G-code should allow air-run");

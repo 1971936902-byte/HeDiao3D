@@ -118,6 +118,8 @@ async function main() {
   assert(/^[a-f0-9]{64}$/.test(toolpathSummary.externalSourceSnapshot.sha256 ?? ""), "neutral source snapshot should include SHA-256");
   assert(toolpathSummary.externalSourceSnapshot.neutral?.pointCount === neutralToolpath.points.length, "neutral source snapshot point count mismatch");
   assert(toolpathSummary.externalSourceSnapshot.neutral?.generatedByExternalCommand === true, "neutral source snapshot should record external command generation");
+  assert(toolpathSummary.externalSourceSnapshot.neutral?.runner?.heightfieldMode === true, "neutral source snapshot should classify heightfield output");
+  assert(toolpathSummary.externalSourceSnapshot.neutral?.runner?.previewScaffold === true, "neutral source snapshot should classify heightfield preview scaffold");
 
   const toolpath = await getArtifactText(job.id, "toolpath.nc");
   assert(toolpath.includes("OpenCAMLib neutral adapter"), "NC should name OpenCAMLib neutral adapter");
@@ -143,6 +145,8 @@ async function main() {
   const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
   assert(camHandoffQuality.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff quality should include neutral source snapshot");
   assert(camHandoffQuality.sourceSnapshot?.sha256 === toolpathSummary.externalSourceSnapshot.sha256, "CAM handoff snapshot hash should match toolpath summary");
+  assert(camHandoffQuality.previewScaffold === true, "CAM handoff quality should mark heightfield preview scaffold");
+  assert((camHandoffQuality.warningIssues ?? []).some((item) => /preview|scaffold|预览|刀具接触/i.test(item)), "CAM handoff quality should warn about preview scaffold output");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.simulationEvidence?.level === "material-removal-incomplete", `expected material-removal-incomplete evidence, got ${productionGate.simulationEvidence?.level}`);

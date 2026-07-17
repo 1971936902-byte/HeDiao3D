@@ -120,6 +120,10 @@ async function main() {
   assert(neutralToolpath.generatedByExternalCommand === true, "neutral output should record external command generation");
   assert(neutralToolpath.runner?.heightfield?.missCount === 0, "heightfield runner should sample repaired closed STL");
 
+  const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
+  assert(camHandoffQuality.previewScaffold === true, "repaired heightfield handoff should remain preview scaffold until real cutter-contact CAM is wired");
+  assert((camHandoffQuality.requiredActions ?? []).some((item) => /刀具接触|heightfield|scaffold|真实/i.test(item)), "handoff quality should require replacing preview scaffold with real CAM output");
+
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowAirRun === true, "repaired handoff should allow air-run");
   assert(productionGate.allowTrialNc === true, `repaired handoff should allow trial NC; blockers: ${(productionGate.blockers ?? []).join("; ")}`);
