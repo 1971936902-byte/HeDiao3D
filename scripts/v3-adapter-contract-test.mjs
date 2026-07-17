@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -238,6 +239,71 @@ try {
     gcode: freecadExternalReport.metrics.gcode?.status ?? null
   });
 
+  const freecadNoProofRunnerPath = join(workDir, "freecad-no-proof-runner.py");
+  const freecadNoProofJobPath = join(workDir, "freecad-no-proof-job.json");
+  const freecadNoProofResultPath = join(workDir, "freecad-no-proof-report.json");
+  const freecadNoProofGcodePath = join(workDir, "outputs", "freecad-no-proof-toolpath.nc");
+  writeExternalRunner(freecadNoProofRunnerPath, "freecad", false);
+  writeFileSync(freecadNoProofJobPath, JSON.stringify({
+    ...job,
+    engine: "freecad",
+    modelPath: freecadExternalModelPath,
+    outputs: {
+      ...job.outputs,
+      report: freecadNoProofResultPath,
+      gcode: freecadNoProofGcodePath
+    }
+  }, null, 2));
+  const freecadNoProofRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/freecad/freecad_cam_job.py", freecadNoProofJobPath, freecadNoProofResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", freecadNoProofRunnerPath])
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(freecadNoProofRun.status === 0, `freecad no-proof handoff exited ${freecadNoProofRun.status}: ${freecadNoProofRun.stderr || freecadNoProofRun.stdout}`);
+  const freecadNoProofReport = JSON.parse(readFileSync(freecadNoProofResultPath, "utf8"));
+  validateReport("freecad", freecadNoProofReport);
+  assert(freecadNoProofReport.metrics.handoffEvidence.classification === "missing-cam-proof", "freecad real G-code without CAM proof must be missing-cam-proof");
+  assert(freecadNoProofReport.metrics.handoffEvidence.productionCandidate === false, "freecad missing-proof output must not be production candidate");
+
+  const freecadProofRunnerPath = join(workDir, "freecad-proof-runner.py");
+  const freecadProofJobPath = join(workDir, "freecad-proof-job.json");
+  const freecadProofResultPath = join(workDir, "freecad-proof-report.json");
+  const freecadProofGcodePath = join(workDir, "outputs", "freecad-proof-toolpath.nc");
+  writeExternalRunner(freecadProofRunnerPath, "freecad", true);
+  writeFileSync(freecadProofJobPath, JSON.stringify({
+    ...job,
+    engine: "freecad",
+    modelPath: freecadExternalModelPath,
+    outputs: {
+      ...job.outputs,
+      report: freecadProofResultPath,
+      gcode: freecadProofGcodePath
+    }
+  }, null, 2));
+  const freecadProofRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/freecad/freecad_cam_job.py", freecadProofJobPath, freecadProofResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_FREECAD_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", freecadProofRunnerPath])
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(freecadProofRun.status === 0, `freecad proof handoff exited ${freecadProofRun.status}: ${freecadProofRun.stderr || freecadProofRun.stdout}`);
+  const freecadProofReport = JSON.parse(readFileSync(freecadProofResultPath, "utf8"));
+  validateReport("freecad", freecadProofReport);
+  assert(freecadProofReport.metrics.handoffEvidence.classification === "production-candidate", "freecad proof-backed output should be production-candidate");
+  assert(freecadProofReport.metrics.handoffEvidence.productionCandidate === true, "freecad proof-backed output should be production candidate");
+  assert(freecadProofReport.metrics.handoffEvidence.camOutputProof.gcodeSha256 === sha256(normalizedText(readFileSync(freecadProofGcodePath, "utf8"))), "freecad proof hash should bind current G-code");
+
   const blendercamRunnerPath = resolve("adapters", "blendercam", "blendercam_runner.py");
   const blendercamExternalJobPath = join(workDir, "blendercam-external-job.json");
   const blendercamExternalResultPath = join(workDir, "blendercam-external-report.json");
@@ -288,6 +354,71 @@ try {
     gcode: blendercamExternalReport.metrics.gcode?.status ?? null
   });
 
+  const blendercamNoProofRunnerPath = join(workDir, "blendercam-no-proof-runner.py");
+  const blendercamNoProofJobPath = join(workDir, "blendercam-no-proof-job.json");
+  const blendercamNoProofResultPath = join(workDir, "blendercam-no-proof-report.json");
+  const blendercamNoProofGcodePath = join(workDir, "outputs", "blendercam-no-proof-toolpath.nc");
+  writeExternalRunner(blendercamNoProofRunnerPath, "blendercam", false);
+  writeFileSync(blendercamNoProofJobPath, JSON.stringify({
+    ...job,
+    engine: "blendercam",
+    modelPath: blendercamExternalModelPath,
+    outputs: {
+      ...job.outputs,
+      report: blendercamNoProofResultPath,
+      gcode: blendercamNoProofGcodePath
+    }
+  }, null, 2));
+  const blendercamNoProofRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/blendercam/blendercam_job.py", blendercamNoProofJobPath, blendercamNoProofResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", blendercamNoProofRunnerPath])
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(blendercamNoProofRun.status === 0, `blendercam no-proof handoff exited ${blendercamNoProofRun.status}: ${blendercamNoProofRun.stderr || blendercamNoProofRun.stdout}`);
+  const blendercamNoProofReport = JSON.parse(readFileSync(blendercamNoProofResultPath, "utf8"));
+  validateReport("blendercam", blendercamNoProofReport);
+  assert(blendercamNoProofReport.metrics.handoffEvidence.classification === "missing-cam-proof", "blendercam real G-code without CAM proof must be missing-cam-proof");
+  assert(blendercamNoProofReport.metrics.handoffEvidence.productionCandidate === false, "blendercam missing-proof output must not be production candidate");
+
+  const blendercamProofRunnerPath = join(workDir, "blendercam-proof-runner.py");
+  const blendercamProofJobPath = join(workDir, "blendercam-proof-job.json");
+  const blendercamProofResultPath = join(workDir, "blendercam-proof-report.json");
+  const blendercamProofGcodePath = join(workDir, "outputs", "blendercam-proof-toolpath.nc");
+  writeExternalRunner(blendercamProofRunnerPath, "blendercam", true);
+  writeFileSync(blendercamProofJobPath, JSON.stringify({
+    ...job,
+    engine: "blendercam",
+    modelPath: blendercamExternalModelPath,
+    outputs: {
+      ...job.outputs,
+      report: blendercamProofResultPath,
+      gcode: blendercamProofGcodePath
+    }
+  }, null, 2));
+  const blendercamProofRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/blendercam/blendercam_job.py", blendercamProofJobPath, blendercamProofResultPath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HEDIAO3D_BLENDERCAM_EXPERIMENTAL_OUTPUT: "true",
+      HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND_JSON: JSON.stringify([process.env.PYTHON ?? "python", blendercamProofRunnerPath])
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(blendercamProofRun.status === 0, `blendercam proof handoff exited ${blendercamProofRun.status}: ${blendercamProofRun.stderr || blendercamProofRun.stdout}`);
+  const blendercamProofReport = JSON.parse(readFileSync(blendercamProofResultPath, "utf8"));
+  validateReport("blendercam", blendercamProofReport);
+  assert(blendercamProofReport.metrics.handoffEvidence.classification === "production-candidate", "blendercam proof-backed output should be production-candidate");
+  assert(blendercamProofReport.metrics.handoffEvidence.productionCandidate === true, "blendercam proof-backed output should be production candidate");
+  assert(blendercamProofReport.metrics.handoffEvidence.camOutputProof.gcodeSha256 === sha256(normalizedText(readFileSync(blendercamProofGcodePath, "utf8"))), "blendercam proof hash should bind current G-code");
+
   console.log(JSON.stringify({ ok: true, adapters: results }, null, 2));
 } finally {
   rmSync(workDir, { recursive: true, force: true });
@@ -329,4 +460,55 @@ function createTinyAsciiStl() {
   endfacet
 endsolid freecad_contract
 `;
+}
+
+function sha256(text) {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function normalizedText(text) {
+  return text.replace(/\r\n/g, "\n");
+}
+
+function writeExternalRunner(filePath, engine, withProof) {
+  const schema = engine === "freecad" ? "hediao3d.freecad-cam-output-report.v1" : "hediao3d.blendercam-cam-output-report.v1";
+  writeFileSync(filePath, `#!/usr/bin/env python3
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+job_path = Path(sys.argv[-3])
+plan_path = Path(sys.argv[-2])
+output_path = Path(sys.argv[-1])
+job = json.loads(job_path.read_text(encoding="utf-8"))
+output_path.parent.mkdir(parents=True, exist_ok=True)
+gcode = "\\n".join([
+    "(HeDiao3D ${engine} proof contract)",
+    f"(JOB_ID={job.get('jobId')})",
+    "G21",
+    "G90",
+    "G0 X0.0000 Y0.0000 Z22.0000",
+    "G1 X10.0000 Y0.0000 Z-0.4500 F180",
+    "G1 X20.0000 Y1.0000 Z-0.6000 F180",
+    "G0 Z22.0000",
+    "M30",
+    "",
+])
+output_path.write_text(gcode, encoding="utf-8")
+if ${withProof ? "True" : "False"}:
+    proof = {
+        "schema": "${schema}",
+        "engine": "${engine}",
+        "gcodeSha256": hashlib.sha256(gcode.encode("utf-8")).hexdigest(),
+        "quality": {
+            "productionCandidate": True,
+            "postprocessEligible": True,
+            "fixture": False,
+            "previewScaffold": False
+        }
+    }
+    Path(str(output_path) + ".cam-proof.json").write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8")
+print(json.dumps({"ok": True, "engine": "${engine}", "proof": ${withProof ? "True" : "False"}}))
+`);
 }

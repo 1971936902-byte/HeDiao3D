@@ -2022,6 +2022,8 @@ function createAdapterValidationPublicSummary(summary, validationId) {
       fixtureCount: Number(summary.handoffClassificationAudit.fixtureCount ?? 0),
       syntheticCount: Number(summary.handoffClassificationAudit.syntheticCount ?? 0),
       previewScaffoldCount: Number(summary.handoffClassificationAudit.previewScaffoldCount ?? 0),
+      missingCamProofCount: Number(summary.handoffClassificationAudit.missingCamProofCount ?? 0),
+      camProofReviewCount: Number(summary.handoffClassificationAudit.camProofReviewCount ?? 0),
       notGeneratedCount: Number(summary.handoffClassificationAudit.notGeneratedCount ?? 0),
       summary: summary.handoffClassificationAudit.summary ?? "",
       nextActions: Array.isArray(summary.handoffClassificationAudit.nextActions) ? summary.handoffClassificationAudit.nextActions.slice(0, 6) : [],
@@ -2444,6 +2446,8 @@ function validateNativeCamRealOutputAcceptance(acceptance) {
     "preview-scaffold",
     "missing-contact-report",
     "contact-report-review",
+    "missing-cam-proof",
+    "cam-proof-review",
     "not-generated",
     "internal-fallback",
     "missing"

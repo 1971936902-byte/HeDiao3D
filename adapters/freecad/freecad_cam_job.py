@@ -19,6 +19,7 @@ production CAM result.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shlex
@@ -400,7 +401,8 @@ def run_external_freecad_command(job: Dict[str, Any], plan: Dict[str, Any], job_
             "error": f"FreeCAD external command output does not contain G0/G1 motion: {gcode_path}",
             "externalCommand": command_report,
         }
-    output_evidence = classify_gcode_output(gcode, command_parts)
+    proof = load_cam_output_proof(gcode_path)
+    output_evidence = classify_gcode_output(gcode, command_parts, proof, gcode_path)
     return {
         "status": "completed",
         "error": None,
@@ -409,27 +411,104 @@ def run_external_freecad_command(job: Dict[str, Any], plan: Dict[str, Any], job_
         "fixture": output_evidence["fixture"],
         "previewScaffold": output_evidence["previewScaffold"],
         "handoffEvidence": output_evidence,
+        "camOutputProof": output_evidence.get("camOutputProof"),
         "externalCommand": command_report,
     }
 
 
-def classify_gcode_output(gcode: str, command_parts: List[str]) -> Dict[str, Any]:
+def load_cam_output_proof(gcode_path: Path) -> Optional[Dict[str, Any]]:
+    proof_override = os.environ.get("HEDIAO3D_FREECAD_CAM_OUTPUT_PROOF_JSON")
+    candidates = [Path(proof_override)] if proof_override else [Path(f"{gcode_path}.cam-proof.json")]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            proof = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                "schema": "hediao3d.freecad-cam-output-report.v1",
+                "path": str(candidate),
+                "valid": False,
+                "error": f"failed to read CAM output proof: {exc}",
+            }
+        if isinstance(proof, dict):
+            proof["path"] = str(candidate)
+            return proof
+        return {
+            "schema": "hediao3d.freecad-cam-output-report.v1",
+            "path": str(candidate),
+            "valid": False,
+            "error": "CAM output proof must be a JSON object.",
+        }
+    return None
+
+
+def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode_path: Path, motion_count: int, fixture: bool, preview_scaffold: bool) -> Dict[str, Any]:
+    if not proof:
+        return {
+            "present": False,
+            "status": "missing-cam-proof",
+            "productionCandidate": False,
+            "postprocessEligible": False,
+            "issues": ["External FreeCAD G-code needs a companion CAM output proof before it can be a production candidate."],
+        }
+    allowed_schemas = {"hediao3d.freecad-cam-output-report.v1", "hediao3d.external-cam-output-report.v1"}
+    quality = proof.get("quality") if isinstance(proof.get("quality"), dict) else {}
+    artifacts = proof.get("artifacts") if isinstance(proof.get("artifacts"), dict) else {}
+    expected_hash = str(proof.get("gcodeSha256") or artifacts.get("gcodeSha256") or "").lower()
+    actual_hash = hashlib.sha256(gcode.encode("utf-8")).hexdigest()
+    issues: List[str] = []
+    if proof.get("schema") not in allowed_schemas:
+        issues.append("unsupported CAM output proof schema")
+    if str(proof.get("engine") or "").lower() not in {ENGINE, "freecad cam", "freecad path"}:
+        issues.append("CAM output proof engine does not match FreeCAD")
+    if not expected_hash:
+        issues.append("CAM output proof must include gcodeSha256")
+    if expected_hash and expected_hash != actual_hash:
+        issues.append("CAM output proof G-code SHA-256 does not match current output")
+    if fixture or bool(proof.get("fixture")) or bool(quality.get("fixture")):
+        issues.append("fixture output cannot be a production candidate")
+    if preview_scaffold or bool(proof.get("previewScaffold")) or bool(quality.get("previewScaffold")):
+        issues.append("preview/scaffold output cannot be a production candidate")
+    if motion_count <= 0:
+        issues.append("G-code contains no G0/G1 motion")
+    production_candidate = bool(quality.get("productionCandidate")) and bool(quality.get("postprocessEligible")) and not issues
+    return {
+        "present": True,
+        "status": "production-candidate" if production_candidate else "cam-proof-review",
+        "path": proof.get("path"),
+        "schema": proof.get("schema"),
+        "engine": proof.get("engine"),
+        "gcodeSha256": actual_hash,
+        "declaredGcodeSha256": expected_hash or None,
+        "productionCandidate": production_candidate,
+        "postprocessEligible": bool(quality.get("postprocessEligible")),
+        "quality": quality,
+        "issues": issues,
+    }
+
+
+def classify_gcode_output(gcode: str, command_parts: List[str], proof: Optional[Dict[str, Any]], gcode_path: Path) -> Dict[str, Any]:
     upper = gcode.upper()
     fixture = is_true(os.environ.get("HEDIAO3D_FREECAD_RUNNER_FIXTURE_OUTPUT")) or "FREECAD EXTERNAL RUNNER FIXTURE" in upper
     preview_scaffold = "PREVIEW" in upper or "SCAFFOLD" in upper
     motion_count = len([line for line in upper.splitlines() if line.strip().startswith(("G0", "G1"))])
+    proof_evaluation = evaluate_cam_output_proof(proof, gcode, gcode_path, motion_count, fixture, preview_scaffold)
+    classification = "fixture-contract" if fixture else "preview-scaffold" if preview_scaffold else proof_evaluation["status"]
+    production_candidate = motion_count > 0 and classification == "production-candidate" and bool(proof_evaluation["productionCandidate"])
     return {
         "schema": "hediao3d.adapter-handoff-evidence.v1",
         "engine": ENGINE,
         "outputKind": "gcode",
-        "classification": "fixture-contract" if fixture else "preview-scaffold" if preview_scaffold else "production-candidate",
+        "classification": classification,
         "fixture": fixture,
         "synthetic": False,
         "previewScaffold": preview_scaffold,
         "generatedByExternalCommand": True,
         "motionCount": motion_count,
         "commandHead": command_parts[:3],
-        "productionCandidate": motion_count > 0 and not fixture and not preview_scaffold,
+        "productionCandidate": production_candidate,
+        "camOutputProof": proof_evaluation,
         "productionBoundary": "This evidence classifies adapter output only; HeDiao3D production gates still require CAMotics/material removal, static NC analysis, air-run, trial feedback and machine acceptance.",
     }
 

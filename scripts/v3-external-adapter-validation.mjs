@@ -437,6 +437,8 @@ function createHandoffClassificationAudit(results) {
     const synthetic = Boolean(evidence.synthetic) || classification === "synthetic-contract";
     const previewScaffold = Boolean(evidence.previewScaffold) || /preview|scaffold/i.test(classification);
     const productionCandidate = Boolean(evidence.productionCandidate) && classification === "production-candidate" && !fixture && !synthetic && !previewScaffold;
+    const missingCamProof = classification === "missing-cam-proof";
+    const camProofReview = classification === "cam-proof-review";
     const missing = classification === "missing";
     const notGenerated = classification === "not-generated";
     const unsafe = !productionCandidate;
@@ -449,6 +451,8 @@ function createHandoffClassificationAudit(results) {
       fixture,
       synthetic,
       previewScaffold,
+      missingCamProof,
+      camProofReview,
       missing,
       notGenerated,
       unsafe,
@@ -461,13 +465,17 @@ function createHandoffClassificationAudit(results) {
   const fixtureCount = adapters.filter((adapter) => adapter.fixture).length;
   const syntheticCount = adapters.filter((adapter) => adapter.synthetic).length;
   const previewScaffoldCount = adapters.filter((adapter) => adapter.previewScaffold).length;
+  const missingCamProofCount = adapters.filter((adapter) => adapter.missingCamProof).length;
+  const camProofReviewCount = adapters.filter((adapter) => adapter.camProofReview).length;
   const notGeneratedCount = adapters.filter((adapter) => adapter.notGenerated).length;
   const blockers = [
     ...(missingCount ? [`${missingCount} 个 adapter 缺少 handoff evidence。`] : []),
     ...(notGeneratedCount ? [`${notGeneratedCount} 个 adapter 尚未生成外部 handoff 输出。`] : []),
     ...(fixtureCount ? [`${fixtureCount} 个 adapter 输出为 fixture-contract。`] : []),
     ...(syntheticCount ? [`${syntheticCount} 个 adapter 输出为 synthetic-contract。`] : []),
-    ...(previewScaffoldCount ? [`${previewScaffoldCount} 个 adapter 输出为 preview/scaffold。`] : [])
+    ...(previewScaffoldCount ? [`${previewScaffoldCount} 个 adapter 输出为 preview/scaffold。`] : []),
+    ...(missingCamProofCount ? [`${missingCamProofCount} 个 adapter 缺少 CAM 输出证明。`] : []),
+    ...(camProofReviewCount ? [`${camProofReviewCount} 个 adapter 的 CAM 输出证明需要复核。`] : [])
   ];
   return {
     schema: "hediao3d.adapter-handoff-classification-audit.v1",
@@ -478,6 +486,8 @@ function createHandoffClassificationAudit(results) {
     fixtureCount,
     syntheticCount,
     previewScaffoldCount,
+    missingCamProofCount,
+    camProofReviewCount,
     notGeneratedCount,
     summary: productionCandidateCount > 0 && unsafeCount === 0
       ? "Adapter 输出分类看起来可进入下一步生产证据链，但仍需 CAMotics、空跑和机床验收。"

@@ -1067,6 +1067,8 @@ type V3AdapterValidationSummary = {
     fixtureCount: number;
     syntheticCount: number;
     previewScaffoldCount: number;
+    missingCamProofCount: number;
+    camProofReviewCount: number;
     notGeneratedCount: number;
     summary: string;
     nextActions: string[];
@@ -1078,6 +1080,8 @@ type V3AdapterValidationSummary = {
       fixture: boolean;
       synthetic: boolean;
       previewScaffold: boolean;
+      missingCamProof?: boolean;
+      camProofReview?: boolean;
       notGenerated: boolean;
       unsafe: boolean;
       generatedByExternalCommand: boolean;
@@ -1289,6 +1293,8 @@ type V3ReadinessSummary = {
       productionCandidateCount: number;
       unsafeCount: number;
       missingCount: number;
+      missingCamProofCount?: number;
+      camProofReviewCount?: number;
       notGeneratedCount: number;
       summary: string;
     } | null;
@@ -7174,6 +7180,8 @@ function formatHandoffClassification(classification: string) {
   if (/preview|scaffold/i.test(classification)) return "预览脚手架";
   if (classification === "missing-contact-report") return "缺接触报告";
   if (classification === "contact-report-review") return "接触报告待复核";
+  if (classification === "missing-cam-proof") return "缺CAM证明";
+  if (classification === "cam-proof-review") return "CAM证明待复核";
   if (classification === "not-generated") return "未生成";
   if (classification === "missing") return "缺少证据";
   return classification;
