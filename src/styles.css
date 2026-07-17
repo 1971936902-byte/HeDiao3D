@@ -2212,6 +2212,34 @@ button:disabled {
   margin-top: 0;
 }
 
+.v3-camotics-package-links {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(25, 199, 180, 0.22);
+  border-radius: 7px;
+  background: rgba(25, 199, 180, 0.065);
+}
+
+.v3-camotics-package-links span,
+.v3-camotics-package-links small {
+  flex-basis: 100%;
+}
+
+.v3-camotics-package-links a {
+  color: #dff9f5;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.v3-camotics-package-links a:hover {
+  text-decoration: underline;
+}
+
 .v3-log-list {
   display: grid;
   gap: 5px;

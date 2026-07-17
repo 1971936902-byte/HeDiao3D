@@ -680,6 +680,12 @@ type V3OrchestratorJob = {
           status: string;
           previewFile: string;
           resultFile: string | null;
+          cliRunPackage?: {
+            artifact: string;
+            resultTemplate: string | null;
+            linuxRunScript: string | null;
+            report: string | null;
+          } | null;
           compatibility?: {
             canRunInCamotics: boolean;
             interpretation: string;
@@ -687,6 +693,21 @@ type V3OrchestratorJob = {
           };
           limitation: string;
         };
+      };
+      camoticsCliPackage?: {
+        status: string;
+        ok: boolean;
+        artifact: string;
+        resultTemplate: string;
+        linuxRunScript: string;
+        report: string;
+        productionUnlockEligible: boolean;
+        preferredGcodeSha256: string | null;
+        motionProfile?: {
+          motionLineCount: number;
+          zMin: number | null;
+          zMax: number | null;
+        } | null;
       };
       deliveryManifest?: {
         packageLevel: string;
@@ -1637,6 +1658,7 @@ export function App() {
   const [isV3ReadinessChecking, setIsV3ReadinessChecking] = useState(false);
   const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
   const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
+  const [isV3CamoticsPackagePreparing, setIsV3CamoticsPackagePreparing] = useState(false);
   const [v3CamoticsResultFile, setV3CamoticsResultFile] = useState<File | null>(null);
   const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
@@ -2367,6 +2389,45 @@ export function App() {
       });
     } finally {
       setIsV3CamoticsImporting(false);
+    }
+  };
+
+  const handlePrepareV3CamoticsCliPackage = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再生成 CAMotics Linux 准备包。");
+      return;
+    }
+    setIsV3CamoticsPackagePreparing(true);
+    try {
+      setV3Status("正在生成 CAMotics Linux 仿真准备包");
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-cli-package`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "CAMotics Linux 准备包生成失败");
+      const status = data.status ?? data.report?.status ?? "unknown";
+      const motionCount = data.report?.preferredGcodeIdentity?.motionProfile?.motionLineCount;
+      setV3Status(`CAMotics Linux 准备包已生成：${status}${motionCount ? `，运动行 ${motionCount}` : ""}`);
+      recordTask({
+        category: "cam",
+        status: data.ok ? "ok" : "warning",
+        title: "生成 CAMotics Linux 准备包",
+        detail: `${status} / 生产NC仍未解锁`
+      });
+      await handleLoadV3Job(v3Job.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "CAMotics Linux 准备包生成失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "生成 CAMotics Linux 准备包失败",
+        detail: message
+      });
+    } finally {
+      setIsV3CamoticsPackagePreparing(false);
     }
   };
 
@@ -5028,9 +5089,43 @@ export function App() {
                   </div>
                   <div className="v3-camotics-import">
                     <div>
-                      <strong>CAMotics 真实结果回填</strong>
-                      <small>导入 camotics-result.json，并可附带仿真截图和材料去除 STL；缺少附件会按证据不完整处理。</small>
+                      <strong>CAMotics 真实仿真闭环</strong>
+                      <small>先生成 Linux 准备包，在 CAM 服务器执行材料去除仿真，再回填 camotics-result.json、截图或材料去除 STL。</small>
                     </div>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handlePrepareV3CamoticsCliPackage}
+                      disabled={!v3Job?.id || isV3CamoticsPackagePreparing}
+                    >
+                      <Download size={17} />
+                      {isV3CamoticsPackagePreparing ? "生成中..." : "生成仿真准备包"}
+                    </button>
+                    {v3Job.result.summary.camoticsCliPackage && (
+                      <div className="v3-camotics-package-links">
+                        <span>
+                          准备包：{v3Job.result.summary.camoticsCliPackage.status}
+                          {v3Job.result.summary.camoticsCliPackage.motionProfile?.motionLineCount
+                            ? ` · 运动行 ${v3Job.result.summary.camoticsCliPackage.motionProfile.motionLineCount}`
+                            : ""}
+                        </span>
+                        {[
+                          v3Job.result.summary.camoticsCliPackage.artifact,
+                          v3Job.result.summary.camoticsCliPackage.resultTemplate,
+                          v3Job.result.summary.camoticsCliPackage.linuxRunScript,
+                          v3Job.result.summary.camoticsCliPackage.report
+                        ].filter((filename): filename is string => Boolean(filename)).map((filename) => (
+                          <a
+                            href={`/orchestrator-jobs/${v3Job.id}/${filename}`}
+                            download
+                            key={filename}
+                          >
+                            {formatV3ShortcutFileLabel(filename)}
+                          </a>
+                        ))}
+                        <small>该准备包只用于仿真服务器，不会解锁生产 NC。</small>
+                      </div>
+                    )}
                     <label>
                       <span>结果JSON</span>
                       <input
@@ -6781,6 +6876,10 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "air-run.nc") return "整条刀路空跑";
   if (filename === "toolpath.nc") return "候选刀路NC";
   if (filename === "camotics-preview.nc") return "CAMotics预览";
+  if (filename === "camotics-cli-run-package.json") return "CAMotics运行包";
+  if (filename === "camotics-result-template.json") return "结果回填模板";
+  if (filename === "camotics-linux-run.sh") return "Linux运行脚本";
+  if (filename === "camotics-cli-package-report.json") return "运行包报告";
   if (filename === "operator-download-checklist.md") return "下载核验清单";
   if (filename === "operator-runbook.md") return "操作员说明";
   if (filename === "machining-package-index.json") return "加工包索引";
