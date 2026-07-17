@@ -3970,6 +3970,14 @@ async function processOrchestratorJob(job, settings) {
     postprocessProfile,
     machineControllerProfile
   }), "utf8");
+  await writeFile(join(job.workDir, "linux-cam-closed-loop-handoff.md"), createJobLinuxCamClosedLoopHandoffMarkdown({
+    job,
+    productionGate,
+    productionEvidenceDossier,
+    safeTrialExecutionPlan,
+    postprocessProfile,
+    machineControllerProfile
+  }), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -4024,6 +4032,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "safe-trial-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "next-action-checklist.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "linux-cam-closed-loop-handoff.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "open-source-cam-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
@@ -7532,6 +7541,75 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
   return `${lines.join("\n")}\n`;
 }
 
+function createJobLinuxCamClosedLoopHandoffMarkdown({ job, productionGate, productionEvidenceDossier, safeTrialExecutionPlan, postprocessProfile, machineControllerProfile }) {
+  const axisInstruction = createOperatorAxisInstruction(postprocessProfile ?? {
+    camMode: machineControllerProfile?.camMode,
+    coordinateMapping: machineControllerProfile?.axisMapping
+  });
+  const allowedFiles = safeTrialExecutionPlan?.filePolicy?.allowedOnMachine ?? ["air-run.nc", "rotary-calibration-airrun.nc"];
+  const neverFiles = safeTrialExecutionPlan?.filePolicy?.neverRunOnMachine ?? ["camotics-preview.nc"];
+  const lines = [
+    "# HeDiao3D V3 Linux CAM 与安全试雕闭环交接说明",
+    "",
+    `Job ID: ${job.id}`,
+    `生成时间: ${new Date().toISOString()}`,
+    `机床: ${machineControllerProfile?.name ?? "三轴控制器 + Y轴旋转夹具"}`,
+    `轴映射: ${axisInstruction}`,
+    `当前门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
+    `证据档案: ${productionEvidenceDossier?.status ?? "missing"} / ${productionEvidenceDossier?.summary ?? "未生成"}`,
+    "",
+    "## 1. 这份文件解决什么",
+    "",
+    "这份文件随当前 job 的安全试雕包一起交付，用来把 Linux CAM 服务器、CAMotics 仿真回填、V3 总门禁和现场试雕验收串成一条顺序。",
+    "",
+    "它不是生产放行文件。正式生产包仍必须由 production-readiness-audit 放行。",
+    "",
+    "## 2. Linux CAM 服务器先完成",
+    "",
+    "1. 下载 Native CAM server-package.zip。",
+    "2. 阅读其中的 linux-cam-closed-loop-handoff.md。",
+    "3. 在 Linux CAM 服务器运行 `npm run test:v3:native-cam`。",
+    "4. 配置真实 FreeCAD/BlenderCAM/OpenCAMLib 命令，关闭 fixture/synthetic/preview 开关。",
+    "5. 运行 `bash native-cam-real-output-check.sh`。",
+    "6. 把 `native-cam-real-output-bundle.zip` 回填到 V3 Native CAM 真实输出面板。",
+    "",
+    "## 3. 当前 job 的 CAMotics 材料去除仿真",
+    "",
+    "1. 从当前 job 下载 CAMotics Linux 仿真包。",
+    "2. 在 Linux CAM 服务器执行包内 `camotics-linux-run.sh` 和 `camotics-result-validate.js`。",
+    "3. 生成并保留 `camotics-result-bundle.zip`。",
+    "4. 把 `camotics-result-bundle.zip` 回填到当前 job 的 CAMotics 结果面板。",
+    "5. 重新生成 readiness，确认 `readinessCamoticsEvidence` 来源为 `latest-job-evidence-dossier` 或有效的 `camotics-import-contract`。",
+    "",
+    "## 4. 安全试雕包执行顺序",
+    "",
+    "1. 阅读 `machining-package-index.json`。",
+    "2. 阅读 `next-action-checklist.md`。",
+    "3. 阅读 `operator-download-checklist.md` 并核对 `package-integrity.json`。",
+    "4. 先运行 `rotary-calibration-airrun.nc`。",
+    "5. 再运行 `air-run.nc`。",
+    "6. 如果 `toolpath.nc` 进入本包，也只能用于低倍率软料/废料试雕。",
+    "7. 回填 `trial-feedback-template.json` 和 `machine-acceptance-checklist.json`。",
+    "",
+    "## 5. 当前允许上机文件",
+    "",
+    ...allowedFiles.map((filename) => `- ${filename}`),
+    "",
+    "## 6. 禁止上机文件",
+    "",
+    ...neverFiles.map((filename) => `- ${filename}`),
+    "",
+    "## 7. 生产锁说明",
+    "",
+    "- `camotics-preview.nc` 仅用于展开三轴仿真，禁止上机。",
+    "- `camotics-linux-run.sh`、`camotics-result-validate.js` 等只在 Linux CAM 服务器执行，不是机床文件。",
+    "- 正式生产包返回 423 时，这是预期安全行为，不是下载故障。",
+    "- 未完成真实外部 CAM、真实材料去除仿真、离料空跑、软料试雕、试雕反馈和机床验收同包哈希绑定前，不允许成品生产。",
+    ""
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function createTrialFeedbackTemplate({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist }) {
   const issueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "旋转错位", "耗时异常", "刀路停顿"];
   return {
@@ -8758,6 +8836,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("next-action-checklist.md"),
+        getFile("linux-cam-closed-loop-handoff.md"),
         getFile("operator-runbook.md"),
         getFile("safe-trial-execution-plan.json"),
         getFile("trial-feedback-template.json"),
@@ -8815,6 +8894,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     recommendedSequence: [
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "先阅读 next-action-checklist.md，只执行当前允许的下一步，未放行的生产 NC 不要上机。",
+      "阅读 linux-cam-closed-loop-handoff.md，确认 Native CAM、CAMotics 回填、readiness 和安全试雕的闭环顺序。",
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
       "阅读 postprocess-trace-report.json，确认 toolpath.nc 的 X/Y/A/Z 输出与源刀路点逐点一致。",
@@ -9028,6 +9108,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", true, "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", true, "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
+    createDeliveryFile(job.id, "linux-cam-closed-loop-handoff.md", "Linux CAM闭环交接说明", "report", true, "把 Native CAM、CAMotics、V3 回填、readiness 和安全试雕验收串成同一条执行顺序。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
     createDeliveryFile(job.id, "safe-trial-execution-plan.json", "安全试雕执行计划", "report", true, "结构化记录导入模型、生成安全数据、下载核验、空跑/软料试雕和证据回填步骤。"),
     createDeliveryFile(job.id, "trial-feedback-template.json", "试雕反馈回填模板", "report", true, "记录空跑/试雕结果、实际耗时、缺陷标签和参数调整建议。"),
@@ -9336,6 +9417,7 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", existsSync(join(job.workDir, "production-unlock-matrix.json")), "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", existsSync(join(job.workDir, "machining-package-index.json")), "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", existsSync(join(job.workDir, "next-action-checklist.md")), "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
+    createDeliveryFile(job.id, "linux-cam-closed-loop-handoff.md", "Linux CAM闭环交接说明", "report", existsSync(join(job.workDir, "linux-cam-closed-loop-handoff.md")), "把 Native CAM、CAMotics、V3 回填、readiness 和安全试雕验收串成同一条执行顺序。"),
     createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
     createDeliveryFile(job.id, "trial-feedback-log.json", "试雕反馈日志", "report", existsSync(join(job.workDir, "trial-feedback-log.json")), "按时间保存现场反馈记录，用于工艺参数优化闭环。"),
     createDeliveryFile(job.id, "process-optimization-plan.json", "工艺优化建议", "report", existsSync(join(job.workDir, "process-optimization-plan.json")), "根据试雕反馈生成的下一轮参数复核和调整建议。"),
@@ -9385,7 +9467,16 @@ async function refreshNextActionChecklistArtifact(job) {
     postprocessProfile,
     machineControllerProfile
   }), "utf8");
+  await writeFile(join(job.workDir, "linux-cam-closed-loop-handoff.md"), createJobLinuxCamClosedLoopHandoffMarkdown({
+    job,
+    productionGate,
+    productionEvidenceDossier,
+    safeTrialExecutionPlan,
+    postprocessProfile,
+    machineControllerProfile
+  }), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "next-action-checklist.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "linux-cam-closed-loop-handoff.md"));
   return true;
 }
 
@@ -11862,6 +11953,7 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "delivery-manifest.json",
     "package-integrity.json",
     "next-action-checklist.md",
+    "linux-cam-closed-loop-handoff.md",
     "operator-runbook.md",
     "operator-download-checklist.md",
     "machine-controller-profile.json",
