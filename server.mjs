@@ -2504,7 +2504,9 @@ async function processOrchestratorJob(job, settings) {
     engineReadiness
   });
   await writeFile(join(job.workDir, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
+  await writeFile(join(job.workDir, "cam-server-prep-checklist.md"), createCamServerPrepChecklistMarkdown({ job, settings, selectedEngine: selected, nativeCamReadiness, camServerConfig }), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-prep-checklist.md"));
   const externalCamRecipe = createExternalCamRecipe({
     job,
     settings,
@@ -3955,6 +3957,57 @@ function createCamServerConfigReport({ job, settings, engines, selectedEngine, n
       "本配置清单不会保存密钥，只记录本地 CAM 命令和环境变量名称。"
     ]
   };
+}
+
+function createCamServerPrepChecklistMarkdown({ job, settings, selectedEngine, nativeCamReadiness, camServerConfig }) {
+  const requiredAdapters = camServerConfig.deploymentValidation?.requiredAdapters ?? [];
+  const forbiddenEnv = camServerConfig.deploymentValidation?.forbiddenProductionEnv ?? [];
+  const stages = camServerConfig.deploymentValidation?.stages ?? [];
+  const adapterRows = (camServerConfig.adapters ?? [])
+    .filter((adapter) => adapter.requiredForCurrentMode)
+    .map((adapter) => `- [ ] ${adapter.name}: ${adapter.status}; command=${adapter.detectedCommand ?? "missing"}; env=${adapter.env.experimentalOutput ?? "-"}`);
+  return `# HeDiao3D V3 CAM Server Prep Checklist
+
+Job: ${job.id}
+Created: ${new Date().toISOString()}
+CAM mode: ${settings.camMode}
+Selected engine: ${selectedEngine.name} (${selectedEngine.id})
+Native CAM: ${nativeCamReadiness.readyCount}/${nativeCamReadiness.requiredCount} ${nativeCamReadiness.level}
+CAM server status: ${camServerConfig.status}
+
+## 1. Required Native Adapters
+
+${adapterRows.length ? adapterRows.join("\n") : "- [ ] No required native adapter was selected for this mode."}
+
+## 2. Server Commands
+
+- [ ] npm run test:v3:native-cam
+- [ ] V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters
+${stages.map((stage) => `- [ ] ${stage.command}  # ${stage.title}`).join("\n")}
+
+## 3. Required Evidence
+
+- [ ] native-cam-readiness.json
+- [ ] cam-server-config.json
+- [ ] cam-server-prep-checklist.md
+- [ ] v3-external-adapter-validation.json
+- [ ] adapter-report.json or neutral-toolpath.json
+- [ ] camotics-result.json with non-synthetic material-removal evidence
+- [ ] production-gate.json
+- [ ] machine-acceptance-record.json
+
+## 4. Production Boundary
+
+- This checklist does not unlock production NC.
+- Required adapters for current mode: ${requiredAdapters.join(", ") || "none"}.
+- Keep these production-forbidden switches off: ${forbiddenEnv.join(", ") || "none"}.
+- Fixture, synthetic and preview scaffold outputs are contract evidence only.
+- Final NC for the three-axis controller plus Y rotary fixture must still pass HeDiao3D postprocess, NC static analysis, CAMotics or equivalent simulation, air-run, trial feedback and machine acceptance.
+
+## 5. Missing Required Items
+
+${camServerConfig.missingRequired.length ? camServerConfig.missingRequired.map((item) => `- ${item}`).join("\n") : "- none"}
+`;
 }
 
 function createCamServerDeploymentValidation(adapterConfigs, settings) {
@@ -6365,6 +6418,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("controller-dialect-report.json"),
         getFile("native-cam-readiness.json"),
         getFile("cam-server-config.json"),
+        getFile("cam-server-prep-checklist.md"),
         getFile("cam-engine-selection.json"),
         getFile("external-cam-recipe.json"),
         getFile("postprocess-profile.json"),
@@ -6372,7 +6426,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -6486,7 +6540,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       selectedEngine: camServerConfig.selectedEngine,
       nativeCamLevel: camServerConfig.nativeCamLevel,
       missingRequired: camServerConfig.missingRequired,
-      artifact: "cam-server-config.json"
+      artifact: "cam-server-config.json",
+      prepChecklist: "cam-server-prep-checklist.md"
     } : null,
     camEngineSelection: camEngineSelection ? {
       selectedEngine: camEngineSelection.selectedEngine,
@@ -6542,6 +6597,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "engine-diagnostics.json", "外部引擎诊断", "report", true, "说明 FreeCAD/BlenderCAM/CAMotics 接入状态。"),
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
+    createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
     createDeliveryFile(job.id, "rotary-wrap-preview-report.json", "旋转包裹预览一致性报告", "report", true, "检查中立刀路、Y/A旋转后处理、CAMotics展开预览和每圈等效距离是否一致。"),
