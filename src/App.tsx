@@ -1064,7 +1064,21 @@ type V3NativeCamReadinessSummary = {
   apiArtifacts?: {
     json?: string;
     markdown?: string;
+    bootstrap?: string;
+    envTemplate?: string;
+    checklist?: string;
+    packageManifest?: string;
   };
+  packageArtifacts?: {
+    schema?: string | null;
+    files: Array<{
+      filename: string;
+      role: string;
+      description: string;
+      url: string;
+    }>;
+    commands: string[];
+  } | null;
 };
 
 type V3ReadinessSummary = {
@@ -4970,6 +4984,37 @@ export function App() {
                       </a>
                     )}
                   </div>
+                  {(v3NativeCamReadiness.packageArtifacts?.files?.length ?? 0) > 0 && (
+                    <div className="v3-server-package">
+                      <strong>Linux服务端准备包</strong>
+                      <small>用于在 CAM 服务器安装/探测 FreeCAD、OpenCAMLib、CAMotics，并保留生产边界。</small>
+                      <div className="v3-artifact-list compact">
+                        {v3NativeCamReadiness.apiArtifacts?.bootstrap && (
+                          <a href={v3NativeCamReadiness.apiArtifacts.bootstrap} download>
+                            下载安装脚本
+                          </a>
+                        )}
+                        {v3NativeCamReadiness.apiArtifacts?.envTemplate && (
+                          <a href={v3NativeCamReadiness.apiArtifacts.envTemplate} download>
+                            下载环境模板
+                          </a>
+                        )}
+                        {v3NativeCamReadiness.apiArtifacts?.checklist && (
+                          <a href={v3NativeCamReadiness.apiArtifacts.checklist} download>
+                            下载验收清单
+                          </a>
+                        )}
+                        {v3NativeCamReadiness.apiArtifacts?.packageManifest && (
+                          <a href={v3NativeCamReadiness.apiArtifacts.packageManifest} download>
+                            下载包清单
+                          </a>
+                        )}
+                      </div>
+                      {v3NativeCamReadiness.packageArtifacts.commands[0] && (
+                        <small>服务器首步：{v3NativeCamReadiness.packageArtifacts.commands[0]}</small>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <small>还没有 Native CAM 环境验收记录；Linux CAM 服务器部署后建议先跑此检查。</small>

@@ -1944,6 +1944,21 @@ button:disabled {
   color: var(--rose);
 }
 
+.v3-server-package {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid rgba(89, 213, 181, 0.2);
+  border-radius: 8px;
+  background: rgba(89, 213, 181, 0.045);
+}
+
+.v3-server-package strong {
+  color: #e9fbf6;
+  font-size: 12px;
+}
+
 .v3-engine div {
   display: flex;
   justify-content: space-between;
