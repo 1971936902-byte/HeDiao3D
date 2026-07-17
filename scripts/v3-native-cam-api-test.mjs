@@ -8,10 +8,16 @@ async function main() {
   const run = await postJson("/api/orchestrator/native-cam", { strict: false });
   validateSummary(run, "POST /api/orchestrator/native-cam");
   assert(run.summary.requiredCount === 4, `expected 4 native CAM checks, got ${run.summary.requiredCount}`);
+  assert(run.summary.capabilityMatrix?.length === 4, "native CAM summary should expose four capability matrix entries");
+  assert(run.summary.capabilityMatrix.some((item) => item.id === "opencamlib" && item.supportedWorkflows?.includes("drop-cutter")), "OpenCAMLib capability matrix should expose drop-cutter workflow");
+  assert(run.summary.capabilityMatrix.some((item) => item.id === "camotics" && item.category === "simulation"), "CAMotics capability matrix should mark simulation role");
+  assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
+  assert(run.checks.some((check) => check.id === "opencamlib" && check.capabilities?.outputFormats?.includes("neutral-toolpath")), "OpenCAMLib public check should expose neutral toolpath capability");
 
   const latest = await getJson("/api/orchestrator/native-cam/latest");
   assert(latest.latest, "latest native CAM check missing");
   validateSummary(latest.latest, "GET /api/orchestrator/native-cam/latest");
+  assert(latest.latest.summary.capabilityMatrix?.length === 4, "latest native CAM summary should preserve capability matrix");
   assert(Array.isArray(latest.checks), "checks history missing");
   assert(JSON.stringify(latest.latest).length < 50000, "latest native CAM summary is too large");
 
@@ -20,6 +26,8 @@ async function main() {
   const artifact = await artifactResponse.json();
   assert(artifact.schema === "hediao3d.linux-native-cam-check.v1", "full native CAM artifact schema mismatch");
   assert(Array.isArray(artifact.checks), "full native CAM artifact missing checks[]");
+  assert(artifact.summary?.capabilityMatrix?.some((item) => item.id === "blendercam" && item.supportedWorkflows.includes("artistic-relief")), "full artifact should include BlenderCAM capability matrix");
+  assert(artifact.checks.some((check) => check.id === "camotics" && check.capabilities?.notEnoughFor?.includes("刀路生成")), "full artifact should state CAMotics does not generate toolpaths");
 
   const markdownResponse = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownResponse.ok, `native CAM markdown artifact failed: ${markdownResponse.status}`);
@@ -39,6 +47,7 @@ function validateSummary(summary, label) {
   assert(summary.id, `${label} missing id`);
   assert(summary.schema === "hediao3d.linux-native-cam-check.v1", `${label} schema mismatch`);
   assert(summary.summary, `${label} missing summary`);
+  assert(Array.isArray(summary.summary.capabilityMatrix), `${label} missing capability matrix`);
   assert(Array.isArray(summary.checks), `${label} missing checks[]`);
   assert(summary.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(summary.apiArtifacts?.markdown, `${label} missing Markdown artifact`);

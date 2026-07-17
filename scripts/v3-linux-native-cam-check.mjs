@@ -71,6 +71,7 @@ function checkFreeCad() {
     name: "FreeCAD CAM",
     role: "三轴/规则实体 CAM 生成",
     requiredFor: ["3axis", "fixture", "regular-solid"],
+    capabilities: createCapabilityProfile("freecad"),
     command,
     nativeSignals: {
       freecadCmdAvailable: Boolean(command.command),
@@ -101,6 +102,7 @@ function checkBlenderCam() {
     name: "BlenderCAM/FabexCNC",
     role: "Meshy 佛头/艺术曲面/旋转夹具展开刀路",
     requiredFor: ["rotaryWrap", "artistic-mesh", "relief"],
+    capabilities: createCapabilityProfile("blendercam"),
     command,
     nativeSignals: {
       blenderAvailable: Boolean(command.command),
@@ -133,6 +135,7 @@ function checkOpenCamLib() {
     name: "OpenCAMLib",
     role: "drop-cutter、水线、刀具接触几何内核",
     requiredFor: ["rotaryWrap", "advanced-surface-cam"],
+    capabilities: createCapabilityProfile("opencamlib"),
     command: python,
     nativeSignals: {
       pythonAvailable: Boolean(python.command),
@@ -159,6 +162,7 @@ function checkCamotics() {
     name: "CAMotics",
     role: "G-code 材料去除仿真和空跑验证",
     requiredFor: ["simulation", "production-gate"],
+    capabilities: createCapabilityProfile("camotics"),
     command,
     nativeSignals: {
       camoticsAvailable: Boolean(command.command)
@@ -203,9 +207,84 @@ function createSummary(checks) {
     summary: readyCount === requiredCount
       ? "Linux Native CAM 环境已具备 V3 外部 CAM/仿真验收条件。"
       : `Linux Native CAM 环境未完整就绪：${readyCount}/${requiredCount}。`,
+    capabilityMatrix: createCapabilityMatrix(checks),
     blockers,
     nextActions: [...new Set(nextActions)]
   };
+}
+
+function createCapabilityProfile(id) {
+  const profiles = {
+    freecad: {
+      category: "cam-generator",
+      integrationRole: "外部三轴/规则实体 CAM 生成器，可作为标准 G-code 和后处理参考。",
+      inputFormats: ["stl", "step", "iges", "obj"],
+      outputFormats: ["gcode", "nc", "cam-plan"],
+      supportedWorkflows: ["3axis-relief", "pocket", "profile", "surface-finishing", "postprocess-reference"],
+      bestFor: ["规则几何", "三轴平面浮雕", "标准 CAM 工序验证"],
+      notEnoughFor: ["直接生成三轴控制器+Y旋转夹具的最终专用 NC", "未验证夹具碰撞和核胚装夹"],
+      projectUse: "Orchestrator 调用 FreeCADCmd 生成三轴参考刀路，再由 HeDiao3D 安全门和后处理层复核。",
+      productionGate: "必须有非 synthetic G-code、CAMotics/等效仿真、空跑和试雕证据。"
+    },
+    blendercam: {
+      category: "artistic-mesh-cam",
+      integrationRole: "艺术 Mesh/浮雕 CAM 适配器，适合 Meshy 佛头等复杂曲面预处理。",
+      inputFormats: ["stl", "obj", "glb-after-conversion"],
+      outputFormats: ["gcode", "nc", "operation-report"],
+      supportedWorkflows: ["artistic-relief", "mesh-surface-finishing", "rotary-wrap-reference"],
+      bestFor: ["佛头/人物/纹理等艺术曲面", "网格雕刻策略研究", "与 Blender 修模流程联动"],
+      notEnoughFor: ["未经插件 API 验证的无人值守生产", "真实 Y/A 旋转夹具后处理"],
+      projectUse: "作为 Mesh 艺术刀路候选引擎，输出必须回到 neutral/G-code 摄取链路。",
+      productionGate: "必须确认 BlenderCAM/FabexCNC 插件版本、输出坐标系、刀具补偿和机床后处理。"
+    },
+    opencamlib: {
+      category: "geometry-kernel",
+      integrationRole: "曲面刀具接触几何内核，用于 drop-cutter、水线和旋转展开高度场。",
+      inputFormats: ["stl", "heightfield", "neutral-surface-samples"],
+      outputFormats: ["neutral-toolpath", "contact-points", "cutter-envelope-report"],
+      supportedWorkflows: ["drop-cutter", "waterline", "rotary-wrap-heightfield", "finishing-contact"],
+      bestFor: ["精加工刀位点", "刀具半径包络", "自研 Y/A 旋转后处理前的中性刀路"],
+      notEnoughFor: ["完整 CAM 软件 UI", "自动装夹避让", "未经后处理的机床 NC"],
+      projectUse: "V3 的核心曲面计算层；输出 neutral toolpath，再交给 HeDiao3D wrapY/wrapA 后处理。",
+      productionGate: "必须替换当前 preview scaffold 为真实 OpenCAMLib cutter-contact 输出，并通过材料去除仿真。"
+    },
+    camotics: {
+      category: "simulation",
+      integrationRole: "G-code 材料去除仿真和离料空跑验证，不生成刀路。",
+      inputFormats: ["gcode", "nc", "camotics-project"],
+      outputFormats: ["simulation-report", "material-removal-mesh", "bounds", "screenshot"],
+      supportedWorkflows: ["3axis-simulation", "unwrapped-rotary-preview", "air-run-validation"],
+      bestFor: ["三轴/展开刀路检查", "Z 深度和边界检查", "生产下载前证据"],
+      notEnoughFor: ["完整连续四轴材料去除", "替代真实机床空跑", "刀路生成"],
+      projectUse: "作为生产安全门的一项外部仿真证据，结果需与当前 camotics-preview.nc 哈希绑定。",
+      productionGate: "必须导入非 synthetic 仿真结果，并匹配当前 NC 输入哈希。"
+    }
+  };
+  return profiles[id] ?? {
+    category: "unknown",
+    integrationRole: "未知外部引擎。",
+    inputFormats: [],
+    outputFormats: [],
+    supportedWorkflows: [],
+    bestFor: [],
+    notEnoughFor: ["未知能力，不能用于生产"],
+    projectUse: "仅保留为占位。",
+    productionGate: "不允许生产解锁。"
+  };
+}
+
+function createCapabilityMatrix(checks) {
+  return checks.map((check) => ({
+    id: check.id,
+    name: check.name,
+    level: check.level,
+    ready: check.ready,
+    category: check.capabilities.category,
+    integrationRole: check.capabilities.integrationRole,
+    supportedWorkflows: check.capabilities.supportedWorkflows,
+    outputFormats: check.capabilities.outputFormats,
+    productionGate: check.capabilities.productionGate
+  }));
 }
 
 function findWorkingCommand(commands, args) {
@@ -262,6 +341,16 @@ function createMarkdown(report) {
     "",
     report.summary.summary,
     "",
+    "## Capability Matrix",
+    "",
+    ...report.summary.capabilityMatrix.flatMap((item) => [
+      `- ${item.name}: ${item.level} / ${item.category}`,
+      `  - role: ${item.integrationRole}`,
+      `  - workflows: ${item.supportedWorkflows.join(", ")}`,
+      `  - outputs: ${item.outputFormats.join(", ")}`,
+      `  - production gate: ${item.productionGate}`
+    ]),
+    "",
     "## Blockers",
     "",
     ...(report.summary.blockers.length ? report.summary.blockers.map((item) => `- ${item}`) : ["- none"]),
@@ -279,10 +368,16 @@ function createMarkdown(report) {
       "",
       `- Level: ${check.level}`,
       `- Role: ${check.role}`,
+      `- Category: ${check.capabilities.category}`,
       `- Command: ${check.command ?? "(missing)"}`,
       `- Version: ${check.version ?? "(unknown)"}`,
       `- Missing: ${check.missing.length ? check.missing.join("; ") : "none"}`,
       `- Signals: ${JSON.stringify(check.nativeSignals)}`,
+      `- Inputs: ${check.capabilities.inputFormats.join(", ")}`,
+      `- Outputs: ${check.capabilities.outputFormats.join(", ")}`,
+      `- Best for: ${check.capabilities.bestFor.join("; ")}`,
+      `- Not enough for: ${check.capabilities.notEnoughFor.join("; ")}`,
+      `- Project use: ${check.capabilities.projectUse}`,
       "",
       "Install hints:",
       ...check.installHints.map((item) => `- ${item}`),

@@ -1959,6 +1959,19 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
       requiredCount: Number(summary.requiredCount ?? 0),
       level: summary.level ?? "missing",
       text: summary.summary ?? "Native CAM readiness summary missing.",
+      capabilityMatrix: Array.isArray(summary.capabilityMatrix)
+        ? summary.capabilityMatrix.map((item) => ({
+          id: item.id,
+          name: item.name,
+          level: item.level,
+          ready: Boolean(item.ready),
+          category: item.category,
+          integrationRole: item.integrationRole,
+          supportedWorkflows: Array.isArray(item.supportedWorkflows) ? item.supportedWorkflows.slice(0, 8) : [],
+          outputFormats: Array.isArray(item.outputFormats) ? item.outputFormats.slice(0, 6) : [],
+          productionGate: item.productionGate
+        }))
+        : [],
       blockers: Array.isArray(summary.blockers) ? summary.blockers.slice(0, 8) : [],
       nextActions: Array.isArray(summary.nextActions) ? summary.nextActions.slice(0, 8) : []
     },
@@ -1969,6 +1982,17 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
         role: check.role,
         level: check.level,
         ready: Boolean(check.ready),
+        capabilities: check.capabilities ? {
+          category: check.capabilities.category,
+          integrationRole: check.capabilities.integrationRole,
+          inputFormats: Array.isArray(check.capabilities.inputFormats) ? check.capabilities.inputFormats.slice(0, 8) : [],
+          outputFormats: Array.isArray(check.capabilities.outputFormats) ? check.capabilities.outputFormats.slice(0, 8) : [],
+          supportedWorkflows: Array.isArray(check.capabilities.supportedWorkflows) ? check.capabilities.supportedWorkflows.slice(0, 8) : [],
+          bestFor: Array.isArray(check.capabilities.bestFor) ? check.capabilities.bestFor.slice(0, 5) : [],
+          notEnoughFor: Array.isArray(check.capabilities.notEnoughFor) ? check.capabilities.notEnoughFor.slice(0, 5) : [],
+          projectUse: check.capabilities.projectUse ?? null,
+          productionGate: check.capabilities.productionGate ?? null
+        } : null,
         command: check.command ?? null,
         version: check.version ?? null,
         missing: Array.isArray(check.missing) ? check.missing.slice(0, 4) : []
