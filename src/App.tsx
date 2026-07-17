@@ -1269,6 +1269,22 @@ type SafetyGateStatus = {
   canDownloadProduction: boolean;
 };
 
+type V3EvidenceLoopItem = {
+  id: string;
+  title: string;
+  level: "ok" | "warning" | "critical";
+  value: string;
+  detail: string;
+};
+
+type V3EvidenceLoopSummary = {
+  level: "ok" | "warning" | "critical";
+  title: string;
+  detail: string;
+  items: V3EvidenceLoopItem[];
+  nextActions: string[];
+};
+
 type MachineAcceptanceStep = "airRun" | "softTrial" | "formalTrial";
 type MachineAcceptanceRecord = {
   machineId: string;
@@ -1644,6 +1660,10 @@ export function App() {
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
+  const v3EvidenceLoopSummary = useMemo(
+    () => createV3EvidenceLoopSummary(v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance),
+    [v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
+  );
   const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
   const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
@@ -4825,6 +4845,46 @@ export function App() {
                   ))}
                 </div>
               )}
+              {v3EvidenceLoopSummary && (
+                <div className={`v3-evidence-loop ${v3EvidenceLoopSummary.level}`}>
+                  <div className="v3-evidence-loop-head">
+                    <div>
+                      <strong>{v3EvidenceLoopSummary.title}</strong>
+                      <small>{v3EvidenceLoopSummary.detail}</small>
+                    </div>
+                    <span>{v3EvidenceLoopSummary.level === "ok" ? "可复核" : v3EvidenceLoopSummary.level === "warning" ? "待补证" : "禁止生产"}</span>
+                  </div>
+                  <div className="v3-evidence-grid">
+                    {v3EvidenceLoopSummary.items.map((item) => (
+                      <div className={item.level} key={item.id}>
+                        <span>{item.title}</span>
+                        <strong>{item.value}</strong>
+                        <small>{item.detail}</small>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="v3-next-actions">
+                    {v3EvidenceLoopSummary.nextActions.slice(0, 3).map((action) => (
+                      <small key={action}>{action}</small>
+                    ))}
+                  </div>
+                  <div className="v3-action-row">
+                    <button className="demo-action package-action" type="button" onClick={() => setActiveStage("feedback")}>
+                      <ClipboardCheck size={17} />
+                      记录试雕反馈
+                    </button>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={syncV3MachineAcceptance}
+                      disabled={!v3Job?.id || isV3MachineAcceptanceSyncing}
+                    >
+                      <ShieldCheck size={17} />
+                      {isV3MachineAcceptanceSyncing ? "同步中..." : "同步机床验收"}
+                    </button>
+                  </div>
+                </div>
+              )}
               {v3Job?.result?.summary.meshQuality && (
                 <small>
                   Mesh 评分 {v3Job.result.summary.meshQuality.score.toFixed(1)} / {v3Job.result.summary.meshQuality.verdict}
@@ -6376,6 +6436,105 @@ function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
     verifiedKeyCount: keyFiles.filter((file) => file.verified).length,
     neverMachineCount: keyFiles.filter((file) => !file.allowedOnMachine).length,
     checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null
+  };
+}
+
+function createV3EvidenceLoopSummary(
+  job: V3OrchestratorJob | null,
+  downloadChecklist: ReturnType<typeof createV3DownloadChecklistSummary>,
+  machineAcceptance: MachineAcceptanceRecord
+): V3EvidenceLoopSummary | null {
+  if (!job?.result) return null;
+
+  const summary = job.result.summary;
+  const verifiedKeyCount = downloadChecklist?.verifiedKeyCount ?? 0;
+  const keyFileCount = downloadChecklist?.keyFiles.length ?? 0;
+  const downloadOk = keyFileCount > 0 && verifiedKeyCount === keyFileCount;
+  const simulationEvidence = summary.productionGate?.simulationEvidence;
+  const simulationOk = Boolean(simulationEvidence?.productionUnlockEligible);
+  const simulationLevel: V3EvidenceLoopItem["level"] = simulationOk
+    ? "ok"
+    : simulationEvidence?.synthetic || simulationEvidence?.level === "review"
+      ? "warning"
+      : "critical";
+  const trialLog = summary.trialFeedbackLog;
+  const trialOk = trialLog?.latestOutcome === "success";
+  const trialLevel: V3EvidenceLoopItem["level"] = trialOk
+    ? "ok"
+    : trialLog?.latestOutcome === "failed"
+      ? "critical"
+      : "warning";
+  const acceptanceLog = summary.machineAcceptanceLog;
+  const acceptanceOk = Boolean(acceptanceLog?.allRequiredPassed);
+  const localAcceptanceOk = machineAcceptance.airRun && machineAcceptance.softTrial;
+  const acceptanceLevel: V3EvidenceLoopItem["level"] = acceptanceOk
+    ? "ok"
+    : acceptanceLog?.latestOutcome === "failed"
+      ? "critical"
+      : localAcceptanceOk
+        ? "warning"
+        : "critical";
+
+  const items: V3EvidenceLoopItem[] = [
+    {
+      id: "download-integrity",
+      title: "下载核验",
+      level: downloadOk ? "ok" : "critical",
+      value: keyFileCount > 0 ? `${verifiedKeyCount}/${keyFileCount}` : "未生成",
+      detail: downloadOk
+        ? "关键 NC/仿真文件均有 SHA-256，可按核验清单比对。"
+        : "缺少关键文件哈希或交付清单，不能进入上机验收。"
+    },
+    {
+      id: "simulation",
+      title: "材料去除仿真",
+      level: simulationLevel,
+      value: simulationEvidence?.level ?? "未导入",
+      detail: simulationOk
+        ? "仿真证据满足生产解锁要求。"
+        : simulationEvidence?.summary ?? "需要 CAMotics 或等效材料去除仿真结果。"
+    },
+    {
+      id: "trial-feedback",
+      title: "试雕反馈",
+      level: trialLevel,
+      value: trialLog ? `${trialLog.recordCount} 条` : "未回填",
+      detail: trialLog
+        ? `最新结论：${formatFeedbackOutcome(trialLog.latestOutcome)}。`
+        : "需要在反馈页记录软材料或低风险试雕结果。"
+    },
+    {
+      id: "machine-acceptance",
+      title: "机床验收",
+      level: acceptanceLevel,
+      value: acceptanceLog ? `${acceptanceLog.recordCount} 条` : localAcceptanceOk ? "本地待同步" : "未通过",
+      detail: acceptanceOk
+        ? "必需验收项已同步到 V3 证据链。"
+        : localAcceptanceOk
+          ? "本地空跑/试雕已记录，建议同步到 V3 证据链。"
+          : "至少需要通过旋转标定空跑、整条空跑和软材料试雕。"
+    }
+  ];
+
+  const nextActions: string[] = [];
+  if (!downloadOk) nextActions.push("重新运行 V3 小闭环并下载加工包，按 operator-download-checklist.md 核验文件。");
+  if (!simulationOk) nextActions.push("导入真实 CAMotics 材料去除结果，替换 synthetic/内部预览证据。");
+  if (!trialOk) nextActions.push("到反馈页记录软材料试雕结果，失败项要带缺陷标签和备注。");
+  if (!acceptanceOk) nextActions.push(localAcceptanceOk ? "点击“同步到V3证据链”回填机床验收。" : "先完成空跑、旋转标定和软材料试雕，再同步机床验收。");
+  if (nextActions.length === 0) nextActions.push("闭环证据已齐，仍需确认真实机床参数和刀具装夹后再开放生产 NC。");
+
+  const criticalCount = items.filter((item) => item.level === "critical").length;
+  const warningCount = items.filter((item) => item.level === "warning").length;
+  return {
+    level: criticalCount > 0 ? "critical" : warningCount > 0 ? "warning" : "ok",
+    title: criticalCount > 0 ? "V3 闭环仍有阻断项" : warningCount > 0 ? "V3 闭环可继续试雕" : "V3 闭环证据已齐",
+    detail: criticalCount > 0
+      ? "当前只能做离料空跑、仿真或软材料验证，不能当作生产 CAM 输出。"
+      : warningCount > 0
+        ? "已有关键产物，但还需要补齐真实仿真或实机反馈。"
+        : "下载核验、仿真、试雕和机床验收均已形成证据链。",
+    items,
+    nextActions
   };
 }
 
