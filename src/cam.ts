@@ -726,5 +726,5 @@ export function downloadText(filename: string, content: string, mime = "text/pla
   window.setTimeout(() => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, 0);
+  }, 30000);
 }

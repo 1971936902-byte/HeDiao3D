@@ -16,7 +16,8 @@ loadEnv();
 
 const port = Number(process.env.API_PORT ?? 8787);
 const meshyBase = process.env.MESHY_API_BASE ?? "https://api.meshy.ai";
-const maxToolpathPreviewPoints = Number(process.env.MAX_TOOLPATH_PREVIEW_POINTS ?? 650000);
+const maxToolpathPreviewPoints = Number(process.env.MAX_TOOLPATH_PREVIEW_POINTS ?? 60000);
+const maxToolpathResponsePoints = Number(process.env.MAX_TOOLPATH_RESPONSE_POINTS ?? 60000);
 
 const server = createServer(async (req, res) => {
   try {
@@ -25,46 +26,47 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && req.url === "/api/meshy/multi-image-to-3d") {
-      return createMultiImageTask(req, res);
+      return await createMultiImageTask(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/meshy/repair-printability") {
-      return createRepairPrintabilityTask(req, res);
+      return await createRepairPrintabilityTask(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/meshy/remesh") {
-      return createRemeshTask(req, res);
+      return await createRemeshTask(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/cam/mesh-toolpath") {
-      return createMeshToolpath(req, res);
+      return await createMeshToolpath(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/mesh/import") {
-      return importLocalMesh(req, res);
+      return await importLocalMesh(req, res);
     }
 
     if (req.method === "POST" && req.url === "/api/mesh/analyze") {
-      return analyzeMesh(req, res);
+      return await analyzeMesh(req, res);
     }
 
     const taskMatch = req.url?.match(/^\/api\/meshy\/multi-image-to-3d\/([^/?#]+)$/);
     if (req.method === "GET" && taskMatch) {
-      return getMultiImageTask(taskMatch[1], res);
+      return await getMultiImageTask(taskMatch[1], res);
     }
 
     const repairMatch = req.url?.match(/^\/api\/meshy\/repair-printability\/([^/?#]+)$/);
     if (req.method === "GET" && repairMatch) {
-      return getRepairPrintabilityTask(repairMatch[1], res);
+      return await getRepairPrintabilityTask(repairMatch[1], res);
     }
 
     const remeshMatch = req.url?.match(/^\/api\/meshy\/remesh\/([^/?#]+)$/);
     if (req.method === "GET" && remeshMatch) {
-      return getRemeshTask(remeshMatch[1], res);
+      return await getRemeshTask(remeshMatch[1], res);
     }
 
     return json(res, 404, { error: "Not found" });
   } catch (error) {
+    if (res.headersSent || res.writableEnded) return;
     return json(res, 500, { error: error instanceof Error ? error.message : "Unknown server error" });
   }
 });
@@ -218,6 +220,7 @@ async function createMeshToolpath(req, res) {
   const input = await readJson(req);
   const settings = input.settings;
   const modelUrl = String(input.stlUrl ?? input.modelUrl ?? "");
+  const finishingOnly = Boolean(input.finishing);
 
   if (!settings || !isAllowedLocalModelUrl(modelUrl)) {
     return json(res, 400, { error: "本地 Mesh 模型地址或刀路参数无效" });
@@ -235,7 +238,7 @@ async function createMeshToolpath(req, res) {
     geometry.computeBoundsTree();
 
     const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
-    const toolpath = generateMeshSurfaceToolpath(mesh, settings);
+    const toolpath = generateMeshSurfaceToolpath(mesh, settings, { finishingOnly });
     geometry.disposeBoundsTree();
     geometry.dispose();
 
@@ -478,6 +481,7 @@ function readJson(req, limit = 25_000_000) {
 }
 
 function json(res, status, payload) {
+  if (res.headersSent || res.writableEnded) return;
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*"
@@ -530,7 +534,7 @@ async function cacheMeshyAssets(taskId, task) {
   return result;
 }
 
-function generateMeshSurfaceToolpath(mesh, settings) {
+function generateMeshSurfaceToolpath(mesh, settings, options = {}) {
   if (settings.camMode === "3axis") {
     return generateMeshTopSurfaceToolpath(mesh, settings);
   }
@@ -628,19 +632,140 @@ function generateMeshSurfaceToolpath(mesh, settings) {
 
   const travelMm = estimateTravel(points, machineRadius);
   const estimatedMinutes = travelMm / Math.max(1, Number(settings.feedRate));
-  const gcode = toGcode(points, settings, estimatedMinutes, "Meshy STL surface CAM");
+  const finishPoints = points;
+  const finishMinutes = estimatedMinutes;
+  const finishGcode = toGcode(finishPoints, settings, finishMinutes, "Meshy STL finishing CAM");
+  const finishSurfacePreview = limitSurfacePreviewSamples(finishPoints, previewPoints);
+
+  if (options.finishingOnly) {
+    return {
+      points: finishSurfacePreview.points,
+      previewPoints: finishSurfacePreview.previewPoints,
+      gcode: finishGcode,
+      tap: "",
+      txt: "",
+      csv: toCsv(finishSurfacePreview.points),
+      estimatedMinutes: finishMinutes,
+      postProcessorName: postProcessorName(settings.postProcessor),
+      programs: {
+        finish: createProgram("Mesh精加工", "meshy-stl-finish.nc", "", [], finishMinutes)
+      },
+      summary: {
+        ...summarizePoints(finishPoints, warnings),
+        process: {
+          roughPasses: 0,
+          roughPoints: 0,
+          finishPoints: finishPoints.length,
+          restPoints: 0,
+          roughMinutes: 0,
+          finishMinutes,
+          restMinutes: 0,
+          restPointRate: 0,
+          restStrategy: "仅生成精加工",
+          restTrigger: "精加工按钮触发时跳过粗加工和清残"
+        }
+      }
+    };
+  }
+
+  const roughPoints = createMeshRoughingPoints(points, settings);
+  const restPoints = limitToolpathPoints(createMeshRestPoints(points, settings));
+  const responseFinishPoints = finishSurfacePreview.points;
+  const combinedPoints = [...roughPoints, ...finishPoints, ...restPoints];
+  const responseCombinedPoints = limitToolpathPoints([...roughPoints, ...responseFinishPoints, ...restPoints]);
+  const roughMinutes = estimateTravel(roughPoints, machineRadius) / Math.max(1, Number(settings.feedRate));
+  const restMinutes = estimateTravel(restPoints, machineRadius) / Math.max(1, Number(settings.feedRate) * 0.78);
+  const combinedMinutes = roughMinutes + finishMinutes + restMinutes;
+  const roughGcode = toGcode(roughPoints, settings, roughMinutes, "Meshy STL roughing CAM");
+  const restGcode = toGcode(restPoints, { ...settings, feedRate: Math.max(30, Number(settings.feedRate) * 0.78) }, restMinutes, "Meshy STL rest machining CAM");
+  const gcode = toGcode(combinedPoints, settings, combinedMinutes, "Meshy STL combined surface CAM");
 
   return {
-    points,
-    previewPoints: limitPreviewPoints(previewPoints),
+    points: responseFinishPoints,
+    previewPoints: finishSurfacePreview.previewPoints,
     gcode,
-    tap: gcode,
-    txt: gcode,
-    csv: toCsv(points),
-    estimatedMinutes,
+    tap: "",
+    txt: "",
+    csv: toCsv(responseFinishPoints),
+    estimatedMinutes: combinedMinutes,
     postProcessorName: postProcessorName(settings.postProcessor),
-    summary: summarizePoints(points, warnings)
+    programs: {
+      rough: createProgram("Mesh粗加工", "meshy-stl-rough.nc", roughGcode, roughPoints, roughMinutes),
+      finish: createProgram("Mesh精加工", "meshy-stl-finish.nc", finishGcode, responseFinishPoints, finishMinutes),
+      rest: createProgram("Mesh清残", "meshy-stl-rest.nc", restGcode, restPoints, restMinutes),
+      combined: createProgram("Mesh合并程序", "meshy-stl-combined.nc", "", responseCombinedPoints, combinedMinutes)
+    },
+    summary: {
+      ...summarizePoints(combinedPoints, warnings),
+      process: {
+        roughPasses: Math.max(1, Math.ceil(Number(settings.depthMm) / Math.max(0.02, Number(settings.maxCutDepth ?? 0.16)))),
+        roughPoints: roughPoints.length,
+        finishPoints: finishPoints.length,
+        restPoints: restPoints.length,
+        roughMinutes,
+        finishMinutes,
+        restMinutes,
+        restPointRate: finishPoints.length > 0 ? (restPoints.length / finishPoints.length) * 100 : 0,
+        restStrategy: "Mesh深凹/曲率清残",
+        restTrigger: "深度较大或相邻点 Z 跳变明显"
+      }
+    }
   };
+}
+
+function createProgram(name, filename, gcode, points, estimatedMinutes) {
+  return { name, filename, gcode, points, estimatedMinutes };
+}
+
+function createMeshRoughingPoints(points, settings) {
+  const stockAllowance = Math.max(0, Number(settings.stockAllowance ?? 0.12));
+  const maxCutDepth = Math.max(0.02, Number(settings.maxCutDepth ?? 0.16));
+  const maxDepth = maxPointDepth(points);
+  const layers = Math.max(1, Math.ceil(Math.max(0.001, maxDepth - stockAllowance) / maxCutDepth));
+  const stride = Math.max(1, Math.ceil((points.length * layers) / maxToolpathResponsePoints));
+  const rough = [];
+  let sampleIndex = 0;
+
+  for (let layer = 1; layer <= layers; layer += 1) {
+    const layerDepth = Math.min(Math.max(0, maxDepth - stockAllowance), layer * maxCutDepth);
+    for (const point of points) {
+      sampleIndex += 1;
+      if (sampleIndex % stride !== 0) continue;
+      const depth = Math.min(Math.max(0, point.depth - stockAllowance), layerDepth);
+      const z = Math.max(0, point.z - (point.depth - depth));
+      rough.push({ ...point, z, depth });
+    }
+  }
+
+  return rough;
+}
+
+function createMeshRestPoints(points, settings) {
+  const maxDepth = maxPointDepth(points);
+  const deepThreshold = maxDepth * 0.72;
+  const jumpThreshold = Math.max(Number(settings.toolDiameter ?? 0.6) * 0.45, 0.08);
+  const rest = [];
+
+  for (let i = 0; i < points.length; i += 1) {
+    const point = points[i];
+    const prev = points[i - 1];
+    const next = points[i + 1];
+    const zJump = Math.max(prev ? Math.abs(point.z - prev.z) : 0, next ? Math.abs(point.z - next.z) : 0);
+    if ((point.depth >= deepThreshold || zJump >= jumpThreshold) && i % 2 === 0) {
+      rest.push(point);
+    }
+  }
+
+  return rest;
+}
+
+function maxPointDepth(points) {
+  let maxDepth = 0.001;
+  for (const point of points) {
+    const depth = Number(point.depth) || 0;
+    if (depth > maxDepth) maxDepth = depth;
+  }
+  return maxDepth;
 }
 
 function generateMeshTopSurfaceToolpath(mesh, settings) {
@@ -724,6 +849,58 @@ function limitPreviewPoints(previewPoints) {
   if (previewPoints.length <= maxToolpathPreviewPoints) return previewPoints;
   const stride = Math.ceil(previewPoints.length / maxToolpathPreviewPoints);
   return previewPoints.filter((_, index) => index % stride === 0);
+}
+
+function limitToolpathPoints(points) {
+  if (points.length <= maxToolpathResponsePoints) return points;
+  const stride = Math.ceil(points.length / maxToolpathResponsePoints);
+  return points.filter((_, index) => index % stride === 0);
+}
+
+function limitSurfacePreviewSamples(points, previewPoints) {
+  const count = Math.min(points.length, previewPoints.length);
+  if (count <= maxToolpathPreviewPoints) {
+    return { points: points.slice(0, count), previewPoints: previewPoints.slice(0, count) };
+  }
+
+  const rows = [];
+  let currentA = null;
+  let currentRow = [];
+  for (let index = 0; index < count; index += 1) {
+    const a = Number(points[index].a).toFixed(6);
+    if (currentA !== null && a !== currentA) {
+      rows.push(currentRow);
+      currentRow = [];
+    }
+    currentA = a;
+    currentRow.push(index);
+  }
+  if (currentRow.length > 0) rows.push(currentRow);
+
+  const rowCount = rows.length;
+  const longestRow = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const targetRows = Math.max(2, Math.floor(Math.sqrt(maxToolpathPreviewPoints * Math.max(1, rowCount) / Math.max(1, longestRow))));
+  const rowStride = Math.max(1, Math.ceil(rowCount / targetRows));
+  const keptRows = rows.filter((_, rowIndex) => rowIndex % rowStride === 0 || rowIndex === rowCount - 1);
+  const maxColumns = Math.max(2, Math.floor(maxToolpathPreviewPoints / Math.max(1, keptRows.length)));
+  const sampledPoints = [];
+  const sampledPreviewPoints = [];
+
+  for (const row of keptRows) {
+    const columnStride = Math.max(1, Math.ceil(row.length / maxColumns));
+    for (let column = 0; column < row.length; column += columnStride) {
+      const index = row[column];
+      sampledPoints.push(points[index]);
+      sampledPreviewPoints.push(previewPoints[index]);
+    }
+    const lastIndex = row[row.length - 1];
+    if (lastIndex !== row[row.length - 1 - ((row.length - 1) % columnStride)]) {
+      sampledPoints.push(points[lastIndex]);
+      sampledPreviewPoints.push(previewPoints[lastIndex]);
+    }
+  }
+
+  return { points: sampledPoints, previewPoints: sampledPreviewPoints };
 }
 
 function buildMeshQualityReport(geometry) {

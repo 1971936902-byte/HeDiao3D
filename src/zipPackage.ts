@@ -91,7 +91,7 @@ export function downloadBlob(filename: string, blob: Blob) {
   window.setTimeout(() => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, 0);
+  }, 30000);
 }
 
 function uint16(value: number) {

@@ -75,7 +75,7 @@ const defaultSettings: ModelSettings = {
   postProcessor: "generic"
 };
 
-type ToolpathKind = "rough" | "finish" | "rest";
+type ToolpathKind = "combined" | "rough" | "finish" | "rest";
 type WorkflowStage = "project" | "source" | "model" | "process" | "cam" | "tasks" | "deployment" | "feedback";
 type ModelSubStage = "local" | "ai" | "inspection";
 type WorkbenchView = "model" | "simulation" | "heatmap" | "gcode" | "report";
@@ -241,6 +241,7 @@ type MachineAcceptanceRecord = {
 };
 
 const toolpathColors = {
+  combined: 0x00a676,
   rough: 0xd2451e,
   finish: 0x8b5cf6,
   rest: 0xf59e0b,
@@ -465,6 +466,19 @@ function isUserRole(role: unknown): role is UserRole {
   return role === "designer" || role === "process" || role === "operator" || role === "admin";
 }
 
+function isImageFile(file: File): boolean {
+  if (/^image\/hei[cf]$/i.test(file.type)) return false;
+  if (file.type.startsWith("image/")) return true;
+  return /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(file.name);
+}
+
+function createClientId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function App() {
   const [images, setImages] = useState<CarvingImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -474,6 +488,7 @@ export function App() {
   const [wireframe, setWireframe] = useState(false);
   const [toolpath, setToolpath] = useState<GeneratedToolpath | null>(null);
   const [isReading, setIsReading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [generatedDepth, setGeneratedDepth] = useState<DepthMap | null>(null);
   const [generationLabel, setGenerationLabel] = useState("内置示例");
   const [aiMeshUrl, setAiMeshUrl] = useState<string | null>(null);
@@ -575,7 +590,9 @@ export function App() {
     if (!toolpath) return null;
     return getToolpathProgram(toolpath, toolpathKind);
   }, [toolpath, toolpathKind]);
-  const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
+  const selectedToolpathPoints = selectedToolpathProgram?.points.length ? selectedToolpathProgram.points : toolpath?.points ?? [];
+  const selectedToolpathPreviewPoints = toolpath?.previewPoints ?? [];
+  const simulationToolpathPoints = selectedToolpathPreviewPoints.length > 0 ? toolpath?.points ?? selectedToolpathPoints : selectedToolpathPoints;
   const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
   const workbenchTitle =
@@ -698,7 +715,7 @@ export function App() {
     setTaskEvents((current) => [
       {
         ...event,
-        id: crypto.randomUUID(),
+        id: createClientId(),
         timestamp: new Date().toLocaleString("zh-CN", { hour12: false })
       },
       ...current
@@ -706,7 +723,7 @@ export function App() {
   };
 
   const startTaskJob = (job: Pick<TaskJob, "title" | "detail" | "category" | "retryAction">) => {
-    const id = crypto.randomUUID();
+    const id = createClientId();
     const startedAt = Date.now();
     canceledTaskJobIdsRef.current.delete(id);
     setTaskJobs((current) => [
@@ -806,7 +823,7 @@ export function App() {
   const saveSnapshot = (label: string, snapshotSettings: ModelSettings, detail: string) => {
     setTaskSnapshots((current) => [
       {
-        id: crypto.randomUUID(),
+        id: createClientId(),
         label,
         detail,
         settings: { ...snapshotSettings },
@@ -908,7 +925,7 @@ export function App() {
 
   const handleArchiveProject = () => {
     const archive: ProjectArchive = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       createdAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       projectName: projectProfile.projectName,
       customerName: projectProfile.customerName,
@@ -1288,7 +1305,7 @@ export function App() {
     const actualMinutes = Number(feedbackDraft.actualMinutes);
     const normalizedActual = Number.isFinite(actualMinutes) && actualMinutes > 0 ? actualMinutes : null;
     const feedback: MachineFeedback = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       createdAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       outcome: feedbackDraft.outcome,
       sourceLabel: generationLabel,
@@ -1355,7 +1372,14 @@ export function App() {
   };
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/"));
+    const selectedFiles = Array.from(event.target.files ?? []);
+    const files = selectedFiles.filter(isImageFile);
+    setUploadError(null);
+    if (selectedFiles.length > 0 && files.length === 0) {
+      setUploadError("没有识别到可用图片。请上传 JPG、PNG、WEBP、GIF、BMP 或 AVIF 图片；HEIC/HEIF 请先转成 JPG。");
+      event.target.value = "";
+      return;
+    }
     if (files.length === 0) return;
 
     setIsReading(true);
@@ -1364,7 +1388,7 @@ export function App() {
         files.map(async (file) => {
           const result = await fileToDepthMap(file);
           return {
-            id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
+            id: `${file.name}-${file.lastModified}-${createClientId()}`,
             name: file.name,
             quality: analyzeDepthMapQuality(result.depthMap),
             ...result
@@ -1388,6 +1412,15 @@ export function App() {
         status: "ok",
         title: "上传图片素材",
         detail: `已读取 ${loaded.length} 张图片，首张质量评分 ${loaded[0].quality?.score.toFixed(1) ?? "-"}。`
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setUploadError(`图片读取失败：${message}。请换一张 JPG/PNG/WEBP 图片再试；如果是手机 HEIC/HEIF 原图，请先转成 JPG。`);
+      recordTask({
+        category: "source",
+        status: "error",
+        title: "上传图片失败",
+        detail: message
       });
     } finally {
       setIsReading(false);
@@ -1422,10 +1455,7 @@ export function App() {
 
   const handleDownloadModelAsset = async (url: string, fallbackName: string) => {
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`模型文件下载失败：${response.status}`);
-      const blob = await response.blob();
-      downloadBlob(extractDownloadFilename(url, fallbackName), blob);
+      triggerDownloadLink(url, extractDownloadFilename(url, fallbackName));
     } catch (error) {
       const message = error instanceof Error ? error.message : "模型文件下载失败";
       setAiMeshStatus(message);
@@ -1533,8 +1563,8 @@ export function App() {
       { name: "reports/cost-estimate.json", content: JSON.stringify(costEstimate, null, 2), mime: "application/json" },
       ...(airRunProgram ? [{ name: `nc/${airRunProgram.filename}`, content: airRunProgram.gcode }] : []),
       { name: "nc/nuclear-carving-combined.nc", content: toolpath.gcode },
-      { name: "nc/nuclear-carving-toolpath.tap", content: toolpath.tap },
-      { name: "nc/nuclear-carving-toolpath.txt", content: toolpath.txt },
+      { name: "nc/nuclear-carving-toolpath.tap", content: toolpath.tap || toolpath.gcode },
+      { name: "nc/nuclear-carving-toolpath.txt", content: toolpath.txt || toolpath.gcode },
       { name: "nc/nuclear-carving-toolpath.csv", content: toolpath.csv, mime: "text/csv" }
     ];
 
@@ -1646,7 +1676,7 @@ export function App() {
         const response = await fetch("/api/cam/mesh-toolpath", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stlUrl: aiMeshStlUrl, settings: meshCamSettings })
+          body: JSON.stringify({ stlUrl: aiMeshStlUrl, settings: meshCamSettings, finishing })
         });
         const data = await response.json();
         if (!response.ok) {
@@ -1655,7 +1685,7 @@ export function App() {
         if (isTaskJobCanceled(jobId)) return;
         appendTaskJobLog(jobId, "服务端已返回刀路，正在写入预览和报告。", 86);
         setToolpath(data);
-        setToolpathKind(finishing ? "finish" : "rough");
+        setToolpathKind(data.programs ? (finishing ? "finish" : "rough") : "combined");
         setIsSimulationMode(false);
         setWorkbenchView("model");
         saveSnapshot(baseSettings.camMode === "3axis" ? "Mesh 三轴刀路" : baseSettings.camMode === "rotaryWrap" ? "Mesh 旋转包裹刀路" : finishing ? "Mesh 精加工刀路" : "Mesh 四轴刀路", meshCamSettings, `点数 ${data.points.length}，估算 ${data.estimatedMinutes.toFixed(1)} min。`);
@@ -1783,7 +1813,7 @@ export function App() {
       { name: "内置云纹示例", depthMap: createDemoDepthMap("waves") }
     ].map((demo) => ({
       ...demo,
-      id: `${demo.name}-${crypto.randomUUID()}`,
+      id: `${demo.name}-${createClientId()}`,
       url: depthMapToPreviewUrl(demo.depthMap),
       quality: analyzeDepthMapQuality(demo.depthMap)
     }));
@@ -1817,7 +1847,7 @@ export function App() {
           const url = `/test-assets/01/${name}`;
           const result = await assetUrlToDepthMap(url);
           return {
-            id: `素材01-${name}-${crypto.randomUUID()}`,
+            id: `素材01-${name}-${createClientId()}`,
             name: `素材01/${name}`,
             quality: analyzeDepthMapQuality(result.depthMap),
             ...result
@@ -1842,6 +1872,46 @@ export function App() {
         status: "ok",
         title: "载入素材01",
         detail: `已载入 ${loaded.length} 张测试素材，首张质量评分 ${loaded[0].quality?.score.toFixed(1) ?? "-"}。`
+      });
+    } finally {
+      setIsReading(false);
+    }
+  };
+
+  const handleLoadMaterial03 = async () => {
+    setIsReading(true);
+    try {
+      const filenames = ["0.png", "1.png", "2.png", "3.png", "4.png"];
+      const loaded = await Promise.all(
+        filenames.map(async (name) => {
+          const url = `/test-assets/03/01/${name}`;
+          const result = await assetUrlToDepthMap(url);
+          return {
+            id: `素材03-${name}-${createClientId()}`,
+            name: `素材03/01/${name}`,
+            quality: analyzeDepthMapQuality(result.depthMap),
+            ...result
+          };
+        })
+      );
+
+      setImages(loaded);
+      setActiveId(loaded[0].id);
+      setGeneratedDepth(null);
+      releaseImportedModelObjectUrl();
+      setAiMeshUrl(null);
+      setAiMeshStlUrl(null);
+      setOriginalModelFileName(null);
+      setMeshQuality(null);
+      setGenerationLabel("素材03已载入，待生成3D");
+      setToolpath(null);
+      setIsSimulationMode(false);
+      setWorkbenchView("model");
+      recordTask({
+        category: "source",
+        status: "ok",
+        title: "载入素材03",
+        detail: `已载入 ${loaded.length} 张核雕素材，首张质量评分 ${loaded[0].quality?.score.toFixed(1) ?? "-"}。`
       });
     } finally {
       setIsReading(false);
@@ -1952,7 +2022,7 @@ export function App() {
     setOriginalModelFileName(null);
     setModelSubStage("inspection");
     setMeshQuality(null);
-    setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
+    setSettings((current) => ({ ...current, reliefAngleDeg: 360, meshLengthAxis: "z", meshAxisReverse: false }));
     setGenerationLabel("AI 3D Mesh：素材01测试结果");
     setAiMeshStatus("已载入本地 Meshy 测试结果");
     setToolpath(null);
@@ -1962,6 +2032,27 @@ export function App() {
       status: "ok",
       title: "载入 Meshy 测试结果",
       detail: "已载入本地 GLB/STL 测试模型。"
+    });
+  };
+
+  const handleLoadMaterial03AiResult = () => {
+    releaseImportedModelObjectUrl();
+    setAiMeshUrl("/meshy-results/019f708d-a6da-71c6-9f61-f23782929222.glb");
+    setAiMeshStlUrl("/meshy-results/019f708d-a6da-71c6-9f61-f23782929222.stl");
+    setOriginalModelFileName(null);
+    setModelSubStage("inspection");
+    setMeshQuality(null);
+    setSettings((current) => ({ ...current, reliefAngleDeg: 360 }));
+    setGenerationLabel("AI 3D Mesh：素材03生成结果");
+    setAiMeshStatus("已载入素材03 Meshy 生成结果");
+    setToolpath(null);
+    setIsSimulationMode(false);
+    setWorkbenchView("model");
+    recordTask({
+      category: "model",
+      status: "ok",
+      title: "载入素材03 AI结果",
+      detail: "已载入 Meshy 生成的 GLB/STL 模型。"
     });
   };
 
@@ -2204,8 +2295,9 @@ export function App() {
             <label className="upload-panel">
               <UploadCloud size={24} />
               <span>{isReading ? "正在读取图片..." : "上传一张或多张核雕图片"}</span>
-              <input type="file" accept="image/*" multiple onChange={handleFiles} disabled={isReading} />
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif" multiple onChange={handleFiles} disabled={isReading} />
             </label>
+            {uploadError && <p className="panel-note upload-error">{uploadError}</p>}
             <button className="demo-action" onClick={handleLoadDemoImages} type="button">
               <Sparkles size={17} />
               载入示例图案
@@ -2213,6 +2305,14 @@ export function App() {
             <button className="demo-action material-action" onClick={handleLoadMaterial01} type="button" disabled={isReading}>
               <FileImage size={17} />
               载入素材01
+            </button>
+            <button className="demo-action material-action" onClick={handleLoadMaterial03} type="button" disabled={isReading}>
+              <FileImage size={17} />
+              载入素材03
+            </button>
+            <button className="demo-action material-action" onClick={handleLoadMaterial03AiResult} type="button">
+              <Sparkles size={17} />
+              载入素材03 AI结果
             </button>
           </>
         )}
@@ -2491,12 +2591,12 @@ export function App() {
                   )}
                   <div className="calibration-controls">
                     <label className="select-row">
-                      <span>CAM长轴</span>
+                      <span>CAM夹持轴</span>
                       <select value={settings.meshLengthAxis} onChange={(event) => updateSetting("meshLengthAxis", event.target.value as ModelSettings["meshLengthAxis"])}>
                         <option value="auto">自动识别</option>
-                        <option value="x">X 轴</option>
-                        <option value="y">Y 轴</option>
-                        <option value="z">Z 轴</option>
+                        <option value="x">X 轴 / 左右耳方向</option>
+                        <option value="y">Y 轴 / 鼻尖-后脑方向</option>
+                        <option value="z">Z 轴 / 头顶-底部方向</option>
                       </select>
                     </label>
                     <label className="toggle-row">
@@ -2506,6 +2606,10 @@ export function App() {
                     <button className="demo-action" type="button" onClick={() => updateSetting("meshLengthAxis", meshQuality.detectedLongAxis)}>
                       <Layers3 size={17} />
                       采用体检长轴 {meshQuality.detectedLongAxis.toUpperCase()}
+                    </button>
+                    <button className="demo-action" type="button" onClick={() => setSettings((current) => normalizeSettings({ ...current, meshLengthAxis: "z", meshAxisReverse: false }))}>
+                      <Layers3 size={17} />
+                      头顶-底部夹持
                     </button>
                     <button className="demo-action" type="button" onClick={handleApplyMeshDimensions}>
                       <SlidersHorizontal size={17} />
@@ -3457,8 +3561,8 @@ export function App() {
         ) : viewingSimulation ? (
           <div className="simulation-view-shell">
             <SimulationViewer
-              points={toolpath?.points ?? selectedToolpathPoints}
-              previewPoints={toolpath.previewPoints ?? []}
+              points={simulationToolpathPoints}
+              previewPoints={selectedToolpathPreviewPoints}
               settings={settings}
               envelopeColor={toolpathColors.simulation}
               surfaceColor={getToolpathSurfaceColor(toolpathKind)}
@@ -3638,6 +3742,9 @@ export function App() {
                 </strong>
               </div>
               <div className="toolpath-program-switch" role="group" aria-label="toolpath program view">
+                <button type="button" className={toolpathKind === "combined" ? "active" : ""} onClick={() => setToolpathKind("combined")} disabled={!toolpath.programs?.combined && !toolpath.points.length}>
+                  合并
+                </button>
                 <button type="button" className={toolpathKind === "rough" ? "active" : ""} onClick={() => setToolpathKind("rough")} disabled={!toolpath.programs?.rough}>
                   粗加工
                 </button>
@@ -3675,7 +3782,7 @@ export function App() {
                 </button>
               )}
               {toolpath.programs?.finish && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode || toolpath.gcode)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载精加工
                 </button>
@@ -3686,11 +3793,11 @@ export function App() {
                   下载清残
                 </button>
               )}
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap || toolpath.gcode)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 TAP
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt || toolpath.gcode)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 TXT
               </button>
@@ -3741,7 +3848,7 @@ function GcodePreview({ toolpath, exportGateReady }: { toolpath: GeneratedToolpa
 
 function createTaskJobLog(message: string): TaskJobLog {
   return {
-    id: crypto.randomUUID(),
+    id: createClientId(),
     time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
     message
   };
@@ -4691,24 +4798,36 @@ function Control({ label, value, min, max, step, suffix, onChange }: ControlProp
 }
 
 function getToolpathProgram(toolpath: GeneratedToolpath, kind: ToolpathKind) {
+  if (kind === "combined") {
+    return toolpath.programs?.combined ?? {
+      name: "合并程序",
+      filename: "nuclear-carving-toolpath.nc",
+      gcode: toolpath.gcode,
+      points: toolpath.points,
+      estimatedMinutes: toolpath.estimatedMinutes
+    };
+  }
   if (kind === "rough") return toolpath.programs?.rough ?? null;
   if (kind === "finish") return toolpath.programs?.finish ?? null;
   return toolpath.programs?.rest ?? null;
 }
 
 function getToolpathKindLabel(kind: ToolpathKind) {
+  if (kind === "combined") return "合并程序";
   if (kind === "rough") return "粗加工刀路";
   if (kind === "finish") return "精加工刀路";
   return "清残刀路";
 }
 
 function getToolpathKindColorLabel(kind: ToolpathKind) {
+  if (kind === "combined") return "青绿=合并";
   if (kind === "rough") return "橙红=粗加工";
   if (kind === "finish") return "紫色=精加工";
   return "琥珀=清残";
 }
 
 function getToolpathSurfaceColor(kind: ToolpathKind) {
+  if (kind === "combined") return 0x00a676;
   if (kind === "rough") return 0xb95a1b;
   if (kind === "finish") return 0x9a6ff0;
   return 0xc78313;
@@ -5154,4 +5273,17 @@ function extractDownloadFilename(url: string, fallbackName: string) {
   const clean = url.split("?")[0].split("#")[0];
   const filename = decodeURIComponent(clean.split("/").pop() || "");
   return filename || fallbackName;
+}
+
+function triggerDownloadLink(url: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  window.setTimeout(() => {
+    document.body.removeChild(a);
+  }, 1000);
 }

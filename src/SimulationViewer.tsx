@@ -118,26 +118,32 @@ export function SimulationViewer({ points, previewPoints = [], settings, envelop
 }
 
 function createPreviewSurfaceGeometry(points: ToolpathPoint[], previewPoints: ToolpathPreviewPoint[], settings: ModelSettings) {
-  const rows = buildPreviewRows(points, previewPoints);
+  const rows = buildPreviewRows(points, previewPoints).filter((row) => row.points.length >= 2);
   const positions: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
+  const rowOffsets: number[] = [];
+  let vertexOffset = 0;
 
   for (const row of rows) {
+    rowOffsets.push(vertexOffset);
     for (const point of row.points) {
       positions.push(point.x, point.y, point.z);
       const depthShade = THREE.MathUtils.clamp(point.depth / Math.max(settings.depthMm, 0.001), 0, 1);
       colors.push(0.38 + depthShade * 0.2, 0.54 + depthShade * 0.25, 0.42 + depthShade * 0.12);
     }
+    vertexOffset += row.points.length;
   }
 
-  const rowLength = rows[0]?.points.length ?? 0;
   for (let r = 0; r < rows.length - 1; r += 1) {
-    for (let c = 0; c < rowLength - 1; c += 1) {
-      const a = r * rowLength + c;
-      const b = (r + 1) * rowLength + c;
-      const c1 = (r + 1) * rowLength + c + 1;
-      const d = r * rowLength + c + 1;
+    const rowLength = rows[r].points.length;
+    const nextRowLength = rows[r + 1].points.length;
+    const columns = Math.min(rowLength, nextRowLength);
+    for (let c = 0; c < columns - 1; c += 1) {
+      const a = rowOffsets[r] + c;
+      const b = rowOffsets[r + 1] + c;
+      const c1 = rowOffsets[r + 1] + c + 1;
+      const d = rowOffsets[r] + c + 1;
       indices.push(a, b, d, b, c1, d);
     }
   }

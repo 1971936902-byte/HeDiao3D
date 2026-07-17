@@ -478,6 +478,11 @@ button:disabled {
   line-height: 1.55;
 }
 
+.upload-error {
+  margin: 8px 0 10px;
+  color: #f4a7a1;
+}
+
 .thumb-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -3135,6 +3140,10 @@ button:disabled {
 
 .legend-dot.rough {
   background: #d2451e;
+}
+
+.legend-dot.combined {
+  background: #00a676;
 }
 
 .legend-dot.finish {
