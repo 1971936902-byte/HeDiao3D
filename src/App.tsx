@@ -2121,17 +2121,24 @@ export function App() {
     const files = v3Job?.result?.summary.deliveryManifest?.files ?? [];
     const byName = new Map(files.map((file) => [file.filename, file]));
     return [
+      byName.get("machining-package-index.json"),
+      byName.get("next-action-checklist.md"),
+      byName.get("linux-cam-closed-loop-handoff.md"),
+      byName.get("operator-runbook.md"),
+      byName.get("operator-download-checklist.md"),
+      byName.get("safe-trial-execution-plan.json"),
       byName.get("rotary-calibration-airrun.nc"),
       byName.get("air-run.nc"),
-      byName.get("operator-runbook.md"),
-      byName.get("safe-trial-execution-plan.json"),
-      byName.get("machining-package-index.json"),
       byName.get("cam-handoff-evidence.md"),
       byName.get("open-source-cam-execution-plan.json")
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
   const v3SafeTrialPlanFile = useMemo(
     () => findV3DeliveryFile(v3Job, "safe-trial-execution-plan.json"),
+    [v3Job]
+  );
+  const v3ClosedLoopHandoffFile = useMemo(
+    () => findV3DeliveryFile(v3Job, "linux-cam-closed-loop-handoff.md"),
     [v3Job]
   );
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
@@ -5339,6 +5346,11 @@ export function App() {
                         下载执行计划
                       </a>
                     )}
+                    {v3ClosedLoopHandoffFile?.url && (
+                      <a href={v3ClosedLoopHandoffFile.url} download>
+                        下载闭环交接说明
+                      </a>
+                    )}
                   </div>
                 )}
                 <div className="v3-trial-action-panel">
@@ -6525,6 +6537,11 @@ export function App() {
                   {v3DownloadChecklistSummary.checklistUrl && (
                     <a href={v3DownloadChecklistSummary.checklistUrl} download>
                       下载操作员核验清单
+                    </a>
+                  )}
+                  {v3DownloadChecklistSummary.closedLoopHandoffUrl && (
+                    <a href={v3DownloadChecklistSummary.closedLoopHandoffUrl} download>
+                      下载闭环交接说明
                     </a>
                   )}
                   {v3DownloadChecklistSummary.camHandoffEvidenceUrl && (
@@ -7938,6 +7955,7 @@ function createV3DownloadChecklistSummary(job: V3OrchestratorJob | null) {
     verifiedKeyCount: keyFiles.filter((file) => file.verified).length,
     neverMachineCount: keyFiles.filter((file) => !file.allowedOnMachine).length,
     checklistUrl: deliveryByName.get("operator-download-checklist.md")?.url ?? null,
+    closedLoopHandoffUrl: deliveryByName.get("linux-cam-closed-loop-handoff.md")?.url ?? null,
     camHandoffEvidenceUrl: deliveryByName.get("cam-handoff-evidence.md")?.url ?? null
   };
 }
@@ -8147,6 +8165,8 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "camotics-linux-operator-checklist.md") return "Linux操作清单";
   if (filename === "camotics-cli-package-report.json") return "运行包报告";
   if (filename === "safe-trial-execution-plan.json") return "安全试雕执行计划";
+  if (filename === "next-action-checklist.md") return "下一步清单";
+  if (filename === "linux-cam-closed-loop-handoff.md") return "闭环交接说明";
   if (filename === "operator-download-checklist.md") return "下载核验清单";
   if (filename === "operator-runbook.md") return "操作员说明";
   if (filename === "machining-package-index.json") return "加工包索引";
