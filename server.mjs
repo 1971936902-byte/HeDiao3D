@@ -119,6 +119,11 @@ const server = createServer(async (req, res) => {
       return createOrchestratorMachineAcceptance(req, orchestratorMachineAcceptanceMatch[1], res);
     }
 
+    const orchestratorCamoticsResultMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/camotics-result$/);
+    if (req.method === "POST" && orchestratorCamoticsResultMatch) {
+      return importOrchestratorCamoticsResult(req, orchestratorCamoticsResultMatch[1], res);
+    }
+
     const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/artifacts\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorArtifactMatch) {
       return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
@@ -6073,12 +6078,16 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
 }
 
 function createDeliveryFile(jobId, filename, label, kind, downloadable, note) {
+  const artifactPath = join(process.cwd(), "public", "orchestrator-jobs", jobId, filename);
+  const exists = existsSync(artifactPath);
   return {
     filename,
     label,
     kind,
     url: publicArtifactUrl(jobId, filename),
     downloadable,
+    exists,
+    bytes: exists ? statSync(artifactPath).size : 0,
     machineUse: classifyDeliveryMachineUse(filename, kind, downloadable),
     note
   };
@@ -6291,6 +6300,14 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     files: [...existingManifest.files]
   };
   const evidenceFiles = [
+    createDeliveryFile(job.id, "camotics-adapter-report.json", "CAMotics Adapter 报告", "report", existsSync(join(job.workDir, "camotics-adapter-report.json")), "记录 CAMotics adapter 是否执行、命令、耗时和错误。"),
+    createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
+    createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
+    createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
+    createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", existsSync(join(job.workDir, "simulation-summary.json")), "当前记录内置预览或 CAMotics 仿真结果。"),
+    createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", existsSync(join(job.workDir, "production-gate.json")), "说明是否允许生产 NC 下载。"),
+    createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", existsSync(join(job.workDir, "production-unlock-matrix.json")), "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
+    createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", existsSync(join(job.workDir, "machining-package-index.json")), "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
     createDeliveryFile(job.id, "trial-feedback-log.json", "试雕反馈日志", "report", existsSync(join(job.workDir, "trial-feedback-log.json")), "按时间保存现场反馈记录，用于工艺参数优化闭环。"),
     createDeliveryFile(job.id, "process-optimization-plan.json", "工艺优化建议", "report", existsSync(join(job.workDir, "process-optimization-plan.json")), "根据试雕反馈生成的下一轮参数复核和调整建议。"),
@@ -6950,6 +6967,347 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
     },
     productionEvidenceDossier
   });
+}
+
+async function importOrchestratorCamoticsResult(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+  if (!existsSync(join(workDir, "camotics-preview.nc"))) {
+    return json(res, 409, { error: "当前任务缺少 camotics-preview.nc，无法校验 CAMotics 输入哈希。" });
+  }
+
+  const input = await readJson(req, 30_000_000);
+  const importBundle = await writeImportedCamoticsResultBundle(workDir, input);
+  const adapterJobPath = await ensureCamoticsAdapterJobForImport(job, workDir);
+  const resultPath = join(workDir, "camotics-adapter-report.json");
+  const run = spawnSync(process.execPath, [getAdapterScriptPath("camotics"), adapterJobPath, resultPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: Number(process.env.CAMOTICS_ADAPTER_TIMEOUT_MS ?? 120000),
+    env: {
+      ...process.env,
+      HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
+      HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "false",
+      HEDIAO3D_CAMOTICS_RESULT_JSON: importBundle.resultPath
+    }
+  });
+
+  let adapterReport = readJsonFile(resultPath);
+  if (!adapterReport) {
+    adapterReport = {
+      status: run.status === 0 ? "completed_without_report" : "failed",
+      protocolVersion: "hediao3d.adapter.v1",
+      engine: "camotics",
+      jobId: safeJobId,
+      error: run.error?.message ?? (run.status === 0 ? null : `camotics adapter exit ${run.status}`),
+      warnings: [],
+      metrics: {}
+    };
+  }
+  adapterReport.importedViaApi = true;
+  adapterReport.importBundle = {
+    result: "imported-camotics-result.json",
+    screenshot: importBundle.screenshotFilename,
+    materialMesh: importBundle.materialMeshFilename
+  };
+  adapterReport.exitCode = run.status;
+  adapterReport.stdout = String(run.stdout ?? "").slice(-6000);
+  adapterReport.stderr = String(run.stderr ?? "").slice(-6000);
+  await writeFile(resultPath, JSON.stringify(adapterReport, null, 2), "utf8");
+
+  const refreshed = await refreshCamoticsEvidenceArtifacts(job, adapterReport);
+  appendOrchestratorLog(job, `CAMotics 真实结果回填：${adapterReport.status}，${adapterReport.error ?? "已更新仿真证据"}`);
+  job.workDir = workDir;
+  job.updatedAt = new Date().toISOString();
+  job.camoticsImport = {
+    importedAt: job.updatedAt,
+    status: adapterReport.status,
+    resultArtifact: "camotics-result.json",
+    productionEvidenceEligible: Boolean(refreshed.simulationEvidence?.productionUnlockEligible)
+  };
+  job.result = job.result ?? {};
+  job.result.camoticsAdapterReport = adapterReport;
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    simulation: refreshed.simulationSummary,
+    productionGate: refreshed.productionGate,
+    productionUnlockMatrix: refreshed.productionUnlockMatrix,
+    productionEvidenceDossier: refreshed.productionEvidenceDossier ? {
+      schema: refreshed.productionEvidenceDossier.schema,
+      artifact: "production-evidence-dossier.json",
+      status: refreshed.productionEvidenceDossier.status,
+      passedCount: refreshed.productionEvidenceDossier.passedCount,
+      reviewCount: refreshed.productionEvidenceDossier.reviewCount,
+      blockedCount: refreshed.productionEvidenceDossier.blockedCount
+    } : job.result.summary?.productionEvidenceDossier,
+    machiningPackageIndex: refreshed.machiningPackageIndex ?? job.result.summary?.machiningPackageIndex,
+    deliveryManifest: refreshed.deliveryManifest ?? job.result.summary?.deliveryManifest,
+    packageIntegrity: refreshed.packageIntegrity ? {
+      schema: refreshed.packageIntegrity.schema,
+      status: refreshed.packageIntegrity.status,
+      summary: refreshed.packageIntegrity.summary,
+      fileCount: refreshed.packageIntegrity.fileCount,
+      downloadableCount: refreshed.packageIntegrity.downloadableCount,
+      missingDownloadableCount: refreshed.packageIntegrity.missingDownloadableCount,
+      totalBytes: refreshed.packageIntegrity.totalBytes,
+      files: refreshed.packageIntegrity.files
+    } : job.result.summary?.packageIntegrity
+  };
+  for (const filename of [
+    "imported-camotics-result.json",
+    "camotics-adapter-report.json",
+    "camotics-result.json",
+    "camotics-preview.png",
+    "camotics-material-removal.stl",
+    "simulation-summary.json",
+    "production-gate.json",
+    "production-unlock-matrix.json",
+    "production-evidence-dossier.json",
+    "machining-package-index.json",
+    "delivery-manifest.json",
+    "operator-download-checklist.md",
+    "package-integrity.json"
+  ]) {
+    pushIfArtifactExists(job, filename);
+  }
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: adapterReport.status === "completed",
+    adapterReport,
+    simulationEvidence: refreshed.simulationEvidence,
+    productionGate: refreshed.productionGate,
+    productionUnlockMatrix: refreshed.productionUnlockMatrix,
+    productionEvidenceDossier: refreshed.productionEvidenceDossier,
+    artifacts: {
+      result: publicArtifactUrl(safeJobId, "camotics-result.json"),
+      adapterReport: publicArtifactUrl(safeJobId, "camotics-adapter-report.json"),
+      screenshot: existsSync(join(workDir, "camotics-preview.png")) ? publicArtifactUrl(safeJobId, "camotics-preview.png") : null,
+      materialMesh: existsSync(join(workDir, "camotics-material-removal.stl")) ? publicArtifactUrl(safeJobId, "camotics-material-removal.stl") : null
+    }
+  });
+}
+
+async function writeImportedCamoticsResultBundle(workDir, input) {
+  const result = input?.result && typeof input.result === "object" ? { ...input.result } : null;
+  if (!result) throw new Error("CAMotics result 不能为空，需传入 result 对象。");
+  if (result.schema !== "hediao3d.camotics-result.v1") throw new Error("result.schema 必须是 hediao3d.camotics-result.v1。");
+  if (result.synthetic === true) throw new Error("不能通过真实结果回填接口导入 synthetic CAMotics 结果。");
+
+  const screenshotFilename = input.screenshotDataUrl ? "imported-camotics-preview.png" : null;
+  const materialMeshFilename = input.materialMeshDataUrl || input.materialMeshText ? "imported-camotics-material-removal.stl" : null;
+  if (screenshotFilename) {
+    await writeFile(join(workDir, screenshotFilename), decodeInlineFile(input.screenshotDataUrl));
+  }
+  if (materialMeshFilename) {
+    const material = input.materialMeshText
+      ? Buffer.from(String(input.materialMeshText), "utf8")
+      : decodeInlineFile(input.materialMeshDataUrl);
+    await writeFile(join(workDir, materialMeshFilename), material);
+  }
+
+  result.artifacts = {
+    ...(result.artifacts ?? {}),
+    ...(screenshotFilename ? { screenshot: join(workDir, screenshotFilename) } : {}),
+    ...(materialMeshFilename ? { materialMesh: join(workDir, materialMeshFilename) } : {})
+  };
+  const resultPath = join(workDir, "imported-camotics-result.json");
+  await writeFile(resultPath, JSON.stringify(result, null, 2), "utf8");
+  return { resultPath, screenshotFilename, materialMeshFilename };
+}
+
+function decodeInlineFile(value) {
+  const text = String(value ?? "");
+  const base64 = text.includes(",") ? text.split(",").pop() : text;
+  if (!base64) throw new Error("上传文件内容为空。");
+  return Buffer.from(base64, "base64");
+}
+
+async function ensureCamoticsAdapterJobForImport(job, workDir) {
+  const existing = readJsonFile(join(workDir, "camotics-job.json"));
+  const jobSpec = readJsonFile(join(workDir, "job.json"));
+  const camoticsInput = readJsonFile(join(workDir, "camotics-input.json"));
+  const camoticsSimulationPlan = readJsonFile(join(workDir, "camotics-simulation-plan.json"));
+  const adapterJob = {
+    ...(existing ?? {}),
+    jobId: job.id,
+    engine: "camotics",
+    modelUrl: job.modelUrl,
+    modelPath: existing?.modelPath ?? jobSpec?.modelPath ?? localModelUrlToPath(job.modelUrl),
+    workDir,
+    settings: existing?.settings ?? jobSpec?.settings ?? {},
+    outputs: {
+      ...(existing?.outputs ?? {}),
+      gcode: join(workDir, "toolpath.nc"),
+      report: join(workDir, "camotics-adapter-report.json"),
+      preview: join(workDir, "camotics-preview.nc"),
+      simulationResult: join(workDir, "camotics-result.json")
+    },
+    camoticsInput: existing?.camoticsInput ?? camoticsInput,
+    camoticsSimulationPlan: existing?.camoticsSimulationPlan ?? camoticsSimulationPlan
+  };
+  const adapterJobPath = join(workDir, "camotics-job.json");
+  await writeFile(adapterJobPath, JSON.stringify(adapterJob, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-job.json"));
+  return adapterJobPath;
+}
+
+async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
+  const workDir = job.workDir;
+  const previousSimulationSummary = readJsonFile(join(workDir, "simulation-summary.json")) ?? {
+    engine: "internal-rotary-preview",
+    status: "completed",
+    riskLevel: "review",
+    metrics: {}
+  };
+  const simulationSummary = mergeCamoticsSimulationResult(previousSimulationSummary, adapterReport, job);
+  await writeFile(join(workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+
+  const productionGate = refreshProductionGateSimulationEvidence(readJsonFile(join(workDir, "production-gate.json")), simulationSummary);
+  await writeFile(join(workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
+  const productionUnlockMatrix = refreshProductionUnlockMatrixSimulationRow(readJsonFile(join(workDir, "production-unlock-matrix.json")), productionGate, simulationSummary);
+  await writeFile(join(workDir, "production-unlock-matrix.json"), JSON.stringify(productionUnlockMatrix, null, 2), "utf8");
+  const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job);
+  if (productionEvidenceDossier) {
+    await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+  }
+
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  const deliveryManifest = refreshedDelivery?.deliveryManifest ?? readJsonFile(join(workDir, "delivery-manifest.json"));
+  const postprocessProfile = readJsonFile(join(workDir, "postprocess-profile.json"));
+  const camoticsInput = readJsonFile(join(workDir, "camotics-input.json"));
+  const machiningPackageIndex = deliveryManifest && postprocessProfile && camoticsInput
+    ? createMachiningPackageIndex({
+      job,
+      toolpath: createToolpathStubForRefresh(job),
+      productionGate,
+      postprocessProfile,
+      simulationSummary,
+      camoticsInput,
+      camHandoffQuality: readJsonFile(join(workDir, "cam-handoff-quality.json")),
+      camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
+      productionEvidenceDossier,
+      ncStaticAnalysis: readJsonFile(join(workDir, "nc-static-analysis.json")),
+      nativeCamReadiness: readJsonFile(join(workDir, "native-cam-readiness.json")),
+      camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
+      machineControllerProfile: readJsonFile(join(workDir, "machine-controller-profile.json")),
+      machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
+      controllerDialectReport: readJsonFile(join(workDir, "controller-dialect-report.json")),
+      deliveryManifest
+    })
+    : null;
+  if (machiningPackageIndex) {
+    await writeFile(join(workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
+  }
+  const refreshedAfterIndex = await refreshEvidenceDeliveryArtifacts(job);
+  return {
+    simulationSummary,
+    simulationEvidence: productionGate.simulationEvidence,
+    productionGate,
+    productionUnlockMatrix,
+    productionEvidenceDossier,
+    machiningPackageIndex,
+    deliveryManifest: refreshedAfterIndex?.deliveryManifest ?? deliveryManifest,
+    packageIntegrity: refreshedAfterIndex?.packageIntegrity ?? refreshedDelivery?.packageIntegrity
+  };
+}
+
+function refreshProductionGateSimulationEvidence(productionGate, simulationSummary) {
+  const simulationEvidence = createSimulationEvidence(simulationSummary);
+  const gate = productionGate && typeof productionGate === "object" ? { ...productionGate } : {
+    schema: "hediao3d.production-gate.v1",
+    level: "trial-only",
+    allowProductionNc: false,
+    allowTrialNc: true,
+    allowAirRun: true,
+    blockers: [],
+    warnings: [],
+    requiredActions: []
+  };
+  gate.simulationEvidence = simulationEvidence;
+  gate.checks = {
+    ...(gate.checks ?? {}),
+    simulationEngine: simulationSummary.engine,
+    simulationEvidenceLevel: simulationEvidence.level,
+    realMaterialRemovalVerified: simulationEvidence.realMaterialRemovalVerified,
+    simulationRiskLevel: simulationSummary.riskLevel
+  };
+  gate.warnings = dedupeStrings([
+    ...(gate.warnings ?? []).filter((item) => !/CAMotics|仿真|材料去除|旋转包裹\/三轴预览/.test(String(item))),
+    ...(simulationEvidence.productionUnlockEligible ? [] : [simulationEvidence.summary])
+  ]);
+  gate.requiredActions = dedupeStrings([
+    ...(gate.requiredActions ?? []).filter((item) => !/CAMotics|仿真|材料去除/.test(String(item))),
+    ...simulationEvidence.requiredActions
+  ]);
+  gate.allowProductionNc = Boolean(gate.allowProductionNc) && simulationEvidence.productionUnlockEligible;
+  gate.level = gate.blockers?.length > 0 ? "blocked" : gate.allowProductionNc ? "production" : "trial-only";
+  gate.summary = gate.allowProductionNc
+    ? "已通过 V3 生产门禁，可下载生产 NC。"
+    : gate.blockers?.length
+      ? `禁止上机：${gate.blockers[0]}`
+      : "仅建议离料空跑/小料试雕，暂不建议直接生产上机。";
+  gate.updatedAt = new Date().toISOString();
+  return gate;
+}
+
+function refreshProductionUnlockMatrixSimulationRow(matrix, productionGate, simulationSummary) {
+  const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
+  const next = matrix && typeof matrix === "object" ? { ...matrix } : {
+    schema: "hediao3d.production-unlock-matrix.v1",
+    rows: []
+  };
+  const rows = Array.isArray(next.rows) ? [...next.rows] : [];
+  const row = {
+    id: "simulation-evidence",
+    label: "材料去除仿真证据",
+    status: simulationEvidence.productionUnlockEligible ? "pass" : "review",
+    evidence: "simulation-summary.json / camotics-result.json",
+    summary: simulationEvidence.summary,
+    requiredForProduction: true
+  };
+  const index = rows.findIndex((item) => item.id === "simulation-evidence");
+  if (index >= 0) rows[index] = { ...rows[index], ...row };
+  else rows.push(row);
+  const blockCount = rows.filter((item) => item.status === "block").length;
+  const reviewCount = rows.filter((item) => item.status === "review").length;
+  const passCount = rows.filter((item) => item.status === "pass").length;
+  return {
+    ...next,
+    jobId: productionGate.jobId ?? next.jobId,
+    updatedAt: new Date().toISOString(),
+    packageLevel: productionGate.level,
+    allowProductionNc: productionGate.allowProductionNc,
+    summary: productionGate.allowProductionNc
+      ? "生产 NC 已满足矩阵条件。"
+      : `生产 NC 未解锁：${blockCount} 个阻断项，${reviewCount} 个复核项。`,
+    passCount,
+    reviewCount,
+    blockCount,
+    rows,
+    blockers: productionGate.blockers ?? [],
+    warnings: productionGate.warnings ?? [],
+    requiredActions: productionGate.requiredActions ?? []
+  };
+}
+
+function createToolpathStubForRefresh(job) {
+  const summary = job.result?.summary ?? {};
+  const toolpathSummary = readJsonFile(join(job.workDir, "toolpath-summary.json"));
+  return {
+    points: new Array(Math.max(0, Number(summary.points ?? toolpathSummary?.points ?? 0))).fill(null),
+    estimatedMinutes: Number(summary.estimatedMinutes ?? toolpathSummary?.estimatedMinutes ?? 0),
+    postProcessorName: summary.postProcessorName ?? toolpathSummary?.postProcessorName ?? "V3 postprocess",
+    summary: {
+      warnings: summary.warnings ?? toolpathSummary?.warnings ?? []
+    }
+  };
 }
 
 function createMachineAcceptanceRecord(job, checklist, input) {
