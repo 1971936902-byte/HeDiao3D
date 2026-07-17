@@ -113,6 +113,8 @@ def build_freecad_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[s
                 "id": operation.get("id"),
                 "enabled": bool(operation.get("enabled")),
                 "strategy": operation.get("strategy"),
+                "freecadOperationHint": freecad_operation_hint(operation, settings),
+                "validationState": freecad_operation_validation_state(operation, settings),
                 "allowAdapter": operation.get("allowAdapter", True),
                 "parameters": operation.get("parameters") or {},
             }
@@ -143,6 +145,30 @@ def build_freecad_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[s
             "Production unlock still requires NC static analysis, controller dialect check, air-run and material-removal simulation.",
         ],
     }
+
+
+def freecad_operation_hint(operation: Dict[str, Any], settings: Dict[str, Any]) -> str:
+    strategy = str(operation.get("strategy") or "").lower()
+    cam_mode = settings.get("camMode")
+    if "rough" in strategy:
+        return "Path Surface roughing or Pocket/Profile roughing on prepared relief stock"
+    if "rest" in strategy or "detail" in strategy:
+        return "Path Engrave/Pocket rest-detail pass after verified finishing stock"
+    if cam_mode == "rotaryWrap":
+        return "Path Surface/Parallel finishing on unwrapped X/Y heightfield; HeDiao3D performs final Y/A rotary wrap"
+    return "Path Surface parallel finishing or Profile finishing on 3-axis relief"
+
+
+def freecad_operation_validation_state(operation: Dict[str, Any], settings: Dict[str, Any]) -> str:
+    if not operation.get("enabled"):
+        return "disabled"
+    strategy = str(operation.get("strategy") or "").lower()
+    cam_mode = settings.get("camMode")
+    if cam_mode == "rotaryWrap":
+        return "requires-unwrapped-heightfield-validation"
+    if "rest" in strategy or "detail" in strategy:
+        return "requires-rest-machining-validation"
+    return "ready-for-cam-server-mapping-test"
 
 
 def write_plan_artifacts(job: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, str]:
@@ -241,14 +267,20 @@ def create_freecad_run_template(plan: Dict[str, Any]) -> str:
         "",
         "def add_operations(doc, job, controller):",
         "    enabled = [op for op in PLAN.get('operations', []) if op.get('enabled')]",
-        "    # Deployment TODO: map these HeDiao3D operations to validated FreeCAD",
-        "    # Path operations, for example Profile/Surface/Waterline/Engrave as",
-        "    # appropriate for the installed FreeCAD version and target controller.",
-        "    # Keep this explicit instead of silently producing an unsafe generic path.",
         "    if not enabled:",
         "        raise RuntimeError('No enabled CAM operations in FreeCAD plan.')",
+        "    mapping_rows = []",
+        "    for op in enabled:",
+        "        mapping_rows.append(f\"{op.get('id')} -> {op.get('freecadOperationHint')} [{op.get('validationState')}]\")",
+        "    print('HeDiao3D FreeCAD operation mapping:')",
+        "    for row in mapping_rows:",
+        "        print(' -', row)",
+        "    # Deployment TODO: replace this guard with validated FreeCAD Path",
+        "    # operation creation for the exact installed FreeCAD version. Do not",
+        "    # silently emit a generic path: the mapping must match the stock, tool,",
+        "    # controller dialect and HeDiao3D rotary-wrap postprocess policy.",
         "    if os.environ.get('HEDIAO3D_FREECAD_TEMPLATE_ALLOW_UNVALIDATED_OPS', '').lower() not in ('1', 'true', 'yes', 'on'):",
-        "        raise RuntimeError('FreeCAD Path operation mapping is not validated yet; set HEDIAO3D_FREECAD_TEMPLATE_ALLOW_UNVALIDATED_OPS only on a CAM test server.')",
+        "        raise RuntimeError('FreeCAD Path operation mapping is not validated yet: ' + '; '.join(mapping_rows) + '. Set HEDIAO3D_FREECAD_TEMPLATE_ALLOW_UNVALIDATED_OPS only on a CAM test server.')",
         "    return enabled",
         "",
         "def postprocess(job):",
