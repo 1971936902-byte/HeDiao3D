@@ -53,6 +53,7 @@ const resultTemplate = createResultTemplate(plan, preferred, motionProfile, runP
 writeFileSync(join(outputDir, "camotics-result-template.json"), JSON.stringify(resultTemplate, null, 2), "utf8");
 writeFileSync(join(outputDir, "camotics-linux-run.sh"), createLinuxRunScript(packageJson), "utf8");
 writeFileSync(join(outputDir, "camotics-result-validate.js"), createResultValidatorScript(packageJson), "utf8");
+writeFileSync(join(outputDir, "camotics-linux-operator-checklist.md"), createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTemplate), "utf8");
 
 console.log(JSON.stringify({
   ok: ready,
@@ -62,6 +63,7 @@ console.log(JSON.stringify({
   resultTemplate: join(outputDir, "camotics-result-template.json"),
   runScript: join(outputDir, "camotics-linux-run.sh"),
   validator: join(outputDir, "camotics-result-validate.js"),
+  operatorChecklist: join(outputDir, "camotics-linux-operator-checklist.md"),
   checks: checks.length
 }, null, 2));
 
@@ -154,7 +156,8 @@ function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
       screenshot: expectedResult.screenshot ?? "camotics-preview.png",
       materialMesh: expectedResult.materialMesh ?? "camotics-material-removal.stl",
       resultTemplate: "camotics-result-template.json",
-      resultValidator: "camotics-result-validate.js"
+      resultValidator: "camotics-result-validate.js",
+      operatorChecklist: "camotics-linux-operator-checklist.md"
     },
     importBack: {
       adapterCommand: `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true HEDIAO3D_CAMOTICS_RESULT_JSON=${shellQuote(join(outputDir, expectedResult.resultJson ?? "camotics-result.json"))} node adapters/camotics/camotics_job.js ${shellQuote(join(jobDir, "camotics-job.json"))} ${shellQuote(join(jobDir, "camotics-adapter-report.json"))}`,
@@ -173,6 +176,10 @@ function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
       productionUnlockFromPreparePackage: false,
       syntheticResultAllowedForProduction: false,
       note: "This package prepares a real CAMotics run; it never unlocks production NC by itself."
+    },
+    operatorChecklist: {
+      filename: "camotics-linux-operator-checklist.md",
+      purpose: "Step-by-step Linux CAMotics run, validation and import-back checklist for the operator."
     }
   };
 }
@@ -263,6 +270,75 @@ function createLinuxRunScript(packageJson) {
     "echo '[HeDiao3D] Validate before import: node camotics-result-validate.js'",
     ""
   ].join("\n");
+}
+
+function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTemplate) {
+  const preferred = packageJson.inputs?.preferredGcode?.filename ?? "camotics-preview.nc";
+  const expectedHash = packageJson.preferredGcodeIdentity?.sha256 ?? "missing";
+  const motion = packageJson.preferredGcodeIdentity?.motionProfile ?? {};
+  const resultJson = packageJson.expectedOutputs?.resultJson ?? "camotics-result.json";
+  const screenshot = packageJson.expectedOutputs?.screenshot ?? "camotics-preview.png";
+  const materialMesh = packageJson.expectedOutputs?.materialMesh ?? "camotics-material-removal.stl";
+  const commands = (packageJson.commandCandidates ?? [])
+    .map((item) => `- \`${item.command}\`: ${item.purpose ?? item.id}`)
+    .join("\n");
+  return [
+    "# HeDiao3D CAMotics Linux 操作清单",
+    "",
+    `生成时间: ${packageJson.createdAt}`,
+    `准备包 SHA-256: \`${runPackageIdentity.sha256}\``,
+    `状态: ${packageJson.status}`,
+    "",
+    "## 1. 核验输入",
+    "",
+    `- [ ] 当前目录是: \`${packageJson.sourceJobDir}\``,
+    `- [ ] 首选仿真 NC 是: \`${preferred}\``,
+    `- [ ] \`${preferred}\` 的 SHA-256 等于: \`${expectedHash}\``,
+    `- [ ] 运动行数: ${motion.motionLineCount ?? "missing"}`,
+    `- [ ] Z 范围: ${motion.zMin ?? "missing"} 到 ${motion.zMax ?? "missing"}`,
+    "- [ ] 确认 `camotics-preview.nc` 只用于三轴展开仿真，禁止上机。",
+    "",
+    "## 2. 运行 CAMotics 或等效仿真",
+    "",
+    commands || "- 当前准备包没有命令候选，请手动打开 camotics-preview.nc。",
+    "",
+    "## 3. 生成回填文件",
+    "",
+    `- [ ] 复制 \`camotics-result-template.json\` 为 \`${resultJson}\`。`,
+    `- [ ] 填写 \`${resultJson}\` 的真实材料去除体积 \`metrics.materialRemovedMm3\`。`,
+    `- [ ] 确认 \`inputs.preferredGcodeSha256\` 等于 \`${expectedHash}\`。`,
+    `- [ ] 确认 \`inputs.camoticsCliRunPackageSha256\` 等于 \`${runPackageIdentity.sha256}\`。`,
+    `- [ ] 导出或截图 \`${screenshot}\`。`,
+    `- [ ] 如可用，导出材料去除网格 \`${materialMesh}\`。`,
+    "",
+    "## 4. 本地校验",
+    "",
+    "```bash",
+    `node camotics-result-validate.js ${resultJson} > camotics-result-local-validation.json`,
+    "```",
+    "",
+    "- [ ] `camotics-result-local-validation.json` 中 `ok=true`。",
+    "- [ ] `productionEvidenceEligible=true`。",
+    "- [ ] `missing=[]`。",
+    "",
+    "## 5. 回填到 HeDiao3D",
+    "",
+    "- [ ] 将 `camotics-result.json`、`camotics-result-local-validation.json`、截图或材料网格回填到当前 job。",
+    "- [ ] 回填后检查 `simulation-summary.json`、`production-gate.json`、`production-evidence-dossier.json`。",
+    "- [ ] 未完成空跑、软料试雕、试雕反馈和机床验收前，不允许下载正式生产包。",
+    "",
+    "## 生产边界",
+    "",
+    "- 该准备包只证明 CAMotics 运行输入被绑定，不会解锁生产 NC。",
+    "- synthetic、fixture、手写占位结果不能作为生产证据。",
+    "- 旋转夹具真实材料去除仍需结合 `rotary-wrap-preview-report.json`、离料空跑和现场试雕验收。",
+    "",
+    "## 结果模板摘要",
+    "",
+    `- schema: \`${resultTemplate.schema}\``,
+    `- jobId: \`${resultTemplate.jobId ?? "missing"}\``,
+    `- expected result: \`${resultJson}\``
+  ].join("\n") + "\n";
 }
 
 function createResultValidatorScript(packageJson) {

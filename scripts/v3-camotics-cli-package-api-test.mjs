@@ -84,6 +84,11 @@ async function main() {
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
   assert(runScript.includes("camotics"), "Linux run script should mention camotics command");
   assert(runScript.includes(previewSha256), "Linux run script should echo expected SHA-256");
+  const operatorChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-operator-checklist.md`);
+  assert(operatorChecklist.includes("HeDiao3D CAMotics Linux 操作清单"), "operator checklist missing heading");
+  assert(operatorChecklist.includes(previewSha256), "operator checklist should bind preferred G-code hash");
+  assert(operatorChecklist.includes(runPackageSha256), "operator checklist should bind run package hash");
+  assert(operatorChecklist.includes("productionEvidenceEligible=true"), "operator checklist should require production evidence validation");
   const validatorScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-validate.js`);
   assert(validatorScript.includes("hediao3d.camotics-result-local-validation.v1"), "validator should emit local validation schema");
   assert(validatorScript.includes(runPackageSha256), "validator should bind to current run package hash");
@@ -98,12 +103,15 @@ async function main() {
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.camoticsCliPackage?.artifact === "camotics-cli-run-package.json", "job summary missing CLI package");
+  assert(reloaded.result?.summary?.camoticsCliPackage?.operatorChecklist === "camotics-linux-operator-checklist.md", "job summary missing operator checklist");
   assert(reloaded.result?.summary?.camoticsCliPackage?.productionUnlockEligible === false, "summary must keep production unlock false");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.exists), "delivery manifest missing run package");
+  assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.exists), "delivery manifest missing operator checklist");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.exists), "delivery manifest missing result validator");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.sha256), "package integrity missing run package hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-linux-run.sh" && file.sha256), "package integrity missing run script hash");
   assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.sha256), "package integrity missing result validator hash");
+  assert(reloaded.result?.summary?.packageIntegrity?.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.sha256), "package integrity missing operator checklist hash");
 
   console.log(JSON.stringify({
     ok: true,

@@ -60,9 +60,11 @@ assert(run.status === 0, `prepare exited ${run.status}: ${run.stderr}`);
 const cliPackagePath = join(outputDir, "camotics-cli-run-package.json");
 const resultTemplatePath = join(outputDir, "camotics-result-template.json");
 const runScriptPath = join(outputDir, "camotics-linux-run.sh");
+const operatorChecklistPath = join(outputDir, "camotics-linux-operator-checklist.md");
 assert(existsSync(cliPackagePath), "run package was not written");
 assert(existsSync(resultTemplatePath), "result template was not written");
 assert(existsSync(runScriptPath), "Linux run script was not written");
+assert(existsSync(operatorChecklistPath), "Linux operator checklist was not written");
 
 const cliPackage = JSON.parse(readFileSync(cliPackagePath, "utf8"));
 const template = JSON.parse(readFileSync(resultTemplatePath, "utf8"));
@@ -76,12 +78,19 @@ assert(cliPackage.preferredGcodeIdentity?.motionProfile?.motionLineCount === 3, 
 assert(cliPackage.preferredGcodeIdentity?.motionProfile?.zMin === -0.4, "motion profile zMin mismatch");
 assert(cliPackage.preferredGcodeIdentity?.motionProfile?.zMax === 5, "motion profile zMax mismatch");
 assert(cliPackage.importBack?.requires?.some((item) => item.includes("preferredGcodeSha256")), "import instructions should require preferred G-code hash");
+assert(cliPackage.expectedOutputs?.operatorChecklist === "camotics-linux-operator-checklist.md", "run package should expose operator checklist");
+assert(cliPackage.operatorChecklist?.filename === "camotics-linux-operator-checklist.md", "run package should describe operator checklist");
 assert(cliPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "prepare package must not unlock production");
 assert(template.inputs?.preferredGcodeSha256 === previewSha256, "template should include preferred G-code hash");
 assert(template.inputs?.camoticsCliRunPackage === "camotics-cli-run-package.json", "template should name CLI run package");
 assert(template.inputs?.camoticsCliRunPackageSha256 === cliPackageSha256, "template should bind to CLI run package hash");
 assert(template.metrics?.motionLineCount === 3, "template should seed motion count from preview");
 assert(template.metrics?.materialRemovedMm3 === null, "template must require real material removal volume");
+const operatorChecklist = readFileSync(operatorChecklistPath, "utf8");
+assert(operatorChecklist.includes("HeDiao3D CAMotics Linux 操作清单"), "operator checklist missing heading");
+assert(operatorChecklist.includes(previewSha256), "operator checklist should include preview hash");
+assert(operatorChecklist.includes(cliPackageSha256), "operator checklist should include run package hash");
+assert(operatorChecklist.includes("camotics-result-local-validation.json"), "operator checklist should require local validation output");
 
 const blockedDir = join(workDir, "blocked");
 mkdirSync(blockedDir, { recursive: true });
