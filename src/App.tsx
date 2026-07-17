@@ -608,6 +608,39 @@ type V3OrchestratorJob = {
           zMin: number | null;
           zMax: number | null;
         };
+        machineFit?: {
+          schema: string;
+          level: "ok" | "review" | "critical";
+          summary: string;
+          targetMachine?: {
+            controllerClass: string;
+            axisMapping: string;
+            postProcessor: string | null;
+            rotaryOutputAxis: string;
+            rotaryWrapPerRevolutionMm: number;
+          };
+          stockEnvelope?: {
+            safeLeftX: number;
+            safeRightX: number;
+            safeMachiningLengthMm: number;
+            depthLimitMm: number;
+          };
+          coverage?: {
+            xCoverageRatio: number;
+            rotarySpanDeg: number;
+            expectedRotaryCoverageDeg: number;
+            rotaryCoverageRatio: number | null;
+            depthMax: number | null;
+          };
+          riskCounts?: {
+            holdZonePointCount: number;
+            deepPointCount: number;
+            invalidPointCount: number;
+            missingRotaryCount: number;
+            outOfRangeCount: number;
+          };
+          warnings?: string[];
+        };
         errors: string[];
         warnings: string[];
       };
@@ -6587,6 +6620,25 @@ export function App() {
                   {v3Job.result.summary.neutralToolpathImportValidation.summary}
                 </small>
               )}
+              {v3Job?.result?.summary.neutralToolpathImportValidation?.machineFit && (
+                <small className={v3Job.result.summary.neutralToolpathImportValidation.machineFit.level === "ok" ? "v3-inline-ok" : v3Job.result.summary.neutralToolpathImportValidation.machineFit.level === "critical" ? "v3-inline-critical" : "v3-inline-warning"}>
+                  机床适配：{v3Job.result.summary.neutralToolpathImportValidation.machineFit.level}
+                  {" · "}
+                  {v3Job.result.summary.neutralToolpathImportValidation.machineFit.targetMachine?.axisMapping ?? "三轴/Y旋转夹具"}
+                  {" · "}
+                  X覆盖 {v3Job.result.summary.neutralToolpathImportValidation.machineFit.coverage?.xCoverageRatio !== undefined ? `${(v3Job.result.summary.neutralToolpathImportValidation.machineFit.coverage.xCoverageRatio * 100).toFixed(1)}%` : "-"}
+                  {" · "}
+                  旋转 {v3Job.result.summary.neutralToolpathImportValidation.machineFit.coverage?.rotarySpanDeg !== undefined ? `${v3Job.result.summary.neutralToolpathImportValidation.machineFit.coverage.rotarySpanDeg.toFixed(1)}°` : "-"}
+                  {v3Job.result.summary.neutralToolpathImportValidation.machineFit.riskCounts?.holdZonePointCount
+                    ? ` · 端部风险 ${v3Job.result.summary.neutralToolpathImportValidation.machineFit.riskCounts.holdZonePointCount}`
+                    : ""}
+                  {v3Job.result.summary.neutralToolpathImportValidation.machineFit.riskCounts?.deepPointCount
+                    ? ` · 超深 ${v3Job.result.summary.neutralToolpathImportValidation.machineFit.riskCounts.deepPointCount}`
+                    : ""}
+                  {" · "}
+                  {v3Job.result.summary.neutralToolpathImportValidation.machineFit.summary}
+                </small>
+              )}
               {findV3DeliveryFile(v3Job, "opencamlib-cutter-envelope-report.json") && (
                 <small className="v3-inline-warning">
                   OpenCAMLib包络：preview审计报告
@@ -9511,6 +9563,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const camHandoffQuality = summary?.camHandoffQuality;
   const neutralToolpathImportValidation = summary?.neutralToolpathImportValidation;
+  const neutralMachineFit = neutralToolpathImportValidation?.machineFit;
   const rotaryWrapPreviewReport = summary?.rotaryWrapPreviewReport;
   const postprocessTraceReport = summary?.postprocessTraceReport;
   const controllerDialectReport = summary?.controllerDialectReport;
@@ -9562,6 +9615,9 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `Neutral导入点数: ${neutralToolpathImportValidation?.metrics?.sourcePointCount ?? "-"} / 归一化 ${neutralToolpathImportValidation?.metrics?.normalizedPointCount ?? "-"} / 越界 ${neutralToolpathImportValidation?.metrics?.outOfRangeCount ?? "-"}`,
     `Neutral导入来源: ${neutralToolpathImportValidation?.engine ?? "-"} / ${neutralToolpathImportValidation?.sourceName ?? "-"}`,
     `Neutral源绑定: ${neutralToolpathImportValidation?.sourceBinding?.status ?? "-"} / 输入 ${neutralToolpathImportValidation?.sourceBinding?.submitted?.sha256 ? `${neutralToolpathImportValidation.sourceBinding.submitted.sha256.slice(0, 12)}...` : "-"} / 后处理 ${neutralToolpathImportValidation?.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact ? "匹配" : neutralToolpathImportValidation?.sourceBinding ? "待复核" : "-"}`,
+    `Neutral机床适配: ${neutralMachineFit?.level ?? "未生成"} / ${neutralMachineFit?.targetMachine?.axisMapping ?? "-"}`,
+    `Neutral覆盖: X ${neutralMachineFit?.coverage?.xCoverageRatio !== undefined ? `${(neutralMachineFit.coverage.xCoverageRatio * 100).toFixed(1)}%` : "-"} / 旋转 ${neutralMachineFit?.coverage?.rotarySpanDeg !== undefined ? `${neutralMachineFit.coverage.rotarySpanDeg.toFixed(1)}°` : "-"} / 目标 ${neutralMachineFit?.coverage?.expectedRotaryCoverageDeg !== undefined ? `${neutralMachineFit.coverage.expectedRotaryCoverageDeg.toFixed(1)}°` : "-"}`,
+    `Neutral风险: 端部 ${neutralMachineFit?.riskCounts?.holdZonePointCount ?? "-"} / 超深 ${neutralMachineFit?.riskCounts?.deepPointCount ?? "-"} / 越界 ${neutralMachineFit?.riskCounts?.outOfRangeCount ?? "-"}`,
     "Neutral导入校验报告: neutral-toolpath-import-validation.json",
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",
