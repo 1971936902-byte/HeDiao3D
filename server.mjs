@@ -2570,6 +2570,7 @@ async function processOrchestratorJob(job, settings) {
     externalToolpathUsed: Boolean(externalToolpath)
   });
   await writeFile(join(job.workDir, "cam-handoff-quality.json"), JSON.stringify(camHandoffQuality, null, 2), "utf8");
+  await writeFile(join(job.workDir, "cam-handoff-evidence.md"), createCamHandoffEvidenceMarkdown(camHandoffQuality), "utf8");
   updatePipelineStage(job, "toolpath", "completed", `生成 ${toolpath.points.length} 个刀路点。`);
   updatePipelineStage(job, "simulation", "running", "正在生成自研旋转包裹预览、CAMotics 仿真输入和离料空跑。");
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
@@ -2794,6 +2795,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-handoff-quality.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-handoff-evidence.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
@@ -4778,6 +4780,68 @@ function createAxisSummary(values) {
   };
 }
 
+function createCamHandoffEvidenceMarkdown(report) {
+  const snapshot = report.sourceSnapshot ?? {};
+  const sourceIdentity = snapshot.sha256
+    ? `${snapshot.kind ?? "source"} sha256=${snapshot.sha256}`
+    : "missing source sha256";
+  const metrics = report.metrics ?? {};
+  return `# HeDiao3D V3 CAM Handoff Evidence
+
+Job: ${report.jobId}
+Created: ${report.createdAt}
+Level: ${report.level}
+Summary: ${report.summary}
+
+## 1. Source Classification
+
+- Source: ${report.source}
+- Selected engine: ${report.selectedEngine ?? "unknown"}
+- Result engine: ${report.resultEngine ?? "unknown"}
+- Adapter status: ${report.adapterStatus ?? "missing"}
+- External toolpath used: ${report.externalToolpathUsed ? "yes" : "no"}
+- External command generated: ${report.externalCommandGenerated ? "yes" : "no"}
+- Synthetic: ${report.synthetic ? "yes" : "no"}
+- Fixture/imported fixture: ${report.importedFixture ? "yes" : "no"}
+- Preview scaffold: ${report.previewScaffold ? "yes" : "no"}
+- Source identity: ${sourceIdentity}
+
+## 2. Motion Coverage
+
+- Point count: ${metrics.pointCount ?? 0}
+- Preview point count: ${metrics.previewPointCount ?? 0}
+- Estimated minutes: ${fmt(Number(metrics.estimatedMinutes ?? 0), 2)}
+- X coverage: ${metrics.xCoverage == null ? "n/a" : `${fmt(Number(metrics.xCoverage) * 100, 1)}%`}
+- Rotary coverage: ${metrics.rotaryCoverage == null ? "n/a" : `${fmt(Number(metrics.rotaryCoverage) * 100, 1)}%`}
+- Z range: ${formatRange(metrics.zRangeMm)}
+- Depth range: ${formatRange(metrics.depthRangeMm)}
+- Expected rotary axis: ${metrics.expectedRotaryAxis ?? "n/a"}
+
+## 3. Issues
+
+Critical:
+${report.criticalIssues.length ? report.criticalIssues.map((item) => `- ${item}`).join("\n") : "- none"}
+
+Review:
+${report.warningIssues.length ? report.warningIssues.map((item) => `- ${item}`).join("\n") : "- none"}
+
+## 4. Required Actions
+
+${report.requiredActions.length ? report.requiredActions.map((item) => `- ${item}`).join("\n") : "- none"}
+
+## 5. Production Boundary
+
+- This evidence file does not unlock production NC by itself.
+- Production requires non-synthetic external CAM output, source identity, real material-removal simulation, NC static analysis, air-run, trial feedback and machine acceptance.
+- Internal fallback, fixture, synthetic and preview scaffold outputs are useful for contract validation only.
+`;
+}
+
+function formatRange(range) {
+  if (!range || range.min == null || range.max == null) return "n/a";
+  return `${fmt(Number(range.min), 4)} .. ${fmt(Number(range.max), 4)} span=${fmt(Number(range.span ?? 0), 4)}`;
+}
+
 function summarizeHandoffPointStats(points) {
   if (!points.length) {
     return {
@@ -6407,6 +6471,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("production-unlock-matrix.json"),
         getFile("production-evidence-dossier.json"),
         getFile("cam-handoff-quality.json"),
+        getFile("cam-handoff-evidence.md"),
         getFile("rotary-wrap-preview-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
@@ -6426,7 +6491,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -6600,6 +6665,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
+    createDeliveryFile(job.id, "cam-handoff-evidence.md", "CAM Handoff证据说明", "report", true, "用可读文本说明刀路来源、输入哈希、fixture/synthetic 风险、覆盖率和生产边界。"),
     createDeliveryFile(job.id, "rotary-wrap-preview-report.json", "旋转包裹预览一致性报告", "report", true, "检查中立刀路、Y/A旋转后处理、CAMotics展开预览和每圈等效距离是否一致。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
