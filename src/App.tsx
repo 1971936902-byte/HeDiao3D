@@ -1764,6 +1764,10 @@ export function App() {
     () => createV3EvidenceLoopSummary(v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance),
     [v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
   );
+  const v3CamoticsPackageAcceptanceStep = useMemo(
+    () => v3Readiness?.acceptancePlan?.steps.find((step) => step.id === "camotics-cli-package") ?? null,
+    [v3Readiness]
+  );
   const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
   const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
@@ -4858,6 +4862,14 @@ export function App() {
                           </span>
                         ))}
                       </div>
+                      {v3CamoticsPackageAcceptanceStep && (
+                        <small className={v3CamoticsPackageAcceptanceStep.status === "done" ? "v3-inline-ok" : "v3-inline-warning"}>
+                          CAMotics准备包：
+                          {v3CamoticsPackageAcceptanceStep.status}
+                          {" · "}
+                          {v3CamoticsPackageAcceptanceStep.detail}
+                        </small>
+                      )}
                     </>
                   )}
                   {v3Readiness.gates.warnings[0] && (
