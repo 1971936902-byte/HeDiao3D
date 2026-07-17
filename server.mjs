@@ -1389,6 +1389,17 @@ function createProductionEvidenceCrossChecksSummary(crossChecks) {
     latestTrialFeedbackOutcome: crossChecks.latestTrialFeedbackOutcome ?? null,
     trialFeedbackPassed: Boolean(crossChecks.trialFeedbackPassed),
     trialFeedbackIntegrityBound: Boolean(crossChecks.trialFeedbackIntegrityBound),
+    productionReadinessAudit: crossChecks.productionReadinessAudit
+      ? {
+        schema: crossChecks.productionReadinessAudit.schema ?? "hediao3d.production-readiness-audit.v1",
+        status: crossChecks.productionReadinessAudit.status ?? "unknown",
+        allowProductionPackage: Boolean(crossChecks.productionReadinessAudit.allowProductionPackage),
+        passCount: Number(crossChecks.productionReadinessAudit.passCount ?? 0),
+        reviewCount: Number(crossChecks.productionReadinessAudit.reviewCount ?? 0),
+        blockCount: Number(crossChecks.productionReadinessAudit.blockCount ?? 0),
+        summary: crossChecks.productionReadinessAudit.summary ?? null
+      }
+      : null,
     optimizationStatus: crossChecks.optimizationStatus ?? null
   };
 }
@@ -1403,6 +1414,7 @@ function formatProductionEvidenceCrossChecksForReadiness(crossChecks) {
     `nc=${crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "ready" : "review"}`,
     `machine=${crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "accepted" : "locked"}`,
     `trial=${crossChecks.trialFeedbackPassed && crossChecks.trialFeedbackIntegrityBound ? "bound-success" : "locked"}`,
+    `productionAudit=${crossChecks.productionReadinessAudit?.status ?? "missing"}`,
     `trialRecords=${crossChecks.trialFeedbackRecords ?? 0}`
   ].join(" / ");
 }
@@ -6710,6 +6722,18 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     && machineAcceptanceLog.latestOutcome === "success"
     && machineAcceptanceLog.latestAllRequiredPassed === true
     && machineAcceptanceIntegrityBound;
+  const productionReadinessAudit = createProductionReadinessAudit({
+    productionGate,
+    camHandoffQuality,
+    neutralBinding,
+    externalGcodeBinding,
+    simulationEvidence,
+    ncStaticAnalysis,
+    controllerDialectReport,
+    machineAcceptancePassed,
+    trialFeedbackPassed,
+    fieldEvidencePackageBinding
+  });
   const evidenceItems = [
     {
       id: "production-gate",
@@ -6871,6 +6895,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       trialFeedbackPassed,
       trialFeedbackIntegrityBound,
       fieldEvidencePackageBinding,
+      productionReadinessAudit,
       optimizationStatus: processOptimizationPlan?.status ?? null
     },
     requiredActions: dedupeStrings([
@@ -6882,6 +6907,89 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       : status === "blocked"
         ? `生产证据档案存在 ${blockedCount} 个阻断项。`
         : `生产证据仍不完整：${reviewCount} 个复核项。`
+  };
+}
+
+function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, fieldEvidencePackageBinding }) {
+  const externalSourceReady = camHandoffQuality?.level === "ready"
+    && camHandoffQuality?.source === "external-adapter"
+    && camHandoffQuality?.externalToolpathUsed === true
+    && camHandoffQuality?.synthetic !== true
+    && camHandoffQuality?.importedFixture !== true
+    && camHandoffQuality?.previewScaffold !== true;
+  const externalBindingReady = Boolean(
+    externalGcodeBinding?.productionCandidate === true
+    || (neutralBinding?.required === true && neutralBinding?.status === "pass")
+  );
+  const realCamReady = externalSourceReady && externalBindingReady;
+  const realSimulationReady = Boolean(
+    simulationEvidence?.realMaterialRemovalVerified
+    && simulationEvidence?.productionUnlockEligible
+    && simulationEvidence?.level === "material-removal-verified"
+  );
+  const ncReady = ncStaticAnalysis?.level === "ready" && controllerDialectReport?.level === "ready";
+  const fieldReady = Boolean(
+    machineAcceptancePassed
+    && trialFeedbackPassed
+    && fieldEvidencePackageBinding?.status === "matched"
+  );
+  const gates = [
+    {
+      id: "external-cam-proof",
+      label: "真实外部CAM输出",
+      status: realCamReady ? "pass" : camHandoffQuality?.level === "critical" ? "block" : "review",
+      summary: realCamReady
+        ? "外部 CAM handoff 已通过，且不是 synthetic/fixture/preview 输出。"
+        : "尚未证明当前刀路来自真实外部 CAM 生产候选输出。"
+    },
+    {
+      id: "material-removal-proof",
+      label: "真实材料去除仿真",
+      status: realSimulationReady ? "pass" : "review",
+      summary: realSimulationReady
+        ? "CAMotics/等效材料去除仿真已绑定当前输入并满足生产证据。"
+        : simulationEvidence?.summary ?? "缺少真实材料去除仿真证据。"
+    },
+    {
+      id: "postprocess-machine-proof",
+      label: "NC与控制器兼容",
+      status: ncReady ? "pass" : ncStaticAnalysis?.level === "critical" || controllerDialectReport?.level === "critical" ? "block" : "review",
+      summary: ncReady
+        ? "NC 静态分析和控制器方言检查通过。"
+        : "NC 静态分析或控制器方言仍需复核。"
+    },
+    {
+      id: "field-package-proof",
+      label: "现场证据同包绑定",
+      status: fieldReady ? "pass" : "review",
+      summary: fieldReady
+        ? "试雕反馈和机床验收均通过，并绑定同一组加工包文件哈希。"
+        : fieldEvidencePackageBinding?.summary ?? "缺少试雕反馈、机床验收或同包哈希绑定。"
+    }
+  ];
+  const blockCount = gates.filter((gate) => gate.status === "block").length;
+  const reviewCount = gates.filter((gate) => gate.status === "review").length;
+  const passCount = gates.filter((gate) => gate.status === "pass").length;
+  const productionGateAllows = productionGate?.allowProductionNc === true;
+  const status = productionGateAllows && blockCount === 0 && reviewCount === 0
+    ? "production-ready"
+    : blockCount > 0
+      ? "blocked"
+      : "trial-only";
+  return {
+    schema: "hediao3d.production-readiness-audit.v1",
+    status,
+    productionGateAllows,
+    allowProductionPackage: status === "production-ready",
+    passCount,
+    reviewCount,
+    blockCount,
+    gates,
+    summary: status === "production-ready"
+      ? "生产下载证据已闭环：真实 CAM、真实仿真、NC 检查、现场同包验收均通过。"
+      : status === "blocked"
+        ? `生产下载存在 ${blockCount} 个阻断项。`
+        : `生产下载仍锁定：${reviewCount} 个生产证据项待补齐。`
   };
 }
 
@@ -11146,6 +11254,8 @@ function getOrchestratorProductionPackage(jobId, res) {
   const workDir = join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
   const manifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
   const productionGate = readJsonFileSafe(join(workDir, "production-gate.json"));
+  const evidenceDossier = readJsonFileSafe(join(workDir, "production-evidence-dossier.json"));
+  const productionAudit = evidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
   if (!manifest?.files?.length) {
     return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
   }
@@ -11160,6 +11270,23 @@ function getOrchestratorProductionPackage(jobId, res) {
       warnings: productionGate?.warnings ?? [],
       nextActions: productionGate?.recommendedWorkflow ?? [
         "完成真实外部 CAM 输出、非 synthetic CAMotics/等效材料去除仿真、空跑、试雕反馈和机床验收后重新生成。"
+      ]
+    });
+  }
+  if (evidenceDossier?.status !== "production-evidence-complete" || productionAudit?.allowProductionPackage !== true) {
+    return json(res, 423, {
+      error: "V3 正式生产包证据档案未闭环",
+      packageLevel: manifest.packageLevel ?? productionGate?.level ?? "unknown",
+      allowTrialNc: Boolean(manifest.allowTrialNc),
+      allowProductionNc: false,
+      dossierStatus: evidenceDossier?.status ?? "missing",
+      productionReadinessAudit: productionAudit ?? null,
+      summary: productionAudit?.summary ?? evidenceDossier?.summary ?? "缺少 production-evidence-dossier.json，无法证明真实 CAM、仿真、试雕反馈和机床验收均绑定同一加工包。",
+      nextActions: [
+        "完成真实外部 CAM 输出与非 synthetic CAMotics/等效材料去除仿真。",
+        "下载同一 job 的安全试雕包，完成离料空跑和软料试雕。",
+        "回填 trial-feedback-log.json 与 machine-acceptance-log.json，并确认 package-integrity 哈希匹配。",
+        "重新请求生产包下载。"
       ]
     });
   }

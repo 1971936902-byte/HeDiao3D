@@ -53,6 +53,7 @@ async function main() {
   const evidenceStep = full.acceptancePlan.steps.find((step) => step.id === "production-evidence-dossier");
   assert(evidenceStep?.detail && /camoticsInput=/.test(evidenceStep.detail), "evidence dossier step detail should include CAMotics input cross check");
   assert(evidenceStep?.detail && /machine=/.test(evidenceStep.detail), "evidence dossier step detail should include machine acceptance cross check");
+  assert(evidenceStep?.detail && /productionAudit=/.test(evidenceStep.detail), "evidence dossier step detail should include production audit status");
   assert(full.externalCamHandoffs?.schema === "hediao3d.external-cam-handoffs.v1", "full readiness artifact missing external CAM handoff summary");
   assert(full.externalCamHandoffs.requiredEngines.includes("freecad"), "external CAM handoff summary missing FreeCAD");
   assert(full.externalCamHandoffs.requiredEngines.includes("blendercam"), "external CAM handoff summary missing BlenderCAM");
@@ -84,6 +85,7 @@ async function main() {
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
   assert(markdown.includes("Evidence cross checks"), "readiness markdown missing evidence cross-check summary");
   assert(markdown.includes("camoticsInput="), "readiness markdown missing CAMotics input cross-check status");
+  assert(markdown.includes("productionAudit="), "readiness markdown missing production audit cross-check status");
 
   const camServerConfigArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.camServerConfig}`);
   assert(camServerConfigArtifact.ok, `CAM server config artifact failed: ${camServerConfigArtifact.status}`);
@@ -218,6 +220,11 @@ function validateReadiness(report, label) {
     assert(report.latestEvidenceDossier.crossChecks, `${label} evidence dossier crossChecks missing`);
     assert(typeof report.latestEvidenceDossier.crossChecks.ncStaticReady === "boolean", `${label} evidence dossier NC static cross-check missing`);
     assert(typeof report.latestEvidenceDossier.crossChecks.camoticsInputIdentityStatus === "string", `${label} evidence dossier CAMotics input cross-check missing`);
+    assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks, "productionReadinessAudit"), `${label} evidence dossier production readiness audit missing`);
+    if (report.latestEvidenceDossier.crossChecks.productionReadinessAudit) {
+      assert(report.latestEvidenceDossier.crossChecks.productionReadinessAudit.schema === "hediao3d.production-readiness-audit.v1", `${label} production readiness audit schema mismatch`);
+      assert(typeof report.latestEvidenceDossier.crossChecks.productionReadinessAudit.allowProductionPackage === "boolean", `${label} production readiness audit package flag missing`);
+    }
     assert(report.acceptancePlan.steps.some((step) => step.id === "production-evidence-dossier"), `${label} acceptance plan missing evidence dossier step`);
   }
 }
