@@ -14,6 +14,9 @@ async function main() {
   assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "opencamlib" && item.handoff?.includes("neutral-toolpath")), "integration strategy should include OpenCAMLib neutral handoff");
   assert(run.summary.integrationStrategy.recommendedStack?.some((item) => item.id === "camotics" && item.role === "material-removal-simulation"), "integration strategy should include CAMotics simulation role");
   assert(run.summary.integrationStrategy.productionBoundary?.some((item) => item.includes("三轴控制器+Y轴旋转夹具")), "integration strategy should preserve rotary fixture production boundary");
+  assert(run.summary.executionPlan?.schema === "hediao3d.opensource-cam-execution-plan.v1", "native CAM summary should expose open-source CAM execution plan");
+  assert(run.summary.executionPlan.stages?.some((stage) => stage.id === "opencamlib-neutral-core" && stage.output.includes("neutral-toolpath")), "execution plan should include OpenCAMLib neutral core stage");
+  assert(run.summary.executionPlan.stages?.some((stage) => stage.id === "camotics-material-removal" && stage.productionBoundary.includes("synthetic")), "execution plan should include CAMotics production lock");
   assert(run.summary.capabilityMatrix.some((item) => item.id === "opencamlib" && item.supportedWorkflows?.includes("drop-cutter")), "OpenCAMLib capability matrix should expose drop-cutter workflow");
   assert(run.summary.capabilityMatrix.some((item) => item.id === "camotics" && item.category === "simulation"), "CAMotics capability matrix should mark simulation role");
   assert(run.apiArtifacts?.bootstrap?.endsWith("native-cam-server-bootstrap.sh"), "native CAM summary should expose bootstrap artifact");
@@ -29,6 +32,7 @@ async function main() {
   validateSummary(latest.latest, "GET /api/orchestrator/native-cam/latest");
   assert(latest.latest.summary.capabilityMatrix?.length === 4, "latest native CAM summary should preserve capability matrix");
   assert(latest.latest.summary.integrationStrategy?.recommendedStack?.length >= 4, "latest native CAM summary should preserve integration strategy");
+  assert(latest.latest.summary.executionPlan?.stages?.length === 4, "latest native CAM summary should preserve execution plan");
   assert(Array.isArray(latest.checks), "checks history missing");
   assert(JSON.stringify(latest.latest).length < 50000, "latest native CAM summary is too large");
 
@@ -39,6 +43,7 @@ async function main() {
   assert(Array.isArray(artifact.checks), "full native CAM artifact missing checks[]");
   assert(artifact.summary?.capabilityMatrix?.some((item) => item.id === "blendercam" && item.supportedWorkflows.includes("artistic-relief")), "full artifact should include BlenderCAM capability matrix");
   assert(artifact.summary?.integrationStrategy?.rolloutStages?.some((item) => item.includes("Linux CAM 服务器")), "full artifact should include rollout stages");
+  assert(artifact.summary?.executionPlan?.productionLocks?.some((item) => item.includes("production-candidate")), "full artifact should include execution production locks");
   assert(artifact.artifacts?.schema === "hediao3d.native-cam-server-package.v1", "full artifact should include native CAM server package manifest");
   assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-server-bootstrap.sh"), "full artifact should include bootstrap package entry");
   assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "full artifact should include real output check package entry");
@@ -58,6 +63,8 @@ async function main() {
   assert(envTemplate.includes("HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT=false"), "native CAM env template should forbid synthetic CAMotics by default");
   const checklist = await fetchText(latest.latest.apiArtifacts.checklist);
   assert(checklist.includes("Production Boundary"), "native CAM checklist should include production boundary");
+  assert(checklist.includes("Open Source CAM Execution Plan"), "native CAM checklist should include execution plan");
+  assert(checklist.includes("OpenCAMLib 曲面接触"), "native CAM checklist should include OpenCAMLib execution stage");
   assert(checklist.includes("native-cam-real-output-check.sh"), "native CAM checklist should include real output check command");
   const realOutputCheck = await fetchText(latest.latest.apiArtifacts.realOutputCheck);
   assert(realOutputCheck.includes("handoffEvidence"), "real output check should parse handoffEvidence");
@@ -84,6 +91,7 @@ function validateSummary(summary, label) {
   assert(summary.summary, `${label} missing summary`);
   assert(Array.isArray(summary.summary.capabilityMatrix), `${label} missing capability matrix`);
   assert(summary.summary.integrationStrategy, `${label} missing integration strategy`);
+  assert(summary.summary.executionPlan?.schema === "hediao3d.opensource-cam-execution-plan.v1", `${label} missing execution plan`);
   assert(Array.isArray(summary.checks), `${label} missing checks[]`);
   assert(summary.apiArtifacts?.json, `${label} missing JSON artifact`);
   assert(summary.apiArtifacts?.markdown, `${label} missing Markdown artifact`);

@@ -209,6 +209,7 @@ function createSummary(checks) {
       ? "Linux Native CAM 环境已具备 V3 外部 CAM/仿真验收条件。"
       : `Linux Native CAM 环境未完整就绪：${readyCount}/${requiredCount}。`,
     integrationStrategy: createOpenSourceCamIntegrationStrategy(),
+    executionPlan: createOpenSourceCamExecutionPlan(checks),
     capabilityMatrix: createCapabilityMatrix(checks),
     blockers,
     nextActions: [...new Set(nextActions)]
@@ -264,6 +265,100 @@ function createOpenSourceCamIntegrationStrategy() {
       "fixture、synthetic、heightfield preview 只能证明协议链路，不能作为生产证据。",
       "外部 CAM 的输出必须包含源码快照、输入模型哈希、刀具参数、坐标系和非 synthetic 仿真结果。",
       "三轴控制器+Y轴旋转夹具的最终 NC 永远由 HeDiao3D 后处理层负责，不能直接使用通用 CAM 默认后处理。"
+    ]
+  };
+}
+
+function createOpenSourceCamExecutionPlan(checks) {
+  const byId = new Map(checks.map((check) => [check.id, check]));
+  const stageDefinitions = [
+    {
+      id: "freecad-reference-cam",
+      engineId: "freecad",
+      title: "FreeCAD 标准三轴参考 CAM",
+      phase: "external-cam-generator",
+      priority: "P0",
+      input: "repaired-model.stl 或 cam-input-plan.json 选中的 STL/STEP/OBJ",
+      output: "adapter-report.json + G-code source snapshot",
+      acceptance: "npm run test:v3:freecad-external-handoff",
+      handoff: "Orchestrator 摄取 FreeCAD G-code，再执行 NC 静态分析、CAMotics 仿真和 HeDiao3D 专用后处理复核。",
+      productionBoundary: "不能直接把 FreeCAD 默认后处理输出当成三轴控制器+Y旋转夹具最终 NC。"
+    },
+    {
+      id: "opencamlib-neutral-core",
+      engineId: "opencamlib",
+      title: "OpenCAMLib 曲面接触与中立刀位点",
+      phase: "geometry-kernel",
+      priority: "P0",
+      input: "修复后的佛头 STL/高度场采样 + 刀具几何参数",
+      output: "hediao3d.neutral-toolpath.v1 + cutter-envelope/contact report",
+      acceptance: "npm run test:v3:neutral-import && npm run test:v3:closed-neutral-handoff",
+      handoff: "中立刀位点由 HeDiao3D 转换为 X+Z+Y/A 旋转夹具 NC。",
+      productionBoundary: "preview/heightfield fixture 只能验协议，真实生产必须来自 OpenCAMLib/ocl 接触计算。"
+    },
+    {
+      id: "camotics-material-removal",
+      engineId: "camotics",
+      title: "CAMotics 材料去除仿真",
+      phase: "simulation",
+      priority: "P0",
+      input: "camotics-preview.nc + camotics-project-template.json + 当前 NC SHA-256",
+      output: "hediao3d.camotics-result.v1 + screenshot/material-removal mesh",
+      acceptance: "npm run test:v3:camotics-import && npm run test:v3:camotics-cli-package-api",
+      handoff: "仿真结果回填 Orchestrator，进入 production-gate 和 evidence dossier。",
+      productionBoundary: "CAMotics 不生成刀路；synthetic 结果永远不能解锁生产。"
+    },
+    {
+      id: "blendercam-artistic-mesh",
+      engineId: "blendercam",
+      title: "BlenderCAM/Fabex 艺术 Mesh 候选刀路",
+      phase: "artistic-cam-generator",
+      priority: "P1",
+      input: "Meshy/导入 GLB 转换后的 STL/OBJ + Blender 修模产物",
+      output: "operation report + G-code source snapshot",
+      acceptance: "npm run test:v3:blendercam-external-handoff",
+      handoff: "作为复杂佛头 Mesh 的候选刀路，与 OpenCAMLib 中立刀位点互相对照。",
+      productionBoundary: "插件版本和坐标系差异大，必须经过真实服务器验收和机床空跑。"
+    }
+  ];
+
+  const stages = stageDefinitions.map((stage, index) => {
+    const check = byId.get(stage.engineId);
+    return {
+      ...stage,
+      order: index + 1,
+      engineReady: Boolean(check?.ready),
+      engineLevel: check?.level ?? "missing",
+      command: check?.command ?? null,
+      status: check?.ready ? "ready-to-validate-output" : check?.command ? "partial-native-env" : "missing-native-env",
+      missing: Array.isArray(check?.missing) ? check.missing : [`${stage.engineId} readiness check missing`],
+      evidence: [
+        "native-cam-readiness.json",
+        "v3-external-adapter-validation.json",
+        "adapter-report.json",
+        stage.output
+      ]
+    };
+  });
+  const readyStages = stages.filter((stage) => stage.engineReady).length;
+  return {
+    schema: "hediao3d.opensource-cam-execution-plan.v1",
+    summary: `${readyStages}/${stages.length} 个开源 CAM/仿真阶段具备 Native 环境；生产仍需真实输出验收、仿真和机床验收。`,
+    strategy: "外部 CAM 只负责生成可审计中间结果；HeDiao3D 负责三轴控制器+Y/A旋转夹具后处理、仿真回填和生产门禁。",
+    readyStages,
+    totalStages: stages.length,
+    stages,
+    globalAcceptanceCommands: [
+      "npm run test:v3:native-cam",
+      "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      "bash native-cam-real-output-check.sh",
+      "npm run test:v3:real-neutral-handoff",
+      "npm run test:v3:camotics-import"
+    ],
+    productionLocks: [
+      "没有 production-candidate handoffEvidence 时禁止生产 NC。",
+      "没有非 synthetic CAMotics/等效材料去除仿真时禁止生产 NC。",
+      "没有三轴控制器+Y/A旋转夹具空跑、软料试雕和现场验收时禁止生产 NC。"
     ]
   };
 }
@@ -612,6 +707,16 @@ echo "[HeDiao3D] If this script exits 0 with production-candidate output, contin
 
 function createNativeCamAcceptanceChecklist(report) {
   const rows = report.checks.map((check) => `- [ ] ${check.name}: ${check.ready ? "已探测到，但仍需小模型验证" : check.missing.join("; ")}`);
+  const executionRows = (report.summary.executionPlan?.stages ?? []).map((stage) => [
+    `### ${stage.order}. ${stage.title}`,
+    "",
+    `- 状态: ${stage.status} / ${stage.engineLevel}`,
+    `- 输入: ${stage.input}`,
+    `- 输出: ${stage.output}`,
+    `- 验收: \`${stage.acceptance}\``,
+    `- 交接: ${stage.handoff}`,
+    `- 生产边界: ${stage.productionBoundary}`
+  ].join("\n"));
   return `# HeDiao3D V3 Native CAM Server Acceptance Checklist
 
 Generated: ${report.createdAt}
@@ -630,11 +735,15 @@ ${rows.join("\n")}
 - [ ] \`npm run test:v3:camotics-import\`
 - [ ] \`npm run test:v3:readiness-api\`
 
-## 3. Production Boundary
+## 3. Open Source CAM Execution Plan
+
+${executionRows.length ? executionRows.join("\n\n") : "- Execution plan missing."}
+
+## 4. Production Boundary
 
 ${report.summary.integrationStrategy.productionBoundary.map((item) => `- ${item}`).join("\n")}
 
-## 4. Evidence To Keep
+## 5. Evidence To Keep
 
 - [ ] \`native-cam-readiness.json\`
 - [ ] \`v3-external-adapter-validation.json\`
@@ -646,7 +755,7 @@ ${report.summary.integrationStrategy.productionBoundary.map((item) => `- ${item}
 - [ ] \`production-gate.json\`
 - [ ] \`machine-acceptance-record.json\`
 
-## 5. Final Rule
+## 6. Final Rule
 
 Do not enable production NC downloads merely because this checklist exists. Production release requires the V3 readiness report to prove non-synthetic CAM, real material-removal evidence, air-run, trial feedback and machine acceptance.
 `;

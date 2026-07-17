@@ -1984,6 +1984,47 @@ button:disabled {
   display: none;
 }
 
+.v3-execution-plan {
+  display: grid;
+  gap: 7px;
+}
+
+.v3-execution-plan article {
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v3-execution-plan article.ready {
+  border-left-color: var(--green);
+}
+
+.v3-execution-plan article.missing {
+  border-left-color: var(--rose);
+}
+
+.v3-execution-plan article div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.v3-execution-plan article strong {
+  color: #f1fbf8;
+  font-size: 12px;
+}
+
+.v3-execution-plan article span,
+.v3-execution-plan article small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .v3-engine div {
   display: flex;
   justify-content: space-between;

@@ -1031,6 +1031,32 @@ type V3NativeCamCapabilityMatrixItem = {
   productionGate: string;
 };
 
+type V3NativeCamExecutionPlan = {
+  schema?: string | null;
+  summary?: string | null;
+  strategy?: string | null;
+  readyStages: number;
+  totalStages: number;
+  stages: Array<{
+    id: string;
+    order: number;
+    title: string;
+    engineId: string;
+    phase: string;
+    priority: string;
+    status: string;
+    engineReady: boolean;
+    engineLevel: string;
+    input: string;
+    output: string;
+    acceptance: string;
+    handoff: string;
+    productionBoundary: string;
+  }>;
+  globalAcceptanceCommands: string[];
+  productionLocks: string[];
+};
+
 type V3NativeCamReadinessSummary = {
   id: string;
   schema: string;
@@ -1047,6 +1073,7 @@ type V3NativeCamReadinessSummary = {
     level: string;
     text: string;
     capabilityMatrix?: V3NativeCamCapabilityMatrixItem[];
+    executionPlan?: V3NativeCamExecutionPlan | null;
     blockers: string[];
     nextActions: string[];
   };
@@ -5041,6 +5068,32 @@ export function App() {
                           <small>生产门禁：{item.productionGate}</small>
                         </article>
                       ))}
+                    </div>
+                  )}
+                  {v3NativeCamReadiness.summary.executionPlan && (
+                    <div className="v3-server-package">
+                      <strong>开源 CAM 接入执行计划</strong>
+                      <small>
+                        {v3NativeCamReadiness.summary.executionPlan.readyStages}/{v3NativeCamReadiness.summary.executionPlan.totalStages}
+                        {" · "}
+                        {v3NativeCamReadiness.summary.executionPlan.summary}
+                      </small>
+                      <div className="v3-execution-plan">
+                        {v3NativeCamReadiness.summary.executionPlan.stages.map((stage) => (
+                          <article className={stage.engineReady ? "ready" : "missing"} key={stage.id}>
+                            <div>
+                              <strong>{stage.order}. {stage.title}</strong>
+                              <span>{stage.priority} · {stage.status}</span>
+                            </div>
+                            <small>输入：{stage.input}</small>
+                            <small>输出：{stage.output}</small>
+                            <small>验收：{stage.acceptance}</small>
+                          </article>
+                        ))}
+                      </div>
+                      {v3NativeCamReadiness.summary.executionPlan.productionLocks[0] && (
+                        <small>生产锁：{v3NativeCamReadiness.summary.executionPlan.productionLocks[0]}</small>
+                      )}
                     </div>
                   )}
                   {v3NativeCamReadiness.checks.some((check) => check.capabilities?.notEnoughFor?.length) && (

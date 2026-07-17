@@ -2114,6 +2114,37 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
           ? summary.integrationStrategy.productionBoundary.slice(0, 6)
           : []
       } : null,
+      executionPlan: summary.executionPlan ? {
+        schema: summary.executionPlan.schema ?? null,
+        summary: summary.executionPlan.summary ?? null,
+        strategy: summary.executionPlan.strategy ?? null,
+        readyStages: Number(summary.executionPlan.readyStages ?? 0),
+        totalStages: Number(summary.executionPlan.totalStages ?? 0),
+        stages: Array.isArray(summary.executionPlan.stages)
+          ? summary.executionPlan.stages.slice(0, 8).map((stage) => ({
+            id: stage.id,
+            order: stage.order,
+            title: stage.title,
+            engineId: stage.engineId,
+            phase: stage.phase,
+            priority: stage.priority,
+            status: stage.status,
+            engineReady: Boolean(stage.engineReady),
+            engineLevel: stage.engineLevel,
+            input: stage.input,
+            output: stage.output,
+            acceptance: stage.acceptance,
+            handoff: stage.handoff,
+            productionBoundary: stage.productionBoundary
+          }))
+          : [],
+        globalAcceptanceCommands: Array.isArray(summary.executionPlan.globalAcceptanceCommands)
+          ? summary.executionPlan.globalAcceptanceCommands.slice(0, 8)
+          : [],
+        productionLocks: Array.isArray(summary.executionPlan.productionLocks)
+          ? summary.executionPlan.productionLocks.slice(0, 8)
+          : []
+      } : null,
       blockers: Array.isArray(summary.blockers) ? summary.blockers.slice(0, 8) : [],
       nextActions: Array.isArray(summary.nextActions) ? summary.nextActions.slice(0, 8) : []
     },
