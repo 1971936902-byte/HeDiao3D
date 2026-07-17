@@ -62,6 +62,10 @@ async function main() {
   const camServerConfig = await camServerConfigArtifact.json();
   assert(camServerConfig.schema === "hediao3d.cam-server-config.v1", "CAM server config artifact schema mismatch");
   assert(camServerConfig.environment?.ENABLE_EXTERNAL_CAM_ADAPTERS, "CAM server config missing external adapter env");
+  assert(camServerConfig.deploymentValidation?.schema === "hediao3d.cam-server-deployment-validation.v1", "CAM server config missing deployment validation plan");
+  assert(camServerConfig.deploymentValidation.stages?.some((stage) => stage.id === "external-handoff-smoke"), "CAM server deployment validation missing external handoff stage");
+  assert(camServerConfig.deploymentValidation.fixtureOrSyntheticMustBeOff?.includes("HEDIAO3D_FREECAD_RUNNER_FIXTURE_OUTPUT"), "CAM server deployment validation missing fixture-off policy");
+  assert(camServerConfig.deploymentValidation.productionUnlockRequires?.some((item) => /CAMotics/i.test(item)), "CAM server deployment validation missing CAMotics production requirement");
 
   const runbookArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.runbook}`);
   assert(runbookArtifact.ok, `readiness runbook artifact failed: ${runbookArtifact.status}`);

@@ -167,6 +167,9 @@ async function main() {
   const camServerConfig = await getArtifactJson(job.id, "cam-server-config.json");
   assert(camServerConfig.schema === "hediao3d.cam-server-config.v1", "CAM server config artifact schema mismatch");
   assert(camServerConfig.adapters?.some((adapter) => adapter.id === camServerConfig.selectedEngine), "CAM server config missing selected adapter details");
+  assert(camServerConfig.deploymentValidation?.schema === "hediao3d.cam-server-deployment-validation.v1", "CAM server config missing deployment validation plan");
+  assert(camServerConfig.deploymentValidation.stages?.some((stage) => stage.id === "camotics-material-removal"), "deployment validation missing CAMotics material-removal stage");
+  assert(camServerConfig.deploymentValidation.forbiddenProductionEnv?.some((item) => item.includes("HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT")), "deployment validation missing synthetic CAMotics forbidden env");
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(Array.isArray(packageIndex.filesByPurpose?.camInputs), "package index missing CAM input model group");
   assert(packageIndex.camEngineSelection?.selectedEngineName, "package index missing CAM engine selection summary");

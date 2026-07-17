@@ -3691,12 +3691,81 @@ function createCamServerConfigReport({ job, settings, engines, selectedEngine, n
       "小模型跑通后再设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true。",
       "生产前必须跑 CAMotics 或等效机床仿真，并回填 production-evidence-dossier.json。"
     ],
+    deploymentValidation: createCamServerDeploymentValidation(adapterConfigs, settings),
     linuxEnvExample: createCamServerLinuxEnvExample(adapterConfigs),
     notes: [
       "fixture/synthetic 开关只允许用于合约测试，不允许作为生产证据。",
       "HeDiao3D 仍负责最终三轴控制器 + Y/A 旋转夹具后处理，外部 CAM 应优先输出中立刀位点或可审计 G-code。",
       "本配置清单不会保存密钥，只记录本地 CAM 命令和环境变量名称。"
     ]
+  };
+}
+
+function createCamServerDeploymentValidation(adapterConfigs, settings) {
+  const requiredAdapters = adapterConfigs.filter((config) => config.requiredForCurrentMode);
+  const fixtureEnvNames = adapterConfigs
+    .map((config) => config.env.fixtureOrSynthetic)
+    .filter(Boolean);
+  return {
+    schema: "hediao3d.cam-server-deployment-validation.v1",
+    camMode: settings.camMode,
+    requiredAdapters: requiredAdapters.map((config) => config.id),
+    fixtureOrSyntheticMustBeOff: fixtureEnvNames,
+    productionUnlockRequires: [
+      "Native CAM readiness ready",
+      "External adapter validation completed with at least one completed adapter",
+      "External CAM handoff source snapshot with SHA-256",
+      "Non-synthetic CAMotics material-removal result with input identity",
+      "Machine acceptance and trial feedback success"
+    ],
+    stages: [
+      {
+        id: "native-cam-readiness",
+        title: "Native CAM 命令探测",
+        command: "npm run test:v3:native-cam",
+        expectedArtifacts: ["native-cam-readiness.json"],
+        blocksProduction: true
+      },
+      {
+        id: "adapter-plan-validation",
+        title: "Adapter 计划与模板验证",
+        command: "npm run test:v3:external-adapters",
+        expectedArtifacts: ["v3-external-adapter-validation.json", "freecad-cam-plan.json", "blendercam-cam-plan.json", "opencamlib-kernel-plan.json"],
+        blocksProduction: true
+      },
+      {
+        id: "external-handoff-smoke",
+        title: "外部 CAM 小模型 handoff",
+        command: settings.camMode === "3axis"
+          ? "npm run test:v3:freecad-external-handoff"
+          : "npm run test:v3:real-neutral-handoff",
+        expectedArtifacts: settings.camMode === "3axis"
+          ? ["adapter-report.json", "freecad-cam-plan.json", "toolpath.nc", "cam-handoff-quality.json"]
+          : ["adapter-report.json", "opencamlib-kernel-plan.json", "neutral-toolpath.json", "toolpath.nc", "cam-handoff-quality.json"],
+        blocksProduction: true
+      },
+      {
+        id: "camotics-material-removal",
+        title: "CAMotics 材料去除仿真回填",
+        command: "npm run test:v3:camotics-import",
+        expectedArtifacts: ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
+        blocksProduction: true
+      },
+      {
+        id: "readiness-runbook",
+        title: "总门禁与服务器侧验收脚本",
+        command: "npm run test:v3:readiness-api",
+        expectedArtifacts: ["v3-readiness-report.json", "v3-acceptance-runbook.sh", "v3-acceptance-runbook-result.json"],
+        blocksProduction: true
+      }
+    ],
+    requiredEnvForCurrentMode: requiredAdapters.flatMap((config) => [
+      "ENABLE_EXTERNAL_CAM_ADAPTERS",
+      config.env.commandJson ?? config.env.command,
+      config.env.experimentalOutput
+    ].filter(Boolean)),
+    forbiddenProductionEnv: fixtureEnvNames.map((name) => `${name}=true`),
+    note: "这些步骤是 CAM 服务器部署验收清单；通过协议测试仍不等于生产可用，生产还需要真实材料去除仿真、空跑、试雕和机床验收。"
   };
 }
 
