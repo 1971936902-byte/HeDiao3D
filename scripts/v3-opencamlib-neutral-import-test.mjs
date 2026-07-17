@@ -97,6 +97,8 @@ assert(report.status === "completed", `adapter report expected completed, got ${
 assert(report.neutralToolpathPath === outputNeutralPath, "adapter report should point to imported neutral output");
 assert(report.metrics?.neutralToolpath?.imported === true, "adapter metrics should mark neutral output as imported");
 assert(report.metrics?.neutralToolpath?.synthetic === false, "adapter metrics should mark neutral output as non-synthetic");
+assert(report.metrics?.handoffEvidence?.classification === "missing-contact-report", `imported OpenCAMLib neutral without contact report should be missing-contact-report, got ${report.metrics?.handoffEvidence?.classification}`);
+assert(report.metrics?.handoffEvidence?.productionCandidate === false, "imported OpenCAMLib neutral without contact report must not be production candidate");
 
 const neutral = JSON.parse(readFileSync(outputNeutralPath, "utf8"));
 assert(neutral.schema === "hediao3d.neutral-toolpath.v1", "neutral schema mismatch");
@@ -122,7 +124,67 @@ copyFileSync(resultPath, contract.adapterReport);
 copyFileSync(outputNeutralPath, contract.neutralToolpath);
 writeFileSync(join(outputRoot, "neutral-import-contract.json"), JSON.stringify(contract, null, 2));
 
-console.log(JSON.stringify(contract, null, 2));
+const candidateJobPath = join(workDir, "opencamlib-candidate-job.json");
+const candidateResultPath = join(workDir, "adapter-candidate-report.json");
+const candidateImportedPath = join(workDir, "real-neutral-toolpath-with-contact-report.json");
+const candidateOutputNeutralPath = join(workDir, "neutral-toolpath-candidate.json");
+writeFileSync(candidateImportedPath, JSON.stringify({
+  schema: "hediao3d.neutral-toolpath.v1",
+  engine: "opencamlib",
+  synthetic: false,
+  coordinate: {
+    lengthAxis: "X",
+    rotaryAxis: "Y",
+    depthAxis: "Z",
+    rotaryUnit: "degree"
+  },
+  cutterContactReport: {
+    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    quality: {
+      level: "ready",
+      productionCandidate: true,
+      postprocessEligible: true,
+      summary: "Validated OpenCAMLib cutter-contact report fixture for production-candidate classification."
+    }
+  },
+  points: [
+    { x: -12, a: 0, z: 21.6, depth: 0.4, source: "validated-contact-fixture" },
+    { x: 0, a: 90, z: 21.2, depth: 0.8, source: "validated-contact-fixture" },
+    { x: 12, a: 180, z: 21.5, depth: 0.5, source: "validated-contact-fixture" }
+  ]
+}, null, 2));
+writeFileSync(candidateJobPath, JSON.stringify({
+  ...JSON.parse(readFileSync(jobPath, "utf8")),
+  outputs: {
+    gcode: join(workDir, "toolpath-candidate.nc"),
+    report: candidateResultPath,
+    neutralToolpath: candidateOutputNeutralPath
+  }
+}, null, 2));
+const candidateRun = spawnSync(process.env.PYTHON ?? "python", ["adapters/opencamlib/opencamlib_job.py", candidateJobPath, candidateResultPath], {
+  cwd: root,
+  encoding: "utf8",
+  windowsHide: true,
+  env: {
+    ...process.env,
+    HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT: "true",
+    HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT: "false",
+    HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON: candidateImportedPath
+  }
+});
+assert(!candidateRun.error, `candidate adapter spawn failed: ${candidateRun.error?.message}`);
+assert(candidateRun.status === 0, `candidate adapter exited ${candidateRun.status}: ${candidateRun.stderr || candidateRun.stdout}`);
+const candidateReport = JSON.parse(readFileSync(candidateResultPath, "utf8"));
+assert(candidateReport.status === "completed", `candidate adapter report expected completed, got ${candidateReport.status}: ${candidateReport.error}`);
+assert(candidateReport.metrics?.neutralToolpath?.cutterContactReport?.status === "production-candidate", "candidate contact report should be production-candidate");
+assert(candidateReport.metrics?.handoffEvidence?.classification === "production-candidate", `validated contact report should classify as production-candidate, got ${candidateReport.metrics?.handoffEvidence?.classification}`);
+assert(candidateReport.metrics?.handoffEvidence?.productionCandidate === true, "validated contact report should allow production candidate classification");
+
+console.log(JSON.stringify({
+  ...contract,
+  missingContactClassification: report.metrics.handoffEvidence.classification,
+  candidateClassification: candidateReport.metrics.handoffEvidence.classification
+}, null, 2));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

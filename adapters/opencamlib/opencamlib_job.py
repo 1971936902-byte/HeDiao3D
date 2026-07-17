@@ -362,12 +362,14 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
     heightfield_preview = bool(neutral.get("experimentalHeightfield")) or "heightfield" in runner_mode.lower()
     preview_scaffold = heightfield_preview or "preview" in runner_mode.lower() or "scaffold" in runner_mode.lower()
     fixture = bool(neutral.get("fixture")) or "fixture" in runner_mode.lower()
-    cutter_envelope_report_path = resolve_cutter_envelope_report_path(neutral_path, neutral)
+    contact_report = evaluate_cutter_contact_report(neutral_path, neutral)
+    preview_scaffold = preview_scaffold or contact_report["previewScaffold"]
     return {
         "status": "completed",
         "error": None,
         "neutralToolpathPath": str(neutral_path),
-        "cutterEnvelopeReportPath": cutter_envelope_report_path,
+        "cutterEnvelopeReportPath": contact_report["path"],
+        "cutterContactReport": contact_report,
         "synthetic": False,
         "imported": False,
         "pointCount": len(neutral.get("points") or []),
@@ -381,6 +383,9 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
             "heightfieldPreview": heightfield_preview,
             "generatedByExternalCommand": True,
             "imported": False,
+            "contactReportProductionCandidate": contact_report["productionCandidate"],
+            "contactReportMissing": contact_report["status"] == "missing",
+            "contactReportStatus": contact_report["status"],
         }),
         "externalCommand": {
             "command": " ".join(command_parts),
@@ -429,20 +434,26 @@ def try_import_neutral_toolpath(job: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "importedFrom": str(source_path),
     }
     neutral_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+    contact_report = evaluate_cutter_contact_report(neutral_path, neutral)
     return {
         "status": "completed",
         "error": None,
         "neutralToolpathPath": str(neutral_path),
+        "cutterEnvelopeReportPath": contact_report["path"],
+        "cutterContactReport": contact_report,
         "synthetic": False,
         "imported": True,
         "sourcePath": str(source_path),
         "handoffEvidence": classify_neutral_output(neutral, {
             "fixture": bool(neutral.get("fixture")),
             "synthetic": False,
-            "previewScaffold": bool(neutral.get("experimentalHeightfield")),
+            "previewScaffold": bool(neutral.get("experimentalHeightfield")) or contact_report["previewScaffold"],
             "heightfieldPreview": bool(neutral.get("experimentalHeightfield")),
             "generatedByExternalCommand": False,
             "imported": True,
+            "contactReportProductionCandidate": contact_report["productionCandidate"],
+            "contactReportMissing": contact_report["status"] == "missing",
+            "contactReportStatus": contact_report["status"],
         }),
     }
 
@@ -467,18 +478,79 @@ def validate_imported_neutral_toolpath(neutral: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def resolve_cutter_envelope_report_path(neutral_path: Path, neutral: Dict[str, Any]) -> Optional[str]:
+def evaluate_cutter_contact_report(neutral_path: Path, neutral: Dict[str, Any]) -> Dict[str, Any]:
+    embedded = neutral.get("cutterContactReport")
+    if isinstance(embedded, dict):
+        return summarize_cutter_contact_report(embedded, None)
+    explicit_path = neutral.get("cutterContactReportPath") or neutral.get("cutterEnvelopeReportPath")
+    if isinstance(explicit_path, str) and explicit_path:
+        path = Path(explicit_path)
+        if path.exists():
+            loaded = read_optional_contact_report(path)
+            if loaded is not None:
+                return summarize_cutter_contact_report(loaded, str(path))
     runner = neutral.get("runner") if isinstance(neutral.get("runner"), dict) else {}
     heightfield = runner.get("heightfield") if isinstance(runner.get("heightfield"), dict) else {}
     reported = heightfield.get("cutterEnvelopeReport")
     if isinstance(reported, str) and reported:
         path = Path(reported)
         if path.exists():
-            return str(path)
+            loaded = read_optional_contact_report(path)
+            if loaded is not None:
+                return summarize_cutter_contact_report(loaded, str(path))
     sibling = neutral_path.with_name("opencamlib-cutter-envelope-report.json")
     if sibling.exists():
-        return str(sibling)
-    return None
+        loaded = read_optional_contact_report(sibling)
+        if loaded is not None:
+            return summarize_cutter_contact_report(loaded, str(sibling))
+    return {
+        "schema": "hediao3d.opencamlib-contact-report-summary.v1",
+        "status": "missing",
+        "path": None,
+        "reportSchema": None,
+        "productionCandidate": False,
+        "postprocessEligible": False,
+        "previewScaffold": False,
+        "summary": "OpenCAMLib neutral output does not include a cutter-contact/envelope report.",
+    }
+
+
+def read_optional_contact_report(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str]) -> Dict[str, Any]:
+    schema = str(report.get("schema") or "")
+    quality = report.get("quality") if isinstance(report.get("quality"), dict) else {}
+    level = str(quality.get("level") or report.get("level") or "")
+    preview_scaffold = (
+        "preview" in schema.lower()
+        or "envelope-report" in schema.lower()
+        or "preview" in level.lower()
+        or "scaffold" in level.lower()
+        or bool(quality.get("previewScaffold"))
+    )
+    production_candidate = (
+        schema == "hediao3d.opencamlib-cutter-contact-report.v1"
+        and bool(quality.get("productionCandidate"))
+        and bool(quality.get("postprocessEligible"))
+        and not preview_scaffold
+    )
+    status = "production-candidate" if production_candidate else "preview-scaffold" if preview_scaffold else "review"
+    return {
+        "schema": "hediao3d.opencamlib-contact-report-summary.v1",
+        "status": status,
+        "path": path,
+        "reportSchema": schema or None,
+        "productionCandidate": production_candidate,
+        "postprocessEligible": bool(quality.get("postprocessEligible")),
+        "previewScaffold": preview_scaffold,
+        "summary": quality.get("summary") or report.get("summary") or "OpenCAMLib cutter-contact report evaluated.",
+    }
 
 
 def write_synthetic_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any]) -> str:
@@ -610,6 +682,7 @@ def main() -> int:
                     "status": "generated" if attempt.get("neutralToolpathPath") else "not_generated",
                     "path": attempt.get("neutralToolpathPath"),
                     "cutterEnvelopeReportPath": attempt.get("cutterEnvelopeReportPath"),
+                    "cutterContactReport": attempt.get("cutterContactReport"),
                     "synthetic": bool(attempt.get("synthetic")),
                     "imported": bool(attempt.get("imported")),
                     "fixture": bool(attempt.get("fixture")),
@@ -642,12 +715,18 @@ def classify_neutral_output(neutral: Dict[str, Any], flags: Dict[str, Any]) -> D
     synthetic = bool(flags.get("synthetic"))
     preview_scaffold = bool(flags.get("previewScaffold"))
     heightfield_preview = bool(flags.get("heightfieldPreview"))
+    contact_report_production_candidate = bool(flags.get("contactReportProductionCandidate"))
+    contact_report_missing = bool(flags.get("contactReportMissing"))
     if synthetic:
         classification = "synthetic-contract"
     elif fixture:
         classification = "fixture-contract"
     elif preview_scaffold or heightfield_preview:
         classification = "preview-scaffold"
+    elif contact_report_missing:
+        classification = "missing-contact-report"
+    elif not contact_report_production_candidate:
+        classification = "contact-report-review"
     else:
         classification = "production-candidate"
     return {
@@ -661,6 +740,7 @@ def classify_neutral_output(neutral: Dict[str, Any], flags: Dict[str, Any]) -> D
         "heightfieldPreview": heightfield_preview,
         "imported": bool(flags.get("imported")),
         "generatedByExternalCommand": bool(flags.get("generatedByExternalCommand")),
+        "contactReportStatus": flags.get("contactReportStatus"),
         "pointCount": point_count,
         "productionCandidate": point_count > 0 and classification == "production-candidate",
         "productionBoundary": "This evidence classifies neutral adapter output only; HeDiao3D production gates still require CAMotics/material removal, postprocess validation, static NC analysis, air-run, trial feedback and machine acceptance.",

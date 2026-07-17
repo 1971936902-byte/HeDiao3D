@@ -2442,6 +2442,8 @@ function validateNativeCamRealOutputAcceptance(acceptance) {
     "fixture-contract",
     "synthetic-contract",
     "preview-scaffold",
+    "missing-contact-report",
+    "contact-report-review",
     "not-generated",
     "internal-fallback",
     "missing"

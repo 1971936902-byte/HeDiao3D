@@ -7172,6 +7172,8 @@ function formatHandoffClassification(classification: string) {
   if (classification === "fixture-contract") return "Fixture测试";
   if (classification === "synthetic-contract") return "Synthetic测试";
   if (/preview|scaffold/i.test(classification)) return "预览脚手架";
+  if (classification === "missing-contact-report") return "缺接触报告";
+  if (classification === "contact-report-review") return "接触报告待复核";
   if (classification === "not-generated") return "未生成";
   if (classification === "missing") return "缺少证据";
   return classification;
