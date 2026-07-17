@@ -471,6 +471,8 @@ function createHandoffClassificationAudit(results) {
   const missingCamProofCount = adapters.filter((adapter) => adapter.missingCamProof).length;
   const camProofReviewCount = adapters.filter((adapter) => adapter.camProofReview).length;
   const notGeneratedCount = adapters.filter((adapter) => adapter.notGenerated).length;
+  const contactReportBindingCounts = createContactReportBindingCounts(adapters);
+  const unboundProductionCandidateCount = adapters.filter((adapter) => adapter.productionCandidate && adapter.contactReport?.inputBindingStatus !== "bound").length;
   const blockers = [
     ...(missingCount ? [`${missingCount} 个 adapter 缺少 handoff evidence。`] : []),
     ...(notGeneratedCount ? [`${notGeneratedCount} 个 adapter 尚未生成外部 handoff 输出。`] : []),
@@ -478,7 +480,8 @@ function createHandoffClassificationAudit(results) {
     ...(syntheticCount ? [`${syntheticCount} 个 adapter 输出为 synthetic-contract。`] : []),
     ...(previewScaffoldCount ? [`${previewScaffoldCount} 个 adapter 输出为 preview/scaffold。`] : []),
     ...(missingCamProofCount ? [`${missingCamProofCount} 个 adapter 缺少 CAM 输出证明。`] : []),
-    ...(camProofReviewCount ? [`${camProofReviewCount} 个 adapter 的 CAM 输出证明需要复核。`] : [])
+    ...(camProofReviewCount ? [`${camProofReviewCount} 个 adapter 的 CAM 输出证明需要复核。`] : []),
+    ...(unboundProductionCandidateCount ? [`${unboundProductionCandidateCount} 个 production-candidate contact report 未绑定输入哈希。`] : [])
   ];
   return {
     schema: "hediao3d.adapter-handoff-classification-audit.v1",
@@ -492,6 +495,8 @@ function createHandoffClassificationAudit(results) {
     missingCamProofCount,
     camProofReviewCount,
     notGeneratedCount,
+    contactReportBindingCounts,
+    unboundProductionCandidateCount,
     summary: productionCandidateCount > 0 && unsafeCount === 0
       ? "Adapter 输出分类看起来可进入下一步生产证据链，但仍需 CAMotics、空跑和机床验收。"
       : `Adapter 输出分类未达到生产候选：productionCandidate=${productionCandidateCount}，unsafe=${unsafeCount}，missing=${missingCount}。`,
@@ -503,6 +508,27 @@ function createHandoffClassificationAudit(results) {
     ],
     adapters
   };
+}
+
+function createContactReportBindingCounts(adapters) {
+  const counts = {
+    bound: 0,
+    missing: 0,
+    mismatch: 0,
+    review: 0,
+    notChecked: 0,
+    other: 0
+  };
+  for (const adapter of adapters) {
+    const status = adapter.contactReport?.inputBindingStatus ?? "missing";
+    if (status === "bound") counts.bound += 1;
+    else if (status === "missing") counts.missing += 1;
+    else if (status === "mismatch") counts.mismatch += 1;
+    else if (status === "review") counts.review += 1;
+    else if (status === "not-checked") counts.notChecked += 1;
+    else counts.other += 1;
+  }
+  return counts;
 }
 
 function summarizeAdapterContactReport(report) {

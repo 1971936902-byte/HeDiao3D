@@ -18,6 +18,8 @@ async function main() {
   assert(run.handoffClassificationAudit.readyForProduction === false, "handoff audit must not mark production ready");
   assert(run.handoffClassificationAudit.adapters?.length === 4, `expected 4 audited adapters, got ${run.handoffClassificationAudit.adapters?.length}`);
   assert(run.handoffClassificationAudit.adapters.every((adapter) => adapter.contactReport?.inputBindingStatus), "handoff audit adapters should expose contact report binding status");
+  assert(typeof run.handoffClassificationAudit.unboundProductionCandidateCount === "number", "handoff audit should expose unbound production candidate count");
+  assert(typeof run.handoffClassificationAudit.contactReportBindingCounts?.bound === "number", "handoff audit should expose contact report binding counts");
   assert(run.handoffClassificationAudit.productionCandidateCount === 0, "safe-default validation must not report production candidates");
   assert(run.handoffClassificationAudit.unsafeCount === 4, `safe-default validation should mark all adapters unsafe, got ${run.handoffClassificationAudit.unsafeCount}`);
 

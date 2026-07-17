@@ -642,6 +642,10 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
       nextActions.push("重新运行 npm run test:v3:external-adapters，生成 handoffClassificationAudit。");
     } else {
       if (handoffAudit.unsafeCount > 0) blockers.push(`Adapter handoff 分类存在 ${handoffAudit.unsafeCount} 个 unsafe 输出：${handoffAudit.summary}`);
+      if (handoffAudit.unboundProductionCandidateCount > 0) {
+        blockers.push(`Adapter handoff 存在 ${handoffAudit.unboundProductionCandidateCount} 个未绑定输入哈希的 production-candidate contact report。`);
+        nextActions.push("查看 v3-external-adapter-validation.json 的 contactReport.inputBindingStatus，确认真实 OpenCAMLib 接触报告绑定当前模型/计划/neutral 输出哈希。");
+      }
       if (handoffAudit.productionCandidateCount === 0) warnings.push("Adapter handoff 尚无 production-candidate 输出，不能作为真实 CAM 生产证据。");
       nextActions.push(...(handoffAudit.nextActions ?? []));
     }
@@ -667,8 +671,8 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
   } else if (adapterValidation?.handoffClassificationAudit) {
     const handoffAudit = adapterValidation.handoffClassificationAudit;
-    if (handoffAudit.unsafeCount > 0 || handoffAudit.productionCandidateCount === 0) {
-      blockers.push(`Native CAM 真实输出验收为 ready，但最新 Adapter handoff 审计仍不一致：productionCandidate=${handoffAudit.productionCandidateCount}，unsafe=${handoffAudit.unsafeCount}。`);
+    if (handoffAudit.unsafeCount > 0 || handoffAudit.productionCandidateCount === 0 || handoffAudit.unboundProductionCandidateCount > 0) {
+      blockers.push(`Native CAM 真实输出验收为 ready，但最新 Adapter handoff 审计仍不一致：productionCandidate=${handoffAudit.productionCandidateCount}，unsafe=${handoffAudit.unsafeCount}，unboundContact=${handoffAudit.unboundProductionCandidateCount ?? 0}。`);
       nextActions.push("重新运行 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters 和 bash native-cam-real-output-check.sh，确保两份报告来自同一次真实 CAM 输出。");
     }
   }
@@ -955,6 +959,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
         : adapterValidation.overall.failed > 0
           ? "blocked"
           : adapterValidation.handoffClassificationAudit?.unsafeCount > 0
+            || adapterValidation.handoffClassificationAudit?.unboundProductionCandidateCount > 0
             ? "blocked"
             : adapterValidation.handoffClassificationAudit?.productionCandidateCount > 0
           ? "done"
@@ -962,9 +967,9 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       command: "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
       evidence: ["v3-external-adapter-validation.json", "adapter-report.json", "handoffClassificationAudit"],
       detail: adapterValidation
-        ? `计划 ${adapterValidation.overall.generatedPlans}/${adapterValidation.overall.adapterCount}，completed ${adapterValidation.overall.completedAdapters}，失败 ${adapterValidation.overall.failed}，productionCandidate=${adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0}，unsafe=${adapterValidation.handoffClassificationAudit?.unsafeCount ?? "unknown"}`
+        ? `计划 ${adapterValidation.overall.generatedPlans}/${adapterValidation.overall.adapterCount}，completed ${adapterValidation.overall.completedAdapters}，失败 ${adapterValidation.overall.failed}，productionCandidate=${adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0}，unsafe=${adapterValidation.handoffClassificationAudit?.unsafeCount ?? "unknown"}，contactBound=${adapterValidation.handoffClassificationAudit?.contactReportBindingCounts?.bound ?? 0}，unboundContact=${adapterValidation.handoffClassificationAudit?.unboundProductionCandidateCount ?? 0}`
         : "尚未运行外部 Adapter 验证。",
-      blocksProduction: !adapterValidation || adapterValidation.overall.failed > 0 || (adapterValidation.handoffClassificationAudit?.unsafeCount ?? 1) > 0 || (adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0) === 0
+      blocksProduction: !adapterValidation || adapterValidation.overall.failed > 0 || (adapterValidation.handoffClassificationAudit?.unsafeCount ?? 1) > 0 || (adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0) === 0 || (adapterValidation.handoffClassificationAudit?.unboundProductionCandidateCount ?? 0) > 0
     }),
     createAcceptanceStep({
       order: 4.5,
@@ -2047,6 +2052,15 @@ function createAdapterValidationPublicSummary(summary, validationId) {
       missingCamProofCount: Number(summary.handoffClassificationAudit.missingCamProofCount ?? 0),
       camProofReviewCount: Number(summary.handoffClassificationAudit.camProofReviewCount ?? 0),
       notGeneratedCount: Number(summary.handoffClassificationAudit.notGeneratedCount ?? 0),
+      unboundProductionCandidateCount: Number(summary.handoffClassificationAudit.unboundProductionCandidateCount ?? 0),
+      contactReportBindingCounts: {
+        bound: Number(summary.handoffClassificationAudit.contactReportBindingCounts?.bound ?? 0),
+        missing: Number(summary.handoffClassificationAudit.contactReportBindingCounts?.missing ?? 0),
+        mismatch: Number(summary.handoffClassificationAudit.contactReportBindingCounts?.mismatch ?? 0),
+        review: Number(summary.handoffClassificationAudit.contactReportBindingCounts?.review ?? 0),
+        notChecked: Number(summary.handoffClassificationAudit.contactReportBindingCounts?.notChecked ?? 0),
+        other: Number(summary.handoffClassificationAudit.contactReportBindingCounts?.other ?? 0)
+      },
       summary: summary.handoffClassificationAudit.summary ?? "",
       nextActions: Array.isArray(summary.handoffClassificationAudit.nextActions) ? summary.handoffClassificationAudit.nextActions.slice(0, 6) : [],
       adapters: Array.isArray(summary.handoffClassificationAudit.adapters)

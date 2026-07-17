@@ -62,6 +62,7 @@ async function main() {
   const adapterStep = full.acceptancePlan.steps.find((step) => step.id === "adapter-validation");
   assert(adapterStep?.status === "blocked", `adapter validation step should be blocked when handoff audit is unsafe, got ${adapterStep?.status}`);
   assert(/unsafe=/.test(adapterStep.detail), "adapter validation step detail should include unsafe handoff count");
+  assert(/contactBound=/.test(adapterStep.detail), "adapter validation step detail should include contact binding count");
 
   const markdownArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.markdown}`);
   assert(markdownArtifact.ok, `readiness markdown artifact failed: ${markdownArtifact.status}`);

@@ -1150,6 +1150,15 @@ type V3AdapterValidationSummary = {
     missingCamProofCount: number;
     camProofReviewCount: number;
     notGeneratedCount: number;
+    unboundProductionCandidateCount?: number;
+    contactReportBindingCounts?: {
+      bound: number;
+      missing: number;
+      mismatch: number;
+      review: number;
+      notChecked: number;
+      other: number;
+    };
     summary: string;
     nextActions: string[];
     adapters: Array<{
@@ -5486,6 +5495,10 @@ export function App() {
                         Handoff分类：生产候选 {v3AdapterValidation.handoffClassificationAudit.productionCandidateCount}
                         {" · "}
                         unsafe {v3AdapterValidation.handoffClassificationAudit.unsafeCount}
+                        {" · "}
+                        contact绑定 {v3AdapterValidation.handoffClassificationAudit.contactReportBindingCounts?.bound ?? 0}
+                        {" · "}
+                        未绑定候选 {v3AdapterValidation.handoffClassificationAudit.unboundProductionCandidateCount ?? 0}
                         {" · "}
                         未生成 {v3AdapterValidation.handoffClassificationAudit.notGeneratedCount}
                         {" · "}
