@@ -9004,6 +9004,7 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
         "synthetic=false",
         "riskLevel=ready",
         "inputs.preferredGcodeSha256",
+        "inputs.machineContext",
         "metrics.motionLineCount",
         "metrics.zMin",
         "metrics.zMax",
@@ -9012,6 +9013,7 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
       ],
       verification: [
         "inputs.preferredGcodeSha256 必须匹配当前 camotics-preview.nc 的 SHA-256。",
+        "inputs.machineContext 必须匹配 camotics-preview.nc 的 ROTARY_WRAP_AXIS、ROTARY_WRAP_PER_REV_MM 和 LENGTH_AXIS。",
         "metrics.motionLineCount 和 Z 范围必须匹配 camotics-preview.nc 的运动画像。",
         "截图或材料去除 STL 必须复制进加工包并生成 SHA-256。",
         "synthetic 或 fixture 结果不能作为生产证据。"
@@ -9108,6 +9110,9 @@ function createCamoticsPreviewGcode(points, settings, estimatedMinutes) {
     "%",
     "(CAMOTICS PREVIEW ONLY - not for machine)",
     "(Coordinate: X/Y unwrapped stock, Z negative cutting depth)",
+    settings.camMode === "rotaryWrap"
+      ? `(ROTARY_WRAP_AXIS=${rotaryAxis} ROTARY_WRAP_PER_REV_MM=${fmt(wrapPerRev, 6)} LENGTH_AXIS=${rotaryAxis === "X" ? "Y" : "X"})`
+      : "(CAM_MODE=3axis LENGTH_AXIS=X)",
     `(SourcePost=${postProcessorName(settings.postProcessor)} Estimated=${fmt(estimatedMinutes, 2)}min)`,
     "G21",
     "G90",

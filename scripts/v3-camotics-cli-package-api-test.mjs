@@ -79,6 +79,8 @@ async function main() {
   assert(template.schema === "hediao3d.camotics-result.v1", "result template schema mismatch");
   assert(template.inputs?.preferredGcodeSha256 === previewSha256, "result template should include preview hash");
   assert(template.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "result template should bind to current CLI run package hash");
+  assert(template.inputs?.machineContext?.rotaryWrapAxis === "Y", "result template should bind Y rotary machine context");
+  assert(template.inputs?.machineContext?.rotaryWrapPerRevolutionMm === 100, "result template should bind rotary wrap distance");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
 
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
@@ -88,11 +90,13 @@ async function main() {
   assert(operatorChecklist.includes("HeDiao3D CAMotics Linux 操作清单"), "operator checklist missing heading");
   assert(operatorChecklist.includes(previewSha256), "operator checklist should bind preferred G-code hash");
   assert(operatorChecklist.includes(runPackageSha256), "operator checklist should bind run package hash");
+  assert(operatorChecklist.includes("inputs.machineContext.rotaryWrapAxis"), "operator checklist should require machine context");
   assert(operatorChecklist.includes("productionEvidenceEligible=true"), "operator checklist should require production evidence validation");
   const validatorScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-validate.js`);
   assert(validatorScript.includes("hediao3d.camotics-result-local-validation.v1"), "validator should emit local validation schema");
   assert(validatorScript.includes("camotics-result-bundle.zip"), "validator should write uploadable CAMotics result bundle");
   assert(validatorScript.includes("README-CAMOTICS-RESULT.md"), "validator bundle should include README");
+  assert(validatorScript.includes("machine-context"), "validator should check machine context");
   assert(validatorScript.includes(runPackageSha256), "validator should bind to current run package hash");
   assert(validatorScript.includes(previewSha256), "validator should bind to current preview G-code hash");
   runLocalValidatorFixture({
@@ -150,8 +154,30 @@ function createPreviewMotionProfile(gcodeText) {
   return {
     motionLineCount: motionLines.length,
     zMin: Math.min(...zValues),
-    zMax: Math.max(...zValues)
+    zMax: Math.max(...zValues),
+    machineContext: createMachineContextFromGcode(gcodeText)
   };
+}
+
+function createMachineContextFromGcode(gcodeText) {
+  const text = String(gcodeText ?? "");
+  const axis = matchHeader(text, "ROTARY_WRAP_AXIS");
+  const perRev = Number(matchHeader(text, "ROTARY_WRAP_PER_REV_MM"));
+  const lengthAxis = matchHeader(text, "LENGTH_AXIS");
+  return {
+    schema: "hediao3d.camotics-machine-context.v1",
+    camMode: axis ? "rotaryWrap" : "3axis",
+    rotaryWrapAxis: axis ? axis.toUpperCase() : null,
+    rotaryOutputAxis: axis ? axis.toUpperCase() : null,
+    rotaryWrapPerRevolutionMm: Number.isFinite(perRev) ? perRev : null,
+    lengthAxis: lengthAxis ? lengthAxis.toUpperCase() : "X",
+    simulationInterpretation: axis ? "linearized-rotary-wrap-as-3axis" : "plain-3axis"
+  };
+}
+
+function matchHeader(text, key) {
+  const match = String(text ?? "").match(new RegExp(`${key}\\s*=\\s*([^\\s)]+)`, "i"));
+  return match ? match[1] : null;
 }
 
 function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPackageSha256, previewMotionProfile }) {
@@ -175,7 +201,8 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
         preferredGcode: "camotics-preview.nc",
         preferredGcodeSha256: previewSha256,
         camoticsCliRunPackage: "camotics-cli-run-package.json",
-        camoticsCliRunPackageSha256: runPackageSha256
+        camoticsCliRunPackageSha256: runPackageSha256,
+        machineContext: previewMotionProfile.machineContext
       },
       metrics: {
         motionLineCount: previewMotionProfile.motionLineCount,
@@ -220,7 +247,11 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
       riskLevel: "ready",
       inputs: {
         preferredGcodeSha256: previewSha256,
-        camoticsCliRunPackageSha256: "bad-hash"
+        camoticsCliRunPackageSha256: "bad-hash",
+        machineContext: {
+          ...previewMotionProfile.machineContext,
+          rotaryWrapAxis: "X"
+        }
       },
       metrics: {
         motionLineCount: previewMotionProfile.motionLineCount,
@@ -243,6 +274,7 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(failedReport.ok === false, "failed validator report should not be ok");
     assert(failedReport.productionEvidenceEligible === false, "failed validator should not be production evidence eligible");
     assert(failedReport.missing?.includes("run-package-hash"), "failed validator should list run-package-hash");
+    assert(failedReport.missing?.includes("machine-context"), "failed validator should list machine-context");
     assert(failedReport.missing?.includes("visual-or-material-artifact"), "failed validator should list missing artifact evidence");
     assert(/failed/.test(failedReport.summary), "failed validator should include failed summary");
   } finally {

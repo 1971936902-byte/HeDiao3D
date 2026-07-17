@@ -396,6 +396,7 @@ function createCamoticsInputIdentity(adapterJob, simulationPlan) {
     previewPath,
     expectedPreferredGcodeSha256: createHash("sha256").update(bytes).digest("hex"),
     previewMotionProfile: createGcodeMotionProfile(text),
+    machineContext: createMachineContextFromGcode(text),
     cliRunPackageIdentity,
     status: "ready",
     message: "Preferred CAMotics preview G-code identity hash computed."
@@ -440,6 +441,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
   const importedCliPackageHash = result?.inputs?.camoticsCliRunPackageSha256;
   const expectedCliPackageHash = inputIdentity?.cliRunPackageIdentity?.sha256 ?? null;
   const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
+  const machineContext = evaluateCamoticsMachineContext(result?.inputs?.machineContext ?? null, inputIdentity?.machineContext ?? null);
   const expectedJobId = adapterJob?.jobId ?? null;
   const importedJobId = result?.jobId ?? null;
   const jobIdentityOk = nonEmptyString(expectedJobId) && importedJobId === expectedJobId;
@@ -500,6 +502,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       message: motionConsistency.message
     },
     {
+      id: "machineContext",
+      ok: machineContext.ok,
+      message: machineContext.message
+    },
+    {
       id: "visualOrMeshArtifact",
       ok: hasVerifiedArtifact,
       message: "A screenshot or material-removal mesh file must exist, be copied into the job package and have a SHA-256 hash."
@@ -557,6 +564,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
             : inputIdentity?.message ?? "Preview G-code identity could not be verified."
     },
     motionConsistency,
+    machineContext,
     artifactEvidence,
     summary: missing.length === 0
       ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."
@@ -617,6 +625,51 @@ function evaluateCamoticsMotionConsistency(metrics, previewProfile) {
   };
 }
 
+function evaluateCamoticsMachineContext(importedContext, expectedContext) {
+  if (!expectedContext) {
+    return {
+      ok: false,
+      status: "missing-expected-context",
+      expected: null,
+      imported: importedContext ?? null,
+      message: "camotics-preview.nc machine context could not be computed."
+    };
+  }
+  const imported = importedContext && typeof importedContext === "object" ? importedContext : null;
+  if (!imported) {
+    return {
+      ok: false,
+      status: "missing-imported-context",
+      expected: expectedContext,
+      imported: null,
+      message: "Imported CAMotics result is missing inputs.machineContext."
+    };
+  }
+  const expectedAxis = String(expectedContext.rotaryWrapAxis ?? "").toUpperCase();
+  const importedAxis = String(imported.rotaryWrapAxis ?? imported.rotaryOutputAxis ?? "").toUpperCase();
+  const expectedLengthAxis = String(expectedContext.lengthAxis ?? "").toUpperCase();
+  const importedLengthAxis = String(imported.lengthAxis ?? "").toUpperCase();
+  const expectedWrap = Number(expectedContext.rotaryWrapPerRevolutionMm);
+  const importedWrap = Number(imported.rotaryWrapPerRevolutionMm);
+  const ok = String(imported.camMode ?? expectedContext.camMode) === String(expectedContext.camMode)
+    && importedAxis === expectedAxis
+    && importedLengthAxis === expectedLengthAxis
+    && close(importedWrap, expectedWrap, 0.001);
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    expected: expectedContext,
+    imported,
+    message: ok
+      ? "Imported CAMotics result matches the current rotary-wrap machine context."
+      : "Imported CAMotics result machine context does not match camotics-preview.nc."
+  };
+}
+
+function close(actual, expectedValue, tolerance) {
+  return Number.isFinite(actual) && Number.isFinite(expectedValue) && Math.abs(actual - expectedValue) <= tolerance;
+}
+
 function createGcodeMotionProfile(gcodeText) {
   const motionLines = String(gcodeText ?? "")
     .split(/\r?\n/)
@@ -628,8 +681,32 @@ function createGcodeMotionProfile(gcodeText) {
   return {
     motionLineCount: motionLines.length,
     zMin: zValues.length ? Math.min(...zValues) : null,
-    zMax: zValues.length ? Math.max(...zValues) : null
+    zMax: zValues.length ? Math.max(...zValues) : null,
+    machineContext: createMachineContextFromGcode(gcodeText)
   };
+}
+
+function createMachineContextFromGcode(gcodeText) {
+  const text = String(gcodeText ?? "");
+  const axis = matchHeader(text, "ROTARY_WRAP_AXIS");
+  const rawPerRev = matchHeader(text, "ROTARY_WRAP_PER_REV_MM");
+  const perRev = rawPerRev == null ? NaN : Number(rawPerRev);
+  const lengthAxis = matchHeader(text, "LENGTH_AXIS");
+  const rotaryMode = Boolean(axis || Number.isFinite(perRev));
+  return {
+    schema: "hediao3d.camotics-machine-context.v1",
+    camMode: rotaryMode ? "rotaryWrap" : "3axis",
+    rotaryWrapAxis: axis ? axis.toUpperCase() : null,
+    rotaryOutputAxis: axis ? axis.toUpperCase() : null,
+    rotaryWrapPerRevolutionMm: Number.isFinite(perRev) ? perRev : null,
+    lengthAxis: lengthAxis ? lengthAxis.toUpperCase() : "X",
+    simulationInterpretation: rotaryMode ? "linearized-rotary-wrap-as-3axis" : "plain-3axis"
+  };
+}
+
+function matchHeader(text, key) {
+  const match = String(text ?? "").match(new RegExp(`${key}\\s*=\\s*([^\\s)]+)`, "i"));
+  return match ? match[1] : null;
 }
 
 function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {

@@ -22,6 +22,7 @@ const completeResultPath = join(workDir, "complete-camotics-result.json");
 
 writeFileSync(previewPath, [
   "(CAMOTICS PREVIEW ONLY - not for machine)",
+  "(ROTARY_WRAP_AXIS=Y ROTARY_WRAP_PER_REV_MM=100.000000 LENGTH_AXIS=X)",
   "G21",
   "G90",
   "G0 X0 Y0 Z5",
@@ -30,6 +31,15 @@ writeFileSync(previewPath, [
   ""
 ].join("\n"));
 const previewSha256 = createHash("sha256").update(readFileSync(previewPath)).digest("hex");
+const machineContext = {
+  schema: "hediao3d.camotics-machine-context.v1",
+  camMode: "rotaryWrap",
+  rotaryWrapAxis: "Y",
+  rotaryOutputAxis: "Y",
+  rotaryWrapPerRevolutionMm: 100,
+  lengthAxis: "X",
+  simulationInterpretation: "linearized-rotary-wrap-as-3axis"
+};
 writeFileSync(screenshotPath, "fake-png-bytes-for-contract-test");
 writeFileSync(materialMeshPath, [
   "solid camotics_material_removal",
@@ -56,7 +66,8 @@ writeFileSync(importedPath, JSON.stringify({
   summary: "Imported real CAMotics result fixture.",
   inputs: {
     preferredGcode: "camotics-preview.nc",
-    preferredGcodeSha256: previewSha256
+    preferredGcodeSha256: previewSha256,
+    machineContext
   },
   metrics: {
     motionLineCount: 2,
@@ -126,6 +137,7 @@ assert(result.evidenceQuality?.status === "complete", `evidence quality should b
 assert(result.evidenceQuality?.inputIdentity?.status === "matched", `input identity should match, got ${result.evidenceQuality?.inputIdentity?.status}`);
 assert(result.evidenceQuality?.inputIdentity?.job?.status === "matched", `job identity should match, got ${result.evidenceQuality?.inputIdentity?.job?.status}`);
 assert(result.evidenceQuality?.motionConsistency?.status === "matched", `motion profile should match, got ${result.evidenceQuality?.motionConsistency?.status}`);
+assert(result.evidenceQuality?.machineContext?.status === "matched", `machine context should match, got ${result.evidenceQuality?.machineContext?.status}`);
 assert(result.inputs?.expectedPreferredGcodeSha256 === previewSha256, "expected preview hash missing from imported result");
 assert(result.evidenceQuality?.inputIdentity?.previewMotionProfile?.motionLineCount === 2, "preview motion profile should be recorded");
 assert(result.artifactEvidence?.files?.screenshot?.sha256 === screenshotSha256, "screenshot artifact hash missing or mismatched");
@@ -140,7 +152,8 @@ writeFileSync(mismatchPath, JSON.stringify({
   ...JSON.parse(readFileSync(importedPath, "utf8")),
   inputs: {
     preferredGcode: "camotics-preview.nc",
-    preferredGcodeSha256: "0".repeat(64)
+    preferredGcodeSha256: "0".repeat(64),
+    machineContext
   }
 }, null, 2));
 const mismatchRun = spawnSync(process.execPath, ["adapters/camotics/camotics_job.js", jobPath, mismatchReportPath], {

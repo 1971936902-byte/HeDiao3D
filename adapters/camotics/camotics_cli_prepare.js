@@ -43,8 +43,9 @@ for (const [key, filename] of optionalInputKeys) {
 
 const preferred = inputs.preferredGcode;
 const motionProfile = preferred.exists ? createGcodeMotionProfile(readFileSync(preferred.path, "utf8")) : null;
+const machineContext = preferred.exists ? createMachineContextFromGcode(readFileSync(preferred.path, "utf8")) : null;
 const ready = checks.every((check) => check.ok);
-const packageJson = createRunPackage(plan, inputs, motionProfile, ready);
+const packageJson = createRunPackage(plan, inputs, motionProfile, machineContext, ready);
 
 const runPackagePath = join(outputDir, "camotics-cli-run-package.json");
 writeFileSync(runPackagePath, JSON.stringify(packageJson, null, 2), "utf8");
@@ -129,7 +130,7 @@ function resolveJobPath(value) {
   return join(jobDir, value);
 }
 
-function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
+function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, ready) {
   const preferred = inspectedInputs.preferredGcode;
   const expectedResult = plan.expectedOutputs ?? {};
   return {
@@ -148,7 +149,8 @@ function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
       filename: preferred.filename,
       sha256: preferred.sha256,
       sizeBytes: preferred.sizeBytes,
-      motionProfile
+      motionProfile,
+      machineContext
     } : null,
     commandCandidates: normalizeCommands(plan.commandCandidates ?? [], jobDir, outputDir),
     expectedOutputs: {
@@ -167,6 +169,7 @@ function createRunPackage(plan, inspectedInputs, motionProfile, ready) {
         "camotics-result.json 使用 hediao3d.camotics-result.v1",
         "inputs.preferredGcodeSha256 等于 preferredGcodeIdentity.sha256",
         "inputs.camoticsCliRunPackageSha256 等于 camotics-cli-run-package.json 的 SHA-256",
+        "inputs.machineContext 与 preferredGcodeIdentity.machineContext 一致",
         "metrics.motionLineCount/zMin/zMax 与 preferredGcodeIdentity.motionProfile 匹配",
         "至少提供 camotics-preview.png 或 camotics-material-removal.stl"
       ]
@@ -195,6 +198,7 @@ function inspectWrittenRunPackage(path) {
 }
 
 function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity) {
+  const machineContext = motionProfile?.machineContext ?? createMachineContextFromGcode(preferred.exists ? readFileSync(preferred.path, "utf8") : "");
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId: plan.jobId ?? null,
@@ -208,6 +212,7 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
       preferredGcodeSha256: preferred.sha256,
       camoticsCliRunPackage: runPackageIdentity.filename,
       camoticsCliRunPackageSha256: runPackageIdentity.sha256,
+      machineContext,
       expectedMotionProfile: motionProfile
     },
     metrics: {
@@ -276,6 +281,7 @@ function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTem
   const preferred = packageJson.inputs?.preferredGcode?.filename ?? "camotics-preview.nc";
   const expectedHash = packageJson.preferredGcodeIdentity?.sha256 ?? "missing";
   const motion = packageJson.preferredGcodeIdentity?.motionProfile ?? {};
+  const machineContext = packageJson.preferredGcodeIdentity?.machineContext ?? {};
   const resultJson = packageJson.expectedOutputs?.resultJson ?? "camotics-result.json";
   const screenshot = packageJson.expectedOutputs?.screenshot ?? "camotics-preview.png";
   const materialMesh = packageJson.expectedOutputs?.materialMesh ?? "camotics-material-removal.stl";
@@ -296,6 +302,7 @@ function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTem
     `- [ ] \`${preferred}\` 的 SHA-256 等于: \`${expectedHash}\``,
     `- [ ] 运动行数: ${motion.motionLineCount ?? "missing"}`,
     `- [ ] Z 范围: ${motion.zMin ?? "missing"} 到 ${motion.zMax ?? "missing"}`,
+    `- [ ] 机床上下文: ${machineContext.camMode ?? "missing"} / ${machineContext.rotaryWrapAxis ?? "no-axis"} / ${machineContext.rotaryWrapPerRevolutionMm ?? "missing"}mm/圈。`,
     "- [ ] 确认 `camotics-preview.nc` 只用于三轴展开仿真，禁止上机。",
     "",
     "## 2. 运行 CAMotics 或等效仿真",
@@ -308,6 +315,8 @@ function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTem
     `- [ ] 填写 \`${resultJson}\` 的真实材料去除体积 \`metrics.materialRemovedMm3\`。`,
     `- [ ] 确认 \`inputs.preferredGcodeSha256\` 等于 \`${expectedHash}\`。`,
     `- [ ] 确认 \`inputs.camoticsCliRunPackageSha256\` 等于 \`${runPackageIdentity.sha256}\`。`,
+    `- [ ] 确认 \`inputs.machineContext.rotaryWrapAxis\` 等于 \`${machineContext.rotaryWrapAxis ?? "missing"}\`。`,
+    `- [ ] 确认 \`inputs.machineContext.rotaryWrapPerRevolutionMm\` 等于 \`${machineContext.rotaryWrapPerRevolutionMm ?? "missing"}\`。`,
     `- [ ] 导出或截图 \`${screenshot}\`。`,
     `- [ ] 如可用，导出材料去除网格 \`${materialMesh}\`。`,
     "",
@@ -345,6 +354,7 @@ function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTem
 function createResultValidatorScript(packageJson) {
   const expectedHash = packageJson.preferredGcodeIdentity?.sha256 ?? null;
   const expectedMotion = packageJson.preferredGcodeIdentity?.motionProfile ?? null;
+  const expectedMachineContext = packageJson.preferredGcodeIdentity?.machineContext ?? null;
   const expectedRunPackageHash = inspectWrittenRunPackage(join(outputDir, "camotics-cli-run-package.json")).sha256;
   const expectedResult = packageJson.expectedOutputs ?? {};
   const resultJson = expectedResult.resultJson ?? "camotics-result.json";
@@ -362,6 +372,7 @@ const expected = {
   preferredGcodeSha256: ${JSON.stringify(expectedHash)},
   camoticsCliRunPackageSha256: ${JSON.stringify(expectedRunPackageHash)},
   motionProfile: ${JSON.stringify(expectedMotion)},
+  machineContext: ${JSON.stringify(expectedMachineContext)},
   screenshot: ${JSON.stringify(screenshot)},
   materialMesh: ${JSON.stringify(materialMesh)}
 };
@@ -375,6 +386,7 @@ check("non-synthetic", result?.synthetic === false, "synthetic must be false for
 check("risk-ready", result?.riskLevel === "ready", "riskLevel must be ready.");
 check("preferred-gcode-hash", Boolean(expected.preferredGcodeSha256) && result?.inputs?.preferredGcodeSha256 === expected.preferredGcodeSha256, "inputs.preferredGcodeSha256 must match camotics-preview.nc.");
 check("run-package-hash", Boolean(expected.camoticsCliRunPackageSha256) && result?.inputs?.camoticsCliRunPackageSha256 === expected.camoticsCliRunPackageSha256, "inputs.camoticsCliRunPackageSha256 must match this run package.");
+check("machine-context", machineContextMatches(result?.inputs?.machineContext, expected.machineContext), "inputs.machineContext must match camotics-preview.nc rotary-wrap axis and wrap distance.");
 check("motion-line-count", Number(result?.metrics?.motionLineCount) === Number(expected.motionProfile?.motionLineCount), "metrics.motionLineCount must match camotics-preview.nc.");
 check("z-min", close(Number(result?.metrics?.zMin), Number(expected.motionProfile?.zMin), 0.05), "metrics.zMin must match camotics-preview.nc within 0.05mm.");
 check("z-max", close(Number(result?.metrics?.zMax), Number(expected.motionProfile?.zMax), 0.05), "metrics.zMax must match camotics-preview.nc within 0.05mm.");
@@ -398,6 +410,7 @@ const report = {
   expected: {
     preferredGcodeSha256: expected.preferredGcodeSha256,
     camoticsCliRunPackageSha256: expected.camoticsCliRunPackageSha256,
+    machineContext: expected.machineContext,
     motionProfile: expected.motionProfile
   },
   nextActions: productionEvidenceEligible
@@ -444,6 +457,21 @@ function check(id, ok, message) {
 
 function close(actual, expectedValue, tolerance) {
   return Number.isFinite(actual) && Number.isFinite(expectedValue) && Math.abs(actual - expectedValue) <= tolerance;
+}
+
+function machineContextMatches(imported, expectedContext) {
+  if (!expectedContext) return true;
+  if (!imported || typeof imported !== "object") return false;
+  const expectedAxis = String(expectedContext.rotaryWrapAxis ?? "").toUpperCase();
+  const importedAxis = String(imported.rotaryWrapAxis ?? imported.rotaryOutputAxis ?? "").toUpperCase();
+  const expectedLengthAxis = String(expectedContext.lengthAxis ?? "").toUpperCase();
+  const importedLengthAxis = String(imported.lengthAxis ?? "").toUpperCase();
+  const expectedWrap = Number(expectedContext.rotaryWrapPerRevolutionMm);
+  const importedWrap = Number(imported.rotaryWrapPerRevolutionMm);
+  return String(imported.camMode ?? expectedContext.camMode) === String(expectedContext.camMode)
+    && importedAxis === expectedAxis
+    && importedLengthAxis === expectedLengthAxis
+    && close(importedWrap, expectedWrap, 0.001);
 }
 
 function inspectArtifacts(result, resultPath, expected) {
@@ -572,8 +600,32 @@ function createGcodeMotionProfile(gcodeText) {
   return {
     motionLineCount: motionLines.length,
     zMin: zValues.length ? Math.min(...zValues) : null,
-    zMax: zValues.length ? Math.max(...zValues) : null
+    zMax: zValues.length ? Math.max(...zValues) : null,
+    machineContext: createMachineContextFromGcode(gcodeText)
   };
+}
+
+function createMachineContextFromGcode(gcodeText) {
+  const text = String(gcodeText ?? "");
+  const axis = matchHeader(text, "ROTARY_WRAP_AXIS");
+  const rawPerRev = matchHeader(text, "ROTARY_WRAP_PER_REV_MM");
+  const perRev = rawPerRev == null ? NaN : Number(rawPerRev);
+  const lengthAxis = matchHeader(text, "LENGTH_AXIS");
+  const rotaryMode = Boolean(axis || Number.isFinite(perRev));
+  return {
+    schema: "hediao3d.camotics-machine-context.v1",
+    camMode: rotaryMode ? "rotaryWrap" : "3axis",
+    rotaryWrapAxis: axis ? axis.toUpperCase() : null,
+    rotaryOutputAxis: axis ? axis.toUpperCase() : null,
+    rotaryWrapPerRevolutionMm: Number.isFinite(perRev) ? perRev : null,
+    lengthAxis: lengthAxis ? lengthAxis.toUpperCase() : "X",
+    simulationInterpretation: rotaryMode ? "linearized-rotary-wrap-as-3axis" : "plain-3axis"
+  };
+}
+
+function matchHeader(text, key) {
+  const match = String(text ?? "").match(new RegExp(`${key}\\s*=\\s*([^\\s)]+)`, "i"));
+  return match ? match[1] : null;
 }
 
 function parseWord(line, word) {

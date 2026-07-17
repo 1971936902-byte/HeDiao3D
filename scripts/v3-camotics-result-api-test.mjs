@@ -106,6 +106,7 @@ async function main() {
   assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
   assert(resultArtifact.evidenceQuality?.motionConsistency?.status === "matched", "camotics result motion profile should match");
+  assert(resultArtifact.evidenceQuality?.machineContext?.status === "matched", "camotics result machine context should match");
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
@@ -155,6 +156,17 @@ async function main() {
   assert(motionMismatchImport.ok === true, "motion mismatch import should complete as review evidence");
   assert(motionMismatchImport.simulationEvidence?.productionUnlockEligible === false, "motion mismatch must not be production eligible");
 
+  const machineContextMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, {
+      ...previewMotionProfile.machineContext,
+      rotaryWrapAxis: "X"
+    }),
+    screenshotDataUrl: toDataUrl("fake-camotics-png"),
+    materialMeshText: "solid material\nendsolid material\n"
+  });
+  assert(machineContextMismatchImport.ok === true, "machine context mismatch import should complete as review evidence");
+  assert(machineContextMismatchImport.simulationEvidence?.productionUnlockEligible === false, "machine context mismatch must not be production eligible");
+
   const jobMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult("wrong-job-id", previewSha256, previewMotionProfile, runPackageSha256),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
@@ -175,7 +187,7 @@ async function main() {
   }, null, 2));
 }
 
-function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256) {
+function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, machineContext = motionProfile.machineContext) {
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId,
@@ -188,7 +200,8 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       preferredGcode: "camotics-preview.nc",
       preferredGcodeSha256,
       camoticsCliRunPackage: "camotics-cli-run-package.json",
-      camoticsCliRunPackageSha256: runPackageSha256
+      camoticsCliRunPackageSha256: runPackageSha256,
+      machineContext
     },
     metrics: {
       motionLineCount: motionProfile.motionLineCount,
@@ -229,8 +242,30 @@ function createPreviewMotionProfile(gcodeText) {
   return {
     motionLineCount: motionLines.length,
     zMin: Math.min(...zValues),
-    zMax: Math.max(...zValues)
+    zMax: Math.max(...zValues),
+    machineContext: createMachineContextFromGcode(gcodeText)
   };
+}
+
+function createMachineContextFromGcode(gcodeText) {
+  const text = String(gcodeText ?? "");
+  const axis = matchHeader(text, "ROTARY_WRAP_AXIS");
+  const perRev = Number(matchHeader(text, "ROTARY_WRAP_PER_REV_MM"));
+  const lengthAxis = matchHeader(text, "LENGTH_AXIS");
+  return {
+    schema: "hediao3d.camotics-machine-context.v1",
+    camMode: axis ? "rotaryWrap" : "3axis",
+    rotaryWrapAxis: axis ? axis.toUpperCase() : null,
+    rotaryOutputAxis: axis ? axis.toUpperCase() : null,
+    rotaryWrapPerRevolutionMm: Number.isFinite(perRev) ? perRev : null,
+    lengthAxis: lengthAxis ? lengthAxis.toUpperCase() : "X",
+    simulationInterpretation: axis ? "linearized-rotary-wrap-as-3axis" : "plain-3axis"
+  };
+}
+
+function matchHeader(text, key) {
+  const match = String(text ?? "").match(new RegExp(`${key}\\s*=\\s*([^\\s)]+)`, "i"));
+  return match ? match[1] : null;
 }
 
 function toDataUrl(text) {
