@@ -57,22 +57,22 @@ const defaultSettings: ModelSettings = {
   leftHoldMm: 2,
   rightHoldMm: 2,
   endTransitionMm: 1.2,
-  toolDiameter: 0.6,
+  toolDiameter: 4,
   stepoverDeg: 1.2,
-  stepoverMm: 0.12,
-  toolProfileId: "ball-0.6",
+  stepoverMm: 0.28,
+  toolProfileId: "vflat-4mm-25deg",
   materialProfileId: "olive-core",
-  machineProfileId: "desktop-4axis-generic",
-  camMode: "4axis",
-  rotaryOutputAxis: "A",
+  machineProfileId: "desktop-3axis-rotary-y",
+  camMode: "rotaryWrap",
+  rotaryOutputAxis: "Y",
   rotaryWrapPerRevolutionMm: 100,
   meshLengthAxis: "auto",
   meshAxisReverse: false,
   maxCutDepth: 0.16,
-  stockAllowance: 0.12,
+  stockAllowance: 0.08,
   finishingStrategy: "x-scan",
   generationMode: "active",
-  postProcessor: "generic"
+  postProcessor: "wrapY"
 };
 
 type ToolpathKind = "rough" | "finish" | "rest";
@@ -1742,10 +1742,7 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "source", label: "素材", hint: "上传/载入" },
   { id: "model", label: "建模", hint: "3D/Meshy" },
   { id: "process", label: "工艺", hint: "刀具/机床" },
-  { id: "cam", label: "CAM", hint: "刀路/导出" },
-  { id: "tasks", label: "任务", hint: "历史/版本" },
-  { id: "deployment", label: "部署", hint: "本地/云端" },
-  { id: "feedback", label: "反馈", hint: "实机闭环" }
+  { id: "cam", label: "CAM", hint: "刀路/导出" }
 ];
 
 const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
@@ -1758,7 +1755,7 @@ const defaultProjectProfile: ProjectProfile = {
   projectName: "核雕试雕项目",
   customerName: "默认客户",
   projectCode: "HD3D-V2",
-  role: "admin"
+  role: "process"
 };
 const defaultDeploymentProfile: DeploymentProfile = {
   mode: "lan-proxy",
@@ -4165,7 +4162,7 @@ export function App() {
           </div>
           <div>
             <h1>核雕3D CAM</h1>
-            <p>图片生成浮雕曲面与四轴刀路</p>
+            <p>三轴旋转夹具试雕闭环</p>
           </div>
         </section>
 
@@ -4771,9 +4768,9 @@ export function App() {
           <label className="select-row">
             <span>CAM模式</span>
             <select value={settings.camMode} onChange={(event) => handleCamModeChange(event.target.value as ModelSettings["camMode"])}>
-              <option value="4axis">四轴核雕 X/A/Z</option>
-              <option value="3axis">三轴浮雕 X/Y/Z</option>
               <option value="rotaryWrap">旋转包裹 X/Z + 夹具轴</option>
+              <option value="3axis">三轴平面浮雕 X/Y/Z</option>
+              <option value="4axis">真实四轴 X/A/Z</option>
             </select>
           </label>
           {settings.camMode === "rotaryWrap" && (

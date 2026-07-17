@@ -278,6 +278,25 @@ export const machineProfiles: MachineProfile[] = [
     maxRpm: 24000,
     aDirection: "normal",
     notes: "三轴 X/Y/Z 平面浮雕配置，不输出 A 轴；首次上机请重新确认工件原点和安全高度。"
+  },
+  {
+    id: "desktop-3axis-rotary-y",
+    name: "三轴控制器 + Y轴旋转夹具",
+    axes: "3axis",
+    controller: "generic",
+    xMin: -80,
+    xMax: 80,
+    yMin: -120,
+    yMax: 120,
+    zMin: -20,
+    zMax: 45,
+    aMin: 0,
+    aMax: 0,
+    safeZ: 16,
+    maxFeed: 900,
+    maxRpm: 24000,
+    aDirection: "normal",
+    notes: "X 走核雕长度，Z 控制刀深，Y 轴线性位移映射夹具旋转；适合一行一行展开雕刻。"
   }
 ];
 
@@ -401,6 +420,17 @@ export function applyMaterialProfile(settings: ModelSettings, material: Material
 }
 
 export function applyMachineProfile(settings: ModelSettings, machine: MachineProfile): ModelSettings {
+  if (machine.id === "desktop-3axis-rotary-y") {
+    return {
+      ...settings,
+      machineProfileId: machine.id,
+      safeZ: machine.safeZ,
+      camMode: "rotaryWrap",
+      rotaryOutputAxis: "Y",
+      postProcessor: "wrapY"
+    };
+  }
+
   return {
     ...settings,
     machineProfileId: machine.id,
