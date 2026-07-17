@@ -22,6 +22,7 @@ async function main() {
   assert(run.apiArtifacts?.bootstrap?.endsWith("native-cam-server-bootstrap.sh"), "native CAM summary should expose bootstrap artifact");
   assert(run.apiArtifacts?.envTemplate?.endsWith("native-cam-env.template"), "native CAM summary should expose env template artifact");
   assert(run.apiArtifacts?.realOutputCheck?.endsWith("native-cam-real-output-check.sh"), "native CAM summary should expose real output check artifact");
+  assert(run.apiArtifacts?.packageZip?.endsWith("server-package.zip"), "native CAM summary should expose server package zip artifact");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-acceptance-checklist.md"), "native CAM summary should expose server package files");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM summary should expose real output check package file");
   assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
@@ -78,6 +79,16 @@ async function main() {
   const packageManifest = await getJson(latest.latest.apiArtifacts.packageManifest);
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM package manifest missing real output check");
+  const packageZip = await getBinary(latest.latest.apiArtifacts.packageZip);
+  assert((packageZip.contentType ?? "").includes("application/zip"), "native CAM server package should use application/zip content type");
+  assert(packageZip.bytes[0] === 0x50 && packageZip.bytes[1] === 0x4b, "native CAM server package should be a ZIP file");
+  const zipNames = listZipFilenames(packageZip.bytes);
+  assert(zipNames.includes("hediao3d-native-cam-server/native-cam-server-bootstrap.sh"), "native CAM zip missing bootstrap");
+  assert(zipNames.includes("hediao3d-native-cam-server/native-cam-env.template"), "native CAM zip missing env template");
+  assert(zipNames.includes("hediao3d-native-cam-server/native-cam-acceptance-checklist.md"), "native CAM zip missing checklist");
+  assert(zipNames.includes("hediao3d-native-cam-server/native-cam-real-output-check.sh"), "native CAM zip missing real output check");
+  assert(zipNames.includes("hediao3d-native-cam-server/native-cam-server-package.json"), "native CAM zip missing package manifest");
+  assert(zipNames.includes("hediao3d-native-cam-server/README-NATIVE-CAM.md"), "native CAM zip missing README");
 
   console.log(JSON.stringify({
     ok: true,
@@ -103,6 +114,7 @@ function validateSummary(summary, label) {
   assert(summary.apiArtifacts?.checklist, `${label} missing checklist artifact`);
   assert(summary.apiArtifacts?.realOutputCheck, `${label} missing real output check artifact`);
   assert(summary.apiArtifacts?.packageManifest, `${label} missing package manifest artifact`);
+  assert(summary.apiArtifacts?.packageZip, `${label} missing package zip artifact`);
   assert(summary.packageArtifacts?.schema === "hediao3d.native-cam-server-package.v1", `${label} missing packageArtifacts summary`);
   const firstCheck = summary.checks[0] ?? {};
   assert(!("outputRoot" in firstCheck), `${label} leaked detailed check outputRoot`);
@@ -122,6 +134,16 @@ async function fetchText(path) {
   return text;
 }
 
+async function getBinary(path) {
+  const response = await fetch(`${baseUrl}${path}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  assert(response.ok, `${path} failed: ${response.status}`);
+  return {
+    bytes,
+    contentType: response.headers.get("content-type")
+  };
+}
+
 async function postJson(path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
@@ -131,6 +153,35 @@ async function postJson(path, body) {
   const data = await response.json().catch(() => ({}));
   assert(response.ok, `${path} failed: ${response.status} ${data.error ?? ""}`);
   return data;
+}
+
+function listZipFilenames(bytes) {
+  const names = [];
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = readUInt32LE(bytes, offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    if (signature !== 0x04034b50) {
+      offset += 1;
+      continue;
+    }
+    const compressedSize = readUInt32LE(bytes, offset + 18);
+    const nameLength = readUInt16LE(bytes, offset + 26);
+    const extraLength = readUInt16LE(bytes, offset + 28);
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + nameLength;
+    names.push(new TextDecoder().decode(bytes.slice(nameStart, nameEnd)));
+    offset = nameEnd + extraLength + compressedSize;
+  }
+  return names;
+}
+
+function readUInt16LE(bytes, offset) {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUInt32LE(bytes, offset) {
+  return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
 }
 
 function assert(condition, message) {

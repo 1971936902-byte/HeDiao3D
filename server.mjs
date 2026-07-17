@@ -164,6 +164,11 @@ const server = createServer(async (req, res) => {
       return getAdapterValidationArtifact(adapterValidationArtifactMatch[1], adapterValidationArtifactMatch[2], res);
     }
 
+    const nativeCamServerPackageMatch = req.url?.match(/^\/api\/orchestrator\/native-cam\/([^/?#/]+)\/server-package\.zip$/);
+    if (req.method === "GET" && nativeCamServerPackageMatch) {
+      return getNativeCamServerPackage(nativeCamServerPackageMatch[1], res);
+    }
+
     const nativeCamArtifactMatch = req.url?.match(/^\/api\/orchestrator\/native-cam\/([^/?#/]+)\/([^/?#/]+)$/);
     if (req.method === "GET" && nativeCamArtifactMatch) {
       return getNativeCamReadinessArtifact(nativeCamArtifactMatch[1], nativeCamArtifactMatch[2], res);
@@ -2523,8 +2528,90 @@ function createNativeCamReadinessArtifactLinks(checkId) {
     envTemplate: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-env.template`,
     checklist: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-acceptance-checklist.md`,
     realOutputCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-real-output-check.sh`,
-    packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`
+    packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`,
+    packageZip: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/server-package.zip`
   };
+}
+
+function getNativeCamServerPackage(checkId, res) {
+  const safeId = decodeURIComponent(checkId);
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(safeId)) {
+    return json(res, 400, { error: "非法 native CAM readiness 路径" });
+  }
+  const root = join(process.cwd(), "public", "native-cam-readiness", safeId);
+  const manifestPath = join(root, "native-cam-server-package.json");
+  if (!existsSync(manifestPath)) return json(res, 404, { error: "找不到 native CAM 服务端包清单" });
+  const manifest = readJsonFile(manifestPath);
+  const listedFiles = Array.isArray(manifest?.files)
+    ? manifest.files.map((file) => file.filename).filter((filename) => /^[a-zA-Z0-9_.-]+$/.test(String(filename)))
+    : [];
+  const requiredFiles = [
+    "native-cam-readiness.json",
+    "native-cam-readiness.md",
+    "native-cam-server-bootstrap.sh",
+    "native-cam-env.template",
+    "native-cam-acceptance-checklist.md",
+    "native-cam-real-output-check.sh",
+    "native-cam-server-package.json"
+  ];
+  const filenames = Array.from(new Set([...requiredFiles, ...listedFiles]));
+  const missing = filenames.filter((filename) => !existsSync(join(root, filename)));
+  if (missing.length) {
+    return json(res, 409, {
+      error: "native CAM 服务端包存在缺失文件，请重新运行验收检查",
+      missing
+    });
+  }
+  const files = filenames.map((filename) => ({
+    name: `hediao3d-native-cam-server/${filename}`,
+    content: readFileSync(join(root, filename))
+  }));
+  files.push({
+    name: "hediao3d-native-cam-server/README-NATIVE-CAM.md",
+    content: createNativeCamServerPackageReadme(safeId, manifest)
+  });
+  const zip = createServerZipBuffer(files);
+  const filename = `hediao3d-native-cam-${safeId}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
+function createNativeCamServerPackageReadme(checkId, manifest) {
+  const commands = Array.isArray(manifest?.commands) ? manifest.commands : [];
+  const lines = [
+    "# HeDiao3D Native CAM Server Package",
+    "",
+    `Check ID: ${checkId}`,
+    "",
+    "## Purpose",
+    "",
+    "This package is for the Linux CAM server only. It prepares and validates FreeCAD CAM, BlenderCAM/FabexCNC, OpenCAMLib and CAMotics evidence for HeDiao3D V3.",
+    "",
+    "## First Steps",
+    "",
+    "- Read native-cam-acceptance-checklist.md.",
+    "- Copy native-cam-env.template to your server environment file and keep synthetic CAMotics disabled.",
+    "- Run native-cam-server-bootstrap.sh in dry-run mode first.",
+    "- Run native-cam-real-output-check.sh only after external CAM commands are configured.",
+    "",
+    "## Production Boundary",
+    "",
+    "- This ZIP does not unlock production NC.",
+    "- Fixture, synthetic and preview scaffold outputs are contract evidence only.",
+    "- Production unlock still requires non-synthetic CAM output, real material-removal simulation, air-run, trial feedback and machine acceptance bound to one job.",
+    "",
+    "## Commands",
+    "",
+    ...(commands.length ? commands.map((command) => `- ${command}`) : ["- See native-cam-acceptance-checklist.md."]),
+    ""
+  ];
+  return lines.join("\n");
 }
 
 function getNativeCamReadinessArtifact(checkId, filename, res) {

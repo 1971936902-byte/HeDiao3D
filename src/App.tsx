@@ -1339,6 +1339,7 @@ type V3NativeCamReadinessSummary = {
     checklist?: string;
     realOutputCheck?: string;
     packageManifest?: string;
+    packageZip?: string;
   };
   packageArtifacts?: {
     schema?: string | null;
@@ -5704,6 +5705,11 @@ export function App() {
                       <strong>Linux服务端准备包</strong>
                       <small>用于在 CAM 服务器安装/探测 FreeCAD、OpenCAMLib、CAMotics，并保留生产边界。</small>
                       <div className="v3-artifact-list compact">
+                        {v3NativeCamReadiness.apiArtifacts?.packageZip && (
+                          <a href={v3NativeCamReadiness.apiArtifacts.packageZip} download>
+                            下载服务端ZIP
+                          </a>
+                        )}
                         {v3NativeCamReadiness.apiArtifacts?.bootstrap && (
                           <a href={v3NativeCamReadiness.apiArtifacts.bootstrap} download>
                             下载安装脚本
