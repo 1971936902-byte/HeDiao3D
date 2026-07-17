@@ -20,6 +20,7 @@ Current state:
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -60,11 +61,11 @@ def main() -> int:
         if neutral is None:
             print("STL heightfield output requested, but no valid surface samples could be generated.", file=sys.stderr)
             return 5
-        envelope_report = create_cutter_envelope_report(job, plan, neutral, detection, geometry)
         envelope_path = output_path.with_name("opencamlib-cutter-envelope-report.json")
         neutral["runner"]["heightfield"]["cutterEnvelopeReport"] = str(envelope_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+        envelope_report = create_cutter_envelope_report(job, plan, neutral, detection, geometry, plan_path, output_path)
         envelope_path.write_text(json.dumps(envelope_report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({
             "ok": True,
@@ -387,7 +388,7 @@ def compute_preview_cutter_radius(tool: Dict[str, Any], settings: Dict[str, Any]
     return max(0.0, radius)
 
 
-def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any]) -> Dict[str, Any]:
+def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path, neutral_path: Path) -> Dict[str, Any]:
     points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
     heightfield = ((neutral.get("runner") or {}).get("heightfield") or {})
     depths = [float(point.get("depth")) for point in points if is_number(point.get("depth"))]
@@ -398,15 +399,21 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
     total_sites = point_count + miss_count
     hit_rate = point_count / total_sites if total_sites else 0
     fallback_rate = fallback_count / point_count if point_count else 0
+    model_path = Path(str((plan.get("model") or {}).get("path") or ""))
     return {
         "schema": "hediao3d.opencamlib-cutter-envelope-report.v1",
         "jobId": job.get("jobId"),
         "engine": "opencamlib",
         "mode": "stl-heightfield-preview",
         "createdBy": "adapters/opencamlib/opencamlib_runner.py",
+        "inputIdentity": {
+            "modelSha256": sha256_file(model_path),
+            "planSha256": sha256_file(plan_path),
+            "neutralToolpathSha256": sha256_file(neutral_path),
+        },
         "opencamlib": detection,
         "model": {
-            "path": (plan.get("model") or {}).get("path"),
+            "path": str(model_path) if str(model_path) else (plan.get("model") or {}).get("path"),
             "format": (plan.get("model") or {}).get("format"),
             "geometry": geometry,
         },
@@ -459,6 +466,13 @@ def is_number(value: Any) -> bool:
         return True
     except (TypeError, ValueError):
         return False
+
+
+def sha256_file(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def sample_cutter_envelope_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float, cutter_radius: float) -> Optional[Dict[str, Any]]:

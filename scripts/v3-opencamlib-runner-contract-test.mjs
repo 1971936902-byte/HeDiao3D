@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const workDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-runner-contract-"));
 const runnerPath = resolve("adapters", "opencamlib", "opencamlib_runner.py");
@@ -76,6 +77,9 @@ try {
   assert(envelopeReport.sampling?.pointCount === heightfield.points.length, "cutter envelope report point count mismatch");
   assert(envelopeReport.sampling?.hitRate === 1, "cutter envelope report hit rate mismatch");
   assert(envelopeReport.tool?.previewCutterRadiusMm === heightfield.runner.heightfield.cutterRadiusMm, "cutter envelope report radius mismatch");
+  assert(envelopeReport.inputIdentity?.neutralToolpathSha256 === sha256File(heightfieldOutput), "cutter envelope report should bind neutral output hash");
+  assert(envelopeReport.inputIdentity?.planSha256 === sha256File(planPath), "cutter envelope report should bind kernel plan hash");
+  assert(envelopeReport.inputIdentity?.modelSha256 === sha256File(job.modelPath), "cutter envelope report should bind model hash");
   assert(envelopeReport.quality?.productionCandidate === false, "heightfield envelope report must not be production candidate");
   assert(/preview/i.test(envelopeReport.quality?.level ?? ""), "cutter envelope report should remain preview-scaffold");
 
@@ -191,4 +195,8 @@ endsolid sample
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }

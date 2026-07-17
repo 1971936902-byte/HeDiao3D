@@ -101,6 +101,7 @@ async function main() {
   assert(adapterReport.metrics?.neutralToolpath?.autoRunner === true, "adapter should use bundled heightfield runner automatically");
   assert(adapterReport.metrics?.neutralToolpath?.heightfieldPreview === true, "adapter should classify heightfield preview output");
   assert(adapterReport.metrics?.neutralToolpath?.previewScaffold === true, "adapter should classify preview scaffold output");
+  assert(adapterReport.metrics?.neutralToolpath?.cutterContactReport?.inputIdentityBinding?.status === "bound", "heightfield contact report should bind to neutral output hash");
   assert(adapterReport.metrics?.neutralToolpath?.imported === false, "external command output should not be classified as imported fixture");
   assert(adapterReport.metrics?.neutralToolpath?.synthetic === false, "adapter neutral output must not be synthetic");
 
