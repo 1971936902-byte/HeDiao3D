@@ -7800,6 +7800,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   const trialFeedbackIntegrityBound = latestTrialFeedbackRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const rotaryCalibrationPassed = latestMachineAcceptanceRecord?.rotaryCalibration?.required === false
     || latestMachineAcceptanceRecord?.rotaryCalibration?.status === "pass";
+  const airRunEvidence = createAirRunEvidence(latestMachineAcceptanceRecord);
   const fieldEvidencePackageBinding = createFieldEvidencePackageBinding(latestMachineAcceptanceRecord, latestTrialFeedbackRecord);
   const trialFeedbackPassed = trialFeedbackLog?.recordCount > 0
     && trialFeedbackLog.latestOutcome === "success"
@@ -7819,6 +7820,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     controllerDialectReport,
     machineAcceptancePassed,
     trialFeedbackPassed,
+    airRunPassed: airRunEvidence.status === "pass",
     rotaryCalibrationPassed,
     fieldEvidencePackageBinding
   });
@@ -7891,6 +7893,13 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       status: controllerDialectReport?.level === "ready" ? "pass" : controllerDialectReport?.level === "critical" ? "block" : "review",
       evidence: ["controller-dialect-report.json", "machine-controller-profile.json"],
       summary: controllerDialectReport?.summary ?? "未生成控制器方言报告。"
+    },
+    {
+      id: "air-run-evidence",
+      label: "离料空跑验证",
+      status: airRunEvidence.status === "pass" ? "pass" : airRunEvidence.status === "failed" ? "block" : "review",
+      evidence: ["air-run.nc", "rotary-calibration-airrun.nc", "machine-acceptance-record.json"],
+      summary: airRunEvidence.summary
     },
     {
       id: "rotary-calibration-evidence",
@@ -7988,6 +7997,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       latestMachineAcceptanceOutcome: machineAcceptanceLog?.latestOutcome ?? null,
       machineAcceptancePassed,
       machineAcceptanceIntegrityBound,
+      airRunPassed: airRunEvidence.status === "pass",
+      airRunStatus: airRunEvidence.status,
+      airRunEvidence,
       rotaryCalibrationPassed,
       rotaryCalibrationStatus: latestMachineAcceptanceRecord?.rotaryCalibration?.status ?? "missing",
       trialFeedbackRecords: trialFeedbackLog?.recordCount ?? 0,
@@ -8010,7 +8022,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   };
 }
 
-function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, rotaryCalibrationPassed, fieldEvidencePackageBinding }) {
+function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, airRunPassed, rotaryCalibrationPassed, fieldEvidencePackageBinding }) {
   const externalSourceReady = camHandoffQuality?.level === "ready"
     && camHandoffQuality?.source === "external-adapter"
     && camHandoffQuality?.externalToolpathUsed === true
@@ -8031,6 +8043,7 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
   const fieldReady = Boolean(
     machineAcceptancePassed
     && trialFeedbackPassed
+    && airRunPassed
     && rotaryCalibrationPassed
     && fieldEvidencePackageBinding?.status === "matched"
   );
@@ -8058,6 +8071,14 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
       summary: ncReady
         ? "NC 静态分析和控制器方言检查通过。"
         : "NC 静态分析或控制器方言仍需复核。"
+    },
+    {
+      id: "air-run-proof",
+      label: "离料空跑验证",
+      status: airRunPassed ? "pass" : "review",
+      summary: airRunPassed
+        ? "旋转标定空跑和整条离料空跑已通过，并绑定当前加工包哈希。"
+        : "缺少旋转标定空跑/整条离料空跑通过记录，或空跑文件哈希未绑定。"
     },
     {
       id: "rotary-calibration-proof",
@@ -8167,6 +8188,71 @@ function createFieldEvidencePackageBinding(machineRecord, trialRecord) {
     summary: status === "matched"
       ? "试雕反馈和机床验收记录绑定到同一组关键加工包文件哈希。"
       : "试雕反馈与机床验收的加工包绑定需要复核。"
+  };
+}
+
+function createAirRunEvidence(machineRecord) {
+  const steps = Array.isArray(machineRecord?.steps) ? machineRecord.steps : [];
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+  const packageFiles = Array.isArray(machineRecord?.downloadIntegrity?.packageBinding?.files)
+    ? machineRecord.downloadIntegrity.packageBinding.files
+    : [];
+  const fileByName = new Map(packageFiles.map((file) => [file.filename, file]));
+  const rotaryStep = stepById.get("rotary-calibration-airrun") ?? null;
+  const fullAirRunStep = stepById.get("air-run") ?? null;
+  const rotaryFile = fileByName.get("rotary-calibration-airrun.nc") ?? null;
+  const airRunFile = fileByName.get("air-run.nc") ?? null;
+  const checks = [
+    {
+      id: "rotary-calibration-airrun-step",
+      label: "旋转标定空跑步骤",
+      status: rotaryStep?.status === "pass" ? "pass" : rotaryStep ? "failed" : "missing",
+      evidenceNote: rotaryStep?.evidenceNote ?? null
+    },
+    {
+      id: "full-air-run-step",
+      label: "整条刀路离料空跑步骤",
+      status: fullAirRunStep?.status === "pass" ? "pass" : fullAirRunStep ? "failed" : "missing",
+      evidenceNote: fullAirRunStep?.evidenceNote ?? null
+    },
+    {
+      id: "rotary-calibration-airrun-hash",
+      label: "rotary-calibration-airrun.nc 哈希绑定",
+      status: rotaryFile?.status === "matched" ? "pass" : rotaryFile ? "failed" : "missing",
+      sha256: rotaryFile?.expectedSha256 ?? rotaryFile?.submittedSha256 ?? null
+    },
+    {
+      id: "air-run-hash",
+      label: "air-run.nc 哈希绑定",
+      status: airRunFile?.status === "matched" ? "pass" : airRunFile ? "failed" : "missing",
+      sha256: airRunFile?.expectedSha256 ?? airRunFile?.submittedSha256 ?? null
+    },
+    {
+      id: "operator-air-run-ok",
+      label: "操作员空跑确认",
+      status: machineRecord?.airRunOk === true ? "pass" : machineRecord ? "failed" : "missing",
+      value: machineRecord?.airRunOk ?? null
+    }
+  ];
+  const missing = checks.filter((check) => check.status === "missing");
+  const failed = checks.filter((check) => check.status === "failed");
+  const status = missing.length > 0
+    ? "missing"
+    : failed.length > 0
+      ? "failed"
+      : "pass";
+  return {
+    schema: "hediao3d.air-run-evidence.v1",
+    status,
+    recordId: machineRecord?.id ?? null,
+    packageBindingStatus: machineRecord?.downloadIntegrity?.packageBinding?.status ?? "missing",
+    allRequiredHashesVerified: Boolean(machineRecord?.downloadIntegrity?.allRequiredHashesVerified),
+    checks,
+    summary: status === "pass"
+      ? "旋转标定空跑和整条离料空跑已通过，并且 air-run 文件哈希绑定当前加工包。"
+      : status === "failed"
+        ? `离料空跑证据存在 ${failed.length} 个失败项。`
+        : `离料空跑证据缺少 ${missing.length} 个必需项。`
   };
 }
 
@@ -9690,6 +9776,9 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
   const nativeCamRealOutputAcceptance = readLatestNativeCamRealOutputAcceptanceSummary();
+  const machineAcceptanceLog = readJsonFile(join(job.workDir, "machine-acceptance-log.json"));
+  const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
+  const airRunEvidence = createAirRunEvidence(latestMachineAcceptanceRecord);
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
   const trialCandidate = productionGate.allowTrialNc ? "toolpath.nc" : null;
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary));
@@ -9874,6 +9963,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       blockedStepCount: machineAcceptanceChecklist.steps?.filter((step) => step.status === "blocked" || step.status === "locked").length ?? 0,
       artifact: "machine-acceptance-checklist.json"
     } : null,
+    airRunEvidence,
     nativeCamReadiness: nativeCamReadiness ? {
       level: nativeCamReadiness.level,
       readyCount: nativeCamReadiness.readyCount,
@@ -10407,6 +10497,42 @@ async function refreshNextActionChecklistArtifact(job) {
   return true;
 }
 
+async function refreshMachiningPackageIndexArtifact(job) {
+  if (!job?.workDir) return null;
+  const workDir = job.workDir;
+  const deliveryManifest = readJsonFile(join(workDir, "delivery-manifest.json"));
+  const productionGate = readJsonFile(join(workDir, "production-gate.json"));
+  const postprocessProfile = readJsonFile(join(workDir, "postprocess-profile.json"));
+  const camoticsInput = readJsonFile(join(workDir, "camotics-input.json"));
+  if (!deliveryManifest || !productionGate || !postprocessProfile || !camoticsInput) return null;
+  const index = createMachiningPackageIndex({
+    job,
+    toolpath: createToolpathStubForRefresh(job),
+    productionGate,
+    postprocessProfile,
+    simulationSummary: readJsonFile(join(workDir, "simulation-summary.json")),
+    camoticsInput,
+    camoticsSimulationPlan: readJsonFile(join(workDir, "camotics-simulation-plan.json")),
+    camoticsCliExecutionPlan: readJsonFile(join(workDir, "camotics-cli-execution-plan.json")),
+    rotaryWrapPreviewReport: readJsonFile(join(workDir, "rotary-wrap-preview-report.json")),
+    camHandoffQuality: readJsonFile(join(workDir, "cam-handoff-quality.json")),
+    postprocessTraceReport: readJsonFile(join(workDir, "postprocess-trace-report.json")),
+    camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
+    productionEvidenceDossier: readJsonFile(join(workDir, "production-evidence-dossier.json")),
+    ncStaticAnalysis: readJsonFile(join(workDir, "nc-static-analysis.json")),
+    nativeCamReadiness: readJsonFile(join(workDir, "native-cam-readiness.json")),
+    camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
+    openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
+    machineControllerProfile: readJsonFile(join(workDir, "machine-controller-profile.json")),
+    machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
+    controllerDialectReport: readJsonFile(join(workDir, "controller-dialect-report.json")),
+    deliveryManifest
+  });
+  await writeFile(join(workDir, "machining-package-index.json"), JSON.stringify(index, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "machining-package-index.json"));
+  return index;
+}
+
 function upsertDeliveryManifestFile(deliveryManifest, nextFile) {
   const files = Array.isArray(deliveryManifest.files) ? [...deliveryManifest.files] : [];
   const index = files.findIndex((file) => file.filename === nextFile.filename);
@@ -10860,6 +10986,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   await writeTrialFeedbackGlobalRecord(record);
   job.workDir = workDir;
   const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  const machiningPackageIndex = await refreshMachiningPackageIndexArtifact(job);
+  const refreshedAfterIndex = machiningPackageIndex ? await refreshEvidenceDeliveryArtifacts(job) : refreshedDelivery;
 
   job.updatedAt = record.createdAt;
   job.trialFeedback = {
@@ -10887,21 +11015,22 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       actionCount: optimizationPlan.actions.length,
       nextRunProfile: optimizationPlan.nextRunProfile
     },
-    ...(refreshedDelivery ? {
-      deliveryManifest: refreshedDelivery.deliveryManifest,
+    ...(refreshedAfterIndex ? {
+      deliveryManifest: refreshedAfterIndex.deliveryManifest,
       packageIntegrity: {
-        schema: refreshedDelivery.packageIntegrity.schema,
-        status: refreshedDelivery.packageIntegrity.status,
-        summary: refreshedDelivery.packageIntegrity.summary,
-        fileCount: refreshedDelivery.packageIntegrity.fileCount,
-        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
-        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
-        totalBytes: refreshedDelivery.packageIntegrity.totalBytes
+        schema: refreshedAfterIndex.packageIntegrity.schema,
+        status: refreshedAfterIndex.packageIntegrity.status,
+        summary: refreshedAfterIndex.packageIntegrity.summary,
+        fileCount: refreshedAfterIndex.packageIntegrity.fileCount,
+        downloadableCount: refreshedAfterIndex.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedAfterIndex.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedAfterIndex.packageIntegrity.totalBytes
       }
     } : {}),
     ...(productionEvidenceDossier ? {
       productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(productionEvidenceDossier)
-    } : {})
+    } : {}),
+    ...(machiningPackageIndex ? { machiningPackageIndex } : {})
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-record.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-log.json"));
@@ -10973,6 +11102,8 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
   await writeMachineAcceptanceGlobalRecord(record);
   job.workDir = workDir;
   const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  const machiningPackageIndex = await refreshMachiningPackageIndexArtifact(job);
+  const refreshedAfterIndex = machiningPackageIndex ? await refreshEvidenceDeliveryArtifacts(job) : refreshedDelivery;
 
   job.updatedAt = record.createdAt;
   job.machineAcceptance = {
@@ -10994,21 +11125,22 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
       rotaryCalibrationStatus: record.rotaryCalibration?.status ?? null,
       recommendations: record.recommendations
     },
-    ...(refreshedDelivery ? {
-      deliveryManifest: refreshedDelivery.deliveryManifest,
+    ...(refreshedAfterIndex ? {
+      deliveryManifest: refreshedAfterIndex.deliveryManifest,
       packageIntegrity: {
-        schema: refreshedDelivery.packageIntegrity.schema,
-        status: refreshedDelivery.packageIntegrity.status,
-        summary: refreshedDelivery.packageIntegrity.summary,
-        fileCount: refreshedDelivery.packageIntegrity.fileCount,
-        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
-        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
-        totalBytes: refreshedDelivery.packageIntegrity.totalBytes
+        schema: refreshedAfterIndex.packageIntegrity.schema,
+        status: refreshedAfterIndex.packageIntegrity.status,
+        summary: refreshedAfterIndex.packageIntegrity.summary,
+        fileCount: refreshedAfterIndex.packageIntegrity.fileCount,
+        downloadableCount: refreshedAfterIndex.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedAfterIndex.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedAfterIndex.packageIntegrity.totalBytes
       }
     } : {}),
     ...(productionEvidenceDossier ? {
       productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(productionEvidenceDossier)
-    } : {})
+    } : {}),
+    ...(machiningPackageIndex ? { machiningPackageIndex } : {})
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-record.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "machine-acceptance-log.json"));

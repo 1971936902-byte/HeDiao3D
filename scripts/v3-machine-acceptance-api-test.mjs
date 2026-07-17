@@ -154,7 +154,10 @@ async function main() {
   assert(acceptance.log?.recordCount >= 1, "machine acceptance log count missing");
   assert(acceptance.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "response missing production evidence dossier");
   assert(acceptance.productionEvidenceDossier.crossChecks?.machineAcceptanceRecords >= 1, "evidence dossier should count machine acceptance records");
+  assert(acceptance.productionEvidenceDossier.crossChecks?.airRunPassed === true, "evidence dossier should mark air-run evidence passed");
+  assert(acceptance.productionEvidenceDossier.crossChecks?.airRunEvidence?.status === "pass", "evidence dossier should expose passing air-run evidence");
   assert(acceptance.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.status === "pass"), "machine acceptance evidence item should pass");
+  assert(acceptance.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "air-run-evidence" && item.status === "pass"), "air-run evidence item should pass");
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.machineAcceptanceLog?.schema === "hediao3d.machine-acceptance-log.v1", "job summary missing machine acceptance log");
@@ -174,8 +177,10 @@ async function main() {
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.summary.includes("机床验收记录")), "dossier missing machine acceptance evidence item");
   assert(dossierArtifact.crossChecks?.machineAcceptancePassed === true, "dossier should mark machine acceptance passed");
   assert(dossierArtifact.crossChecks?.machineAcceptanceIntegrityBound === true, "dossier should mark machine acceptance package binding passed");
+  assert(dossierArtifact.crossChecks?.airRunPassed === true, "dossier should mark air-run evidence passed");
   assert(dossierArtifact.crossChecks?.rotaryCalibrationPassed === true, "dossier should mark rotary calibration passed");
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "rotary-calibration-evidence" && item.status === "pass"), "dossier should include passed rotary calibration evidence item");
+  assert(dossierArtifact.evidenceItems?.some((item) => item.id === "air-run-evidence" && item.status === "pass"), "dossier should include passed air-run evidence item");
   assert(dossierArtifact.crossChecks?.fieldEvidencePackageBinding?.status === "partial", "dossier should mark field package binding partial before trial feedback");
 
   const feedback = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
@@ -205,6 +210,8 @@ async function main() {
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   assert(packageIntegrity.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.sha256), "package integrity missing machine acceptance record hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "machine-acceptance-log.json" && file.sha256), "package integrity missing machine acceptance log hash");
+  const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
+  assert(packageIndex.airRunEvidence?.status === "pass", "package index should expose passing air-run evidence");
 
   console.log(JSON.stringify({
     ok: true,
