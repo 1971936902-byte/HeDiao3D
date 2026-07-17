@@ -630,6 +630,45 @@ type V3OrchestratorJob = {
         warningIssues: string[];
         requiredActions: string[];
       };
+      postprocessTraceReport?: {
+        schema: string;
+        level: "ready" | "review" | "critical";
+        summary: string;
+        camMode: string;
+        postProcessor: string;
+        postProcessorName: string;
+        source: {
+          pointCount: number;
+          toolpathSha256: string;
+        };
+        machineNc: {
+          filename: string;
+          cuttingMoveCount: number;
+          sha256: string;
+        };
+        coordinateMapping: {
+          lengthAxis: string;
+          depthAxis: string;
+          rotaryAxis: string | null;
+          rotaryWrapPerRevolutionMm: number | null;
+          rotaryOutputMode: string;
+        };
+        metrics: {
+          compared: number;
+          matched: number;
+          fitRate: number;
+          missingMoves: number;
+          extraMoves: number;
+          maxAbs: {
+            lengthMm: number;
+            rotaryMachine: number;
+            rotaryDeg: number;
+            zMm: number;
+          };
+        };
+        criticalIssues: string[];
+        warningIssues: string[];
+      };
       controllerDialectReport?: {
         level: "ready" | "review" | "critical";
         summary: string;
@@ -743,6 +782,16 @@ type V3OrchestratorJob = {
           machineCoverage: number | null;
           pointCoverage: number | null;
           linearizationErrorRate: number | null;
+          artifact: string;
+        } | null;
+        postprocessTrace?: {
+          level: string;
+          summary: string;
+          fitRate: number | null;
+          matched: number | null;
+          compared: number | null;
+          missingMoves: number | null;
+          extraMoves: number | null;
           artifact: string;
         } | null;
         camotics?: {
@@ -5912,6 +5961,55 @@ export function App() {
                   )}
                 </div>
               )}
+              {v3Job?.result?.summary.postprocessTraceReport && (
+                <div className={`v3-rotary-preview-card ${v3Job.result.summary.postprocessTraceReport.level}`}>
+                  <div>
+                    <strong>后处理追溯：{v3Job.result.summary.postprocessTraceReport.level}</strong>
+                    <span>{v3Job.result.summary.postprocessTraceReport.summary}</span>
+                  </div>
+                  <div className="v3-rotary-preview-grid">
+                    <span>
+                      <strong>{(v3Job.result.summary.postprocessTraceReport.metrics.fitRate * 100).toFixed(2)}%</strong>
+                      点位匹配
+                    </span>
+                    <span>
+                      <strong>{v3Job.result.summary.postprocessTraceReport.metrics.matched}/{v3Job.result.summary.postprocessTraceReport.metrics.compared}</strong>
+                      已核对
+                    </span>
+                    <span>
+                      <strong>{v3Job.result.summary.postprocessTraceReport.metrics.maxAbs.lengthMm.toFixed(4)}mm</strong>
+                      长度偏差
+                    </span>
+                    <span>
+                      <strong>{v3Job.result.summary.postprocessTraceReport.metrics.maxAbs.zMm.toFixed(4)}mm</strong>
+                      Z偏差
+                    </span>
+                  </div>
+                  <small>
+                    源点 {v3Job.result.summary.postprocessTraceReport.source.pointCount}
+                    {" · "}
+                    机床运动 {v3Job.result.summary.postprocessTraceReport.machineNc.cuttingMoveCount}
+                    {" · "}
+                    {v3Job.result.summary.postprocessTraceReport.coordinateMapping.lengthAxis}/
+                    {v3Job.result.summary.postprocessTraceReport.coordinateMapping.rotaryAxis ?? "-"}/
+                    {v3Job.result.summary.postprocessTraceReport.coordinateMapping.depthAxis}
+                    {" · "}
+                    缺失 {v3Job.result.summary.postprocessTraceReport.metrics.missingMoves}
+                    {" · "}
+                    多余 {v3Job.result.summary.postprocessTraceReport.metrics.extraMoves}
+                  </small>
+                  {(v3Job.result.summary.postprocessTraceReport.criticalIssues[0] || v3Job.result.summary.postprocessTraceReport.warningIssues[0]) && (
+                    <small>
+                      复核：{v3Job.result.summary.postprocessTraceReport.criticalIssues[0] ?? v3Job.result.summary.postprocessTraceReport.warningIssues[0]}
+                    </small>
+                  )}
+                  {findV3DeliveryFile(v3Job, "postprocess-trace-report.json") && (
+                    <a href={findV3DeliveryFile(v3Job, "postprocess-trace-report.json")?.url} download>
+                      下载后处理追溯报告
+                    </a>
+                  )}
+                </div>
+              )}
               {v3Job?.result?.summary.controllerDialectReport && (
                 <small>
                   控制器方言：{v3Job.result.summary.controllerDialectReport.level}
@@ -7261,12 +7359,19 @@ function createV3EvidenceLoopSummary(
   const keyFileCount = downloadChecklist?.keyFiles.length ?? 0;
   const downloadOk = keyFileCount > 0 && verifiedKeyCount === keyFileCount;
   const simulationEvidence = summary.productionGate?.simulationEvidence;
+  const postprocessTrace = summary.postprocessTraceReport;
   const simulationOk = Boolean(simulationEvidence?.productionUnlockEligible);
+  const postprocessTraceOk = postprocessTrace?.level === "ready";
   const simulationLevel: V3EvidenceLoopItem["level"] = simulationOk
     ? "ok"
     : simulationEvidence?.synthetic || simulationEvidence?.level === "review"
       ? "warning"
       : "critical";
+  const postprocessTraceLevel: V3EvidenceLoopItem["level"] = postprocessTraceOk
+    ? "ok"
+    : postprocessTrace?.level === "critical"
+      ? "critical"
+      : "warning";
   const trialLog = summary.trialFeedbackLog;
   const trialOk = trialLog?.latestOutcome === "success";
   const trialLevel: V3EvidenceLoopItem["level"] = trialOk
@@ -7305,6 +7410,15 @@ function createV3EvidenceLoopSummary(
         : simulationEvidence?.summary ?? "需要 CAMotics 或等效材料去除仿真结果。"
     },
     {
+      id: "postprocess-trace",
+      title: "后处理追溯",
+      level: postprocessTraceLevel,
+      value: postprocessTrace ? `${(postprocessTrace.metrics.fitRate * 100).toFixed(2)}%` : "未生成",
+      detail: postprocessTrace
+        ? postprocessTrace.summary
+        : "需要生成 postprocess-trace-report.json，逐点核对 toolpath.nc。"
+    },
+    {
       id: "trial-feedback",
       title: "试雕反馈",
       level: trialLevel,
@@ -7329,6 +7443,7 @@ function createV3EvidenceLoopSummary(
   const nextActions: string[] = [];
   if (!downloadOk) nextActions.push("重新运行 V3 小闭环并下载加工包，按 operator-download-checklist.md 核验文件。");
   if (!simulationOk) nextActions.push("导入真实 CAMotics 材料去除结果，替换 synthetic/内部预览证据。");
+  if (!postprocessTraceOk) nextActions.push("查看 postprocess-trace-report.json，修正后处理轴映射或点位错位后重新生成。");
   if (!trialOk) nextActions.push("到反馈页记录软材料试雕结果，失败项要带缺陷标签和备注。");
   if (!acceptanceOk) nextActions.push(localAcceptanceOk ? "点击“同步到V3证据链”回填机床验收。" : "先完成空跑、旋转标定和软材料试雕，再同步机床验收。");
   if (nextActions.length === 0) nextActions.push("闭环证据已齐，仍需确认真实机床参数和刀具装夹后再开放生产 NC。");
@@ -7363,6 +7478,7 @@ function formatV3ShortcutFileLabel(filename: string) {
   if (filename === "cam-handoff-evidence.md") return "CAM交接证据";
   if (filename === "open-source-cam-execution-plan.json") return "开源CAM执行计划";
   if (filename === "opencamlib-cutter-envelope-report.json") return "OpenCAMLib包络报告";
+  if (filename === "postprocess-trace-report.json") return "后处理追溯";
   return filename;
 }
 
@@ -8444,6 +8560,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camHandoffQuality = summary?.camHandoffQuality;
   const neutralToolpathImportValidation = summary?.neutralToolpathImportValidation;
   const rotaryWrapPreviewReport = summary?.rotaryWrapPreviewReport;
+  const postprocessTraceReport = summary?.postprocessTraceReport;
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
@@ -8490,6 +8607,9 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     "Neutral导入校验报告: neutral-toolpath-import-validation.json",
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",
+    `后处理追溯: ${postprocessTraceReport?.level ?? "未生成"} / 匹配 ${postprocessTraceReport?.metrics?.fitRate !== null && postprocessTraceReport?.metrics?.fitRate !== undefined ? `${(postprocessTraceReport.metrics.fitRate * 100).toFixed(2)}%` : "-"} / 核对 ${postprocessTraceReport?.metrics?.matched ?? "-"}/${postprocessTraceReport?.metrics?.compared ?? "-"}`,
+    `后处理最大偏差: X ${postprocessTraceReport?.metrics?.maxAbs?.lengthMm !== undefined ? `${postprocessTraceReport.metrics.maxAbs.lengthMm.toFixed(4)}mm` : "-"} / 旋转 ${postprocessTraceReport?.metrics?.maxAbs?.rotaryMachine !== undefined ? postprocessTraceReport.metrics.maxAbs.rotaryMachine.toFixed(4) : "-"} / Z ${postprocessTraceReport?.metrics?.maxAbs?.zMm !== undefined ? `${postprocessTraceReport.metrics.maxAbs.zMm.toFixed(4)}mm` : "-"}`,
+    "后处理追溯报告: postprocess-trace-report.json",
     `外部摄取源: ${camHandoffQuality?.sourceSnapshot ? `${camHandoffQuality.sourceSnapshot.kind} / ${camHandoffQuality.sourceSnapshot.sha256.slice(0, 12)}` : "无"}`,
     `OpenCAMLib包络报告: ${cutterEnvelopeReportFile ? "opencamlib-cutter-envelope-report.json / preview审计证据" : "未生成"}`,
     cutterEnvelopeReportFile
