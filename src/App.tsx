@@ -5238,25 +5238,79 @@ export function App() {
                     </div>
                   ))}
                 </div>
-                <div className="v3-action-row">
-                  <button
-                    className="primary-action package-action"
-                    onClick={handleRunV3OrchestratorLoop}
-                    disabled={isV3JobRunning || !aiMeshStlUrl}
-                    type="button"
-                  >
-                    <Cloud size={17} />
-                    {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
-                  </button>
-                  <button
-                    className="demo-action package-action"
-                    onClick={handleDownloadV3TrialPackage}
-                    disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
-                    type="button"
-                  >
-                    <Download size={17} />
-                    {isV3PackageDownloading ? "打包中..." : "下载安全试雕包"}
-                  </button>
+                {v3DownloadChecklistSummary && (
+                  <div className="v3-trial-file-strip">
+                    {v3DownloadChecklistSummary.keyFiles.map((file) => (
+                      <span className={file.verified ? file.allowedOnMachine ? "ok" : "review" : "locked"} key={`trial-${file.filename}`}>
+                        {formatV3ShortcutFileLabel(file.filename)}
+                        <strong>{file.verified ? "已记录哈希" : "缺少哈希"}</strong>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="v3-trial-action-panel">
+                  {v3TrialWorkflow.activeStep.id === "model" && (
+                    <button className="primary-action package-action" type="button" onClick={() => setActiveStage("model")}>
+                      <Box size={17} />
+                      去导入/生成3D模型
+                    </button>
+                  )}
+                  {v3TrialWorkflow.activeStep.id === "orchestrator" && (
+                    <button
+                      className="primary-action package-action"
+                      onClick={handleRunV3OrchestratorLoop}
+                      disabled={isV3JobRunning || !aiMeshStlUrl}
+                      type="button"
+                    >
+                      <Cloud size={17} />
+                      {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
+                    </button>
+                  )}
+                  {v3TrialWorkflow.activeStep.id === "download" && (
+                    <button
+                      className="primary-action package-action"
+                      onClick={handleDownloadV3TrialPackage}
+                      disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
+                      type="button"
+                    >
+                      <Download size={17} />
+                      {isV3PackageDownloading ? "打包中..." : "下载安全试雕包"}
+                    </button>
+                  )}
+                  {v3TrialWorkflow.activeStep.id === "acceptance" && (
+                    <>
+                      <button className="primary-action package-action" type="button" onClick={() => setActiveStage("feedback")}>
+                        <ClipboardCheck size={17} />
+                        记录试雕反馈
+                      </button>
+                      <button
+                        className="demo-action package-action"
+                        type="button"
+                        onClick={syncV3MachineAcceptance}
+                        disabled={!v3Job?.id || isV3MachineAcceptanceSyncing}
+                      >
+                        <ShieldCheck size={17} />
+                        {isV3MachineAcceptanceSyncing ? "同步中..." : "同步机床验收"}
+                      </button>
+                    </>
+                  )}
+                  {v3TrialWorkflow.activeStep.id !== "model" && (
+                    <button className="demo-action package-action" type="button" onClick={() => setActiveStage("process")}>
+                      <SlidersHorizontal size={17} />
+                      检查机床/刀具参数
+                    </button>
+                  )}
+                  {v3Job?.result?.summary.deliveryManifest && v3TrialWorkflow.activeStep.id !== "download" && (
+                    <button
+                      className="demo-action package-action"
+                      onClick={handleDownloadV3TrialPackage}
+                      disabled={isV3PackageDownloading}
+                      type="button"
+                    >
+                      <Download size={17} />
+                      重新下载试雕包
+                    </button>
+                  )}
                 </div>
                 <small>{v3TrialWorkflow.summary}</small>
               </div>
@@ -5272,7 +5326,7 @@ export function App() {
                 </div>
               ))}
             </div>}
-            {v3Diagnostics && (
+            {!V3_TRIAL_FOCUSED_UI && v3Diagnostics && (
               <div className={`v3-diagnostics ${v3Diagnostics.level}`}>
                 <div className="v3-history-heading">
                   <strong>环境自检：{v3Diagnostics.level}</strong>
