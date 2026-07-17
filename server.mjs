@@ -109,6 +109,11 @@ const server = createServer(async (req, res) => {
       return cancelOrchestratorJob(orchestratorCancelMatch[1], res);
     }
 
+    const orchestratorTrialFeedbackMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/trial-feedback$/);
+    if (req.method === "POST" && orchestratorTrialFeedbackMatch) {
+      return createOrchestratorTrialFeedback(req, orchestratorTrialFeedbackMatch[1], res);
+    }
+
     const orchestratorArtifactMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/artifacts\/([^/?#/]+)$/);
     if (req.method === "GET" && orchestratorArtifactMatch) {
       return getOrchestratorArtifact(orchestratorArtifactMatch[1], orchestratorArtifactMatch[2], res);
@@ -5226,6 +5231,10 @@ function createPackageIntegrityReport(job, deliveryManifest) {
   };
 }
 
+function sha256(value) {
+  return createHash("sha256").update(String(value)).digest("hex");
+}
+
 function dedupeStrings(list) {
   return [...new Set(list.filter(Boolean))];
 }
@@ -5573,6 +5582,170 @@ async function getOrchestratorJob(jobId, res) {
   const job = orchestratorJobs.get(jobId) ?? readJobManifest(jobId);
   if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
   return json(res, 200, job);
+}
+
+async function createOrchestratorTrialFeedback(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  const input = await readJson(req);
+  const record = createTrialFeedbackRecord(job, input);
+  const logPath = join(workDir, "trial-feedback-log.json");
+  const existingLog = readJsonFile(logPath) ?? {
+    schema: "hediao3d.trial-feedback-log.v1",
+    jobId: safeJobId,
+    createdAt: new Date().toISOString(),
+    records: []
+  };
+  const records = Array.isArray(existingLog.records) ? existingLog.records : [];
+  const updatedLog = {
+    ...existingLog,
+    schema: "hediao3d.trial-feedback-log.v1",
+    jobId: safeJobId,
+    updatedAt: record.createdAt,
+    recordCount: records.length + 1,
+    latestRecordId: record.id,
+    latestOutcome: record.outcome,
+    records: [record, ...records].slice(0, 80)
+  };
+
+  await writeFile(join(workDir, "trial-feedback-record.json"), JSON.stringify(record, null, 2), "utf8");
+  await writeFile(logPath, JSON.stringify(updatedLog, null, 2), "utf8");
+  await writeTrialFeedbackGlobalRecord(record);
+
+  job.workDir = workDir;
+  job.updatedAt = record.createdAt;
+  job.trialFeedback = {
+    latestRecord: record,
+    logArtifact: "trial-feedback-log.json",
+    recordCount: updatedLog.recordCount
+  };
+  job.result = job.result ?? {};
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    trialFeedbackLog: {
+      schema: updatedLog.schema,
+      artifact: "trial-feedback-log.json",
+      recordCount: updatedLog.recordCount,
+      latestOutcome: record.outcome,
+      latestRecordId: record.id,
+      recommendations: record.recommendations
+    }
+  };
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-record.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-log.json"));
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: true,
+    record,
+    log: {
+      schema: updatedLog.schema,
+      jobId: safeJobId,
+      recordCount: updatedLog.recordCount,
+      latestRecordId: record.id,
+      artifact: publicArtifactUrl(safeJobId, "trial-feedback-log.json")
+    }
+  });
+}
+
+function createTrialFeedbackRecord(job, input) {
+  const summary = job.result?.summary ?? {};
+  const now = new Date().toISOString();
+  const settings = input?.settings && typeof input.settings === "object" ? input.settings : null;
+  const outcome = ["success", "review", "failed"].includes(input?.outcome) ? input.outcome : "review";
+  const actualMinutes = normalizePositiveNumber(input?.actualMinutes);
+  const estimatedMinutes = normalizePositiveNumber(input?.estimatedMinutes ?? summary.estimatedMinutes);
+  const timeRatio = actualMinutes && estimatedMinutes ? actualMinutes / estimatedMinutes : null;
+  const issues = Array.isArray(input?.issues)
+    ? input.issues.map((item) => String(item).trim()).filter(Boolean).slice(0, 24)
+    : [];
+  const notes = String(input?.notes ?? "").trim().slice(0, 4000);
+  const settingsHash = settings ? sha256(JSON.stringify(settings)) : null;
+  const photoName = input?.photoName ? String(input.photoName).slice(0, 240) : null;
+  const photoAttached = Boolean(photoName || input?.photoAttached);
+  return {
+    schema: "hediao3d.trial-feedback-record.v1",
+    id: input?.id && /^[a-zA-Z0-9_.:-]+$/.test(String(input.id)) ? String(input.id) : randomUUID(),
+    jobId: job.id,
+    createdAt: now,
+    source: String(input?.source ?? "frontend-machine-feedback").slice(0, 80),
+    phase: String(input?.phase ?? "soft-trial").slice(0, 80),
+    outcome,
+    machineName: String(input?.machineName ?? "").slice(0, 160),
+    toolName: String(input?.toolName ?? "").slice(0, 160),
+    materialName: String(input?.materialName ?? "").slice(0, 160),
+    estimatedMinutes,
+    actualMinutes,
+    timeRatio,
+    costEstimateRange: input?.costEstimateRange ? String(input.costEstimateRange).slice(0, 120) : null,
+    issues,
+    notes,
+    photoName,
+    photoAttached,
+    settingsHash,
+    packageLevel: summary.productionGate?.level ?? summary.deliveryManifest?.packageLevel ?? null,
+    resultEngine: job.result?.engine ?? null,
+    camHandoffQualityLevel: summary.camHandoffQuality?.level ?? null,
+    simulationEvidenceLevel: summary.productionGate?.simulationEvidence?.level ?? null,
+    recommendations: createTrialFeedbackRecommendations({ outcome, issues, actualMinutes, estimatedMinutes, summary })
+  };
+}
+
+function createTrialFeedbackRecommendations({ outcome, issues, actualMinutes, estimatedMinutes, summary }) {
+  const recommendations = [];
+  if (outcome === "success") {
+    recommendations.push("保留当前参数为候选成功工艺；复雕前仍需核对刀具装夹和旋转夹具标定。");
+  } else {
+    recommendations.push("暂不把本次参数升级为生产参数；先复核刀具、夹具、CAM handoff 和仿真证据。");
+  }
+  if (actualMinutes && estimatedMinutes && actualMinutes > estimatedMinutes * 1.35) {
+    recommendations.push("实际耗时明显高于估算，建议回看进给倍率、空走段和步距设置。");
+  }
+  if (actualMinutes && estimatedMinutes && actualMinutes < estimatedMinutes * 0.65) {
+    recommendations.push("实际耗时明显低于估算，需确认是否漏跑刀路或控制器单位/进给解释不同。");
+  }
+  if (issues.some((item) => /欠切|纹理丢失|细节|浅/.test(item))) {
+    recommendations.push("存在欠切/细节不足迹象，优先检查 Z 零点、最大切深、精加工步距和刀尖磨损。");
+  }
+  if (issues.some((item) => /过切|断刀|毛刺/.test(item))) {
+    recommendations.push("存在过切/断刀/毛刺风险，建议降低单刀切深和进给，复核 4mm 25度平底尖刀伸出量。");
+  }
+  if (issues.some((item) => /端部|夹持|两端/.test(item))) {
+    recommendations.push("端部或夹持区问题需要回到 rotary-calibration-sheet.json 复核夹持余量和不可达区域。");
+  }
+  if (issues.some((item) => /旋转|A轴|Y轴|错位/.test(item))) {
+    recommendations.push("旋转错位优先复核每圈等效距离、旋转方向、Y/A 轴映射和反向间隙。");
+  }
+  if (summary.camHandoffQuality?.level && summary.camHandoffQuality.level !== "ready") {
+    recommendations.push("CAM handoff 质量仍需复核，查看 cam-handoff-quality.json 后再扩大试雕。");
+  }
+  return dedupeStrings(recommendations);
+}
+
+async function writeTrialFeedbackGlobalRecord(record) {
+  const recordDir = join(process.cwd(), "public", "orchestrator-trial-feedback", record.id);
+  await mkdir(recordDir, { recursive: true });
+  await writeFile(join(recordDir, "trial-feedback-record.json"), JSON.stringify(record, null, 2), "utf8");
+}
+
+function normalizePositiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function readJsonFile(filePath) {
+  if (!existsSync(filePath)) return null;
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function listOrchestratorJobs(res) {

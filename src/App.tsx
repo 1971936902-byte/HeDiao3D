@@ -665,6 +665,14 @@ type V3OrchestratorJob = {
           notes: string;
         };
       };
+      trialFeedbackLog?: {
+        schema: string;
+        artifact: string;
+        recordCount: number;
+        latestOutcome: MachineFeedback["outcome"];
+        latestRecordId: string;
+        recommendations: string[];
+      };
       toolSetupSheet?: {
         schema: string;
         summary: string;
@@ -2425,6 +2433,43 @@ export function App() {
       title: `记录实机反馈：${formatFeedbackOutcome(feedback.outcome)}`,
       detail: `${feedback.machineName} / ${feedback.toolName} / ${feedback.issues.length > 0 ? feedback.issues.join("、") : "无缺陷标签"}`
     });
+    void syncV3TrialFeedback(feedback);
+  };
+
+  const syncV3TrialFeedback = async (feedback: MachineFeedback) => {
+    if (!v3Job?.id) {
+      setV3Status("实机反馈已保存在本地；当前没有 V3 任务可同步。");
+      return;
+    }
+    try {
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/trial-feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: feedback.id,
+          source: "frontend-machine-feedback",
+          phase: "soft-trial",
+          outcome: feedback.outcome,
+          machineName: feedback.machineName,
+          toolName: feedback.toolName,
+          materialName: feedback.materialName,
+          estimatedMinutes: feedback.estimatedMinutes,
+          actualMinutes: feedback.actualMinutes,
+          costEstimateRange: feedback.costEstimateRange,
+          issues: feedback.issues,
+          notes: feedback.notes,
+          photoName: feedback.photoName,
+          photoAttached: Boolean(feedback.photoUrl),
+          settings: feedback.settings
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "试雕反馈同步失败");
+      setV3Status(`试雕反馈已同步到 V3 任务：${data.log?.recordCount ?? 1} 条记录`);
+      await handleLoadV3Job(v3Job.id);
+    } catch (error) {
+      setV3Status(error instanceof Error ? error.message : "试雕反馈同步失败");
+    }
   };
 
   const restoreFeedbackSettings = (feedback: MachineFeedback) => {
@@ -4754,6 +4799,15 @@ export function App() {
                   试雕反馈：trial-feedback-template.json
                   {" · "}
                   缺陷标签 {v3Job.result.summary.trialFeedbackTemplate.issueOptions.length}
+                </small>
+              )}
+              {v3Job?.result?.summary.trialFeedbackLog && (
+                <small className={v3Job.result.summary.trialFeedbackLog.latestOutcome === "success" ? "v3-inline-ok" : v3Job.result.summary.trialFeedbackLog.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning"}>
+                  反馈回填：{v3Job.result.summary.trialFeedbackLog.recordCount} 条
+                  {" · "}
+                  最新 {formatFeedbackOutcome(v3Job.result.summary.trialFeedbackLog.latestOutcome)}
+                  {" · "}
+                  {v3Job.result.summary.trialFeedbackLog.artifact}
                 </small>
               )}
               {v3Job?.result?.summary.toolSetupSheet && (
