@@ -82,6 +82,12 @@ async function main() {
   assert(reloaded.result?.summary?.simulation?.engine === "camotics", "job summary should expose camotics simulation");
   assert(reloaded.result.summary.productionGate.simulationEvidence.productionUnlockEligible === true, "job summary production gate should expose imported evidence");
   assert(reloaded.result.summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "material-removal-simulation" && item.status === "pass"), "job summary evidence dossier should expose passing material-removal item");
+  assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "evidence dossier should expose matched CAMotics input identity");
+  assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsCliRunPackageBindingStatus === "matched", "evidence dossier should expose matched CAMotics CLI package binding");
+  assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsMotionConsistencyStatus === "matched", "evidence dossier should expose matched CAMotics motion consistency");
+  assert(reloaded.result.summary.machiningPackageIndex?.camotics?.inputIdentityStatus === "matched", "package index should expose CAMotics input identity");
+  assert(reloaded.result.summary.machiningPackageIndex?.camotics?.cliRunPackageBindingStatus === "matched", "package index should expose CAMotics CLI package binding");
+  assert(reloaded.result.summary.machiningPackageIndex?.camotics?.motionConsistencyStatus === "matched", "package index should expose CAMotics motion consistency");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result.json" && file.exists), "delivery manifest should expose camotics result");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result.json" && file.sha256), "package integrity should hash camotics result");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);

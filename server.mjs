@@ -1085,7 +1085,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       evidence: ["camotics-import-contract.json", "camotics-adapter-report.json", "camotics-result.json"],
       detail: camoticsImport
         ? `${camoticsImport.status} / synthetic=${camoticsImport.synthetic} / risk=${camoticsImport.riskLevel ?? "unknown"} / input=${camoticsImport.inputIdentityStatus ?? "missing"} / cli=${camoticsImport.cliRunPackageBindingStatus ?? "not-required"} / motion=${camoticsImport.motionConsistencyStatus ?? "missing"}`
-        : "尚未验证真实 CAMotics 结果导入契约。",
+        : "尚未验证真实 CAMotics 结果导入契约 / input=missing / cli=not-required / motion=missing。",
       blocksProduction: !camoticsImport || !camoticsImport.ok || !camoticsImport.productionEvidenceEligible || camoticsImport.inputIdentityStatus !== "matched"
     }),
     createAcceptanceStep({
@@ -6269,6 +6269,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
 
 function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
+  const camoticsIdentity = summarizeCamoticsEvidenceIdentity(simulationEvidence);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
   const hasNeutralToolpathImport = Boolean(
     neutralToolpathImportValidation
@@ -6319,7 +6320,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       label: "材料去除仿真",
       status: simulationEvidence?.productionUnlockEligible ? "pass" : "review",
       evidence: ["simulation-summary.json", "camotics-result.json", "camotics-adapter-report.json"],
-      summary: simulationEvidence?.summary ?? "未生成仿真证据。"
+      summary: simulationEvidence
+        ? `${simulationEvidence.summary} / input=${camoticsIdentity.inputIdentityStatus} / cli=${camoticsIdentity.cliRunPackageBindingStatus} / motion=${camoticsIdentity.motionConsistencyStatus} / artifacts=${camoticsIdentity.artifactEvidenceStatus}`
+        : "未生成仿真证据。"
     },
     {
       id: "nc-static-analysis",
@@ -6412,6 +6415,10 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     crossChecks: {
       unlockMatrixPass: unlockByMatrix,
       realMaterialRemovalVerified: Boolean(simulationEvidence?.realMaterialRemovalVerified),
+      camoticsInputIdentityStatus: camoticsIdentity.inputIdentityStatus,
+      camoticsCliRunPackageBindingStatus: camoticsIdentity.cliRunPackageBindingStatus,
+      camoticsMotionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
+      camoticsArtifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       camHandoffReady: camHandoffQuality?.level === "ready",
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       neutralSourceBindingPass: !neutralBinding.required || neutralBinding.status === "pass",
@@ -6436,6 +6443,20 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   };
 }
 
+function summarizeCamoticsEvidenceIdentity(simulationEvidence) {
+  const evidenceQuality = simulationEvidence?.evidenceQuality ?? null;
+  return {
+    inputIdentityStatus: evidenceQuality?.inputIdentity?.status ?? "missing",
+    cliRunPackageBindingStatus: evidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "not-required",
+    motionConsistencyStatus: evidenceQuality?.motionConsistency?.status ?? "missing",
+    artifactEvidenceStatus: evidenceQuality?.artifactEvidence?.complete === true || evidenceQuality?.artifactEvidenceComplete === true
+      ? "complete"
+      : Array.isArray(evidenceQuality?.missing) && evidenceQuality.missing.some((item) => /screenshot|material|artifact|截图|网格/i.test(String(item)))
+        ? "missing"
+        : evidenceQuality?.status ?? "unknown"
+  };
+}
+
 function createProductionEvidenceDossierPublicSummary(dossier) {
   if (!dossier) return null;
   return {
@@ -6446,6 +6467,7 @@ function createProductionEvidenceDossierPublicSummary(dossier) {
     reviewCount: dossier.reviewCount,
     blockedCount: dossier.blockedCount,
     summary: dossier.summary,
+    crossChecks: dossier.crossChecks ?? null,
     evidenceItems: Array.isArray(dossier.evidenceItems)
       ? dossier.evidenceItems.map((item) => ({
         id: item.id,
@@ -7650,6 +7672,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
   const trialCandidate = productionGate.allowTrialNc ? "toolpath.nc" : null;
+  const camoticsIdentity = summarizeCamoticsEvidenceIdentity(productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary));
 
   return {
     schema: "hediao3d.machining-package-index.v1",
@@ -7869,6 +7892,10 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       compatibility: camoticsInput.compatibility,
       resultFile: fileByName.has("camotics-result.json") ? "camotics-result.json" : null,
       evidenceLevel: productionGate.simulationEvidence?.level ?? null,
+      inputIdentityStatus: camoticsIdentity.inputIdentityStatus,
+      cliRunPackageBindingStatus: camoticsIdentity.cliRunPackageBindingStatus,
+      motionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
+      artifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       productionUnlockEligible: productionGate.simulationEvidence?.productionUnlockEligible ?? false,
       limitation: "CAMotics 仅用于展开三轴检查；旋转夹具真实材料去除仍需专业仿真或机床控制软件复核。"
     },
