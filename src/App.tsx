@@ -1155,6 +1155,29 @@ type V3ReadinessSummary = {
     completedAdapters: number;
     readyForProduction: boolean;
   } | null;
+  nativeCamRealOutputAcceptance: {
+    id: string;
+    schema: string;
+    createdAt: string | null;
+    level: string;
+    summary: string;
+    productionCandidateCount: number;
+    unsafeCount: number;
+    missingCount: number;
+    blockers: string[];
+    warnings: string[];
+    nextActions: string[];
+    adapters: Array<{
+      id: string;
+      status: string | null;
+      classification: string;
+      productionCandidate: boolean;
+      fixture: boolean;
+      synthetic: boolean;
+      previewScaffold: boolean;
+      generatedByExternalCommand: boolean;
+    }>;
+  } | null;
   runbookResult: {
     schema: string;
     createdAt: string | null;
@@ -4843,6 +4866,10 @@ export function App() {
                   {v3Readiness.adapterValidation && (
                     <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>
                   )}
+                  <small className={v3Readiness.nativeCamRealOutputAcceptance ? v3Readiness.nativeCamRealOutputAcceptance.level === "ready" ? "v3-inline-ok" : v3Readiness.nativeCamRealOutputAcceptance.level === "critical" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
+                    真实CAM输出验收：{v3Readiness.nativeCamRealOutputAcceptance ? `${v3Readiness.nativeCamRealOutputAcceptance.level} · candidate ${v3Readiness.nativeCamRealOutputAcceptance.productionCandidateCount} · unsafe ${v3Readiness.nativeCamRealOutputAcceptance.unsafeCount} · missing ${v3Readiness.nativeCamRealOutputAcceptance.missingCount}` : "未运行"}
+                    {v3Readiness.nativeCamRealOutputAcceptance?.blockers[0] ? ` · ${v3Readiness.nativeCamRealOutputAcceptance.blockers[0]}` : ""}
+                  </small>
                   <small className={v3Readiness.externalHandoff ? v3Readiness.externalHandoff.status === "completed" && v3Readiness.externalHandoff.simulationStatus === "completed" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     Handoff：{v3Readiness.externalHandoff ? `${v3Readiness.externalHandoff.resultEngine ?? "-"} → ${v3Readiness.externalHandoff.simulationEngine ?? "-"}` : "未验证"}
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
