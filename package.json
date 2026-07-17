@@ -27,6 +27,7 @@
     "test:v3:camotics-cli-prepare": "node scripts/v3-camotics-cli-prepare-test.mjs",
     "test:v3:camotics-cli-package-api": "node scripts/v3-camotics-cli-package-api-test.mjs",
     "test:v3:camotics-result-api": "node scripts/v3-camotics-result-api-test.mjs",
+    "test:v3:evidence-closed-loop": "node scripts/v3-evidence-closed-loop-test.mjs",
     "test:v3:adapter-api": "node scripts/v3-adapter-validation-api-test.mjs",
     "test:v3:external-adapters": "node scripts/v3-external-adapter-validation.mjs",
     "test:v3:native-cam": "node scripts/v3-linux-native-cam-check.mjs",
