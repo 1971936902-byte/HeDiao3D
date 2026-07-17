@@ -7036,8 +7036,8 @@ export function App() {
         <div className="workbench-tabs" role="tablist" aria-label="workbench views">
           <button className={workbenchView === "model" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("model"); setIsSimulationMode(false); }}>3D模型</button>
           <button className={workbenchView === "simulation" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("simulation"); setIsSimulationMode(true); }} disabled={!toolpath}>模拟雕刻</button>
-          <button className={workbenchView === "heatmap" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("heatmap"); setIsSimulationMode(false); }} disabled={!toolpath}>热力图</button>
-          <button className={workbenchView === "gcode" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("gcode"); setIsSimulationMode(false); }} disabled={!toolpath}>G-code</button>
+          {!V3_TRIAL_FOCUSED_UI && <button className={workbenchView === "heatmap" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("heatmap"); setIsSimulationMode(false); }} disabled={!toolpath}>热力图</button>}
+          {!V3_TRIAL_FOCUSED_UI && <button className={workbenchView === "gcode" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("gcode"); setIsSimulationMode(false); }} disabled={!toolpath}>G-code</button>}
           <button className={workbenchView === "report" ? "active" : ""} type="button" onClick={() => { setWorkbenchView("report"); setIsSimulationMode(false); }} disabled={!toolpath}>报告</button>
         </div>
 
@@ -7132,7 +7132,7 @@ export function App() {
               <strong>{isMultiviewGenerated ? "本地环绕浮雕" : "浮雕网格"}</strong>
             </div>
           )}
-          {!aiMeshUrl && (
+          {!aiMeshUrl && !V3_TRIAL_FOCUSED_UI && (
             <button className="download secondary" onClick={() => exportGeometryAsStl(geometry, "nuclear-carving-relief.stl")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
               <Download size={17} />
               下载 STL
@@ -7237,17 +7237,19 @@ export function App() {
                       : `${getToolpathKindColorLabel(toolpathKind)}，粉色=夹持区，浅琥珀=过渡区`}
                 </strong>
               </div>
-              <div className="toolpath-program-switch" role="group" aria-label="toolpath program view">
-                <button type="button" className={toolpathKind === "rough" ? "active" : ""} onClick={() => setToolpathKind("rough")} disabled={!toolpath.programs?.rough}>
-                  粗加工
-                </button>
-                <button type="button" className={toolpathKind === "finish" ? "active" : ""} onClick={() => setToolpathKind("finish")} disabled={!toolpath.programs?.finish}>
-                  精加工
-                </button>
-                <button type="button" className={toolpathKind === "rest" ? "active" : ""} onClick={() => setToolpathKind("rest")} disabled={!toolpath.programs?.rest || toolpath.programs.rest.points.length === 0}>
-                  清残
-                </button>
-              </div>
+              {!V3_TRIAL_FOCUSED_UI && (
+                <div className="toolpath-program-switch" role="group" aria-label="toolpath program view">
+                  <button type="button" className={toolpathKind === "rough" ? "active" : ""} onClick={() => setToolpathKind("rough")} disabled={!toolpath.programs?.rough}>
+                    粗加工
+                  </button>
+                  <button type="button" className={toolpathKind === "finish" ? "active" : ""} onClick={() => setToolpathKind("finish")} disabled={!toolpath.programs?.finish}>
+                    精加工
+                  </button>
+                  <button type="button" className={toolpathKind === "rest" ? "active" : ""} onClick={() => setToolpathKind("rest")} disabled={!toolpath.programs?.rest || toolpath.programs.rest.points.length === 0}>
+                    清残
+                  </button>
+                </div>
+              )}
               <button className="download secondary" onClick={() => {
                 const nextView: WorkbenchView = viewingSimulation ? "model" : "simulation";
                 setWorkbenchView(nextView);
@@ -7256,48 +7258,78 @@ export function App() {
                 <Layers3 size={17} />
                 {viewingSimulation ? "返回3D视图" : "模拟雕刻"}
               </button>
-              <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={!toolpath} title="下载加工参数、模型来源、校验结果和上机说明">
-                <Download size={17} />
-                加工包说明
-              </button>
-              <button className="download secondary" onClick={handleDownloadAirRun} disabled={!airRunProgram} title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
-                <Download size={17} />
-                下载空跑 NC
-              </button>
-              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
-                <Download size={17} />
-                下载合并 NC
-              </button>
-              {toolpath.programs?.rough && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+              {V3_TRIAL_FOCUSED_UI ? (
+                <>
+                  {v3Job?.result?.summary.deliveryManifest ? (
+                    <button className="download" onClick={handleDownloadV3TrialPackage} disabled={isV3PackageDownloading} type="button" title="下载只允许空跑和低风险试雕的安全交付包">
+                      <Download size={17} />
+                      {isV3PackageDownloading ? "打包中..." : "安全试雕包"}
+                    </button>
+                  ) : (
+                    <button className="download" onClick={() => setActiveStage("cam")} type="button" title="进入 CAM 面板运行 V3 小闭环">
+                      <Cloud size={17} />
+                      生成试雕数据
+                    </button>
+                  )}
+                  {v3SafeTrialPlanFile?.url && (
+                    <a className="download secondary" href={v3SafeTrialPlanFile.url} download title="下载安全试雕执行计划">
+                      <Download size={17} />
+                      执行计划
+                    </a>
+                  )}
+                  {v3DownloadChecklistSummary?.checklistUrl && (
+                    <a className="download secondary" href={v3DownloadChecklistSummary.checklistUrl} download title="下载操作员核验清单">
+                      <Download size={17} />
+                      核验清单
+                    </a>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={!toolpath} title="下载加工参数、模型来源、校验结果和上机说明">
+                    <Download size={17} />
+                    加工包说明
+                  </button>
+                  <button className="download secondary" onClick={handleDownloadAirRun} disabled={!airRunProgram} title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
+                    <Download size={17} />
+                    下载空跑 NC
+                  </button>
+                  <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+                    <Download size={17} />
+                    下载合并 NC
+                  </button>
+                  {toolpath.programs?.rough && (
+                    <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+                      <Download size={17} />
+                      下载粗加工
+                    </button>
+                  )}
+                  {toolpath.programs?.finish && (
+                    <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+                      <Download size={17} />
+                      下载精加工
+                    </button>
+                  )}
+                  {toolpath.programs?.rest && (
+                    <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+                      <Download size={17} />
+                      下载清残
+                    </button>
+                  )}
+                  <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+                    <Download size={17} />
+                    下载 TAP
+                  </button>
+                  <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
+                    <Download size={17} />
+                    下载 TXT
+                  </button>
+                  <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                   <Download size={17} />
-                  下载粗加工
-                </button>
+                    下载 CSV
+                  </button>
+                </>
               )}
-              {toolpath.programs?.finish && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
-                  <Download size={17} />
-                  下载精加工
-                </button>
-              )}
-              {toolpath.programs?.rest && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
-                  <Download size={17} />
-                  下载清残
-                </button>
-              )}
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
-                <Download size={17} />
-                下载 TAP
-              </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
-                <Download size={17} />
-                下载 TXT
-              </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
-                <Download size={17} />
-                下载 CSV
-              </button>
             </>
           )}
           {!toolpath && (
