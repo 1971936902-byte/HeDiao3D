@@ -1744,6 +1744,7 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "process", label: "工艺", hint: "刀具/机床" },
   { id: "cam", label: "CAM", hint: "刀路/导出" }
 ];
+const V3_TRIAL_FOCUSED_UI = true;
 
 const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
 const MACHINE_FEEDBACK_STORAGE_KEY = "hediao3d.machineFeedback.v1";
@@ -1957,7 +1958,7 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
   const [activeStage, setActiveStage] = useState<WorkflowStage>("project");
-  const [modelSubStage, setModelSubStage] = useState<ModelSubStage>("local");
+  const [modelSubStage, setModelSubStage] = useState<ModelSubStage>(V3_TRIAL_FOCUSED_UI ? "ai" : "local");
   const [wireframe, setWireframe] = useState(false);
   const [toolpath, setToolpath] = useState<GeneratedToolpath | null>(null);
   const [isReading, setIsReading] = useState(false);
@@ -4425,12 +4426,12 @@ export function App() {
         {activeStage === "model" && (
           <>
             <div className="stage-subtabs" role="tablist" aria-label="model stage sections">
-              <button className={modelSubStage === "local" ? "active" : ""} type="button" onClick={() => setModelSubStage("local")}>本地建模</button>
+              {!V3_TRIAL_FOCUSED_UI && <button className={modelSubStage === "local" ? "active" : ""} type="button" onClick={() => setModelSubStage("local")}>本地建模</button>}
               <button className={modelSubStage === "ai" ? "active" : ""} type="button" onClick={() => setModelSubStage("ai")}>AI Mesh</button>
               <button className={modelSubStage === "inspection" ? "active" : ""} type="button" onClick={() => setModelSubStage("inspection")}>Mesh体检</button>
             </div>
 
-            {modelSubStage === "local" && <section className="panel">
+            {!V3_TRIAL_FOCUSED_UI && modelSubStage === "local" && <section className="panel">
               <div className="panel-title">
                 <Layers3 size={18} />
                 <h2>生成控制</h2>
@@ -4454,7 +4455,7 @@ export function App() {
                 <Sparkles size={18} />
                 <h2>推荐：真实3D网格</h2>
               </div>
-              <p className="panel-note">选择 AI 3D Provider，将多角度图片生成真正的 GLB/STL 三维网格；当前 Meshy 已接入，其他服务为预留接口。</p>
+              <p className="panel-note">主流程只保留 Meshy 多图生成和原始 GLB/STL 导入，生成真正三维网格后进入 V3 安全试雕闭环。</p>
               <label className="select-row">
                 <span>AI Provider</span>
                 <select value={aiProviderId} onChange={(event) => setAiProviderId(event.target.value as Ai3dProviderId)}>
@@ -4470,7 +4471,7 @@ export function App() {
                 <span>{selectedAiProvider.note}</span>
                 <small>{selectedAiProvider.capabilities.join(" / ")}</small>
               </div>
-              <div className="provider-compare-grid">
+              {!V3_TRIAL_FOCUSED_UI && <div className="provider-compare-grid">
                 {ai3dProviders.map((provider) => {
                   const score = scoreAiProvider(provider, images.length, captureGuide.score);
                   return (
@@ -4490,7 +4491,7 @@ export function App() {
                     </button>
                   );
                 })}
-              </div>
+              </div>}
               <button className="primary-action ai-action" onClick={handleGenerateAiMesh} disabled={isAiGenerating || images.length === 0}>
                 <Sparkles size={18} />
                 {isAiGenerating ? "AI生成中..." : `${selectedAiProvider.name}生成3D Mesh`}
@@ -4507,10 +4508,10 @@ export function App() {
                   accept=".stl,.obj,.glb,.gltf,model/stl,model/obj,model/gltf-binary,model/gltf+json"
                   onChange={handleImportOriginalModelFile}
                 />
-                <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
+                {!V3_TRIAL_FOCUSED_UI && <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
                   <FileImage size={17} />
                   载入测试结果
-                </button>
+                </button>}
                 <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing || isOriginalModelImported}>
                   <Sparkles size={17} />
                   {isMeshRepairing ? "修复中..." : "修复缺损"}
@@ -4817,6 +4818,9 @@ export function App() {
             <Hammer size={18} />
             <h2>刀路参数</h2>
           </div>
+          {V3_TRIAL_FOCUSED_UI && (
+            <p className="panel-note">这些参数供 V3 小闭环生成安全试雕包使用；旧版本地生成、精加工和反向预览入口已暂时隐藏，避免误下载未验收 NC。</p>
+          )}
           <label className="select-row">
             <span>CAM模式</span>
             <select value={settings.camMode} onChange={(event) => handleCamModeChange(event.target.value as ModelSettings["camMode"])}>
@@ -4884,14 +4888,14 @@ export function App() {
               <option value="wrapX">X轴旋转包裹</option>
             </select>
           </label>
-          <button className="primary-action" onClick={handleGenerateToolpath} disabled={isToolpathGenerating}>
+          {!V3_TRIAL_FOCUSED_UI && <button className="primary-action" onClick={handleGenerateToolpath} disabled={isToolpathGenerating}>
             <Hammer size={18} />
             {isToolpathGenerating ? "刀路生成中..." : "生成刀路"}
-          </button>
-          <button className="demo-action" type="button" onClick={() => toolpathImportRef.current?.click()} disabled={isToolpathGenerating}>
+          </button>}
+          {!V3_TRIAL_FOCUSED_UI && <button className="demo-action" type="button" onClick={() => toolpathImportRef.current?.click()} disabled={isToolpathGenerating}>
             <UploadCloud size={17} />
             导入NC/G-code预览
-          </button>
+          </button>}
           <input
             ref={toolpathImportRef}
             className="hidden-file-input"
@@ -4899,13 +4903,13 @@ export function App() {
             accept=".nc,.tap,.gcode,.ngc,.cnc,.txt,.csv,text/plain,text/csv"
             onChange={handleImportToolpathFile}
           />
-          <button className="demo-action finish-action" onClick={handleGenerateFinishingToolpath} disabled={isToolpathGenerating}>
+          {!V3_TRIAL_FOCUSED_UI && <button className="demo-action finish-action" onClick={handleGenerateFinishingToolpath} disabled={isToolpathGenerating}>
             <Hammer size={17} />
             生成精加工刀路
-          </button>
+          </button>}
         </section>}
 
-        {activeStage === "cam" && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
               <ShieldCheck size={18} />
@@ -5162,7 +5166,7 @@ export function App() {
               <Cloud size={18} />
               <h2>V3 Orchestrator 小闭环</h2>
             </div>
-            <p className="panel-note">先验证 Orchestrator 调度层：探测 FreeCAD / BlenderCAM / CAMotics，未安装时使用内置 Mesh CAM fallback 完成模型到刀路闭环。</p>
+            <p className="panel-note">当前主线是三轴控制器 + Y轴旋转夹具：先跑 V3 小闭环，再下载安全试雕包做标定、空跑和低风险试雕。</p>
             <div className="v3-engine-grid">
               {v3Engines.map((engine) => (
                 <div className={`v3-engine ${engine.available ? "ok" : ""} ${engine.adapterReady ? "ready" : ""}`} key={engine.id}>
@@ -5357,10 +5361,12 @@ export function App() {
               ) : (
                 <small>还没有 V3 总门禁报告；建议在 Native CAM、Adapter 验证和 V3 小闭环后生成。</small>
               )}
-              <button className="demo-action package-action" onClick={handleRunV3Readiness} disabled={isV3ReadinessChecking} type="button">
-                <ClipboardCheck size={17} />
-                {isV3ReadinessChecking ? "生成中..." : "生成V3总门禁"}
-              </button>
+              {!V3_TRIAL_FOCUSED_UI && (
+                <button className="demo-action package-action" onClick={handleRunV3Readiness} disabled={isV3ReadinessChecking} type="button">
+                  <ClipboardCheck size={17} />
+                  {isV3ReadinessChecking ? "生成中..." : "生成V3总门禁"}
+                </button>
+              )}
             </div>
             <div className={`v3-diagnostics ${v3NativeCamReadiness?.summary.level === "ready" ? "ok" : v3NativeCamReadiness ? "warning" : "critical"}`}>
               <div className="v3-history-heading">
@@ -5514,16 +5520,18 @@ export function App() {
               ) : (
                 <small>还没有 Native CAM 环境验收记录；Linux CAM 服务器部署后建议先跑此检查。</small>
               )}
-              <div className="v3-action-row">
-                <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(false)} disabled={isV3NativeCamChecking} type="button">
-                  <HardDrive size={17} />
-                  {isV3NativeCamChecking ? "验收中..." : "验收Native CAM"}
-                </button>
-                <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(true)} disabled={isV3NativeCamChecking} type="button">
-                  <ShieldCheck size={17} />
-                  严格验收
-                </button>
-              </div>
+              {!V3_TRIAL_FOCUSED_UI && (
+                <div className="v3-action-row">
+                  <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(false)} disabled={isV3NativeCamChecking} type="button">
+                    <HardDrive size={17} />
+                    {isV3NativeCamChecking ? "验收中..." : "验收Native CAM"}
+                  </button>
+                  <button className="demo-action package-action" onClick={() => handleRunV3NativeCamReadiness(true)} disabled={isV3NativeCamChecking} type="button">
+                    <ShieldCheck size={17} />
+                    严格验收
+                  </button>
+                </div>
+              )}
             </div>
             <div className={`v3-diagnostics ${v3AdapterValidation?.overall.failed ? "warning" : "ok"}`}>
               <div className="v3-history-heading">
@@ -5612,16 +5620,18 @@ export function App() {
               ) : (
                 <small>还没有 Adapter 验证记录；可先跑安全模板验证，再按需跑 Native 外部引擎验证。</small>
               )}
-              <div className="v3-action-row">
-                <button className="demo-action package-action" onClick={() => handleRunV3AdapterValidation(false)} disabled={isV3AdapterValidating} type="button">
-                  <ClipboardCheck size={17} />
-                  {isV3AdapterValidating ? "验证中..." : "验证外部Adapter"}
-                </button>
-                <button className="demo-action package-action" onClick={() => handleRunV3AdapterValidation(true)} disabled={isV3AdapterValidating} type="button">
-                  <HardDrive size={17} />
-                  Native验证
-                </button>
-              </div>
+              {!V3_TRIAL_FOCUSED_UI && (
+                <div className="v3-action-row">
+                  <button className="demo-action package-action" onClick={() => handleRunV3AdapterValidation(false)} disabled={isV3AdapterValidating} type="button">
+                    <ClipboardCheck size={17} />
+                    {isV3AdapterValidating ? "验证中..." : "验证外部Adapter"}
+                  </button>
+                  <button className="demo-action package-action" onClick={() => handleRunV3AdapterValidation(true)} disabled={isV3AdapterValidating} type="button">
+                    <HardDrive size={17} />
+                    Native验证
+                  </button>
+                </div>
+              )}
             </div>
             <div className="v3-status-card">
               <strong>{v3Job ? `任务 ${v3Job.status}` : "等待执行"}</strong>
@@ -6389,9 +6399,9 @@ export function App() {
                 ))}
               </div>
             )}
-            <button className="demo-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
+            <button className="primary-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
               <Cloud size={17} />
-              {isV3JobRunning ? "闭环运行中..." : "运行 V3 小闭环"}
+              {isV3JobRunning ? "闭环运行中..." : "生成安全试雕数据"}
             </button>
             {v3Job && (v3Job.status === "queued" || v3Job.status === "running") && (
               <button className="demo-action package-action" onClick={handleCancelV3Job} type="button">
@@ -6399,18 +6409,20 @@ export function App() {
                 取消 V3 任务
               </button>
             )}
-            <button className="demo-action package-action" onClick={handleDownloadV3Package} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button">
+            <button className="primary-action package-action" onClick={handleDownloadV3TrialPackage} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button" title="只包含空跑、标定、说明、报告，以及被 V3 试雕门禁允许的 toolpath.nc">
               <Download size={17} />
-              {isV3PackageDownloading ? "正在打包..." : "下载 V3 加工包"}
+              {isV3PackageDownloading ? "正在打包..." : "下载安全试雕包"}
             </button>
-            <button className="demo-action package-action" onClick={handleDownloadV3TrialPackage} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button" title="只包含空跑、标定、说明、报告，以及被 V3 试雕门禁允许的 toolpath.nc">
-              <Download size={17} />
-              下载安全试雕包
-            </button>
+            {!V3_TRIAL_FOCUSED_UI && (
+              <button className="demo-action package-action" onClick={handleDownloadV3Package} disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading} type="button">
+                <Download size={17} />
+                下载 V3 工程包
+              </button>
+            )}
           </section>
         )}
 
-        {activeStage === "cam" && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
               <Download size={18} />
