@@ -1393,7 +1393,22 @@ function createV3ReadinessPublicSummary(report, reportId) {
       selectedEngine: report.camServerConfig.selectedEngine,
       selectedEngineName: report.camServerConfig.selectedEngineName,
       nativeCamLevel: report.camServerConfig.nativeCamLevel,
-      missingRequired: report.camServerConfig.missingRequired ?? []
+      missingRequired: report.camServerConfig.missingRequired ?? [],
+      deploymentValidation: report.camServerConfig.deploymentValidation ? {
+        schema: report.camServerConfig.deploymentValidation.schema,
+        camMode: report.camServerConfig.deploymentValidation.camMode,
+        requiredAdapters: report.camServerConfig.deploymentValidation.requiredAdapters ?? [],
+        fixtureOrSyntheticMustBeOff: report.camServerConfig.deploymentValidation.fixtureOrSyntheticMustBeOff ?? [],
+        productionUnlockRequires: report.camServerConfig.deploymentValidation.productionUnlockRequires ?? [],
+        stages: (report.camServerConfig.deploymentValidation.stages ?? []).map((stage) => ({
+          id: stage.id,
+          title: stage.title,
+          command: stage.command,
+          expectedArtifacts: stage.expectedArtifacts ?? [],
+          blocksProduction: Boolean(stage.blocksProduction)
+        })),
+        forbiddenProductionEnv: report.camServerConfig.deploymentValidation.forbiddenProductionEnv ?? []
+      } : null
     } : null,
     adapterValidation: report.adapterValidation ? {
       failed: report.adapterValidation.overall.failed,

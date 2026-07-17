@@ -315,6 +315,7 @@ type V3OrchestratorJob = {
         selectedEngineName: string;
         nativeCamLevel: string;
         missingRequired: string[];
+        deploymentValidation?: V3CamServerDeploymentValidation | null;
       };
       externalCamRecipe?: {
         status: string;
@@ -1027,6 +1028,7 @@ type V3ReadinessSummary = {
     selectedEngineName: string;
     nativeCamLevel: string;
     missingRequired: string[];
+    deploymentValidation?: V3CamServerDeploymentValidation | null;
   } | null;
   adapterValidation: {
     failed: number;
@@ -1114,6 +1116,22 @@ type V3ReadinessSummary = {
     runbook?: string;
     camServerConfig?: string;
   };
+};
+
+type V3CamServerDeploymentValidation = {
+  schema: string;
+  camMode: string;
+  requiredAdapters: string[];
+  fixtureOrSyntheticMustBeOff: string[];
+  productionUnlockRequires: string[];
+  stages: Array<{
+    id: string;
+    title: string;
+    command: string;
+    expectedArtifacts: string[];
+    blocksProduction: boolean;
+  }>;
+  forbiddenProductionEnv?: string[];
 };
 
 type V3ExternalHandoffSummary = {
@@ -4545,13 +4563,36 @@ export function App() {
                     <small>Native CAM {v3Readiness.nativeCam.readyCount}/{v3Readiness.nativeCam.requiredCount} · {v3Readiness.nativeCam.level}</small>
                   )}
                   {v3Readiness.camServerConfig && (
-                    <small className={v3Readiness.camServerConfig.status === "ready-to-attempt-external-cam" ? "v3-inline-ok" : v3Readiness.camServerConfig.status === "missing-native-dependencies" ? "v3-inline-critical" : "v3-inline-warning"}>
-                      CAM服务器配置：{v3Readiness.camServerConfig.status}
-                      {" · "}
-                      {v3Readiness.camServerConfig.selectedEngineName}
-                      {" · "}
-                      缺失 {v3Readiness.camServerConfig.missingRequired.length}
-                    </small>
+                    <>
+                      <small className={v3Readiness.camServerConfig.status === "ready-to-attempt-external-cam" ? "v3-inline-ok" : v3Readiness.camServerConfig.status === "missing-native-dependencies" ? "v3-inline-critical" : "v3-inline-warning"}>
+                        CAM服务器配置：{v3Readiness.camServerConfig.status}
+                        {" · "}
+                        {v3Readiness.camServerConfig.selectedEngineName}
+                        {" · "}
+                        缺失 {v3Readiness.camServerConfig.missingRequired.length}
+                      </small>
+                      {v3Readiness.camServerConfig.deploymentValidation && (
+                        <div className="v3-deployment-validation">
+                          <small>
+                            CAM服务器验收：{v3Readiness.camServerConfig.deploymentValidation.requiredAdapters.join(" / ") || "未指定"}
+                            {" · "}
+                            阶段 {v3Readiness.camServerConfig.deploymentValidation.stages.length}
+                          </small>
+                          <div className="v3-adapter-list">
+                            {v3Readiness.camServerConfig.deploymentValidation.stages.slice(0, 5).map((stage) => (
+                              <span className={stage.blocksProduction ? "warning" : "ok"} key={stage.id} title={stage.command}>
+                                {stage.title}
+                              </span>
+                            ))}
+                          </div>
+                          {v3Readiness.camServerConfig.deploymentValidation.fixtureOrSyntheticMustBeOff[0] && (
+                            <small className="v3-inline-warning">
+                              生产必须关闭：{v3Readiness.camServerConfig.deploymentValidation.fixtureOrSyntheticMustBeOff.slice(0, 3).join("、")}
+                            </small>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                   {v3Readiness.adapterValidation && (
                     <small>Adapter 计划 {v3Readiness.adapterValidation.generatedPlans} · 失败 {v3Readiness.adapterValidation.failed} · completed {v3Readiness.adapterValidation.completedAdapters}</small>

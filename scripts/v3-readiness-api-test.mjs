@@ -126,6 +126,8 @@ function validateReadiness(report, label) {
   if (report.camServerConfig) {
     assert(report.camServerConfig.schema === "hediao3d.cam-server-config.v1", `${label} camServerConfig schema mismatch`);
     assert(Array.isArray(report.camServerConfig.missingRequired), `${label} camServerConfig missing required list`);
+    assert(report.camServerConfig.deploymentValidation?.schema === "hediao3d.cam-server-deployment-validation.v1", `${label} camServerConfig missing deployment validation summary`);
+    assert(report.camServerConfig.deploymentValidation.stages?.some((stage) => stage.id === "external-handoff-smoke"), `${label} deployment validation missing external handoff stage`);
     assert(report.acceptancePlan.steps.some((step) => step.id === "cam-server-config"), `${label} acceptance plan missing CAM server config step`);
   }
   assert(Object.hasOwn(report, "runbookResult"), `${label} missing runbookResult field`);

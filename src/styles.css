@@ -2586,6 +2586,14 @@ button:disabled {
   line-height: 1.45;
 }
 
+.v3-deployment-validation {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.18);
+}
+
 .deployment-checklist,
 .deployment-advice {
   display: grid;
