@@ -129,21 +129,23 @@ async function main() {
   const camoticsResult = await getArtifactJson(job.id, "camotics-result.json");
   assert(camoticsResult.schema === "hediao3d.camotics-result.v1", "CAMotics result schema mismatch");
   assert(camoticsResult.synthetic === false, "CAMotics result should be non-synthetic");
+  assert(camoticsResult.evidenceQuality?.inputIdentity?.status === "missing-imported-hash", `fixture should be missing imported hash, got ${camoticsResult.evidenceQuality?.inputIdentity?.status}`);
+  assert(camoticsResult.evidenceQuality?.productionEvidenceEligible === false, "fixture without G-code identity hash must not be production eligible");
 
   const simulationSummary = await getArtifactJson(job.id, "simulation-summary.json");
   assert(simulationSummary.engine === "camotics", `simulation expected camotics, got ${simulationSummary.engine}`);
   assert(simulationSummary.camoticsAdapter?.synthetic === false, "simulation summary should mark non-synthetic CAMotics result");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
-  assert(productionGate.simulationEvidence?.level === "material-removal-verified", `expected material-removal-verified evidence, got ${productionGate.simulationEvidence?.level}`);
-  assert(productionGate.simulationEvidence?.productionUnlockEligible === true, "non-synthetic CAMotics evidence should be production unlock eligible");
+  assert(productionGate.simulationEvidence?.level === "material-removal-incomplete", `expected material-removal-incomplete evidence, got ${productionGate.simulationEvidence?.level}`);
+  assert(productionGate.simulationEvidence?.productionUnlockEligible === false, "non-synthetic CAMotics fixture without hash must not be production unlock eligible");
   assert(productionGate.allowAirRun === true, "real neutral handoff should allow air-run when NC static gates pass");
   assert(productionGate.allowTrialNc === false, "open two-triangle test STL must not unlock trial NC");
   assert(productionGate.allowProductionNc === false, "heightfield handoff must not unlock production while Native CAM/model gates remain");
 
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
-  assert(packageIndex.simulationEvidence?.level === "material-removal-verified", "package index should expose material-removal evidence");
-  assert(packageIndex.camotics?.productionUnlockEligible === true, "package index should mark real CAMotics evidence eligible");
+  assert(packageIndex.simulationEvidence?.level === "material-removal-incomplete", "package index should expose incomplete material-removal evidence");
+  assert(packageIndex.camotics?.productionUnlockEligible === false, "package index should not mark hashless fixture eligible");
 
   console.log(JSON.stringify({
     ok: true,

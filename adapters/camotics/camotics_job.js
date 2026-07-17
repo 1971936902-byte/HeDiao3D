@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -266,7 +267,8 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
       error: `Imported CAMotics result failed validation: ${validationErrors.join("; ")}`
     };
   }
-  const evidenceQuality = evaluateCamoticsEvidence(imported);
+  const inputIdentity = createCamoticsInputIdentity(adapterJob, simulationPlan);
+  const evidenceQuality = evaluateCamoticsEvidence(imported, inputIdentity);
   const result = {
     ...imported,
     jobId: imported.jobId ?? adapterJob.jobId ?? null,
@@ -277,7 +279,10 @@ function tryImportCamoticsResult(adapterJob, simulationPlan, detection) {
     evidenceQuality,
     inputs: {
       ...(imported.inputs ?? {}),
-      preferredGcode: imported.inputs?.preferredGcode ?? simulationPlan.inputs.preferredGcode
+      preferredGcode: imported.inputs?.preferredGcode ?? simulationPlan.inputs.preferredGcode,
+      preferredGcodeSha256: imported.inputs?.preferredGcodeSha256 ?? null,
+      expectedPreferredGcodeSha256: inputIdentity.expectedPreferredGcodeSha256,
+      identityStatus: evidenceQuality.inputIdentity.status
     },
     detection
   };
@@ -303,10 +308,48 @@ function validateImportedCamoticsResult(result) {
   return errors;
 }
 
-function evaluateCamoticsEvidence(result) {
+function createCamoticsInputIdentity(adapterJob, simulationPlan) {
+  const dir = adapterJob.workDir ?? dirname(resultPath);
+  const preferredGcode = simulationPlan.inputs.preferredGcode;
+  const previewPath = join(dir, preferredGcode);
+  if (!existsSync(previewPath)) {
+    return {
+      preferredGcode,
+      previewPath,
+      expectedPreferredGcodeSha256: null,
+      status: "missing-preview",
+      message: `Preferred CAMotics preview G-code does not exist: ${previewPath}`
+    };
+  }
+  const bytes = readFileSync(previewPath);
+  return {
+    preferredGcode,
+    previewPath,
+    expectedPreferredGcodeSha256: createHash("sha256").update(bytes).digest("hex"),
+    status: "ready",
+    message: "Preferred CAMotics preview G-code identity hash computed."
+  };
+}
+
+function evaluateCamoticsEvidence(result, inputIdentity = null) {
   const metrics = result?.metrics ?? {};
   const artifacts = result?.artifacts ?? {};
+  const importedHash = result?.inputs?.preferredGcodeSha256;
+  const expectedHash = inputIdentity?.expectedPreferredGcodeSha256 ?? null;
+  const identityOk = nonEmptyString(expectedHash) && importedHash === expectedHash;
+  const identityStatus = !inputIdentity || inputIdentity.status !== "ready"
+    ? "missing-preview"
+    : !nonEmptyString(importedHash)
+      ? "missing-imported-hash"
+      : identityOk
+        ? "matched"
+        : "mismatch";
   const checks = [
+    {
+      id: "inputIdentity",
+      ok: identityOk,
+      message: "inputs.preferredGcodeSha256 must match the current camotics-preview.nc SHA-256."
+    },
     {
       id: "materialRemovedMm3",
       ok: Number.isFinite(Number(metrics.materialRemovedMm3)) && Number(metrics.materialRemovedMm3) >= 0,
@@ -336,8 +379,21 @@ function evaluateCamoticsEvidence(result) {
     status: missing.length === 0 ? "complete" : "incomplete",
     missing,
     checks,
+    inputIdentity: {
+      status: identityStatus,
+      preferredGcode: inputIdentity?.preferredGcode ?? null,
+      expectedPreferredGcodeSha256: expectedHash,
+      importedPreferredGcodeSha256: importedHash ?? null,
+      message: identityStatus === "matched"
+        ? "Imported CAMotics result matches the current preview G-code."
+        : identityStatus === "mismatch"
+          ? "Imported CAMotics result hash does not match the current preview G-code."
+          : identityStatus === "missing-imported-hash"
+            ? "Imported CAMotics result is missing inputs.preferredGcodeSha256."
+            : inputIdentity?.message ?? "Preview G-code identity could not be verified."
+    },
     summary: missing.length === 0
-      ? "CAMotics result includes material volume, Z range and visual/material mesh evidence."
+      ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."
       : `CAMotics result imported, but evidence is incomplete: ${missing.join(", ")}.`
   };
 }
@@ -358,6 +414,7 @@ function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {
     };
   }
   const previewText = readFileSync(previewPath, "utf8");
+  const previewHash = createHash("sha256").update(previewText).digest("hex");
   const motionLines = previewText
     .split(/\r?\n/)
     .map((line) => line.replace(/\([^)]*\)/g, "").trim().toUpperCase())
@@ -378,6 +435,9 @@ function writeSyntheticCamoticsResult(adapterJob, simulationPlan, detection) {
     summary: "Synthetic CAMotics result generated from camotics-preview.nc for Orchestrator handoff validation.",
     inputs: {
       preferredGcode: simulationPlan.inputs.preferredGcode,
+      preferredGcodeSha256: previewHash,
+      expectedPreferredGcodeSha256: previewHash,
+      identityStatus: "synthetic",
       previewBytes: Buffer.byteLength(previewText),
       motionLineCount: motionLines.length
     },

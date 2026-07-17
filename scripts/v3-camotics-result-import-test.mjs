@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -25,14 +26,20 @@ writeFileSync(previewPath, [
   "M30",
   ""
 ].join("\n"));
+const previewSha256 = createHash("sha256").update(readFileSync(previewPath)).digest("hex");
 
 writeFileSync(importedPath, JSON.stringify({
   schema: "hediao3d.camotics-result.v1",
+  jobId: "camotics-import-test",
   engine: "camotics",
   status: "completed",
   synthetic: false,
   riskLevel: "ready",
   summary: "Imported real CAMotics result fixture.",
+  inputs: {
+    preferredGcode: "camotics-preview.nc",
+    preferredGcodeSha256: previewSha256
+  },
   metrics: {
     motionLineCount: 2,
     zMin: -0.2,
@@ -98,6 +105,36 @@ assert(result.importedFrom === importedPath, "imported result should record sour
 assert(result.metrics?.materialRemovedMm3 === 1.2, "imported metrics were not preserved");
 assert(result.evidenceQuality?.productionEvidenceEligible === true, "complete imported CAMotics evidence should be production eligible");
 assert(result.evidenceQuality?.status === "complete", `evidence quality should be complete, got ${result.evidenceQuality?.status}`);
+assert(result.evidenceQuality?.inputIdentity?.status === "matched", `input identity should match, got ${result.evidenceQuality?.inputIdentity?.status}`);
+assert(result.inputs?.expectedPreferredGcodeSha256 === previewSha256, "expected preview hash missing from imported result");
+
+const mismatchPath = join(workDir, "mismatched-camotics-result.json");
+const mismatchReportPath = join(workDir, "mismatched-camotics-adapter-report.json");
+writeFileSync(mismatchPath, JSON.stringify({
+  ...JSON.parse(readFileSync(importedPath, "utf8")),
+  inputs: {
+    preferredGcode: "camotics-preview.nc",
+    preferredGcodeSha256: "0".repeat(64)
+  }
+}, null, 2));
+const mismatchRun = spawnSync(process.execPath, ["adapters/camotics/camotics_job.js", jobPath, mismatchReportPath], {
+  cwd: root,
+  encoding: "utf8",
+  windowsHide: true,
+  env: {
+    ...process.env,
+    HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN: "true",
+    HEDIAO3D_CAMOTICS_SYNTHETIC_RESULT: "false",
+    HEDIAO3D_CAMOTICS_RESULT_JSON: mismatchPath
+  }
+});
+assert(!mismatchRun.error, `mismatch adapter spawn failed: ${mismatchRun.error?.message}`);
+assert(mismatchRun.status === 0, `mismatch adapter exited ${mismatchRun.status}: ${mismatchRun.stderr}`);
+const mismatchReport = JSON.parse(readFileSync(mismatchReportPath, "utf8"));
+assert(mismatchReport.status === "completed", "mismatched import should still complete as review evidence");
+const mismatchResult = JSON.parse(readFileSync(join(workDir, "camotics-result.json"), "utf8"));
+assert(mismatchResult.evidenceQuality?.productionEvidenceEligible === false, "hash mismatch must not be production eligible");
+assert(mismatchResult.evidenceQuality?.inputIdentity?.status === "mismatch", `hash mismatch should be reported, got ${mismatchResult.evidenceQuality?.inputIdentity?.status}`);
 
 const contract = {
   schema: "hediao3d.camotics-import-contract.v1",
