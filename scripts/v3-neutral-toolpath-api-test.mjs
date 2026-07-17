@@ -62,11 +62,11 @@ async function main() {
       },
       estimatedMinutes: 1.5,
       points: [
-        { x: -16, a: 0, z: 21.7, depth: 0.3 },
-        { x: -8, a: 45, z: 21.45, depth: 0.55 },
+        { x: -15, a: 0, z: 21.7, depth: 0.3 },
+        { x: -7.5, a: 45, z: 21.45, depth: 0.55 },
         { x: 0, a: 90, z: 21.1, depth: 0.9 },
-        { x: 8, a: 180, z: 21.35, depth: 0.65 },
-        { x: 16, a: 270, z: 21.65, depth: 0.35 }
+        { x: 7.5, a: 180, z: 21.35, depth: 0.65 },
+        { x: 15, a: 270, z: 21.65, depth: 0.35 }
       ]
     }
   });
@@ -76,6 +76,11 @@ async function main() {
   assert(imported.validation.sourceBinding?.status === "bound", "neutral import should bind submitted/imported/postprocess artifacts");
   assert(imported.validation.sourceBinding.importedArtifact?.matchesSubmitted === true, "imported neutral artifact should match submitted payload hash");
   assert(imported.validation.sourceBinding.sourceSnapshot?.matchesPostprocessArtifact === true, "source snapshot should match postprocess neutral artifact hash");
+  assert(imported.validation.machineFit?.schema === "hediao3d.neutral-toolpath-machine-fit.v1", "neutral import should include machine-fit report");
+  assert(imported.validation.machineFit.targetMachine?.controllerClass === "3axis-controller-with-rotary-fixture", "machine-fit should identify rotary fixture controller class");
+  assert(imported.validation.machineFit.targetMachine?.axisMapping?.includes("Y=旋转夹具"), "machine-fit should preserve Y rotary axis mapping");
+  assert(imported.validation.machineFit.coverage?.rotarySpanDeg > 0, "machine-fit should compute rotary angle coverage");
+  assert(imported.validation.machineFit.stockEnvelope?.safeLeftX > -19, "machine-fit should account for left hold/end transition");
   assert(imported.toolpathSummary?.source === "external-adapter", "toolpath summary should mark external adapter source");
 
   const rejectedSynthetic = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
@@ -112,6 +117,8 @@ async function main() {
   assert(summary.neutralToolpathImportValidation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "reloaded job should expose neutral import validation");
   assert(summary.neutralToolpathImportValidation.postprocessEligible === true, "reloaded neutral validation should be eligible");
   assert(summary.neutralToolpathImportValidation.sourceBinding?.status === "bound", "reloaded neutral validation should expose source binding");
+  assert(summary.neutralToolpathImportValidation.machineFit?.targetMachine?.rotaryOutputAxis === "Y", "reloaded neutral validation should expose machine-fit rotary axis");
+  assert(summary.neutralToolpathImportValidation.machineFit?.riskCounts?.holdZonePointCount === 0, "sample neutral path should avoid hold zones");
   assert(summary.neutralToolpathImportValidation.sourceBinding?.postprocessArtifact?.sha256 === summary.toolpathSummary.externalSourceSnapshot.sha256, "neutral source binding should match toolpath source snapshot hash");
   assert(summary.productionUnlockMatrix?.rows?.some((row) => row.id === "neutral-toolpath-import-validation" && row.status === "pass"), "unlock matrix should include passing neutral import validation row");
   assert(summary.productionUnlockMatrix.rows.some((row) => row.id === "neutral-toolpath-import-validation" && String(row.summary).includes("sourceBinding=bound")), "unlock matrix neutral row should consume source binding");
@@ -130,6 +137,7 @@ async function main() {
   assert(neutralArtifact.points?.length === 5, "neutral artifact should preserve source points");
   const validationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath-import-validation.json`);
   assert(validationArtifact.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact === true, "validation artifact should preserve postprocess source binding");
+  assert(validationArtifact.machineFit?.coverage?.xCoverageRatio > 0.5, "validation artifact should preserve machine-fit coverage");
   const adapterReport = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/adapter-report.json`);
   assert(adapterReport.metrics?.neutralToolpath?.sourceBinding?.status === "bound", "adapter report should preserve neutral source binding");
 

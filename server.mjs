@@ -3364,6 +3364,12 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
   }
 
   const normalizedPoints = errors.length === 0 ? normalizeNeutralToolpathPoints(neutral, settings) : [];
+  const machineFit = analyzeNeutralToolpathMachineFit(normalizedPoints, settings, {
+    invalidPointCount,
+    missingRotaryCount,
+    outOfRangeCount
+  });
+  warnings.push(...machineFit.warnings);
   const level = errors.length ? "critical" : warnings.length ? "review" : "ready";
   return {
     schema: "hediao3d.neutral-toolpath-import-validation.v1",
@@ -3403,6 +3409,7 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
       zMin: Number.isFinite(deepestZ) ? deepestZ : null,
       zMax: Number.isFinite(shallowestZ) ? shallowestZ : null
     },
+    machineFit,
     errors,
     warnings,
     productionBoundary: [
@@ -3430,6 +3437,150 @@ function createNeutralToolpathSourceBinding(neutral, source = {}) {
     sourceSnapshot: null,
     summary: "neutral-toolpath 输入已记录，等待写入导入/后处理产物。"
   };
+}
+
+function analyzeNeutralToolpathMachineFit(points, settings, counters = {}) {
+  const warnings = [];
+  const lengthMm = Math.max(1, Number(settings.lengthMm ?? 0));
+  const halfLength = lengthMm / 2;
+  const leftHoldMm = Math.max(0, Number(settings.leftHoldMm ?? 0));
+  const rightHoldMm = Math.max(0, Number(settings.rightHoldMm ?? 0));
+  const transitionMm = Math.max(0, Number(settings.endTransitionMm ?? 0));
+  const safeLeftX = -halfLength + leftHoldMm + transitionMm;
+  const safeRightX = halfLength - rightHoldMm - transitionMm;
+  const safeZ = Number(settings.safeZ ?? 0);
+  const depthLimit = Math.max(0.05, Number(settings.depthMm ?? 0) + Number(settings.stockAllowance ?? 0) + 0.5);
+  const expectedRotaryCoverageDeg = Math.max(0, Number(settings.reliefAngleDeg ?? 360));
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const rotaryOutputAxis = String(settings.rotaryOutputAxis ?? "Y").toUpperCase();
+
+  const finitePoints = Array.isArray(points)
+    ? points.filter((point) => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.z)))
+    : [];
+  const xs = finitePoints.map((point) => Number(point.x));
+  const zs = finitePoints.map((point) => Number(point.z));
+  const depths = finitePoints.map((point) => Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, safeZ - Number(point.z)));
+  const angles = finitePoints.map((point) => {
+    if (Number.isFinite(Number(point.a))) return normalizeAngleDeg(Number(point.a));
+    if (rotaryOutputAxis !== "A" && Number.isFinite(Number(point.y))) return normalizeAngleDeg((Number(point.y) / wrapPerRev) * 360);
+    return null;
+  }).filter((value) => Number.isFinite(value));
+
+  const xMin = xs.length ? Math.min(...xs) : null;
+  const xMax = xs.length ? Math.max(...xs) : null;
+  const zMin = zs.length ? Math.min(...zs) : null;
+  const zMax = zs.length ? Math.max(...zs) : null;
+  const depthMin = depths.length ? Math.min(...depths) : null;
+  const depthMax = depths.length ? Math.max(...depths) : null;
+  const holdZonePointCount = finitePoints.filter((point) => Number(point.x) < safeLeftX || Number(point.x) > safeRightX).length;
+  const deepPointCount = depths.filter((depth) => depth > depthLimit).length;
+  const rotaryCoverage = calculateRotaryCoverage(angles);
+  const xCoverageMm = xMin == null || xMax == null ? 0 : Math.max(0, xMax - xMin);
+  const safeMachiningLengthMm = Math.max(0, safeRightX - safeLeftX);
+  const xCoverageRatio = safeMachiningLengthMm > 0 ? Math.min(1, xCoverageMm / safeMachiningLengthMm) : 0;
+  const rotaryCoverageRatio = expectedRotaryCoverageDeg > 0 ? Math.min(1, rotaryCoverage.spanDeg / expectedRotaryCoverageDeg) : null;
+
+  if (holdZonePointCount > 0) {
+    warnings.push(`${holdZonePointCount} 个 neutral 点落入夹持/端部过渡保护区，真实上机前需调整端部避让或 CAM 边界。`);
+  }
+  if (deepPointCount > 0) {
+    warnings.push(`${deepPointCount} 个 neutral 点深度超过当前工艺深度上限 ${formatFixed(depthLimit, 2)}mm，建议拆粗/精加工多刀路。`);
+  }
+  if (settings.camMode === "rotaryWrap" && finitePoints.length > 0 && angles.length === 0) {
+    warnings.push("旋转包裹模式没有可分析的角度/Y 旋转坐标，无法判断 360° 覆盖。");
+  }
+  if (settings.camMode === "rotaryWrap" && expectedRotaryCoverageDeg >= 300 && angles.length > 2 && rotaryCoverage.spanDeg < expectedRotaryCoverageDeg * 0.72) {
+    warnings.push(`旋转角覆盖约 ${formatFixed(rotaryCoverage.spanDeg, 1)}°，低于目标 ${formatFixed(expectedRotaryCoverageDeg, 1)}°，可能只生成了局部刀路。`);
+  }
+  if (safeMachiningLengthMm > 0 && finitePoints.length > 2 && xCoverageRatio < 0.55) {
+    warnings.push(`X 向覆盖约 ${(xCoverageRatio * 100).toFixed(1)}%，可能没有覆盖佛头/核胚有效长度。`);
+  }
+
+  const level = counters.invalidPointCount || counters.missingRotaryCount
+    ? "critical"
+    : holdZonePointCount || deepPointCount || warnings.length
+      ? "review"
+      : "ok";
+
+  return {
+    schema: "hediao3d.neutral-toolpath-machine-fit.v1",
+    level,
+    summary: level === "ok"
+      ? "neutral-toolpath 与当前三轴控制器 + Y轴旋转夹具参数基本匹配。"
+      : level === "critical"
+        ? "neutral-toolpath 缺少关键坐标，无法证明适配当前机床。"
+        : "neutral-toolpath 可进入试雕闭环，但存在机床覆盖/边界复核项。",
+    targetMachine: {
+      controllerClass: settings.camMode === "rotaryWrap" ? "3axis-controller-with-rotary-fixture" : "3axis-cartesian",
+      axisMapping: settings.camMode === "rotaryWrap"
+        ? `X=长度方向，${rotaryOutputAxis}=旋转夹具，Z=刀深/安全高度`
+        : "X/Y=平面，Z=刀深/安全高度",
+      postProcessor: settings.postProcessor ?? null,
+      rotaryOutputAxis,
+      rotaryWrapPerRevolutionMm: wrapPerRev
+    },
+    stockEnvelope: {
+      lengthMm,
+      safeLeftX,
+      safeRightX,
+      safeMachiningLengthMm,
+      leftHoldMm,
+      rightHoldMm,
+      endTransitionMm: transitionMm,
+      safeZ,
+      depthLimitMm: depthLimit
+    },
+    coverage: {
+      pointCount: finitePoints.length,
+      xMin,
+      xMax,
+      xCoverageMm,
+      xCoverageRatio,
+      rotarySampleCount: angles.length,
+      rotaryMinDeg: rotaryCoverage.minDeg,
+      rotaryMaxDeg: rotaryCoverage.maxDeg,
+      rotarySpanDeg: rotaryCoverage.spanDeg,
+      expectedRotaryCoverageDeg,
+      rotaryCoverageRatio,
+      zMin,
+      zMax,
+      depthMin,
+      depthMax
+    },
+    riskCounts: {
+      holdZonePointCount,
+      deepPointCount,
+      invalidPointCount: Number(counters.invalidPointCount ?? 0),
+      missingRotaryCount: Number(counters.missingRotaryCount ?? 0),
+      outOfRangeCount: Number(counters.outOfRangeCount ?? 0)
+    },
+    warnings
+  };
+}
+
+function calculateRotaryCoverage(angles) {
+  const normalized = [...new Set(angles.map((angle) => normalizeAngleDeg(angle)))].sort((a, b) => a - b);
+  if (normalized.length === 0) return { minDeg: null, maxDeg: null, spanDeg: 0 };
+  if (normalized.length === 1) return { minDeg: normalized[0], maxDeg: normalized[0], spanDeg: 0 };
+  const directSpan = normalized[normalized.length - 1] - normalized[0];
+  const wrapGap = 360 - directSpan;
+  const gaps = normalized.slice(1).map((angle, index) => angle - normalized[index]);
+  const largestGap = Math.max(wrapGap, ...gaps);
+  const spanDeg = Math.max(0, 360 - largestGap);
+  return {
+    minDeg: normalized[0],
+    maxDeg: normalized[normalized.length - 1],
+    spanDeg
+  };
+}
+
+function normalizeAngleDeg(value) {
+  if (!Number.isFinite(Number(value))) return NaN;
+  return ((Number(value) % 360) + 360) % 360;
+}
+
+function formatFixed(value, digits) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "-";
 }
 
 async function createExternalAdapterNeutralToolpathValidation(job, settings, adapterReport, toolpath, selectedEngine) {
