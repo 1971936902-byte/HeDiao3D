@@ -227,6 +227,12 @@ async function main() {
   assert(deliveryManifest.files?.every((file) => file.machineUse?.class), "delivery-manifest artifact missing machineUse classifications");
   assert(deliveryManifest.files?.some((file) => file.filename === "open-source-cam-execution-plan.json" && file.downloadable), "delivery manifest should expose open-source CAM execution plan");
   assert(deliveryManifest.files?.some((file) => file.filename === "operator-download-checklist.md" && file.downloadable), "delivery manifest should expose operator download checklist");
+  const safeTrialPackageFiles = deliveryManifest.files.filter((file) => isSafeTrialPackageFile(file, deliveryManifest.allowTrialNc));
+  assert(safeTrialPackageFiles.some((file) => file.filename === "air-run.nc"), "safe trial package should include air-run.nc");
+  assert(safeTrialPackageFiles.some((file) => file.filename === "rotary-calibration-airrun.nc"), "safe trial package should include rotary calibration air-run");
+  assert(safeTrialPackageFiles.some((file) => file.filename === "operator-runbook.md"), "safe trial package should include operator runbook");
+  assert(safeTrialPackageFiles.some((file) => file.filename === "toolpath.nc") === deliveryManifest.allowTrialNc, "safe trial package should include toolpath.nc only when trial NC is allowed");
+  assert(!safeTrialPackageFiles.some((file) => file.filename === "camotics-preview.nc"), "safe trial package must not include camotics-preview.nc");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
   const operatorDownloadChecklist = await getArtifactText(job.id, "operator-download-checklist.md");
@@ -314,6 +320,39 @@ async function getArtifactText(jobId, filename) {
   const text = await response.text();
   assert(response.ok, `artifact ${filename} failed: ${response.status} ${text}`);
   return text;
+}
+
+function isSafeTrialPackageFile(file, allowTrialNc) {
+  if (!file.downloadable) return false;
+  if (file.filename === "toolpath.nc") return allowTrialNc;
+  if (file.machineUse?.class === "air-run-no-cut") return true;
+  if (file.machineUse?.class === "simulation-only-never-machine") return false;
+  return new Set([
+    "machining-package-index.json",
+    "production-gate.json",
+    "production-unlock-matrix.json",
+    "production-evidence-dossier.json",
+    "delivery-manifest.json",
+    "package-integrity.json",
+    "operator-runbook.md",
+    "operator-download-checklist.md",
+    "machine-controller-profile.json",
+    "postprocess-profile.json",
+    "postprocess-trace-report.json",
+    "nc-static-analysis.json",
+    "controller-dialect-report.json",
+    "rotary-wrap-preview-report.json",
+    "rotary-calibration-sheet.json",
+    "tool-setup-sheet.json",
+    "machine-acceptance-checklist.json",
+    "trial-feedback-template.json",
+    "cam-handoff-evidence.md",
+    "cam-handoff-quality.json",
+    "camotics-input.json",
+    "camotics-simulation-plan.json",
+    "camotics-cli-execution-plan.json",
+    "simulation-summary.json"
+  ]).has(file.filename);
 }
 
 async function getJson(path) {
