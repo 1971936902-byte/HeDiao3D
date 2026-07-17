@@ -3078,6 +3078,28 @@ button:disabled {
   line-height: 1.42;
 }
 
+.v3-production-lock-note {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 8px;
+  padding: 9px;
+  border: 1px solid rgba(255, 107, 156, 0.30);
+  border-left: 4px solid var(--rose);
+  border-radius: 8px;
+  background: rgba(255, 107, 156, 0.07);
+}
+
+.v3-production-lock-note strong {
+  color: #ffe8f0;
+  font-size: 13px;
+}
+
+.v3-production-lock-note span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .deployment-checklist,
 .deployment-advice {
   display: grid;

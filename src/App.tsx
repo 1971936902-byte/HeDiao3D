@@ -2052,7 +2052,10 @@ export function App() {
   const exportGateReady = safetyGateStatus.canDownloadProduction;
   const isOperatorMode = projectProfile.role === "operator";
   const canDownloadProduction = !isOperatorMode || exportGateReady;
-  const productionDownloadTitle = getProductionDownloadTitle(isOperatorMode, exportBlocked, exportGateReady);
+  const v3ProductionGate = v3Job?.result?.summary.productionGate ?? null;
+  const v3ProductionDownloadLocked = Boolean(v3ProductionGate && !v3ProductionGate.allowProductionNc);
+  const formalDownloadAllowed = exportGateReady && canDownloadProduction && !v3ProductionDownloadLocked;
+  const productionDownloadTitle = getProductionDownloadTitle(isOperatorMode, exportBlocked, exportGateReady, v3ProductionGate);
   const activeQuality = activeImage?.quality;
   const captureGuide = useMemo(() => createCaptureGuideReport(images), [images]);
   const manufacturingQuality = useMemo(
@@ -6393,7 +6396,13 @@ export function App() {
               <span>安全报告</span>
               <span>交付清单</span>
             </div>
-            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!exportGateReady || !canDownloadProduction} type="button" title={productionDownloadTitle}>
+            {v3ProductionDownloadLocked && (
+              <div className="v3-production-lock-note">
+                <strong>V3 正式 NC 未解锁</strong>
+                <span>{v3ProductionGate?.summary ?? "当前仅允许空跑或低风险试雕包，不能下载正式生产 NC。"}</span>
+              </div>
+            )}
+            <button className="primary-action package-action" onClick={handleDownloadZipPackage} disabled={!formalDownloadAllowed} type="button" title={productionDownloadTitle}>
               <Download size={17} />
               下载 ZIP 加工包
             </button>
@@ -6868,7 +6877,7 @@ export function App() {
             </div>
           )}
           {!aiMeshUrl && (
-            <button className="download secondary" onClick={() => exportGeometryAsStl(geometry, "nuclear-carving-relief.stl")} disabled={!canDownloadProduction} title={productionDownloadTitle}>
+            <button className="download secondary" onClick={() => exportGeometryAsStl(geometry, "nuclear-carving-relief.stl")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
               <Download size={17} />
               下载 STL
             </button>
@@ -6999,37 +7008,37 @@ export function App() {
                 <Download size={17} />
                 下载空跑 NC
               </button>
-              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+              <button className="download" onClick={() => downloadText("nuclear-carving-toolpath.nc", toolpath.gcode)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载合并 NC
               </button>
               {toolpath.programs?.rough && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rough?.filename ?? "nuclear-carving-rough.nc", toolpath.programs?.rough?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载粗加工
                 </button>
               )}
               {toolpath.programs?.finish && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.finish?.filename ?? "nuclear-carving-finish.nc", toolpath.programs?.finish?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载精加工
                 </button>
               )}
               {toolpath.programs?.rest && (
-                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+                <button className="download secondary" onClick={() => downloadText(toolpath.programs?.rest?.filename ?? "nuclear-carving-rest.nc", toolpath.programs?.rest?.gcode ?? "")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                   <Download size={17} />
                   下载清残
                 </button>
               )}
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.tap", toolpath.tap)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 TAP
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.txt", toolpath.txt)} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 TXT
               </button>
-              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!exportGateReady || !canDownloadProduction} title={productionDownloadTitle}>
+              <button className="download secondary" onClick={() => downloadText("nuclear-carving-toolpath.csv", toolpath.csv, "text/csv")} disabled={!formalDownloadAllowed} title={productionDownloadTitle}>
                 <Download size={17} />
                 下载 CSV
               </button>
@@ -7703,7 +7712,15 @@ function getV3MachineFileCardClass(file: {
   return "locked";
 }
 
-function getProductionDownloadTitle(isOperatorMode: boolean, exportBlocked: boolean, exportGateReady: boolean) {
+function getProductionDownloadTitle(
+  isOperatorMode: boolean,
+  exportBlocked: boolean,
+  exportGateReady: boolean,
+  v3ProductionGate: V3OrchestratorJob["result"]["summary"]["productionGate"] | null
+) {
+  if (v3ProductionGate && !v3ProductionGate.allowProductionNc) {
+    return `V3 production-gate 未解锁正式生产 NC：${v3ProductionGate.summary}`;
+  }
   if (isOperatorMode && !exportGateReady) return "操作员模式：只能下载已通过安全校验并完成正式确认的文件";
   if (exportBlocked) return "导出前安全校验存在阻断项";
   if (!exportGateReady) return "请先完成正式导出确认";
