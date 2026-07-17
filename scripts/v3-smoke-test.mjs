@@ -68,6 +68,8 @@ async function main() {
   assert(job.result?.summary?.productionUnlockMatrix?.schema === "hediao3d.production-unlock-matrix.v1", "production unlock matrix missing");
   assert(job.result.summary.productionUnlockMatrix.rows?.some((row) => row.id === "simulation-evidence"), "production unlock matrix missing simulation row");
   assert(job.result.summary.productionUnlockMatrix.rows?.some((row) => row.id === "cam-handoff-quality"), "production unlock matrix missing CAM handoff quality row");
+  assert(job.result?.summary?.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "production evidence dossier missing");
+  assert(job.result.summary.productionEvidenceDossier.reviewCount >= 1, "production evidence dossier should show missing evidence in trial-only flow");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   assert(job.result?.summary?.machineControllerProfile?.rotary?.outputAxis === "Y", "machine controller profile should use Y rotary output");
   assert(job.result?.summary?.machineAcceptanceChecklist?.schema === "hediao3d.machine-acceptance-checklist.v1", "machine acceptance checklist missing");
@@ -126,6 +128,7 @@ async function main() {
     "air-run.nc",
     "production-gate.json",
     "production-unlock-matrix.json",
+    "production-evidence-dossier.json",
     "postprocess-profile.json",
     "machining-package-index.json",
     "delivery-manifest.json",
@@ -150,6 +153,7 @@ async function main() {
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "trial-feedback-template.json"), "readFirst missing trial feedback template");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-evidence-dossier.json"), "readFirst missing production evidence dossier");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "cam-handoff-quality.json"), "readFirst missing CAM handoff quality report");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-acceptance-checklist.json"), "readFirst missing machine acceptance checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "tool-setup-sheet.json"), "readFirst missing tool setup sheet");
@@ -164,6 +168,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-template.json" && file.sha256), "package integrity missing trial feedback template hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-handoff-quality.json" && file.sha256), "package integrity missing CAM handoff quality hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "production-evidence-dossier.json" && file.sha256), "package integrity missing production evidence dossier hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "tool-setup-sheet.json" && file.sha256), "package integrity missing tool setup hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "rotary-calibration-sheet.json" && file.sha256), "package integrity missing rotary calibration hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "package-integrity.json" && file.selfReference), "package integrity should mark self reference");

@@ -656,6 +656,14 @@ type V3OrchestratorJob = {
         blockCount: number;
         allowProductionNc: boolean;
       };
+      productionEvidenceDossier?: {
+        schema: string;
+        status: string;
+        passedCount: number;
+        reviewCount: number;
+        blockedCount: number;
+        summary: string;
+      };
       trialFeedbackTemplate?: {
         schema: string;
         purpose: string;
@@ -4709,6 +4717,17 @@ export function App() {
                   阻断 {v3Job.result.summary.productionUnlockMatrix.blockCount}
                 </small>
               )}
+              {v3Job?.result?.summary.productionEvidenceDossier && (
+                <small className={v3Job.result.summary.productionEvidenceDossier.status === "production-evidence-complete" ? "v3-inline-ok" : v3Job.result.summary.productionEvidenceDossier.blockedCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
+                  证据档案：{v3Job.result.summary.productionEvidenceDossier.status}
+                  {" · "}
+                  通过 {v3Job.result.summary.productionEvidenceDossier.passedCount}
+                  {" · "}
+                  复核 {v3Job.result.summary.productionEvidenceDossier.reviewCount}
+                  {" · "}
+                  阻断 {v3Job.result.summary.productionEvidenceDossier.blockedCount}
+                </small>
+              )}
               {v3Job?.result?.summary.productionGate?.simulationEvidence && (
                 <small className={v3Job.result.summary.productionGate.simulationEvidence.productionUnlockEligible ? "v3-inline-ok" : v3Job.result.summary.productionGate.simulationEvidence.synthetic ? "v3-inline-warning" : "v3-inline-critical"}>
                   仿真证据：{v3Job.result.summary.productionGate.simulationEvidence.level}
@@ -7055,6 +7074,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const summary = job.result?.summary;
   const gate = summary?.productionGate;
   const productionUnlockMatrix = summary?.productionUnlockMatrix;
+  const productionEvidenceDossier = summary?.productionEvidenceDossier;
   const manifest = summary?.deliveryManifest;
   const preflight = summary?.adapterPreflight;
   const engineReadiness = summary?.engineReadiness;
@@ -7098,6 +7118,8 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `允许离料空跑: ${gate?.allowAirRun ? "是" : "否"}`,
     `解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
     "矩阵报告: production-unlock-matrix.json",
+    `证据档案: ${productionEvidenceDossier?.status ?? "未生成"} / 通过 ${productionEvidenceDossier?.passedCount ?? "-"} / 复核 ${productionEvidenceDossier?.reviewCount ?? "-"} / 阻断 ${productionEvidenceDossier?.blockedCount ?? "-"}`,
+    "证据档案报告: production-evidence-dossier.json",
     `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     "CAM交接报告: cam-handoff-quality.json",
     "",

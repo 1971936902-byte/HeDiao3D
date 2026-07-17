@@ -75,12 +75,15 @@ async function main() {
   assert(feedback.optimizationPlan?.schema === "hediao3d.process-optimization-plan.v1", "optimization plan schema mismatch");
   assert(feedback.optimizationPlan.actions?.some((action) => action.id === "rotary-misalignment"), "optimization plan should include rotary action");
   assert(feedback.optimizationPlan.nextRunProfile?.requiresRegeneration === true, "optimization plan should require regeneration");
+  assert(feedback.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "feedback response missing evidence dossier");
+  assert(feedback.productionEvidenceDossier.crossChecks?.trialFeedbackRecords >= 1, "evidence dossier should count feedback records");
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.trialFeedbackLog?.schema === "hediao3d.trial-feedback-log.v1", "job summary missing feedback log");
   assert(reloaded.result.summary.trialFeedbackLog.recordCount >= 1, "job summary feedback count missing");
   assert(reloaded.result?.summary?.processOptimizationPlan?.schema === "hediao3d.process-optimization-plan.v1", "job summary missing optimization plan");
   assert(reloaded.result.summary.processOptimizationPlan.actionCount >= 1, "job summary optimization action count missing");
+  assert(reloaded.result?.summary?.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "job summary missing evidence dossier");
 
   const recordArtifact = await getArtifactJson(job.id, "trial-feedback-record.json");
   assert(recordArtifact.id === feedback.record.id, "record artifact id mismatch");
@@ -92,6 +95,9 @@ async function main() {
   const optimizationArtifact = await getArtifactJson(job.id, "process-optimization-plan.json");
   assert(optimizationArtifact.actions?.some((action) => action.id === "under-cut-detail-loss"), "optimization artifact missing under-cut action");
   assert(optimizationArtifact.nextRunProfile?.settingsPatch?.stepoverMm, "optimization artifact should suggest stepover patch");
+  const dossierArtifact = await getArtifactJson(job.id, "production-evidence-dossier.json");
+  assert(dossierArtifact.evidenceItems?.some((item) => item.id === "trial-feedback" && item.summary.includes("1 条")), "dossier missing feedback evidence item");
+  assert(dossierArtifact.missingEvidence?.some((item) => item.id === "process-optimization"), "dossier should still require process optimization review");
 
   console.log(JSON.stringify({
     ok: true,

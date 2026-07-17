@@ -2171,6 +2171,17 @@ async function processOrchestratorJob(job, settings) {
     machineAcceptanceChecklist
   });
   await writeFile(join(job.workDir, "trial-feedback-template.json"), JSON.stringify(trialFeedbackTemplate, null, 2), "utf8");
+  const productionEvidenceDossier = createProductionEvidenceDossier({
+    job,
+    productionGate,
+    productionUnlockMatrix,
+    camHandoffQuality,
+    simulationSummary,
+    ncStaticAnalysis,
+    controllerDialectReport,
+    machineAcceptanceChecklist
+  });
+  await writeFile(join(job.workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -2181,6 +2192,7 @@ async function processOrchestratorJob(job, settings) {
     camoticsInput,
     camoticsSimulationPlan,
     camHandoffQuality,
+    productionEvidenceDossier,
     ncStaticAnalysis,
     nativeCamReadiness,
     camEngineSelection,
@@ -2203,6 +2215,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "simulation-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-controller-profile.json"));
@@ -2251,6 +2264,7 @@ async function processOrchestratorJob(job, settings) {
       toolSetupSheet,
       rotaryCalibrationSheet,
       productionUnlockMatrix,
+      productionEvidenceDossier,
       trialFeedbackTemplate,
       camHandoffQuality,
       camoticsInput,
@@ -4031,6 +4045,158 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
   };
 }
 
+function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
+  if (!job?.workDir) return null;
+  const productionGate = readJsonFile(join(job.workDir, "production-gate.json"));
+  const productionUnlockMatrix = readJsonFile(join(job.workDir, "production-unlock-matrix.json"));
+  const camHandoffQuality = readJsonFile(join(job.workDir, "cam-handoff-quality.json"));
+  const simulationSummary = readJsonFile(join(job.workDir, "simulation-summary.json"));
+  const ncStaticAnalysis = readJsonFile(join(job.workDir, "nc-static-analysis.json"));
+  const controllerDialectReport = readJsonFile(join(job.workDir, "controller-dialect-report.json"));
+  const machineAcceptanceChecklist = readJsonFile(join(job.workDir, "machine-acceptance-checklist.json"));
+  if (!productionGate) return null;
+  return createProductionEvidenceDossier({
+    job,
+    productionGate,
+    productionUnlockMatrix,
+    camHandoffQuality,
+    simulationSummary,
+    ncStaticAnalysis,
+    controllerDialectReport,
+    machineAcceptanceChecklist,
+    trialFeedbackLog: overrides.trialFeedbackLog ?? readJsonFile(join(job.workDir, "trial-feedback-log.json")),
+    processOptimizationPlan: overrides.processOptimizationPlan ?? readJsonFile(join(job.workDir, "process-optimization-plan.json"))
+  });
+}
+
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, simulationSummary, ncStaticAnalysis, controllerDialectReport, machineAcceptanceChecklist, trialFeedbackLog = null, processOptimizationPlan = null }) {
+  const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
+  const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
+  const evidenceItems = [
+    {
+      id: "production-gate",
+      label: "生产门禁",
+      status: productionGate?.allowProductionNc ? "pass" : productionGate?.level === "blocked" ? "block" : "review",
+      evidence: ["production-gate.json"],
+      summary: productionGate?.summary ?? "未生成生产门禁。"
+    },
+    {
+      id: "unlock-matrix",
+      label: "生产解锁矩阵",
+      status: productionUnlockMatrix?.allowProductionNc ? "pass" : productionUnlockMatrix?.blockCount > 0 ? "block" : "review",
+      evidence: ["production-unlock-matrix.json"],
+      summary: productionUnlockMatrix?.summary ?? "未生成生产解锁矩阵。"
+    },
+    {
+      id: "external-cam-handoff",
+      label: "CAM Handoff",
+      status: camHandoffQuality?.level === "ready" ? "pass" : camHandoffQuality?.level === "critical" ? "block" : "review",
+      evidence: ["cam-handoff-quality.json", "adapter-report.json", "neutral-toolpath.json"],
+      summary: camHandoffQuality?.summary ?? "未生成 CAM handoff 质量报告。"
+    },
+    {
+      id: "material-removal-simulation",
+      label: "材料去除仿真",
+      status: simulationEvidence?.productionUnlockEligible ? "pass" : "review",
+      evidence: ["simulation-summary.json", "camotics-result.json", "camotics-adapter-report.json"],
+      summary: simulationEvidence?.summary ?? "未生成仿真证据。"
+    },
+    {
+      id: "nc-static-analysis",
+      label: "NC 静态分析",
+      status: ncStaticAnalysis?.level === "ready" ? "pass" : ncStaticAnalysis?.level === "critical" ? "block" : "review",
+      evidence: ["nc-static-analysis.json", "toolpath.nc", "air-run.nc"],
+      summary: ncStaticAnalysis?.summary ?? "未生成 NC 静态分析。"
+    },
+    {
+      id: "controller-dialect",
+      label: "控制器方言",
+      status: controllerDialectReport?.level === "ready" ? "pass" : controllerDialectReport?.level === "critical" ? "block" : "review",
+      evidence: ["controller-dialect-report.json", "machine-controller-profile.json"],
+      summary: controllerDialectReport?.summary ?? "未生成控制器方言报告。"
+    },
+    {
+      id: "machine-acceptance",
+      label: "机床现场验收",
+      status: machineAcceptanceChecklist?.steps?.some((step) => step.blocksProduction) ? "review" : machineAcceptanceChecklist ? "pass" : "review",
+      evidence: ["machine-acceptance-checklist.json", "operator-runbook.md"],
+      summary: machineAcceptanceChecklist?.summary ?? "未生成机床验收清单。"
+    },
+    {
+      id: "trial-feedback",
+      label: "试雕反馈",
+      status: trialFeedbackLog?.recordCount > 0
+        ? trialFeedbackLog.latestOutcome === "success" ? "pass" : "review"
+        : "review",
+      evidence: ["trial-feedback-template.json", "trial-feedback-log.json", "trial-feedback-record.json"],
+      summary: trialFeedbackLog?.recordCount > 0
+        ? `已回填 ${trialFeedbackLog.recordCount} 条试雕反馈，最新结论 ${trialFeedbackLog.latestOutcome}。`
+        : "尚未回填真实空跑/试雕反馈。"
+    },
+    {
+      id: "process-optimization",
+      label: "工艺优化闭环",
+      status: processOptimizationPlan
+        ? processOptimizationPlan.status === "candidate-success-profile" ? "pass" : "review"
+        : "review",
+      evidence: ["process-optimization-plan.json"],
+      summary: processOptimizationPlan?.summary ?? "尚未根据试雕反馈生成工艺优化计划。"
+    }
+  ];
+  const passedCount = evidenceItems.filter((item) => item.status === "pass").length;
+  const blockedCount = evidenceItems.filter((item) => item.status === "block").length;
+  const reviewCount = evidenceItems.filter((item) => item.status === "review").length;
+  const missingEvidence = evidenceItems
+    .filter((item) => item.status !== "pass")
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      status: item.status,
+      summary: item.summary,
+      evidence: item.evidence
+    }));
+  const unlockByMatrix = unlockRows.length
+    ? unlockRows.every((row) => row.status === "pass")
+    : false;
+  const status = productionGate?.allowProductionNc && blockedCount === 0 && reviewCount === 0 && unlockByMatrix
+    ? "production-evidence-complete"
+    : blockedCount > 0
+      ? "blocked"
+      : "trial-evidence-incomplete";
+  return {
+    schema: "hediao3d.production-evidence-dossier.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status,
+    packageLevel: productionGate?.level ?? null,
+    allowProductionNc: Boolean(productionGate?.allowProductionNc),
+    allowTrialNc: Boolean(productionGate?.allowTrialNc),
+    passedCount,
+    reviewCount,
+    blockedCount,
+    evidenceItems,
+    missingEvidence,
+    crossChecks: {
+      unlockMatrixPass: unlockByMatrix,
+      realMaterialRemovalVerified: Boolean(simulationEvidence?.realMaterialRemovalVerified),
+      camHandoffReady: camHandoffQuality?.level === "ready",
+      ncStaticReady: ncStaticAnalysis?.level === "ready",
+      controllerDialectReady: controllerDialectReport?.level === "ready",
+      trialFeedbackRecords: trialFeedbackLog?.recordCount ?? 0,
+      optimizationStatus: processOptimizationPlan?.status ?? null
+    },
+    requiredActions: dedupeStrings([
+      ...(productionGate?.requiredActions ?? []),
+      ...missingEvidence.map((item) => `补齐或复核：${item.label} - ${item.summary}`)
+    ]),
+    summary: status === "production-evidence-complete"
+      ? "生产证据档案完整，可作为生产 NC 解锁依据之一。"
+      : status === "blocked"
+        ? `生产证据档案存在 ${blockedCount} 个阻断项。`
+        : `生产证据仍不完整：${reviewCount} 个复核项。`
+  };
+}
+
 function createTrialFeedbackTemplate({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist }) {
   const issueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "旋转错位", "耗时异常", "刀路停顿"];
   return {
@@ -4928,7 +5094,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camHandoffQuality, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camHandoffQuality, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -4956,6 +5122,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
         getFile("production-unlock-matrix.json"),
+        getFile("production-evidence-dossier.json"),
         getFile("cam-handoff-quality.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
@@ -5038,6 +5205,14 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       criticalIssues: camHandoffQuality.criticalIssues ?? [],
       warningIssues: camHandoffQuality.warningIssues ?? []
     } : null,
+    productionEvidenceDossier: productionEvidenceDossier ? {
+      status: productionEvidenceDossier.status,
+      passedCount: productionEvidenceDossier.passedCount,
+      reviewCount: productionEvidenceDossier.reviewCount,
+      blockedCount: productionEvidenceDossier.blockedCount,
+      summary: productionEvidenceDossier.summary,
+      artifact: "production-evidence-dossier.json"
+    } : null,
     controllerDialect: {
       level: controllerDialectReport?.level ?? "unknown",
       summary: controllerDialectReport?.summary ?? null,
@@ -5108,6 +5283,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "camotics-preview.nc", "CAMotics 展开预览 NC", "simulation", true, "仅用于 CAMotics 三轴展开仿真，Z 已转成负向切深，不可上机。"),
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", true, "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
+    createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", true, "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
     createDeliveryFile(job.id, "trial-feedback-template.json", "试雕反馈回填模板", "report", true, "记录空跑/试雕结果、实际耗时、缺陷标签和参数调整建议。"),
@@ -5595,6 +5771,10 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   const input = await readJson(req);
   const record = createTrialFeedbackRecord(job, input);
   const optimizationPlan = createProcessOptimizationPlan(job, record);
+  const refreshedEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
+    trialFeedbackLog: null,
+    processOptimizationPlan: optimizationPlan
+  });
   const logPath = join(workDir, "trial-feedback-log.json");
   const existingLog = readJsonFile(logPath) ?? {
     schema: "hediao3d.trial-feedback-log.v1",
@@ -5613,10 +5793,17 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
     latestOutcome: record.outcome,
     records: [record, ...records].slice(0, 80)
   };
+  const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job, {
+    trialFeedbackLog: updatedLog,
+    processOptimizationPlan: optimizationPlan
+  }) ?? refreshedEvidenceDossier;
 
   await writeFile(join(workDir, "trial-feedback-record.json"), JSON.stringify(record, null, 2), "utf8");
   await writeFile(logPath, JSON.stringify(updatedLog, null, 2), "utf8");
   await writeFile(join(workDir, "process-optimization-plan.json"), JSON.stringify(optimizationPlan, null, 2), "utf8");
+  if (productionEvidenceDossier) {
+    await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+  }
   await writeTrialFeedbackGlobalRecord(record);
 
   job.workDir = workDir;
@@ -5643,11 +5830,22 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       status: optimizationPlan.status,
       actionCount: optimizationPlan.actions.length,
       nextRunProfile: optimizationPlan.nextRunProfile
-    }
+    },
+    ...(productionEvidenceDossier ? {
+      productionEvidenceDossier: {
+        schema: productionEvidenceDossier.schema,
+        artifact: "production-evidence-dossier.json",
+        status: productionEvidenceDossier.status,
+        passedCount: productionEvidenceDossier.passedCount,
+        reviewCount: productionEvidenceDossier.reviewCount,
+        blockedCount: productionEvidenceDossier.blockedCount
+      }
+    } : {})
   };
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-record.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "trial-feedback-log.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "process-optimization-plan.json"));
+  if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "production-evidence-dossier.json"));
   orchestratorJobs.set(safeJobId, job);
   await writeJobManifest(job);
 
@@ -5661,7 +5859,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       latestRecordId: record.id,
       artifact: publicArtifactUrl(safeJobId, "trial-feedback-log.json")
     },
-    optimizationPlan
+    optimizationPlan,
+    productionEvidenceDossier
   });
 }
 
