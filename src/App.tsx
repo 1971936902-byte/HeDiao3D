@@ -543,6 +543,40 @@ type V3OrchestratorJob = {
           rotaryCoverage: number | null;
         };
       };
+      neutralToolpathImportValidation?: {
+        schema: string;
+        status: "ready" | "review" | "critical";
+        postprocessEligible: boolean;
+        summary: string;
+        sourceName?: string | null;
+        engine?: string | null;
+        classification?: {
+          synthetic: boolean;
+          fixture: boolean;
+          previewScaffold: boolean;
+          imported: boolean;
+          generatedByExternalCommand: boolean;
+        };
+        coordinate?: {
+          lengthAxis: string | null;
+          rotaryAxis: string | null;
+          depthAxis: string | null;
+          rotaryUnit: string | null;
+        };
+        metrics?: {
+          sourcePointCount: number;
+          normalizedPointCount: number;
+          invalidPointCount: number;
+          missingRotaryCount: number;
+          outOfRangeCount: number;
+          xMin: number | null;
+          xMax: number | null;
+          zMin: number | null;
+          zMax: number | null;
+        };
+        errors: string[];
+        warnings: string[];
+      };
       rotaryWrapPreviewReport?: {
         schema: string;
         level: "ready" | "review" | "critical";
@@ -5692,6 +5726,23 @@ export function App() {
                     : ""}
                 </small>
               )}
+              {v3Job?.result?.summary.neutralToolpathImportValidation && (
+                <small className={v3Job.result.summary.neutralToolpathImportValidation.postprocessEligible ? v3Job.result.summary.neutralToolpathImportValidation.status === "ready" ? "v3-inline-ok" : "v3-inline-warning" : "v3-inline-critical"}>
+                  Neutral导入校验：{v3Job.result.summary.neutralToolpathImportValidation.status}
+                  {" · "}
+                  {v3Job.result.summary.neutralToolpathImportValidation.postprocessEligible ? "可进入后处理" : "已拒绝"}
+                  {" · "}
+                  点 {v3Job.result.summary.neutralToolpathImportValidation.metrics?.sourcePointCount ?? "-"}
+                  {v3Job.result.summary.neutralToolpathImportValidation.metrics?.outOfRangeCount
+                    ? ` · 越界 ${v3Job.result.summary.neutralToolpathImportValidation.metrics.outOfRangeCount}`
+                    : ""}
+                  {v3Job.result.summary.neutralToolpathImportValidation.classification?.previewScaffold
+                    ? " · preview/scaffold"
+                    : ""}
+                  {" · "}
+                  {v3Job.result.summary.neutralToolpathImportValidation.summary}
+                </small>
+              )}
               {v3Job?.result?.summary.rotaryWrapPreviewReport && (
                 <div className={`v3-rotary-preview-card ${v3Job.result.summary.rotaryWrapPreviewReport.level}`}>
                   <div>
@@ -8235,6 +8286,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const machineControllerProfile = summary?.machineControllerProfile;
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const camHandoffQuality = summary?.camHandoffQuality;
+  const neutralToolpathImportValidation = summary?.neutralToolpathImportValidation;
   const rotaryWrapPreviewReport = summary?.rotaryWrapPreviewReport;
   const controllerDialectReport = summary?.controllerDialectReport;
   const camoticsInput = summary?.camoticsInput;
@@ -8275,6 +8327,10 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `CAM交接质量: ${camHandoffQuality?.level ?? "未生成"} / ${camHandoffQuality?.source ?? "-"}`,
     "CAM交接报告: cam-handoff-quality.json",
     "CAM交接证据: cam-handoff-evidence.md",
+    `Neutral导入校验: ${neutralToolpathImportValidation?.status ?? "未生成"} / ${neutralToolpathImportValidation?.postprocessEligible ? "可进入后处理" : neutralToolpathImportValidation ? "已拒绝" : "-"}`,
+    `Neutral导入点数: ${neutralToolpathImportValidation?.metrics?.sourcePointCount ?? "-"} / 归一化 ${neutralToolpathImportValidation?.metrics?.normalizedPointCount ?? "-"} / 越界 ${neutralToolpathImportValidation?.metrics?.outOfRangeCount ?? "-"}`,
+    `Neutral导入来源: ${neutralToolpathImportValidation?.engine ?? "-"} / ${neutralToolpathImportValidation?.sourceName ?? "-"}`,
+    "Neutral导入校验报告: neutral-toolpath-import-validation.json",
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",
     `外部摄取源: ${camHandoffQuality?.sourceSnapshot ? `${camHandoffQuality.sourceSnapshot.kind} / ${camHandoffQuality.sourceSnapshot.sha256.slice(0, 12)}` : "无"}`,
