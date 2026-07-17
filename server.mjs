@@ -833,21 +833,28 @@ function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealO
   const nextActions = [];
   const neutralReady = Boolean(neutralImport?.ok && neutralImport?.postprocessEligible && neutralImport?.synthetic === false);
   const pointCount = Number(neutralImport?.pointCount ?? 0);
+  const sourceBindingStatus = neutralImport?.sourceBindingStatus ?? "missing";
+  const sourceBindingBound = sourceBindingStatus === "bound";
   if (neutralReady) {
     return {
       schema: "hediao3d.v3-postprocess-handoff-readiness.v1",
-      status: pointCount > 0 ? "ready" : "review",
-      summary: pointCount > 0
+      status: pointCount > 0 && sourceBindingBound ? "ready" : "review",
+      summary: pointCount > 0 && sourceBindingBound
         ? `真实 neutral-toolpath 已通过导入校验，可进入 HeDiao3D Y/A 旋转夹具后处理（${pointCount} 点）。`
-        : "neutral-toolpath 已通过导入校验，但点数为 0 或未知，需复核后处理输入。",
+        : pointCount > 0
+          ? `neutral-toolpath 已通过导入校验，但 sourceBinding=${sourceBindingStatus}，需复核导入源、neutral-toolpath.json 和后处理输入哈希链。`
+          : "neutral-toolpath 已通过导入校验，但点数为 0 或未知，需复核后处理输入。",
       required: productionCamEvidence.required,
       source: "neutral-import",
       productionCamEvidence: productionCamEvidence.summary,
       neutralImportId: neutralImport.id ?? null,
       pointCount,
-      nextActions: pointCount > 0
+      sourceBindingStatus,
+      nextActions: pointCount > 0 && sourceBindingBound
         ? ["继续执行 CAMotics 材料去除仿真、离料空跑、软料试雕和机床验收。"]
-        : ["复核 neutral-import-contract.json 和 neutral-toolpath.json，确认 points[] 有效。"]
+        : pointCount > 0
+          ? ["查看 neutral-import-contract.json 的 sourceBinding，确认导入源与后处理输入哈希一致。"]
+          : ["复核 neutral-import-contract.json 和 neutral-toolpath.json，确认 points[] 有效。"]
     };
   }
 
@@ -864,6 +871,7 @@ function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealO
       productionCamEvidence: productionCamEvidence.summary,
       neutralImportId: neutralImport?.id ?? null,
       pointCount,
+      sourceBindingStatus,
       nextActions
     };
   }
@@ -877,6 +885,7 @@ function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealO
     productionCamEvidence: productionCamEvidence.summary,
     neutralImportId: neutralImport?.id ?? null,
     pointCount,
+    sourceBindingStatus,
     nextActions
   };
 }
@@ -1569,6 +1578,7 @@ function createCamoticsImportContractPublicSummary(report, contractId) {
 }
 
 function createNeutralImportContractPublicSummary(report, contractId) {
+  const sourceBinding = report.sourceBinding ?? report.neutralToolpathImportValidation?.sourceBinding ?? null;
   return {
     id: contractId,
     schema: report.schema ?? "unknown",
@@ -1579,6 +1589,8 @@ function createNeutralImportContractPublicSummary(report, contractId) {
     synthetic: Boolean(report.synthetic),
     pointCount: Number.isFinite(Number(report.pointCount)) ? Number(report.pointCount) : null,
     postprocessEligible: Boolean(report.postprocessEligible),
+    sourceBindingStatus: sourceBinding?.status ?? "missing",
+    sourceBindingSummary: sourceBinding?.summary ?? null,
     adapterReport: report.adapterReport ?? null,
     neutralToolpath: report.neutralToolpath ?? null,
     outputRoot: report.outputRoot ?? null

@@ -1441,6 +1441,8 @@ type V3ReadinessSummary = {
     synthetic: boolean;
     pointCount: number | null;
     postprocessEligible: boolean;
+    sourceBindingStatus?: string | null;
+    sourceBindingSummary?: string | null;
     adapterReport: string | null;
     neutralToolpath: string | null;
     outputRoot: string | null;
@@ -1454,6 +1456,7 @@ type V3ReadinessSummary = {
     productionCamEvidence: string;
     neutralImportId: string | null;
     pointCount: number;
+    sourceBindingStatus?: string | null;
     nextActions: string[];
   } | null;
   camoticsImport: {
@@ -5179,13 +5182,15 @@ export function App() {
                       );
                     })}
                   </div>
-                  <small className={v3Readiness.neutralImport ? v3Readiness.neutralImport.postprocessEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                  <small className={v3Readiness.neutralImport ? v3Readiness.neutralImport.postprocessEligible ? v3Readiness.neutralImport.sourceBindingStatus === "bound" ? "v3-inline-ok" : "v3-inline-warning" : "v3-inline-critical" : "v3-inline-warning"}>
                     Neutral导入：{v3Readiness.neutralImport ? `${v3Readiness.neutralImport.status ?? "-"} · ${v3Readiness.neutralImport.imported ? "真实导入" : "未导入"}` : "未验证"}
                     {v3Readiness.neutralImport?.pointCount ? ` · ${v3Readiness.neutralImport.pointCount}点` : ""}
+                    {v3Readiness.neutralImport ? ` · sourceBinding ${v3Readiness.neutralImport.sourceBindingStatus ?? "missing"}` : ""}
                   </small>
                   <small className={v3Readiness.postprocessHandoffReadiness ? v3Readiness.postprocessHandoffReadiness.status === "ready" ? "v3-inline-ok" : v3Readiness.postprocessHandoffReadiness.status === "blocked" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     后处理交接：{v3Readiness.postprocessHandoffReadiness ? `${v3Readiness.postprocessHandoffReadiness.status} · ${v3Readiness.postprocessHandoffReadiness.required ? "生产必需" : "待验证"} · ${v3Readiness.postprocessHandoffReadiness.source}` : "未验证"}
                     {v3Readiness.postprocessHandoffReadiness?.pointCount ? ` · ${v3Readiness.postprocessHandoffReadiness.pointCount}点` : ""}
+                    {v3Readiness.postprocessHandoffReadiness?.sourceBindingStatus ? ` · sourceBinding ${v3Readiness.postprocessHandoffReadiness.sourceBindingStatus}` : ""}
                     {v3Readiness.postprocessHandoffReadiness?.nextActions[0] ? ` · ${v3Readiness.postprocessHandoffReadiness.nextActions[0]}` : ""}
                   </small>
                   <small className={v3Readiness.camoticsImport ? v3Readiness.camoticsImport.productionEvidenceEligible ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>

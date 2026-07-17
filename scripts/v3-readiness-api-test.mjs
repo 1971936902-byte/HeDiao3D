@@ -175,12 +175,14 @@ function validateReadiness(report, label) {
   if (report.neutralImport) {
     assert(report.neutralImport.schema === "hediao3d.neutral-import-contract.v1", `${label} neutralImport schema mismatch`);
     assert(typeof report.neutralImport.postprocessEligible === "boolean", `${label} neutralImport eligibility missing`);
+    assert(typeof report.neutralImport.sourceBindingStatus === "string", `${label} neutralImport source binding status missing`);
   }
   assert(Object.hasOwn(report, "postprocessHandoffReadiness"), `${label} missing postprocessHandoffReadiness field`);
   if (report.postprocessHandoffReadiness) {
     assert(report.postprocessHandoffReadiness.schema === "hediao3d.v3-postprocess-handoff-readiness.v1", `${label} postprocess handoff schema mismatch`);
     assert(["ready", "review", "pending", "blocked"].includes(report.postprocessHandoffReadiness.status), `${label} postprocess handoff status mismatch`);
     assert(typeof report.postprocessHandoffReadiness.required === "boolean", `${label} postprocess handoff required flag missing`);
+    assert(typeof report.postprocessHandoffReadiness.sourceBindingStatus === "string", `${label} postprocess handoff source binding status missing`);
   }
   assert(Object.hasOwn(report, "camoticsImport"), `${label} missing camoticsImport field`);
   if (report.camoticsImport) {
