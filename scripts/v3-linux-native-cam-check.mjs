@@ -626,10 +626,13 @@ fi
 
 node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" <<'NODE'
 const { readFileSync, writeFileSync } = require("fs");
+const { createHash } = require("crypto");
 const [reportPath, acceptancePath, strictValue, expectValue] = process.argv.slice(2);
 const strict = /^(1|true|yes|on)$/i.test(strictValue || "");
 const expectProductionCandidate = /^(1|true|yes|on)$/i.test(expectValue || "");
-const report = JSON.parse(readFileSync(reportPath, "utf8"));
+const reportBytes = readFileSync(reportPath);
+const reportText = reportBytes.toString("utf8");
+const report = JSON.parse(reportText);
 const adapters = Array.isArray(report.adapters) ? report.adapters : [];
 const rows = adapters.map((adapter) => ({
   id: adapter.id,
@@ -659,6 +662,13 @@ const acceptance = {
   schema: "hediao3d.native-cam-real-output-acceptance.v1",
   createdAt: new Date().toISOString(),
   sourceReport: reportPath,
+  sourceReportIdentity: {
+    filename: "v3-external-adapter-validation.json",
+    path: reportPath,
+    sha256: createHash("sha256").update(reportBytes).digest("hex"),
+    schema: report.schema || null,
+    createdAt: report.createdAt || null
+  },
   strict,
   expectProductionCandidate,
   level: blockers.length ? "critical" : warnings.length ? "review" : "ready",

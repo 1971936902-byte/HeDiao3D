@@ -1367,6 +1367,10 @@ type V3ReadinessSummary = {
     productionCandidateCount: number;
     unsafeCount: number;
     missingCount: number;
+    sourceReportBindingStatus?: string;
+    sourceReportBindingRequired?: boolean;
+    sourceReportBindingSummary?: string;
+    sourceReportSha256?: string | null;
     blockers: string[];
     warnings: string[];
     nextActions: string[];
@@ -5135,6 +5139,7 @@ export function App() {
                   )}
                   <small className={v3Readiness.nativeCamRealOutputAcceptance ? v3Readiness.nativeCamRealOutputAcceptance.level === "ready" ? "v3-inline-ok" : v3Readiness.nativeCamRealOutputAcceptance.level === "critical" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     真实CAM输出验收：{v3Readiness.nativeCamRealOutputAcceptance ? `${v3Readiness.nativeCamRealOutputAcceptance.level} · candidate ${v3Readiness.nativeCamRealOutputAcceptance.productionCandidateCount} · unsafe ${v3Readiness.nativeCamRealOutputAcceptance.unsafeCount} · missing ${v3Readiness.nativeCamRealOutputAcceptance.missingCount}` : "未运行"}
+                    {v3Readiness.nativeCamRealOutputAcceptance ? ` · sourceBinding ${v3Readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing"}` : ""}
                     {v3Readiness.nativeCamRealOutputAcceptance?.blockers[0] ? ` · ${v3Readiness.nativeCamRealOutputAcceptance.blockers[0]}` : ""}
                   </small>
                   <small className={v3Readiness.externalHandoff ? v3Readiness.externalHandoff.status === "completed" && v3Readiness.externalHandoff.simulationStatus === "completed" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>

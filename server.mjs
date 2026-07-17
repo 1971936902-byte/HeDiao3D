@@ -656,6 +656,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   if (!nativeCamRealOutputAcceptance) {
     warnings.push("尚未运行 Native CAM 真实输出验收，当前无法证明外部 CAM 已产生 production-candidate 输出。");
     nextActions.push("在 Linux CAM 服务器运行 bash native-cam-real-output-check.sh，并保留 native-cam-real-output-acceptance.json。");
+  } else if (nativeCamRealOutputAcceptance.sourceReportBindingRequired && nativeCamRealOutputAcceptance.sourceReportBindingStatus !== "matched") {
+    blockers.push(`Native CAM 真实输出验收缺少源报告绑定：${nativeCamRealOutputAcceptance.sourceReportBindingSummary}`);
+    nextActions.push("导入 native-cam-real-output-acceptance.json 时同时随附 v3-external-adapter-validation.json，或重新运行 native-cam-real-output-check.sh 生成 sourceReportIdentity。");
   } else if (nativeCamRealOutputAcceptance.level === "critical") {
     blockers.push(`Native CAM 真实输出验收未通过：${nativeCamRealOutputAcceptance.blockers[0] ?? nativeCamRealOutputAcceptance.summary}`);
     nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
@@ -968,9 +971,11 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       command: "bash native-cam-real-output-check.sh",
       evidence: ["native-cam-real-output-acceptance.json", "v3-external-adapter-validation.json", "adapter-report.json"],
       detail: nativeCamRealOutputAcceptance
-        ? `${nativeCamRealOutputAcceptance.level} / productionCandidate=${nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${nativeCamRealOutputAcceptance.unsafeCount} / missing=${nativeCamRealOutputAcceptance.missingCount}`
+        ? `${nativeCamRealOutputAcceptance.level} / productionCandidate=${nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${nativeCamRealOutputAcceptance.unsafeCount} / missing=${nativeCamRealOutputAcceptance.missingCount} / sourceBinding=${nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing"}`
         : "尚未运行 Linux CAM 服务端真实输出验收脚本。",
-      blocksProduction: !nativeCamRealOutputAcceptance || nativeCamRealOutputAcceptance.level !== "ready"
+      blocksProduction: !nativeCamRealOutputAcceptance
+        || nativeCamRealOutputAcceptance.level !== "ready"
+        || (nativeCamRealOutputAcceptance.sourceReportBindingRequired && nativeCamRealOutputAcceptance.sourceReportBindingStatus !== "matched")
     }),
     createAcceptanceStep({
       order: 5,
@@ -1448,6 +1453,10 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
     schema: report.schema ?? "hediao3d.native-cam-real-output-acceptance.v1",
     createdAt: report.createdAt ?? null,
     sourceReport: report.sourceReport ?? null,
+    sourceReportBindingStatus: report.sourceReportBinding?.status ?? "missing",
+    sourceReportBindingRequired: Boolean(report.sourceReportBinding?.required),
+    sourceReportBindingSummary: report.sourceReportBinding?.summary ?? "未提供源报告绑定。",
+    sourceReportSha256: report.sourceReportBinding?.expectedSha256 ?? report.sourceReportIdentity?.sha256 ?? null,
     level: report.level ?? (blockers.length ? "critical" : warnings.length ? "review" : "ready"),
     summary: `productionCandidate=${Number(report.productionCandidateCount ?? 0)} / unsafe=${Number(report.unsafeCount ?? 0)} / missing=${Number(report.missingCount ?? 0)}`,
     productionCandidateCount: Number(report.productionCandidateCount ?? 0),
@@ -2389,6 +2398,13 @@ async function importNativeCamRealOutputAcceptance(req, res) {
   if (!validation.ok) {
     return json(res, 400, { error: validation.error });
   }
+  const sourceReportBinding = createNativeCamRealOutputSourceReportBinding(acceptance, input);
+  if (sourceReportBinding.status === "mismatch") {
+    return json(res, 400, {
+      error: sourceReportBinding.summary,
+      sourceReportBinding
+    });
+  }
 
   const importId = `imported-real-output-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
   const outputRoot = join(process.cwd(), "public", "orchestrator-adapter-validation", importId);
@@ -2401,7 +2417,8 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : "native-cam-real-output-acceptance.json",
       route: "/api/orchestrator/native-cam/real-output-acceptance",
       note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself."
-    }
+    },
+    sourceReportBinding
   };
   await writeFile(join(outputRoot, "native-cam-real-output-acceptance.json"), JSON.stringify(imported, null, 2), "utf8");
   await writeFile(join(outputRoot, "native-cam-real-output-import.json"), JSON.stringify({
@@ -2411,6 +2428,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     sourceName: imported.importSource.sourceName,
     acceptanceSchema: imported.schema,
     acceptanceLevel: imported.level ?? null,
+    sourceReportBinding,
     productionCandidateCount: Number(imported.productionCandidateCount ?? 0),
     unsafeCount: Number(imported.unsafeCount ?? 0),
     missingCount: Number(imported.missingCount ?? 0)
@@ -2424,6 +2442,84 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       importJson: `/api/orchestrator/adapter-validation/${encodeURIComponent(importId)}/native-cam-real-output-import.json`
     }
   });
+}
+
+function createNativeCamRealOutputSourceReportBinding(acceptance, input) {
+  const suppliedReport = input?.validationReport && typeof input.validationReport === "object"
+    ? JSON.stringify(input.validationReport, null, 2)
+    : typeof input?.validationReportText === "string"
+      ? input.validationReportText
+      : null;
+  const suppliedSha256 = suppliedReport ? createHash("sha256").update(suppliedReport).digest("hex") : null;
+  const expected = acceptance?.sourceReportIdentity && typeof acceptance.sourceReportIdentity === "object"
+    ? acceptance.sourceReportIdentity
+    : null;
+  const expectedSha256 = typeof expected?.sha256 === "string" ? expected.sha256.toLowerCase() : null;
+  const suppliedSchema = input?.validationReport?.schema ?? null;
+  const suppliedCreatedAt = input?.validationReport?.createdAt ?? null;
+  if (suppliedSha256 && expectedSha256 && suppliedSha256 !== expectedSha256) {
+    return {
+      schema: "hediao3d.native-cam-source-report-binding.v1",
+      status: "mismatch",
+      required: true,
+      expectedSha256,
+      suppliedSha256,
+      sourceReport: acceptance?.sourceReport ?? null,
+      suppliedSchema,
+      suppliedCreatedAt,
+      summary: "Native CAM 真实输出验收与随附 v3-external-adapter-validation.json 哈希不匹配。"
+    };
+  }
+  if (suppliedSha256 && !expectedSha256) {
+    return {
+      schema: "hediao3d.native-cam-source-report-binding.v1",
+      status: "unclaimed-supplied",
+      required: false,
+      expectedSha256: null,
+      suppliedSha256,
+      sourceReport: acceptance?.sourceReport ?? null,
+      suppliedSchema,
+      suppliedCreatedAt,
+      summary: "已随附 v3-external-adapter-validation.json，但 acceptance 未声明 sourceReportIdentity.sha256。"
+    };
+  }
+  if (!suppliedSha256 && expectedSha256) {
+    return {
+      schema: "hediao3d.native-cam-source-report-binding.v1",
+      status: "missing-supplied-report",
+      required: true,
+      expectedSha256,
+      suppliedSha256: null,
+      sourceReport: acceptance?.sourceReport ?? null,
+      suppliedSchema: null,
+      suppliedCreatedAt: null,
+      summary: "acceptance 声明了 sourceReportIdentity.sha256，但导入时未随附 v3-external-adapter-validation.json。"
+    };
+  }
+  if (suppliedSha256 && expectedSha256 && suppliedSha256 === expectedSha256) {
+    return {
+      schema: "hediao3d.native-cam-source-report-binding.v1",
+      status: "matched",
+      required: true,
+      expectedSha256,
+      suppliedSha256,
+      sourceReport: acceptance?.sourceReport ?? null,
+      suppliedSchema,
+      suppliedCreatedAt,
+      summary: "Native CAM 真实输出验收已绑定随附 v3-external-adapter-validation.json。"
+    };
+  }
+  return {
+    schema: "hediao3d.native-cam-source-report-binding.v1",
+    status: "missing",
+    required: false,
+    expectedSha256: null,
+    suppliedSha256: null,
+    sourceReport: acceptance?.sourceReport ?? null,
+    suppliedSchema: null,
+    suppliedCreatedAt: null,
+    summary: "未提供 v3-external-adapter-validation.json 源报告哈希绑定；只能作为待复核证据。"
+  };
 }
 
 function validateNativeCamRealOutputAcceptance(acceptance) {
