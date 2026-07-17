@@ -272,10 +272,12 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     stock = plan.get("stock") or {}
     sampling = plan.get("sampling") or {}
     axis_mapping = sampling.get("axisMapping") or {}
+    tool = plan.get("tool") or {}
     safe_z = float(settings.get("safeZ") or 22)
     output_length = float(stock.get("lengthMm") or settings.get("lengthMm") or max(0.001, float(geometry.get("dimensions", {}).get("x") or 1)))
     output_depth = max(0.001, float(settings.get("depthMm") or settings.get("maxCutDepth") or max(0.001, float(geometry.get("dimensions", {}).get("z") or 1))))
     rotary_axis = axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y"
+    cutter_radius = compute_preview_cutter_radius(tool, settings)
     cols = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS") or 8)))
     rows = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS") or 6)))
     x_min = float(min_bounds["x"])
@@ -288,6 +290,7 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     points: List[Dict[str, Any]] = []
     miss_count = 0
     fallback_count = 0
+    cutter_sample_count = 0
     cell_radius = max(
         abs(x_max - x_min) / max(1, cols - 1),
         abs(y_max - y_min) / max(1, rows - 1),
@@ -299,14 +302,14 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
         for col in range(cols):
             col_t = col / (cols - 1)
             x = x_min + (x_max - x_min) * col_t
-            surface_z = sample_projected_surface_z(triangles, x, y, cell_radius)
-            if surface_z is None:
+            contact = sample_cutter_envelope_surface_z(triangles, x, y, cell_radius, cutter_radius)
+            if contact is None:
                 miss_count += 1
                 continue
-            if isinstance(surface_z, dict):
-                if surface_z.get("fallback"):
-                    fallback_count += 1
-                surface_z = surface_z["z"]
+            if contact.get("fallback"):
+                fallback_count += 1
+            cutter_sample_count += int(contact.get("samples") or 1)
+            surface_z = contact["z"]
             output_x = -output_length / 2 + output_length * col_t
             normalized_surface = max(0.0, min(1.0, (z_max - surface_z) / z_span))
             depth = output_depth * normalized_surface
@@ -318,6 +321,8 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
                 "surfaceZ": round(surface_z, 6),
                 "modelX": round(x, 6),
                 "modelY": round(y, 6),
+                "contactSamples": int(contact.get("samples") or 1),
+                "cutterRadiusMm": round(cutter_radius, 6),
                 "source": "stl-heightfield-preview",
             })
     if not points:
@@ -351,6 +356,9 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
                 "missCount": miss_count,
                 "fallbackCount": fallback_count,
                 "fallbackRadius": cell_radius,
+                "cutterRadiusMm": cutter_radius,
+                "cutterSampleCount": cutter_sample_count,
+                "cutterEnvelope": cutter_radius > 0,
                 "surfaceZMax": z_max,
                 "surfaceZMin": z_min,
                 "outputLengthMm": output_length,
@@ -366,7 +374,51 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     }
 
 
-def sample_projected_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float = 0.0) -> Optional[Any]:
+def compute_preview_cutter_radius(tool: Dict[str, Any], settings: Dict[str, Any]) -> float:
+    diameter = float(tool.get("diameterMm") or settings.get("toolDiameter") or 0)
+    flat_tip = float(tool.get("flatTipMm") or 0)
+    scale = float(os.environ.get("HEDIAO3D_OPENCAMLIB_CUTTER_RADIUS_SCALE") or 0.5)
+    radius = max(flat_tip / 2, diameter / 2 * max(0.0, scale))
+    return max(0.0, radius)
+
+
+def sample_cutter_envelope_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float, cutter_radius: float) -> Optional[Dict[str, Any]]:
+    offsets = create_cutter_sample_offsets(cutter_radius)
+    hits: List[Dict[str, Any]] = []
+    for dx, dy in offsets:
+        hit = sample_projected_surface_z(triangles, x + dx, y + dy, fallback_radius)
+        if hit is not None:
+            hits.append(hit)
+    if not hits:
+        return None
+    best = max(hits, key=lambda item: item["z"])
+    return {
+        "z": best["z"],
+        "fallback": any(bool(item.get("fallback")) for item in hits),
+        "samples": len(hits),
+    }
+
+
+def create_cutter_sample_offsets(cutter_radius: float) -> List[List[float]]:
+    if cutter_radius <= 1e-9:
+        return [[0.0, 0.0]]
+    offsets = [[0.0, 0.0]]
+    for radius in (cutter_radius * 0.5, cutter_radius):
+        for dx, dy in (
+            (radius, 0.0),
+            (-radius, 0.0),
+            (0.0, radius),
+            (0.0, -radius),
+            (radius * 0.70710678, radius * 0.70710678),
+            (-radius * 0.70710678, radius * 0.70710678),
+            (radius * 0.70710678, -radius * 0.70710678),
+            (-radius * 0.70710678, -radius * 0.70710678),
+        ):
+            offsets.append([dx, dy])
+    return offsets
+
+
+def sample_projected_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float = 0.0) -> Optional[Dict[str, Any]]:
     hits: List[float] = []
     for tri in triangles:
         z = interpolate_triangle_z(tri, x, y)

@@ -109,6 +109,12 @@ async function main() {
   assert(adapterReport.metrics?.neutralToolpath?.previewScaffold === true, "converted GLB handoff should remain preview scaffold");
   assert(adapterReport.metrics?.neutralToolpath?.pointCount === 24, `OpenCAMLib preview should emit 24 neutral points, got ${adapterReport.metrics?.neutralToolpath?.pointCount}`);
 
+  const neutralToolpath = await getArtifactJson(job.id, "neutral-toolpath.json");
+  assert(neutralToolpath.experimentalHeightfield === true, "neutral toolpath should come from the STL heightfield preview runner");
+  assert(neutralToolpath.runner?.heightfield?.cutterEnvelope === true, "neutral toolpath should use cutter envelope preview sampling");
+  assert(neutralToolpath.runner?.heightfield?.cutterRadiusMm > 0, "neutral toolpath should report a cutter radius");
+  assert(neutralToolpath.points?.some((point) => point.contactSamples > 1), "neutral toolpath should include multi-sample cutter contacts");
+
   const convertedStl = await getArtifactText(job.id, "cam-source-converted.stl");
   assert(convertedStl.startsWith("solid hediao3d_cam_source_converted"), "converted STL should be ASCII STL");
   assert(convertedStl.includes("facet normal"), "converted STL should contain facets");

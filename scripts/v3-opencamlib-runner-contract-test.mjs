@@ -62,6 +62,11 @@ try {
   assert(heightfield.experimentalHeightfield === true, "heightfield marker missing");
   assert(heightfield.runner?.heightfield?.pointCount === 12, "heightfield point count mismatch");
   assert(heightfield.runner?.heightfield?.missCount === 0, "heightfield should sample the whole rectangle");
+  assert(heightfield.runner?.heightfield?.cutterEnvelope === true, "heightfield should enable cutter envelope sampling");
+  assert(heightfield.runner?.heightfield?.cutterRadiusMm > 0, "heightfield cutter radius should be derived from the tool profile");
+  assert(heightfield.runner?.heightfield?.cutterSampleCount >= heightfield.points.length, "heightfield should report cutter contact sample count");
+  assert(heightfield.points.every((point) => point.cutterRadiusMm === heightfield.runner.heightfield.cutterRadiusMm), "heightfield points should echo cutter radius");
+  assert(heightfield.points.some((point) => point.contactSamples > 1), "heightfield should include multi-contact cutter envelope samples");
   assert(heightfield.points.some((point) => point.source === "stl-heightfield-preview"), "heightfield point source missing");
   assert(new Set(heightfield.points.map((point) => point.depth)).size > 1, "heightfield should contain varying depths from STL Z interpolation");
 
