@@ -3506,6 +3506,17 @@ async function processOrchestratorJob(job, settings) {
     machineAcceptanceChecklist
   });
   await writeFile(join(job.workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+  const safeTrialExecutionPlan = createSafeTrialExecutionPlan({
+    job,
+    settings,
+    productionGate,
+    postprocessProfile,
+    toolSetupSheet,
+    rotaryCalibrationSheet,
+    machineAcceptanceChecklist,
+    productionEvidenceDossier
+  });
+  await writeFile(join(job.workDir, "safe-trial-execution-plan.json"), JSON.stringify(safeTrialExecutionPlan, null, 2), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
@@ -3558,6 +3569,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "safe-trial-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "open-source-cam-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-server-config.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "trial-feedback-template.json"));
@@ -3615,6 +3627,14 @@ async function processOrchestratorJob(job, settings) {
         schema: "hediao3d.operator-runbook.v1",
         artifact: "operator-runbook.md",
         summary: "操作员中文上机说明书已生成。"
+      },
+      safeTrialExecutionPlan: {
+        schema: safeTrialExecutionPlan.schema,
+        artifact: "safe-trial-execution-plan.json",
+        stepCount: safeTrialExecutionPlan.steps.length,
+        activeGate: safeTrialExecutionPlan.gate.packageLevel,
+        allowTrialNc: safeTrialExecutionPlan.gate.allowTrialNc,
+        allowAirRun: safeTrialExecutionPlan.gate.allowAirRun
       },
       toolSetupSheet,
       rotaryCalibrationSheet,
@@ -6603,6 +6623,131 @@ function createProductionEvidenceDossierPublicSummary(dossier) {
   };
 }
 
+function createSafeTrialExecutionPlan({ job, settings, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist, productionEvidenceDossier }) {
+  const axisInstruction = createOperatorAxisInstruction(postprocessProfile);
+  const trialNcAllowed = Boolean(productionGate?.allowTrialNc);
+  const airRunAllowed = Boolean(productionGate?.allowAirRun);
+  const machineName = "三轴控制器 + Y轴旋转夹具";
+  const requiredHashFiles = [
+    ...(trialNcAllowed ? ["toolpath.nc"] : []),
+    "air-run.nc",
+    "rotary-calibration-airrun.nc",
+    "operator-runbook.md",
+    "operator-download-checklist.md",
+    "machine-acceptance-checklist.json",
+    "trial-feedback-template.json"
+  ];
+  return {
+    schema: "hediao3d.v3-safe-trial-execution-plan.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    purpose: "把前端安全试雕向导、下载包、空跑/软料试雕和证据回填固化为可审计执行计划。",
+    machine: {
+      model: machineName,
+      camMode: settings.camMode,
+      postProcessor: settings.postProcessor,
+      axisMapping: axisInstruction,
+      rotaryOutputAxis: settings.rotaryOutputAxis ?? postprocessProfile?.coordinateMapping?.rotaryAxis ?? "Y",
+      rotaryWrapPerRevolutionMm: Number(settings.rotaryWrapPerRevolutionMm ?? postprocessProfile?.machine?.rotaryWrapPerRevolutionMm ?? 0),
+      safeZ: Number(settings.safeZ ?? 0)
+    },
+    tool: {
+      profileId: settings.toolProfileId,
+      name: toolSetupSheet?.tool?.name ?? null,
+      diameterMm: Number(settings.toolDiameter ?? toolSetupSheet?.tool?.diameterMm ?? 0),
+      angleDeg: toolSetupSheet?.tool?.angleDeg ?? null,
+      flatTipMm: toolSetupSheet?.tool?.flatTipMm ?? null,
+      maxCutDepthMm: Number(settings.maxCutDepth ?? 0),
+      feedRateMmMin: Number(settings.feedRate ?? 0),
+      spindleRpm: Number(settings.spindleRpm ?? 0)
+    },
+    gate: {
+      packageLevel: productionGate?.level ?? "unknown",
+      allowAirRun: airRunAllowed,
+      allowTrialNc: trialNcAllowed,
+      allowProductionNc: Boolean(productionGate?.allowProductionNc),
+      summary: productionGate?.summary ?? null,
+      blockers: productionGate?.blockers ?? [],
+      warnings: productionGate?.warnings ?? []
+    },
+    steps: [
+      {
+        id: "read-and-verify",
+        title: "阅读并核验下载包",
+        status: "required",
+        files: ["safe-trial-execution-plan.json", "operator-runbook.md", "operator-download-checklist.md", "package-integrity.json", "production-gate.json"],
+        passCriteria: [
+          "确认 production-gate.json 仍为 trial-only 或 production-ready 的真实状态。",
+          "确认 package-integrity.json 中 requiredHashFiles 的 SHA-256 与本地下载文件一致。",
+          "确认 camotics-preview.nc 没有进入上机文件清单。"
+        ]
+      },
+      {
+        id: "rotary-calibration-airrun",
+        title: "旋转夹具标定空跑",
+        status: airRunAllowed ? "ready" : "blocked",
+        files: ["rotary-calibration-airrun.nc", "rotary-calibration-sheet.json"],
+        passCriteria: [
+          "主轴关闭，Z 始终保持安全高度。",
+          "Y 轴带动夹具按 90/180/360 度等效距离运动，方向与实机一致。",
+          "夹持端、尾座和刀具无干涉。"
+        ]
+      },
+      {
+        id: "full-air-run",
+        title: "整条刀路离料空跑",
+        status: airRunAllowed ? "ready" : "blocked",
+        files: ["air-run.nc", "machine-controller-profile.json", "postprocess-trace-report.json"],
+        passCriteria: [
+          `确认 ${axisInstruction} 与机床接线一致。`,
+          "整条程序没有越程、突然下扎、夹具干涉或反向旋转。"
+        ]
+      },
+      {
+        id: "soft-material-trial",
+        title: "软料/废料低风险试雕",
+        status: trialNcAllowed ? "trial-ready" : "locked",
+        files: trialNcAllowed ? ["toolpath.nc", "tool-setup-sheet.json", "nc-static-analysis.json"] : ["tool-setup-sheet.json", "nc-static-analysis.json"],
+        passCriteria: trialNcAllowed
+          ? ["首次进给倍率建议 30%-50%。", "确认深浅、方向、端部夹持区和表面刀痕可接受。"]
+          : ["当前 toolpath.nc 未进入安全试雕包，只能完成空跑、标定和报告复核。"]
+      },
+      {
+        id: "feedback-and-acceptance",
+        title: "回填试雕反馈与机床验收",
+        status: "required",
+        files: ["trial-feedback-template.json", "machine-acceptance-checklist.json"],
+        passCriteria: [
+          "试雕反馈必须绑定当前 package-integrity.json 的关键文件哈希。",
+          "机床验收必须通过 verify-download-integrity、rotary-calibration-airrun、air-run 和 soft-material-trial 必需项。",
+          "未完成回填前，生产 NC 保持锁定。"
+        ]
+      }
+    ],
+    requiredHashFiles,
+    filePolicy: {
+      allowedOnMachine: [
+        ...(trialNcAllowed ? ["toolpath.nc"] : []),
+        "air-run.nc",
+        "rotary-calibration-airrun.nc"
+      ],
+      neverRunOnMachine: ["camotics-preview.nc", "camotics-cli-run-package.json", "camotics-linux-run.sh", "camotics-result-template.json"],
+      reportsOnly: ["operator-runbook.md", "operator-download-checklist.md", "production-gate.json", "production-evidence-dossier.json", "machine-acceptance-checklist.json", "trial-feedback-template.json"]
+    },
+    evidenceBinding: {
+      packageIntegrity: "package-integrity.json",
+      trialFeedback: "trial-feedback-log.json",
+      machineAcceptance: "machine-acceptance-log.json",
+      productionEvidenceDossier: "production-evidence-dossier.json",
+      currentDossierStatus: productionEvidenceDossier?.status ?? null,
+      currentDossierSummary: productionEvidenceDossier?.summary ?? null
+    },
+    nextActions: trialNcAllowed
+      ? ["下载安全试雕包并核验哈希。", "先运行旋转标定空跑，再运行整条离料空跑。", "低倍率软料试雕后回填试雕反馈和机床验收。"]
+      : ["下载安全试雕包并核验哈希。", "当前只允许旋转标定空跑和整条离料空跑。", "补齐阻断项后重新生成 V3 小闭环。"]
+  };
+}
+
 function createTrialFeedbackTemplate({ job, settings, toolpath, productionGate, postprocessProfile, toolSetupSheet, rotaryCalibrationSheet, machineAcceptanceChecklist }) {
   const issueOptions = ["过切", "欠切", "毛刺", "断刀", "端部残料", "夹持痕迹", "纹理丢失", "旋转错位", "耗时异常", "刀路停顿"];
   return {
@@ -7828,6 +7973,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("operator-runbook.md"),
+        getFile("safe-trial-execution-plan.json"),
         getFile("trial-feedback-template.json"),
         getFile("tool-setup-sheet.json"),
         getFile("rotary-calibration-sheet.json"),
@@ -7884,6 +8030,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
       "阅读 postprocess-trace-report.json，确认 toolpath.nc 的 X/Y/A/Z 输出与源刀路点逐点一致。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
+      "阅读 safe-trial-execution-plan.json，按四步安全试雕计划执行并保留现场证据。",
       "试雕后填写 trial-feedback-template.json，把真实耗时、刀痕和旋转误差回填到工艺优化流程。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
       "阅读 tool-setup-sheet.json，确认实际装刀、进给、转速、切深与 CAM 参数一致。",
@@ -8077,6 +8224,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", true, "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
+    createDeliveryFile(job.id, "safe-trial-execution-plan.json", "安全试雕执行计划", "report", true, "结构化记录导入模型、生成安全数据、下载核验、空跑/软料试雕和证据回填步骤。"),
     createDeliveryFile(job.id, "trial-feedback-template.json", "试雕反馈回填模板", "report", true, "记录空跑/试雕结果、实际耗时、缺陷标签和参数调整建议。"),
     createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
     createDeliveryFile(job.id, "trial-feedback-log.json", "试雕反馈日志", "report", existsSync(join(job.workDir, "trial-feedback-log.json")), "按时间保存现场反馈记录，用于工艺参数优化闭环。"),
@@ -10652,6 +10800,7 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "rotary-wrap-preview-report.json",
     "rotary-calibration-sheet.json",
     "tool-setup-sheet.json",
+    "safe-trial-execution-plan.json",
     "machine-acceptance-checklist.json",
     "trial-feedback-template.json",
     "cam-handoff-evidence.md",
@@ -10704,7 +10853,7 @@ function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
         reason: "simulation-only-never-machine"
       })),
     recommendedOrder: [
-      "阅读 operator-runbook.md、operator-download-checklist.md 和 production-gate.json。",
+      "阅读 safe-trial-execution-plan.json、operator-runbook.md、operator-download-checklist.md 和 production-gate.json。",
       "运行 rotary-calibration-airrun.nc，确认 Y 轴旋转夹具方向和每圈距离。",
       "运行 air-run.nc，确认 X=长度方向，Y=旋转夹具，Z=安全高度。",
       "若本包包含 toolpath.nc，仅用于低风险试雕，首次建议 30%-50% 进给倍率。",

@@ -135,6 +135,7 @@ async function main() {
     "tool-setup-sheet.json",
     "rotary-calibration-sheet.json",
     "operator-runbook.md",
+    "safe-trial-execution-plan.json",
     "trial-feedback-template.json",
     "machine-controller-profile.json",
     "machine-acceptance-checklist.json",
@@ -202,6 +203,7 @@ async function main() {
   assert(packageIndex.camServerConfig?.prepChecklist === "cam-server-prep-checklist.md", "package index missing CAM server prep checklist artifact");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "safe-trial-execution-plan.json"), "readFirst missing safe trial execution plan");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "trial-feedback-template.json"), "readFirst missing trial feedback template");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-unlock-matrix.json"), "readFirst missing production unlock matrix");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "production-evidence-dossier.json"), "readFirst missing production evidence dossier");
@@ -226,11 +228,13 @@ async function main() {
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.every((file) => file.machineUse?.class), "delivery-manifest artifact missing machineUse classifications");
   assert(deliveryManifest.files?.some((file) => file.filename === "open-source-cam-execution-plan.json" && file.downloadable), "delivery manifest should expose open-source CAM execution plan");
+  assert(deliveryManifest.files?.some((file) => file.filename === "safe-trial-execution-plan.json" && file.downloadable), "delivery manifest should expose safe trial execution plan");
   assert(deliveryManifest.files?.some((file) => file.filename === "operator-download-checklist.md" && file.downloadable), "delivery manifest should expose operator download checklist");
   const safeTrialPackageFiles = deliveryManifest.files.filter((file) => isSafeTrialPackageFile(file, deliveryManifest.allowTrialNc));
   assert(safeTrialPackageFiles.some((file) => file.filename === "air-run.nc"), "safe trial package should include air-run.nc");
   assert(safeTrialPackageFiles.some((file) => file.filename === "rotary-calibration-airrun.nc"), "safe trial package should include rotary calibration air-run");
   assert(safeTrialPackageFiles.some((file) => file.filename === "operator-runbook.md"), "safe trial package should include operator runbook");
+  assert(safeTrialPackageFiles.some((file) => file.filename === "safe-trial-execution-plan.json"), "safe trial package should include safe trial execution plan");
   assert(safeTrialPackageFiles.some((file) => file.filename === "toolpath.nc") === deliveryManifest.allowTrialNc, "safe trial package should include toolpath.nc only when trial NC is allowed");
   assert(!safeTrialPackageFiles.some((file) => file.filename === "camotics-preview.nc"), "safe trial package must not include camotics-preview.nc");
   const safeTrialPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-package`);
@@ -240,6 +244,7 @@ async function main() {
   const safeTrialZipNames = listZipFilenames(safeTrialPackage.bytes);
   assert(safeTrialZipNames.includes("hediao3d-v3-trial/README-TRIAL.md"), "safe trial package missing README");
   assert(safeTrialZipNames.includes("hediao3d-v3-trial/safe-trial-package-manifest.json"), "safe trial package missing package manifest");
+  assert(safeTrialZipNames.some((name) => name.endsWith("/safe-trial-execution-plan.json")), "safe trial package zip missing safe trial execution plan");
   assert(safeTrialZipNames.some((name) => name.endsWith("/air-run.nc")), "safe trial package zip missing air-run.nc");
   assert(safeTrialZipNames.some((name) => name.endsWith("/rotary-calibration-airrun.nc")), "safe trial package zip missing rotary calibration air-run");
   assert(!safeTrialZipNames.some((name) => name.endsWith("/camotics-preview.nc")), "safe trial package zip must exclude camotics-preview.nc");
@@ -249,8 +254,15 @@ async function main() {
   assert(lockedProductionPackage.allowProductionNc === false, "locked production package response should keep allowProductionNc=false");
   assert(lockedProductionPackage.summary, "locked production package response should explain gate summary");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
+  const safeTrialExecutionPlan = await getArtifactJson(job.id, "safe-trial-execution-plan.json");
   const operatorRunbook = await getArtifactText(job.id, "operator-runbook.md");
   const operatorDownloadChecklist = await getArtifactText(job.id, "operator-download-checklist.md");
+  assert(safeTrialExecutionPlan.schema === "hediao3d.v3-safe-trial-execution-plan.v1", "safe trial execution plan schema mismatch");
+  assert(safeTrialExecutionPlan.machine?.axisMapping === "X=长度方向，Y=旋转夹具，Z=刀深/安全高度", "safe trial execution plan should state wrapY axis mapping");
+  assert(safeTrialExecutionPlan.steps?.some((step) => step.id === "rotary-calibration-airrun" && step.files?.includes("rotary-calibration-airrun.nc")), "safe trial plan missing rotary calibration step");
+  assert(safeTrialExecutionPlan.steps?.some((step) => step.id === "feedback-and-acceptance" && step.files?.includes("machine-acceptance-checklist.json")), "safe trial plan missing feedback/acceptance step");
+  assert(safeTrialExecutionPlan.filePolicy?.neverRunOnMachine?.includes("camotics-preview.nc"), "safe trial plan should forbid CAMotics preview on machine");
+  assert(safeTrialExecutionPlan.requiredHashFiles?.includes("air-run.nc"), "safe trial plan missing air-run hash requirement");
   assert(operatorRunbook.includes("HeDiao3D V3 操作员上机说明书"), "operator runbook missing title");
   assert(operatorRunbook.includes("rotary-calibration-airrun.nc"), "operator runbook missing rotary calibration air-run");
   assert(operatorRunbook.includes("camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机"), "operator runbook should forbid CAMotics preview on machine");
@@ -265,6 +277,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.machineUse?.class), "package integrity missing toolpath machineUse");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-runbook.md" && file.sha256), "package integrity missing operator runbook hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "safe-trial-execution-plan.json" && file.sha256), "package integrity missing safe trial execution plan hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "operator-download-checklist.md" && file.sha256), "package integrity missing operator download checklist hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-template.json" && file.sha256), "package integrity missing trial feedback template hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "cam-handoff-quality.json" && file.sha256), "package integrity missing CAM handoff quality hash");
@@ -367,6 +380,7 @@ function isSafeTrialPackageFile(file, allowTrialNc) {
     "delivery-manifest.json",
     "package-integrity.json",
     "operator-runbook.md",
+    "safe-trial-execution-plan.json",
     "operator-download-checklist.md",
     "machine-controller-profile.json",
     "postprocess-profile.json",

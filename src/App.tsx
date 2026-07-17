@@ -893,6 +893,14 @@ type V3OrchestratorJob = {
         artifact: string;
         summary: string;
       };
+      safeTrialExecutionPlan?: {
+        schema: string;
+        artifact: string;
+        stepCount: number;
+        activeGate: string;
+        allowTrialNc: boolean;
+        allowAirRun: boolean;
+      };
       productionUnlockMatrix?: {
         schema: string;
         summary: string;
