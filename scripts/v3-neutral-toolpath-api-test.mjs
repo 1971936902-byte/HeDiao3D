@@ -114,13 +114,16 @@ async function main() {
   assert(summary.neutralToolpathImportValidation.sourceBinding?.status === "bound", "reloaded neutral validation should expose source binding");
   assert(summary.neutralToolpathImportValidation.sourceBinding?.postprocessArtifact?.sha256 === summary.toolpathSummary.externalSourceSnapshot.sha256, "neutral source binding should match toolpath source snapshot hash");
   assert(summary.productionUnlockMatrix?.rows?.some((row) => row.id === "neutral-toolpath-import-validation" && row.status === "pass"), "unlock matrix should include passing neutral import validation row");
+  assert(summary.productionUnlockMatrix.rows.some((row) => row.id === "neutral-toolpath-import-validation" && String(row.summary).includes("sourceBinding=bound")), "unlock matrix neutral row should consume source binding");
   assert(summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "neutral-toolpath-import-validation" && item.status === "pass"), "evidence dossier should include passing neutral import validation item");
+  assert(summary.productionEvidenceDossier.evidenceItems.some((item) => item.id === "neutral-toolpath-import-validation" && String(item.summary).includes("sourceBinding=bound")), "evidence dossier neutral item should consume source binding");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.exists), "delivery manifest should include neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "imported-neutral-toolpath.json" && file.exists), "delivery manifest should include imported-neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.exists), "delivery manifest should include neutral import validation");
   assert(summary.packageIntegrity?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.sha256), "package integrity should hash neutral-toolpath.json");
   assert(summary.packageIntegrity?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.sha256), "package integrity should hash neutral import validation");
   assert(summary.productionGate?.allowProductionNc !== true, "neutral import alone must not unlock production NC");
+  assert(summary.productionGate?.checks?.neutralSourceBindingStatus === "bound", "production gate should expose bound neutral source status");
 
   const neutralArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath.json`);
   assert(neutralArtifact.importedFromApi === true, "neutral artifact should be marked as API import");

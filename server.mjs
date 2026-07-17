@@ -3260,6 +3260,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     camoticsInput,
     camHandoffQuality,
+    neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
     postprocessTraceReport,
     ncStaticAnalysis,
     machineControllerProfile,
@@ -5030,7 +5031,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, postprocessTraceReport, ncStaticAnalysis, controllerDialectReport }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, neutralToolpathImportValidation = null, postprocessTraceReport, ncStaticAnalysis, controllerDialectReport }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -5076,6 +5077,15 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   } else if (camHandoffQuality?.level === "review") {
     warnings.push(`CAM handoff 质量需要复核：${camHandoffQuality.warningIssues[0] ?? "请查看 cam-handoff-quality.json"}`);
     requiredActions.push("查看 cam-handoff-quality.json，确认外部 CAM 输出是真实可复核刀路，不是合约 fixture。");
+  }
+
+  const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
+  if (neutralBinding.required && neutralBinding.status === "block") {
+    blockers.push(`Neutral 刀位点源绑定存在阻断项：${neutralBinding.summary}`);
+    requiredActions.push("查看 neutral-toolpath-import-validation.json，确认 API 输入、neutral-toolpath.json 和后处理 sourceSnapshot 哈希一致。");
+  } else if (neutralBinding.required && neutralBinding.status === "review") {
+    warnings.push(`Neutral 刀位点源绑定需要复核：${neutralBinding.summary}`);
+    requiredActions.push("查看 neutral-toolpath-import-validation.json 的 sourceBinding，确认导入源与后处理输入一致。");
   }
 
   if (!simulationEvidence.productionUnlockEligible) {
@@ -5170,6 +5180,7 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       simulationRiskLevel: simulationSummary.riskLevel,
       postprocessTraceLevel: postprocessTraceReport?.level ?? "missing",
       postprocessTraceFitRate: postprocessTraceReport?.metrics?.fitRate ?? null,
+      neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       camHandoffQualityLevel: camHandoffQuality?.level ?? "unknown",
       camHandoffSource: camHandoffQuality?.source ?? "unknown",
       fitRate: simulationSummary.metrics.fitRate,
@@ -5188,6 +5199,68 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       "用废料或低进给做小料试雕，记录真实深度、耗时和夹具方向。",
       "接入 BlenderCAM/FreeCAD 与 CAMotics 后，再解锁生产 NC 下载。"
     ]
+  };
+}
+
+function createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality) {
+  const required = Boolean(
+    neutralToolpathImportValidation
+    || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
+  );
+  if (!required) {
+    return {
+      required: false,
+      status: "pass",
+      bindingStatus: "not-required",
+      summary: "当前不是 neutral-toolpath handoff。"
+    };
+  }
+  const binding = neutralToolpathImportValidation?.sourceBinding ?? null;
+  if (!neutralToolpathImportValidation) {
+    return {
+      required: true,
+      status: "block",
+      bindingStatus: "missing-validation",
+      summary: "检测到 neutral-toolpath handoff，但缺少 neutral-toolpath-import-validation.json。"
+    };
+  }
+  if (!neutralToolpathImportValidation.postprocessEligible) {
+    return {
+      required: true,
+      status: "block",
+      bindingStatus: binding?.status ?? "ineligible",
+      summary: neutralToolpathImportValidation.summary ?? "neutral-toolpath 未通过导入校验。"
+    };
+  }
+  if (!binding) {
+    return {
+      required: true,
+      status: "review",
+      bindingStatus: "missing",
+      summary: "neutral-toolpath 已可进入后处理，但缺少 sourceBinding 哈希链。"
+    };
+  }
+  if (binding.status !== "bound") {
+    return {
+      required: true,
+      status: "review",
+      bindingStatus: binding.status ?? "unknown",
+      summary: binding.summary ?? "neutral-toolpath sourceBinding 未完全绑定。"
+    };
+  }
+  if (binding.sourceSnapshot && binding.sourceSnapshot.matchesPostprocessArtifact !== true) {
+    return {
+      required: true,
+      status: "block",
+      bindingStatus: "snapshot-mismatch",
+      summary: "neutral-toolpath 后处理 sourceSnapshot 与 neutral-toolpath.json 哈希不一致。"
+    };
+  }
+  return {
+    required: true,
+    status: "pass",
+    bindingStatus: "bound",
+    summary: binding.summary ?? "neutral-toolpath sourceBinding 已绑定。"
   };
 }
 
@@ -5989,6 +6062,7 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
 
 function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
   const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
+  const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
   const neutralToolpathHandoff = Boolean(
     neutralToolpathImportValidation
     || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
@@ -6038,11 +6112,11 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
     ...(neutralToolpathHandoff ? [{
       id: "neutral-toolpath-import-validation",
       label: "Neutral刀位点导入校验",
-      status: neutralToolpathImportValidation?.postprocessEligible
-        ? neutralToolpathImportValidation.status === "ready" ? "pass" : "review"
-        : "block",
+      status: neutralBinding.status,
       evidence: "neutral-toolpath-import-validation.json",
-      summary: neutralToolpathImportValidation?.summary ?? "检测到 neutral-toolpath，但缺少导入校验报告，不能作为生产证据。",
+      summary: neutralToolpathImportValidation
+        ? `${neutralToolpathImportValidation.summary} / sourceBinding=${neutralBinding.bindingStatus}`
+        : neutralBinding.summary,
       requiredForProduction: true
     }] : []),
     {
@@ -6156,6 +6230,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     || existsSync(join(job.workDir, "neutral-toolpath.json"))
   );
   const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
+  const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
   const machineAcceptanceIntegrityBound = latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const machineAcceptancePassed = machineAcceptanceLog?.recordCount > 0
     && machineAcceptanceLog.latestOutcome === "success"
@@ -6186,11 +6261,11 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     ...(hasNeutralToolpathImport ? [{
       id: "neutral-toolpath-import-validation",
       label: "Neutral刀位点导入校验",
-      status: neutralToolpathImportValidation?.postprocessEligible
-        ? neutralToolpathImportValidation.status === "ready" ? "pass" : "review"
-        : "block",
+      status: neutralBinding.status,
       evidence: ["neutral-toolpath-import-validation.json", "neutral-toolpath.json", "imported-neutral-toolpath.json"],
-      summary: neutralToolpathImportValidation?.summary ?? "检测到 neutral-toolpath，但缺少导入校验报告。"
+      summary: neutralToolpathImportValidation
+        ? `${neutralToolpathImportValidation.summary} / sourceBinding=${neutralBinding.bindingStatus}`
+        : neutralBinding.summary
     }] : []),
     {
       id: "material-removal-simulation",
@@ -6291,6 +6366,8 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       unlockMatrixPass: unlockByMatrix,
       realMaterialRemovalVerified: Boolean(simulationEvidence?.realMaterialRemovalVerified),
       camHandoffReady: camHandoffQuality?.level === "ready",
+      neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
+      neutralSourceBindingPass: !neutralBinding.required || neutralBinding.status === "pass",
       ncStaticReady: ncStaticAnalysis?.level === "ready",
       controllerDialectReady: controllerDialectReport?.level === "ready",
       machineAcceptanceRecords: machineAcceptanceLog?.recordCount ?? 0,
@@ -9520,6 +9597,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     simulationSummary,
     camoticsInput,
     camHandoffQuality,
+    neutralToolpathImportValidation: readJsonFile(join(workDir, "neutral-toolpath-import-validation.json")),
     postprocessTraceReport,
     ncStaticAnalysis,
     machineControllerProfile,
