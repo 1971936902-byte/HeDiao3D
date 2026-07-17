@@ -902,7 +902,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
             ? "done"
             : "pending",
       command: "npm run test:v3",
-      evidence: ["machining-package-index.json", "production-gate.json", "delivery-manifest.json"],
+      evidence: ["machining-package-index.json", "production-gate.json", "delivery-manifest.json", "package-integrity.json", "rotary-calibration-airrun.nc", "air-run.nc"],
       detail: latestJob
         ? `${latestJob.status} / ${latestJob.packageLevel ?? "unknown"} / ${latestJob.points ?? 0} 点`
         : "尚未运行 V3 Orchestrator 小闭环。",
@@ -3897,7 +3897,8 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
     requiredActions: dedupeStrings(requiredActions),
     recommendedWorkflow: [
       "下载并查看 mesh-quality.json、repair-plan.json、cam-input-plan.json。",
-      "先运行 air-run.nc 做离料空跑，确认 X/Y旋转/Z 安全方向。",
+      "先运行 rotary-calibration-airrun.nc 做旋转夹具标定空跑，确认 90/180/360 度方向和每圈距离。",
+      "再运行 air-run.nc 做整条刀路离料空跑，确认 X/Y旋转/Z 安全方向。",
       "用废料或低进给做小料试雕，记录真实深度、耗时和夹具方向。",
       "接入 BlenderCAM/FreeCAD 与 CAMotics 后，再解锁生产 NC 下载。"
     ]
@@ -4189,7 +4190,8 @@ function createToolSetupSheet({ job, settings, toolpath, productionGate, postpro
     setupProcedure: [
       "确认实际装刀为 4mm 25度平底尖刀，刀尖平底约 0.4mm。",
       "测量伸出长度，尽量短装；若伸出超过 18mm，降低进给和单刀切深。",
-      "运行 air-run.nc 前确认主轴关闭、Z 安全高度和旋转夹具方向。",
+      "先运行 rotary-calibration-airrun.nc 确认旋转夹具方向、每圈距离和反向间隙。",
+      "再运行 air-run.nc 前确认主轴关闭、Z 安全高度和整条刀路行程。",
       "首次试雕使用废料或低价值核胚，并把进给倍率降到 30%-50%。"
     ]
   };
@@ -4759,8 +4761,17 @@ function createMachineAcceptanceChecklist({ job, settings, toolpath, productionG
       blocksProduction: !productionGate.simulationEvidence?.productionUnlockEligible
     },
     {
+      id: "rotary-calibration-airrun",
+      title: "执行旋转夹具标定空跑",
+      required: true,
+      status: airRunAllowed ? "ready" : "blocked",
+      file: "rotary-calibration-airrun.nc",
+      expectedEvidence: `主轴关闭，${depthAxis} 保持安全高度，确认 ${rotaryAxis ?? "旋转夹具"} 90/180/360 度方向、每圈等效距离和反向间隙。`,
+      blocksProduction: !airRunAllowed
+    },
+    {
       id: "air-run",
-      title: "离料空跑",
+      title: "执行整条刀路离料空跑",
       required: true,
       status: airRunAllowed ? "ready" : "blocked",
       file: "air-run.nc",
@@ -4931,11 +4942,13 @@ function createPostprocessProfile({ job, settings, toolpath, selectedEngine, res
     outputFiles: {
       productionOrTrialNc: "toolpath.nc",
       airRunNc: "air-run.nc",
+      rotaryCalibrationAirRunNc: "rotary-calibration-airrun.nc",
       productionGate: "production-gate.json",
       simulationSummary: "simulation-summary.json"
     },
     safetyNotes: [
-      "先运行 air-run.nc 做离料空跑，确认长度轴、旋转轴和 Z 方向。",
+      "先运行 rotary-calibration-airrun.nc 做旋转夹具标定空跑，确认每圈等效距离、方向和反向间隙。",
+      "再运行 air-run.nc 做整条刀路离料空跑，确认长度轴、旋转轴和 Z 方向。",
       "当前 packageLevel 不是 production 时，只建议小料试雕，不建议直接正式上机。",
       "若机床把旋转夹具接到 Y 轴，请确认控制器每转一圈等效距离与 rotaryWrapPerRevolutionMm 一致。"
     ]

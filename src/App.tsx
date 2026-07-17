@@ -2131,6 +2131,7 @@ export function App() {
           steps: [
             { id: "read-package", passed: true, evidenceNote: "前端 V3 面板已查看加工包和门禁状态。" },
             { id: "camotics-preview", passed: simulationEligible, evidenceNote: simulationEligible ? "V3 仿真证据已满足生产解锁条件。" : "当前仿真证据仍需 CAMotics/等效材料去除复核。" },
+            { id: "rotary-calibration-airrun", passed: selectedMachineAcceptance.airRun, evidenceNote: selectedMachineAcceptance.airRunAt ?? selectedMachineAcceptance.notes },
             { id: "air-run", passed: selectedMachineAcceptance.airRun, evidenceNote: selectedMachineAcceptance.airRunAt ?? selectedMachineAcceptance.notes },
             { id: "soft-material-trial", passed: selectedMachineAcceptance.softTrial, evidenceNote: selectedMachineAcceptance.softTrialAt ?? selectedMachineAcceptance.notes },
             { id: "formal-trial", passed: selectedMachineAcceptance.formalTrial, evidenceNote: selectedMachineAcceptance.formalTrialAt ?? selectedMachineAcceptance.notes }

@@ -69,6 +69,7 @@ async function main() {
     steps: [
       { id: "read-package", passed: true, evidenceNote: "All package reports reviewed." },
       { id: "camotics-preview", passed: true, evidenceNote: "Preview checked for bounds and Z range." },
+      { id: "rotary-calibration-airrun", passed: true, evidenceNote: "Rotary calibration air-run completed at safe Z." },
       { id: "air-run", passed: true, evidenceNote: "Dry run completed with spindle off and safe Z." },
       { id: "soft-material-trial", passed: true, evidenceNote: "Soft material trial completed at reduced feed." }
     ],

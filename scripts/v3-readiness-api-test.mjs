@@ -78,6 +78,8 @@ async function main() {
   assert(runbook.includes("npm run test:v3:neutral-import"), "readiness runbook missing neutral import command");
   assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
   assert(runbook.includes("production-evidence-dossier"), "readiness runbook missing evidence dossier step");
+  assert(runbook.includes("rotary-calibration-airrun.nc"), "readiness runbook missing rotary calibration air-run evidence");
+  assert(runbook.includes("package-integrity.json"), "readiness runbook missing package integrity evidence");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
   assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
 
@@ -152,6 +154,7 @@ function validateReadiness(report, label) {
     assert(typeof report.latestMachineAcceptance.recordCount === "number", `${label} latestMachineAcceptance count missing`);
   }
   assert(Object.hasOwn(report, "latestEvidenceDossier"), `${label} missing latestEvidenceDossier field`);
+  assert(report.acceptancePlan.steps.some((step) => step.id === "v3-small-loop" && step.evidence?.includes("rotary-calibration-airrun.nc")), `${label} V3 small loop missing rotary calibration evidence`);
   if (report.latestEvidenceDossier) {
     assert(report.latestEvidenceDossier.schema === "hediao3d.production-evidence-dossier.v1", `${label} evidence dossier schema mismatch`);
     assert(typeof report.latestEvidenceDossier.reviewCount === "number", `${label} evidence dossier reviewCount missing`);
