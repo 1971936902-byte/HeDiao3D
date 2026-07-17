@@ -557,11 +557,11 @@ export function validateManufacturingSetup(settings: ModelSettings, toolpath: Ge
     }
   }
 
-  if (settings.camMode === "3axis" && tool.type === "v-bit" && tool.angleDeg != null) {
+  if ((settings.camMode === "3axis" || settings.camMode === "rotaryWrap") && tool.type === "v-bit" && tool.angleDeg != null) {
     issues.push({
       level: "warning",
       title: "V 型平底尖刀已启用",
-      detail: `${tool.name} 会按尖端 Z 深度输出三轴刀路，尖刀侧刃会随深度扩大实际切削宽度，正式上机前请先做浅雕验证。`
+      detail: `${tool.name} 会按尖端 Z 深度输出刀路，尖刀侧刃会随深度扩大实际切削宽度，正式上机前请先做浅雕和离料空跑验证。`
     });
   }
 
