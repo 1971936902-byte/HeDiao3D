@@ -2303,6 +2303,7 @@ async function processOrchestratorJob(job, settings) {
   updatePipelineStage(job, "toolpath", "completed", `生成 ${toolpath.points.length} 个刀路点。`);
   updatePipelineStage(job, "simulation", "running", "正在生成自研旋转包裹预览、CAMotics 仿真输入和离料空跑。");
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 Orchestrator air run");
+  const rotaryCalibrationAirRunGcode = createRotaryCalibrationAirRunGcode(settings);
   const camoticsPreviewGcode = createCamoticsPreviewGcode(toolpath.points, settings, toolpath.estimatedMinutes);
   const machineControllerProfile = createMachineControllerProfile(settings);
   const ncStaticAnalysis = createNcStaticAnalysis({
@@ -2310,6 +2311,7 @@ async function processOrchestratorJob(job, settings) {
     files: [
       { filename: "toolpath.nc", role: "machine", gcode: toolpath.gcode },
       { filename: "air-run.nc", role: "air-run", gcode: airRunGcode },
+      { filename: "rotary-calibration-airrun.nc", role: "air-run", gcode: rotaryCalibrationAirRunGcode },
       { filename: "camotics-preview.nc", role: "simulation-only", gcode: camoticsPreviewGcode }
     ]
   });
@@ -2319,6 +2321,7 @@ async function processOrchestratorJob(job, settings) {
     files: [
       { filename: "toolpath.nc", role: "machine", gcode: toolpath.gcode },
       { filename: "air-run.nc", role: "air-run", gcode: airRunGcode },
+      { filename: "rotary-calibration-airrun.nc", role: "air-run", gcode: rotaryCalibrationAirRunGcode },
       { filename: "camotics-preview.nc", role: "simulation-only", gcode: camoticsPreviewGcode }
     ]
   });
@@ -2344,6 +2347,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
+  await writeFile(join(job.workDir, "rotary-calibration-airrun.nc"), rotaryCalibrationAirRunGcode, "utf8");
   const camoticsAdapterReport = await runCamoticsSimulationAdapter(job, settings, camoticsInput, camoticsSimulationPlan);
   pushIfArtifactExists(job, "camotics-adapter-report.json");
   pushIfArtifactExists(job, "camotics-result.json");
@@ -2502,6 +2506,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-input.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-simulation-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-project-template.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
@@ -4225,6 +4230,7 @@ function createRotaryCalibrationSheet({ job, settings, toolpath, productionGate,
     },
     testProgramIntent: {
       airRunFile: "air-run.nc",
+      rotaryCalibrationAirRunFile: "rotary-calibration-airrun.nc",
       machineFileForTrialOnly: productionGate.allowTrialNc ? "toolpath.nc" : null,
       recommendedManualTest: rotaryAxis
         ? `${rotaryAxis}${testMoveMm ? fmt(testMoveMm, 3) : "?"} 应约等于夹具旋转 ${testMoveDeg ? fmt(testMoveDeg, 1) : "?"} 度。`
@@ -4295,6 +4301,7 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
     "",
     "## 文件用途",
     "",
+    "- `rotary-calibration-airrun.nc`: 旋转夹具标定空跑，主轴关闭，Z 保持安全高度，只验证 90/180/360 度旋转距离和方向。",
     "- `air-run.nc`: 离料空跑，主轴关闭，确认行程、方向和安全高度。",
     "- `toolpath.nc`: 试雕/生产候选文件，只有生产门禁或试雕门禁允许时才能使用。",
     "- `camotics-preview.nc`: 仅用于 CAMotics 展开三轴仿真，禁止上机。",
@@ -4326,9 +4333,10 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
     "1. 核对 `package-integrity.json`，确认下载文件没有缺失。",
     "2. 阅读 `production-gate.json`、`tool-setup-sheet.json`、`rotary-calibration-sheet.json`。",
     "3. 手动低速验证旋转夹具方向和每圈等效距离。",
-    "4. 运行 `air-run.nc`，确认 X/Y或A/Z 方向、行程和安全高度。",
-    "5. 若允许试雕，使用废料或低价值核胚运行 `toolpath.nc`，进给倍率建议 30%-50%。",
-    "6. 记录试雕结果；只有生产门禁允许且现场验收通过后，才可正式加工。",
+    "4. 运行 `rotary-calibration-airrun.nc`，确认 90/180/360 度旋转方向、每圈距离和反向间隙。",
+    "5. 运行 `air-run.nc`，确认 X/Y或A/Z 方向、行程和安全高度。",
+    "6. 若允许试雕，使用废料或低价值核胚运行 `toolpath.nc`，进给倍率建议 30%-50%。",
+    "7. 记录试雕结果；只有生产门禁允许且现场验收通过后，才可正式加工。",
     "",
     "## 现场验收清单",
     "",
@@ -5591,7 +5599,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("camotics-preview.nc"),
         getFile("simulation-summary.json")
       ],
-      airRun: [getFile("air-run.nc")],
+      airRun: [getFile("air-run.nc"), getFile("rotary-calibration-airrun.nc")],
       machineNcCandidates: [
         ...(trialCandidate ? [{ ...getFile(trialCandidate), usage: productionGate.allowProductionNc ? "production-or-trial" : "trial-only" }] : [])
       ],
@@ -5611,7 +5619,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "按 machine-acceptance-checklist.json 完成操作员现场验收记录。",
       "阅读 postprocess-profile.json，确认 X/Y/A/Z 轴映射与机床接线一致。",
       "使用 camotics-preview.nc 做展开三轴仿真检查，不要上机运行该文件。",
-      "运行 air-run.nc 做离料空跑，确认夹具旋转方向、行程和 Z 安全高度。",
+      "先运行 rotary-calibration-airrun.nc，确认旋转夹具 90/180/360 度方向和每圈等效距离。",
+      "再运行 air-run.nc 做整条刀路离料空跑，确认夹具旋转方向、行程和 Z 安全高度。",
       productionGate.allowProductionNc
         ? "通过外部 CAM 与仿真门禁后，可按生产流程运行 toolpath.nc。"
         : "当前仅允许小料/废料低进给试雕；生产前必须补齐外部 CAM 和真实仿真复核。"
@@ -5742,6 +5751,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", true, "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
     createDeliveryFile(job.id, "package-integrity.json", "加工包完整性清单", "report", true, "记录交付文件大小和 SHA-256，用于下载后核验。"),
     createDeliveryFile(job.id, "air-run.nc", "离料空跑 NC", "air-run", productionGate.allowAirRun, "主轴关闭且 Z 在安全高度，用来验证轴向和行程。"),
+    createDeliveryFile(job.id, "rotary-calibration-airrun.nc", "旋转夹具标定空跑 NC", "air-run", true, "主轴关闭且 Z 在安全高度，用 90/180/360 度动作核验旋转方向、每圈距离和反向间隙。"),
     createDeliveryFile(job.id, "toolpath.nc", "试雕/生产 NC", "nc", productionGate.allowTrialNc, productionGate.allowProductionNc ? "已允许生产下载。" : "当前仅建议小料试雕，不建议直接生产上机。"),
     createDeliveryFile(job.id, "toolpath-summary.json", "刀路摘要", "report", true, "记录点数、时间和后处理。"),
     createDeliveryFile(job.id, "nc-static-analysis.json", "NC 静态分析", "report", true, "检查机床 NC、空跑 NC、仿真 NC 的轴字、Z范围、头部标记和不可上机标记。"),
@@ -6243,6 +6253,38 @@ function createServerAirRunGcode(points, settings, estimatedMinutes, sourceName)
   return toGcode(safePoints, { ...settings, spindleRpm: 0 }, estimatedMinutes, sourceName)
     .replace(/S\d+\s+M3/g, "M5")
     .replace(/\(Nuclear carving /, "(AIR RUN ONLY - Nuclear carving ");
+}
+
+function createRotaryCalibrationAirRunGcode(settings) {
+  const safeZ = Number(settings.safeZ ?? 10);
+  const rotaryAxis = settings.camMode === "rotaryWrap"
+    ? String(settings.rotaryOutputAxis || (settings.postProcessor === "wrapX" ? "X" : settings.postProcessor === "wrapY" ? "Y" : "A")).toUpperCase()
+    : String(settings.rotaryOutputAxis || "Y").toUpperCase();
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const lengthAxis = rotaryAxis === "X" ? "Y" : "X";
+  const lengthCenter = 0;
+  const rotaryWord = (deg) => rotaryAxis === "A"
+    ? `A${fmt(deg, 3)}`
+    : `${rotaryAxis}${fmt((deg / 360) * wrapPerRev, 4)}`;
+  const lengthWord = `${lengthAxis}${fmt(lengthCenter, 4)}`;
+  const feed = Math.max(60, Math.min(300, Number(settings.feedRate ?? 180)));
+  const steps = [0, 90, 180, 270, 360, 270, 180, 90, 0];
+  const lines = [
+    "(AIR RUN ONLY - ROTARY CALIBRATION - DO NOT CUT)",
+    "(Purpose: verify rotary fixture direction, 90/180/360 degree distance, and backlash at safe Z)",
+    `(ROTARY_WRAP_AXIS=${rotaryAxis} ROTARY_WRAP_PER_REV_MM=${fmt(wrapPerRev, 6)} LENGTH_AXIS=${lengthAxis})`,
+    `(Coordinate: ${lengthAxis}=length hold position, ${rotaryAxis}=rotary fixture calibration, Z=safe height only)`,
+    "G21",
+    "G90",
+    "M5",
+    `G0 ${lengthWord} Z${fmt(safeZ)}`,
+    `G0 ${rotaryWord(0)} Z${fmt(safeZ)}`
+  ];
+  for (const deg of steps.slice(1)) {
+    lines.push(`G1 ${lengthWord} ${rotaryWord(deg)} Z${fmt(safeZ)} F${fmt(feed, 1)} (calibration ${fmt(deg, 1)} deg)`);
+  }
+  lines.push("M5", "G0 Z" + fmt(safeZ), "M30", "");
+  return lines.join("\n");
 }
 
 function publicArtifactUrl(jobId, filename) {

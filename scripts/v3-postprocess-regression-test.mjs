@@ -59,7 +59,7 @@ async function main() {
 
   const analysis = await getArtifactJson(job.id, "nc-static-analysis.json");
   assert(analysis.level === "ready", `NC static analysis expected ready, got ${analysis.level}: ${analysis.summary}`);
-  assert(Array.isArray(analysis.programs) && analysis.programs.length === 3, "expected three NC programs in static analysis");
+  assert(Array.isArray(analysis.programs) && analysis.programs.length === 4, "expected four NC programs in static analysis");
 
   const machine = findProgram(analysis, "toolpath.nc");
   assert(machine.role === "machine", "toolpath.nc role mismatch");
@@ -78,6 +78,20 @@ async function main() {
   assert(airRun.markers.spindleStartCount === 0, "air-run.nc must not start spindle");
   assert(Math.abs(Number(airRun.zRange.min) - settings.safeZ) < 0.001, `air-run.nc min Z expected ${settings.safeZ}, got ${airRun.zRange.min}`);
   assert(Math.abs(Number(airRun.zRange.max) - settings.safeZ) < 0.001, `air-run.nc max Z expected ${settings.safeZ}, got ${airRun.zRange.max}`);
+
+  const rotaryCalibration = findProgram(analysis, "rotary-calibration-airrun.nc");
+  assert(rotaryCalibration.role === "air-run", "rotary calibration role mismatch");
+  assert(rotaryCalibration.markers.hasAirRunMarker, "rotary calibration missing AIR RUN marker");
+  assert(rotaryCalibration.markers.hasRotaryHeader, "rotary calibration missing ROTARY_WRAP_AXIS marker");
+  assert(rotaryCalibration.axisCounts.y > 0, "rotary calibration should move Y rotary fixture");
+  assert(rotaryCalibration.axisCounts.a === 0, "Y rotary calibration should not emit A axis");
+  assert(rotaryCalibration.markers.spindleStartCount === 0, "rotary calibration must not start spindle");
+  assert(Math.abs(Number(rotaryCalibration.zRange.min) - settings.safeZ) < 0.001, `rotary calibration min Z expected ${settings.safeZ}, got ${rotaryCalibration.zRange.min}`);
+  assert(Math.abs(Number(rotaryCalibration.zRange.max) - settings.safeZ) < 0.001, `rotary calibration max Z expected ${settings.safeZ}, got ${rotaryCalibration.zRange.max}`);
+
+  const rotaryCalibrationText = await getArtifactText(job.id, "rotary-calibration-airrun.nc");
+  assert(rotaryCalibrationText.includes("ROTARY CALIBRATION"), "rotary calibration header missing purpose");
+  assert(rotaryCalibrationText.includes("calibration 360.0 deg"), "rotary calibration should include 360 degree move");
 
   const preview = findProgram(analysis, "camotics-preview.nc");
   assert(preview.role === "simulation-only", "camotics-preview.nc role mismatch");
@@ -103,6 +117,9 @@ async function main() {
   assert(machineDialect.unsupportedWords.length === 0, `toolpath.nc has unsupported words: ${machineDialect.unsupportedWords.join(", ")}`);
   assert((machineDialect.wordCounts?.Y ?? 0) > 0, "toolpath.nc dialect report missing Y motion");
   assert((machineDialect.wordCounts?.A ?? 0) === 0, "toolpath.nc dialect report should not contain A axis for wrapY");
+  const rotaryDialect = findProgram(dialect, "rotary-calibration-airrun.nc");
+  assert(rotaryDialect.unsupportedCommands.length === 0, `rotary calibration has unsupported commands: ${rotaryDialect.unsupportedCommands.join(", ")}`);
+  assert(rotaryDialect.unsupportedWords.length === 0, `rotary calibration has unsupported words: ${rotaryDialect.unsupportedWords.join(", ")}`);
 
   const profile = await getArtifactJson(job.id, "machine-controller-profile.json");
   assert(profile.schema === "hediao3d.machine-controller-profile.v1", "machine controller profile schema mismatch");
@@ -122,6 +139,7 @@ async function main() {
     machineControllerProfile: profile.id,
     machineAxes: machine.axisCounts,
     airRunZ: airRun.zRange,
+    rotaryCalibrationZ: rotaryCalibration.zRange,
     previewZ: preview.zRange
   }, null, 2));
 }
