@@ -1533,6 +1533,23 @@ type V3ReadinessSummary = {
     camoticsResult: string | null;
     outputRoot: string | null;
   } | null;
+  readinessCamoticsEvidence: {
+    schema: string;
+    source: string;
+    id: string | null;
+    jobId: string | null;
+    ok: boolean;
+    status: string | null;
+    synthetic: boolean | null;
+    riskLevel: string | null;
+    productionEvidenceEligible: boolean;
+    realMaterialRemovalVerified: boolean;
+    inputIdentityStatus: string;
+    cliRunPackageBindingStatus: string;
+    motionConsistencyStatus: string;
+    artifactEvidenceStatus: string;
+    summary: string;
+  } | null;
   latestJob: V3JobSummary | null;
   latestTrialFeedback: {
     schema: string;
@@ -5551,6 +5568,11 @@ export function App() {
                     {v3Readiness.camoticsImport?.riskLevel ? ` · ${v3Readiness.camoticsImport.riskLevel}` : ""}
                     {v3Readiness.camoticsImport ? ` · input ${v3Readiness.camoticsImport.inputIdentityStatus ?? "missing"} · cli ${v3Readiness.camoticsImport.cliRunPackageBindingStatus ?? "not-required"} · motion ${v3Readiness.camoticsImport.motionConsistencyStatus ?? "missing"}` : ""}
                   </small>
+                  <small className={v3Readiness.readinessCamoticsEvidence ? v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible && v3Readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
+                    材料去除证据：{v3Readiness.readinessCamoticsEvidence ? `${v3Readiness.readinessCamoticsEvidence.status ?? "-"} · ${formatReadinessCamoticsSource(v3Readiness.readinessCamoticsEvidence.source)}` : "未验证"}
+                    {v3Readiness.readinessCamoticsEvidence ? ` · eligible ${v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible ? "yes" : "no"} · input ${v3Readiness.readinessCamoticsEvidence.inputIdentityStatus} · cli ${v3Readiness.readinessCamoticsEvidence.cliRunPackageBindingStatus} · motion ${v3Readiness.readinessCamoticsEvidence.motionConsistencyStatus}` : ""}
+                    {v3Readiness.readinessCamoticsEvidence?.jobId ? ` · job ${v3Readiness.readinessCamoticsEvidence.jobId.slice(0, 8)}` : ""}
+                  </small>
                   </>}
                   <small className={v3Readiness.latestTrialFeedback ? v3Readiness.latestTrialFeedback.latestOutcome === "success" ? "v3-inline-ok" : v3Readiness.latestTrialFeedback.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     最新试雕反馈：{v3Readiness.latestTrialFeedback ? `${v3Readiness.latestTrialFeedback.recordCount} 条 · ${v3Readiness.latestTrialFeedback.latestOutcome ?? "-"}` : "未回填"}
@@ -7900,6 +7922,13 @@ function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
   const synthetic = handoff.syntheticSimulation ? " · synthetic" : "";
   const points = handoff.points ? ` · ${handoff.points}点` : "";
   return `${status}${simulation}${synthetic}${points}`;
+}
+
+function formatReadinessCamoticsSource(source: string) {
+  if (source === "latest-job-evidence-dossier") return "当前Job证据档案";
+  if (source === "camotics-import-contract") return "全局导入契约";
+  if (source === "missing") return "缺失";
+  return source;
 }
 
 function findV3DeliveryFile(job: V3OrchestratorJob | null, filename: string) {
