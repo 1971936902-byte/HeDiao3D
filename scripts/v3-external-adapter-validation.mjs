@@ -96,6 +96,8 @@ const consoleSummary = {
     status: item.report?.status ?? item.run.status,
     command: item.command,
     planGenerated: item.plan.generated,
+    handoffClassification: item.handoffEvidence?.classification ?? "missing",
+    productionCandidate: Boolean(item.handoffEvidence?.productionCandidate),
     nativeSignals: item.nativeSignals
   }))
 };
@@ -151,6 +153,7 @@ function runAdapterValidation(adapter) {
     },
     report,
     plan,
+    handoffEvidence: extractHandoffEvidence(adapter.id, report),
     nativeSignals: extractNativeSignals(adapter.id, report),
     failed,
     nextActions: createNextActions(adapter.id, report, plan, commandResolution.mode)
@@ -261,6 +264,7 @@ function createMissingCommandResult(adapter, workDir, jobPath, resultPath, comma
     },
     report: null,
     plan: inspectPlanArtifacts(adapter, workDir, null),
+    handoffEvidence: extractHandoffEvidence(adapter.id, null),
     nativeSignals: {},
     failed: true,
     nextActions: [`Install or expose command for ${adapter.id}, then re-run npm run test:v3:external-adapters.`]
@@ -292,6 +296,23 @@ function inspectPlanArtifacts(adapter, workDir, report) {
     generated: files.every((file) => file.exists) && (metric?.status === "generated" || metric === null || typeof metric === "object"),
     metric,
     files
+  };
+}
+
+function extractHandoffEvidence(id, report) {
+  const evidence = report?.metrics?.handoffEvidence;
+  if (evidence?.schema === "hediao3d.adapter-handoff-evidence.v1") return evidence;
+  return {
+    schema: "hediao3d.adapter-handoff-evidence.v1",
+    engine: id,
+    outputKind: id === "opencamlib" ? "neutral-toolpath" : "gcode",
+    classification: "missing",
+    fixture: false,
+    synthetic: false,
+    previewScaffold: false,
+    generatedByExternalCommand: false,
+    productionCandidate: false,
+    productionBoundary: "Adapter did not expose handoff evidence; production NC remains locked."
   };
 }
 
@@ -383,11 +404,13 @@ function createProductionGuardrails(results) {
     }
   ];
   const adapterStatuses = Object.fromEntries(results.map((item) => [item.id, item.report?.status ?? "missing"]));
+  const handoffClassifications = Object.fromEntries(results.map((item) => [item.id, item.handoffEvidence?.classification ?? "missing"]));
   return {
     schema: "hediao3d.external-adapter-production-guardrails.v1",
     readyForProduction: false,
     summary: "Adapter 验证只证明计划和接口契约；生产仍需真实外部 CAM、匹配 G-code 的 CAMotics 材料去除结果和现场验收。",
     adapterStatuses,
+    handoffClassifications,
     required,
     nextActions: [
       "在 CAM 服务器上运行 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters。",
@@ -523,6 +546,8 @@ function createMarkdown(summary) {
       `- Report status: ${adapter.report?.status ?? "(missing)"}`,
       `- Plan generated: ${adapter.plan.generated ? "yes" : "no"}`,
       `- Native signals: ${JSON.stringify(adapter.nativeSignals)}`,
+      `- Handoff classification: ${adapter.handoffEvidence?.classification ?? "missing"}`,
+      `- Production candidate: ${adapter.handoffEvidence?.productionCandidate ? "yes" : "no"}`,
       `- Work dir: ${adapter.workDir}`,
       "",
       "Plan files:",

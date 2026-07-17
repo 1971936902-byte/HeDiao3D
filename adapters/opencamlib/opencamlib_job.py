@@ -57,6 +57,13 @@ def safe_find_spec(name: str) -> Any:
         return None
 
 
+def read_json(path: Path) -> Dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return data
+
+
 def recipe_summary(job: Dict[str, Any]) -> Dict[str, Any]:
     recipe = job.get("externalCamRecipe") or {}
     operations = recipe.get("operations") or []
@@ -229,11 +236,21 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
         return imported
     if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_SYNTHETIC_NEUTRAL_OUTPUT")):
         neutral_path = write_synthetic_neutral_toolpath(job, plan)
+        neutral = read_json(Path(neutral_path))
         return {
             "status": "completed",
             "error": None,
             "neutralToolpathPath": neutral_path,
             "synthetic": True,
+            "fixture": True,
+            "handoffEvidence": classify_neutral_output(neutral, {
+                "fixture": True,
+                "synthetic": True,
+                "previewScaffold": False,
+                "heightfieldPreview": False,
+                "generatedByExternalCommand": False,
+                "imported": False,
+            }),
         }
     if not plan["opencamlib"]["available"]:
         return {
@@ -355,6 +372,14 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
         "heightfieldPreview": heightfield_preview,
         "previewScaffold": preview_scaffold,
         "fixture": fixture,
+        "handoffEvidence": classify_neutral_output(neutral, {
+            "fixture": fixture,
+            "synthetic": False,
+            "previewScaffold": preview_scaffold,
+            "heightfieldPreview": heightfield_preview,
+            "generatedByExternalCommand": True,
+            "imported": False,
+        }),
         "externalCommand": {
             "command": " ".join(command_parts),
             "commandParts": command_parts,
@@ -409,6 +434,14 @@ def try_import_neutral_toolpath(job: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "synthetic": False,
         "imported": True,
         "sourcePath": str(source_path),
+        "handoffEvidence": classify_neutral_output(neutral, {
+            "fixture": bool(neutral.get("fixture")),
+            "synthetic": False,
+            "previewScaffold": bool(neutral.get("experimentalHeightfield")),
+            "heightfieldPreview": bool(neutral.get("experimentalHeightfield")),
+            "generatedByExternalCommand": False,
+            "imported": True,
+        }),
     }
 
 
@@ -570,6 +603,7 @@ def main() -> int:
                     "autoRunner": bool(attempt.get("autoRunner")),
                     "schema": "hediao3d.neutral-toolpath.v1" if attempt.get("neutralToolpathPath") else None,
                 },
+                "handoffEvidence": attempt.get("handoffEvidence") or create_missing_handoff_evidence(ENGINE, "neutral-toolpath", attempt),
                 "externalCommand": attempt.get("externalCommand"),
             },
         )
@@ -582,6 +616,54 @@ def main() -> int:
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0
+
+
+def classify_neutral_output(neutral: Dict[str, Any], flags: Dict[str, Any]) -> Dict[str, Any]:
+    points = neutral.get("points") if isinstance(neutral, dict) else []
+    point_count = len(points) if isinstance(points, list) else 0
+    fixture = bool(flags.get("fixture"))
+    synthetic = bool(flags.get("synthetic"))
+    preview_scaffold = bool(flags.get("previewScaffold"))
+    heightfield_preview = bool(flags.get("heightfieldPreview"))
+    if synthetic:
+        classification = "synthetic-contract"
+    elif fixture:
+        classification = "fixture-contract"
+    elif preview_scaffold or heightfield_preview:
+        classification = "preview-scaffold"
+    else:
+        classification = "production-candidate"
+    return {
+        "schema": "hediao3d.adapter-handoff-evidence.v1",
+        "engine": ENGINE,
+        "outputKind": "neutral-toolpath",
+        "classification": classification,
+        "fixture": fixture,
+        "synthetic": synthetic,
+        "previewScaffold": preview_scaffold,
+        "heightfieldPreview": heightfield_preview,
+        "imported": bool(flags.get("imported")),
+        "generatedByExternalCommand": bool(flags.get("generatedByExternalCommand")),
+        "pointCount": point_count,
+        "productionCandidate": point_count > 0 and classification == "production-candidate",
+        "productionBoundary": "This evidence classifies neutral adapter output only; HeDiao3D production gates still require CAMotics/material removal, postprocess validation, static NC analysis, air-run, trial feedback and machine acceptance.",
+    }
+
+
+def create_missing_handoff_evidence(engine: str, output_kind: str, attempt: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "schema": "hediao3d.adapter-handoff-evidence.v1",
+        "engine": engine,
+        "outputKind": output_kind,
+        "classification": "not-generated",
+        "fixture": False,
+        "synthetic": False,
+        "previewScaffold": False,
+        "generatedByExternalCommand": bool(attempt.get("externalCommand")),
+        "pointCount": 0,
+        "productionCandidate": False,
+        "productionBoundary": "No external neutral output was generated; production NC remains locked.",
+    }
 
 
 if __name__ == "__main__":

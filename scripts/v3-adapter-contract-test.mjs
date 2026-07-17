@@ -157,6 +157,9 @@ try {
   const neutralReport = JSON.parse(readFileSync(neutralResultPath, "utf8"));
   validateReport("opencamlib", neutralReport);
   assert(neutralReport.status === "completed", "opencamlib neutral handoff should complete in synthetic contract mode");
+  assert(neutralReport.metrics.handoffEvidence?.schema === "hediao3d.adapter-handoff-evidence.v1", "opencamlib neutral handoff evidence missing");
+  assert(neutralReport.metrics.handoffEvidence.classification === "synthetic-contract", "opencamlib synthetic neutral handoff should be classified as synthetic-contract");
+  assert(neutralReport.metrics.handoffEvidence.productionCandidate === false, "opencamlib synthetic neutral handoff must not be production candidate");
   assert(existsSync(neutralOutputPath), "opencamlib neutral toolpath file missing");
   const neutralToolpath = JSON.parse(readFileSync(neutralOutputPath, "utf8"));
   assert(neutralToolpath.schema === "hediao3d.neutral-toolpath.v1", "neutral toolpath schema mismatch");
@@ -203,6 +206,9 @@ try {
   const freecadExternalReport = JSON.parse(readFileSync(freecadExternalResultPath, "utf8"));
   validateReport("freecad", freecadExternalReport);
   assert(freecadExternalReport.status === "completed", "freecad external handoff should complete in fixture mode");
+  assert(freecadExternalReport.metrics.handoffEvidence?.schema === "hediao3d.adapter-handoff-evidence.v1", "freecad handoff evidence missing");
+  assert(freecadExternalReport.metrics.handoffEvidence.classification === "fixture-contract", "freecad fixture output should be classified as fixture-contract");
+  assert(freecadExternalReport.metrics.handoffEvidence.productionCandidate === false, "freecad fixture output must not be production candidate");
   assert(freecadExternalReport.gcodePath === freecadExternalGcodePath, "freecad report should expose gcodePath");
   assert(freecadExternalReport.metrics?.gcode?.status === "generated", "freecad metrics should mark G-code generated");
   const freecadPlan = JSON.parse(readFileSync(freecadExternalReport.metrics?.freecadPlan?.planPath, "utf8"));
@@ -264,6 +270,9 @@ try {
   const blendercamExternalReport = JSON.parse(readFileSync(blendercamExternalResultPath, "utf8"));
   validateReport("blendercam", blendercamExternalReport);
   assert(blendercamExternalReport.status === "completed", "blendercam external handoff should complete in fixture mode");
+  assert(blendercamExternalReport.metrics.handoffEvidence?.schema === "hediao3d.adapter-handoff-evidence.v1", "blendercam handoff evidence missing");
+  assert(blendercamExternalReport.metrics.handoffEvidence.classification === "fixture-contract", "blendercam fixture output should be classified as fixture-contract");
+  assert(blendercamExternalReport.metrics.handoffEvidence.productionCandidate === false, "blendercam fixture output must not be production candidate");
   assert(blendercamExternalReport.gcodePath === blendercamExternalGcodePath, "blendercam report should expose gcodePath");
   assert(blendercamExternalReport.metrics?.gcode?.status === "generated", "blendercam metrics should mark G-code generated");
   assert(existsSync(blendercamExternalGcodePath), "blendercam external G-code file missing");

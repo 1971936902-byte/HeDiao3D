@@ -310,12 +310,37 @@ def run_external_blendercam_command(job: Dict[str, Any], plan: Dict[str, Any], j
             "error": f"BlenderCAM external command output does not contain G0/G1 motion: {gcode_path}",
             "externalCommand": command_report,
         }
+    output_evidence = classify_gcode_output(gcode, command_parts)
     return {
         "status": "completed",
         "error": None,
         "gcodePath": str(gcode_path),
         "synthetic": False,
+        "fixture": output_evidence["fixture"],
+        "previewScaffold": output_evidence["previewScaffold"],
+        "handoffEvidence": output_evidence,
         "externalCommand": command_report,
+    }
+
+
+def classify_gcode_output(gcode: str, command_parts: List[str]) -> Dict[str, Any]:
+    upper = gcode.upper()
+    fixture = is_true(os.environ.get("HEDIAO3D_BLENDERCAM_RUNNER_FIXTURE_OUTPUT")) or "BLENDERCAM EXTERNAL RUNNER FIXTURE" in upper
+    preview_scaffold = "PREVIEW" in upper or "SCAFFOLD" in upper
+    motion_count = len([line for line in upper.splitlines() if line.strip().startswith(("G0", "G1"))])
+    return {
+        "schema": "hediao3d.adapter-handoff-evidence.v1",
+        "engine": ENGINE,
+        "outputKind": "gcode",
+        "classification": "fixture-contract" if fixture else "preview-scaffold" if preview_scaffold else "production-candidate",
+        "fixture": fixture,
+        "synthetic": False,
+        "previewScaffold": preview_scaffold,
+        "generatedByExternalCommand": True,
+        "motionCount": motion_count,
+        "commandHead": command_parts[:3],
+        "productionCandidate": motion_count > 0 and not fixture and not preview_scaffold,
+        "productionBoundary": "This evidence classifies adapter output only; HeDiao3D production gates still require CAMotics/material removal, static NC analysis, air-run, trial feedback and machine acceptance.",
     }
 
 
@@ -392,7 +417,10 @@ def main() -> int:
                     "status": "generated" if attempt.get("gcodePath") else "not_generated",
                     "path": attempt.get("gcodePath"),
                     "synthetic": attempt.get("synthetic"),
+                    "fixture": bool(attempt.get("fixture")),
+                    "previewScaffold": bool(attempt.get("previewScaffold")),
                 },
+                "handoffEvidence": attempt.get("handoffEvidence") or create_missing_handoff_evidence(ENGINE, "gcode", attempt),
             },
         )
         if attempt.get("gcodePath"):
@@ -405,6 +433,22 @@ def main() -> int:
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0
+
+
+def create_missing_handoff_evidence(engine: str, output_kind: str, attempt: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "schema": "hediao3d.adapter-handoff-evidence.v1",
+        "engine": engine,
+        "outputKind": output_kind,
+        "classification": "not-generated",
+        "fixture": False,
+        "synthetic": False,
+        "previewScaffold": False,
+        "generatedByExternalCommand": bool(attempt.get("externalCommand")),
+        "motionCount": 0,
+        "productionCandidate": False,
+        "productionBoundary": "No external CAM output was generated; production NC remains locked.",
+    }
 
 
 if __name__ == "__main__":
