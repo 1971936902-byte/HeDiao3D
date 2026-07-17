@@ -3688,6 +3688,7 @@ async function processOrchestratorJob(job, settings) {
     camHandoffQuality,
     postprocessTraceReport,
     neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
+    externalGcodeImportValidation: readJsonFile(join(job.workDir, "external-gcode-import-validation.json")),
     controllerDialectReport,
     toolSetupSheet,
     rotaryCalibrationSheet
@@ -3710,6 +3711,7 @@ async function processOrchestratorJob(job, settings) {
     productionUnlockMatrix,
     camHandoffQuality,
     neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
+    externalGcodeImportValidation: readJsonFile(join(job.workDir, "external-gcode-import-validation.json")),
     simulationSummary,
     ncStaticAnalysis,
     postprocessTraceReport,
@@ -6454,9 +6456,61 @@ function createOperatorAxisInstruction(postprocessProfile = {}) {
   return `${lengthAxis}=长度方向，${planarAxis}=平面宽度方向，${depthAxis}=刀深/安全高度`;
 }
 
-function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
+function createExternalGcodeBindingGateStatus(externalGcodeImportValidation, camHandoffQuality) {
+  const required = Boolean(
+    externalGcodeImportValidation
+    || camHandoffQuality?.sourceSnapshot?.kind === "gcode"
+    || camHandoffQuality?.adapterHandoffEvidence?.outputKind === "gcode"
+  );
+  if (!required) {
+    return {
+      required: false,
+      status: "pass",
+      bindingStatus: "not-required",
+      productionCandidate: false,
+      summary: "本次未使用外部 G-code handoff。"
+    };
+  }
+  if (!externalGcodeImportValidation) {
+    return {
+      required: true,
+      status: "review",
+      bindingStatus: "missing",
+      productionCandidate: false,
+      summary: "检测到外部 G-code handoff，但缺少 external-gcode-import-validation.json。"
+    };
+  }
+  if (externalGcodeImportValidation.status === "critical") {
+    return {
+      required: true,
+      status: "block",
+      bindingStatus: externalGcodeImportValidation.sourceBinding?.status ?? "critical",
+      productionCandidate: false,
+      summary: externalGcodeImportValidation.summary ?? "外部 G-code 源绑定存在阻断项。"
+    };
+  }
+  if (externalGcodeImportValidation.status === "bound-production-candidate" && externalGcodeImportValidation.productionCandidate === true) {
+    return {
+      required: true,
+      status: "pass",
+      bindingStatus: externalGcodeImportValidation.sourceBinding?.status ?? "bound",
+      productionCandidate: true,
+      summary: externalGcodeImportValidation.summary ?? "外部 G-code 源绑定和 CAM proof 已通过。"
+    };
+  }
+  return {
+    required: true,
+    status: "review",
+    bindingStatus: externalGcodeImportValidation.sourceBinding?.status ?? externalGcodeImportValidation.status ?? "review",
+    productionCandidate: Boolean(externalGcodeImportValidation.productionCandidate),
+    summary: externalGcodeImportValidation.summary ?? "外部 G-code 源绑定需要复核。"
+  };
+}
+
+function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
   const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
+  const externalGcodeBinding = createExternalGcodeBindingGateStatus(externalGcodeImportValidation, camHandoffQuality);
   const neutralToolpathHandoff = Boolean(
     neutralToolpathImportValidation
     || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
@@ -6511,6 +6565,16 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
       summary: neutralToolpathImportValidation
         ? `${neutralToolpathImportValidation.summary} / sourceBinding=${neutralBinding.bindingStatus}`
         : neutralBinding.summary,
+      requiredForProduction: true
+    }] : []),
+    ...(externalGcodeBinding.required ? [{
+      id: "external-gcode-import-validation",
+      label: "外部G-code导入校验",
+      status: externalGcodeBinding.status,
+      evidence: "external-gcode-import-validation.json",
+      summary: externalGcodeImportValidation
+        ? `${externalGcodeImportValidation.summary} / sourceBinding=${externalGcodeBinding.bindingStatus} / productionCandidate=${externalGcodeBinding.productionCandidate ? "yes" : "no"}`
+        : externalGcodeBinding.summary,
       requiredForProduction: true
     }] : []),
     {
@@ -6591,6 +6655,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   const productionUnlockMatrix = readJsonFile(join(job.workDir, "production-unlock-matrix.json"));
   const camHandoffQuality = readJsonFile(join(job.workDir, "cam-handoff-quality.json"));
   const neutralToolpathImportValidation = readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json"));
+  const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
   const simulationSummary = readJsonFile(join(job.workDir, "simulation-summary.json"));
   const ncStaticAnalysis = readJsonFile(join(job.workDir, "nc-static-analysis.json"));
   const postprocessTraceReport = readJsonFile(join(job.workDir, "postprocess-trace-report.json"));
@@ -6603,6 +6668,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
     productionUnlockMatrix,
     camHandoffQuality,
     neutralToolpathImportValidation,
+    externalGcodeImportValidation,
     simulationSummary,
     ncStaticAnalysis,
     postprocessTraceReport,
@@ -6614,7 +6680,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   });
 }
 
-function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(simulationEvidence);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
@@ -6624,9 +6690,16 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     || camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath"
     || existsSync(join(job.workDir, "neutral-toolpath.json"))
   );
+  const hasExternalGcodeImport = Boolean(
+    externalGcodeImportValidation
+    || unlockRows.some((row) => row.id === "external-gcode-import-validation")
+    || camHandoffQuality?.sourceSnapshot?.kind === "gcode"
+    || camHandoffQuality?.adapterHandoffEvidence?.outputKind === "gcode"
+  );
   const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
   const latestTrialFeedbackRecord = Array.isArray(trialFeedbackLog?.records) ? trialFeedbackLog.records[0] : null;
   const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
+  const externalGcodeBinding = createExternalGcodeBindingGateStatus(externalGcodeImportValidation, camHandoffQuality);
   const machineAcceptanceIntegrityBound = latestMachineAcceptanceRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const trialFeedbackIntegrityBound = latestTrialFeedbackRecord?.downloadIntegrity?.packageBinding?.status === "matched";
   const trialFeedbackPassed = trialFeedbackLog?.recordCount > 0
@@ -6666,6 +6739,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       summary: neutralToolpathImportValidation
         ? `${neutralToolpathImportValidation.summary} / sourceBinding=${neutralBinding.bindingStatus}`
         : neutralBinding.summary
+    }] : []),
+    ...(hasExternalGcodeImport ? [{
+      id: "external-gcode-import-validation",
+      label: "外部G-code导入校验",
+      status: externalGcodeBinding.status,
+      evidence: ["external-gcode-import-validation.json", "adapter-report.json", "toolpath.nc"],
+      summary: externalGcodeImportValidation
+        ? `${externalGcodeImportValidation.summary} / sourceBinding=${externalGcodeBinding.bindingStatus} / productionCandidate=${externalGcodeBinding.productionCandidate ? "yes" : "no"}`
+        : externalGcodeBinding.summary
     }] : []),
     {
       id: "material-removal-simulation",
@@ -6774,6 +6856,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camHandoffReady: camHandoffQuality?.level === "ready",
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       neutralSourceBindingPass: !neutralBinding.required || neutralBinding.status === "pass",
+      externalGcodeSourceBindingStatus: externalGcodeBinding.required ? externalGcodeBinding.bindingStatus : "not-required",
+      externalGcodeSourceBindingPass: !externalGcodeBinding.required || externalGcodeBinding.status === "pass",
+      externalGcodeProductionCandidate: Boolean(externalGcodeBinding.productionCandidate),
       ncStaticReady: ncStaticAnalysis?.level === "ready",
       controllerDialectReady: controllerDialectReport?.level === "ready",
       machineAcceptanceRecords: machineAcceptanceLog?.recordCount ?? 0,
@@ -10233,6 +10318,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     camHandoffQuality,
     postprocessTraceReport,
     neutralToolpathImportValidation: readJsonFile(join(workDir, "neutral-toolpath-import-validation.json")),
+    externalGcodeImportValidation: readJsonFile(join(workDir, "external-gcode-import-validation.json")),
     controllerDialectReport,
     toolSetupSheet,
     rotaryCalibrationSheet

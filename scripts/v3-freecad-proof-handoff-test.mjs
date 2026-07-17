@@ -106,6 +106,19 @@ async function main() {
   assert(camHandoffQuality.importedFixture === false, "proof-backed handoff should not be fixture");
   assert(camHandoffQuality.previewScaffold === false, "proof-backed handoff should not be preview scaffold");
 
+  const unlockMatrix = await getArtifactJson(job.id, "production-unlock-matrix.json");
+  const gcodeUnlockRow = unlockMatrix.rows?.find((row) => row.id === "external-gcode-import-validation");
+  assert(gcodeUnlockRow, "production unlock matrix should include external G-code validation row");
+  assert(gcodeUnlockRow.status === "pass", `proof-backed G-code unlock row should pass, got ${gcodeUnlockRow.status}`);
+  assert(/productionCandidate=yes/.test(gcodeUnlockRow.summary), "G-code unlock row should expose productionCandidate=yes");
+
+  const evidenceDossier = await getArtifactJson(job.id, "production-evidence-dossier.json");
+  const gcodeEvidenceItem = evidenceDossier.evidenceItems?.find((item) => item.id === "external-gcode-import-validation");
+  assert(gcodeEvidenceItem, "production evidence dossier should include external G-code validation item");
+  assert(gcodeEvidenceItem.status === "pass", `proof-backed G-code evidence item should pass, got ${gcodeEvidenceItem.status}`);
+  assert(evidenceDossier.crossChecks?.externalGcodeSourceBindingPass === true, "dossier should mark external G-code source binding as pass");
+  assert(evidenceDossier.crossChecks?.externalGcodeProductionCandidate === true, "dossier should mark external G-code as production candidate");
+
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowTrialNc === true, `proof-backed FreeCAD should allow trial NC; blockers: ${(productionGate.blockers ?? []).join("; ")}`);
   assert(productionGate.allowProductionNc === false, "proof-backed FreeCAD still must not unlock production without full external validation and machine acceptance");
