@@ -241,9 +241,16 @@ async function waitForHealth() {
 }
 
 async function waitForJob(jobId, startedAt) {
+  let transientFetchFailures = 0;
   while (Date.now() - startedAt < timeoutMs) {
-    const job = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
-    if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return job;
+    try {
+      const job = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
+      transientFetchFailures = 0;
+      if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return job;
+    } catch (error) {
+      transientFetchFailures += 1;
+      if (transientFetchFailures > 5) throw error;
+    }
     await sleep(1000);
   }
   throw new Error(`job ${jobId} timed out after ${timeoutMs}ms`);

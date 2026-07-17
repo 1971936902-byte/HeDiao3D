@@ -3098,6 +3098,13 @@ async function processOrchestratorJob(job, settings) {
     machineControllerProfile,
     camoticsInput
   });
+  const postprocessTraceReport = createPostprocessTraceReport({
+    job,
+    settings,
+    toolpath,
+    machineGcode: toolpath.gcode,
+    machineControllerProfile
+  });
   await writeFile(join(job.workDir, "machine-controller-profile.json"), JSON.stringify(machineControllerProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
   await writeFile(join(job.workDir, "controller-dialect-report.json"), JSON.stringify(controllerDialectReport, null, 2), "utf8");
@@ -3106,6 +3113,7 @@ async function processOrchestratorJob(job, settings) {
   await writeFile(join(job.workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-cli-execution-plan.json"), JSON.stringify(camoticsCliExecutionPlan, null, 2), "utf8");
   await writeFile(join(job.workDir, "rotary-wrap-preview-report.json"), JSON.stringify(rotaryWrapPreviewReport, null, 2), "utf8");
+  await writeFile(join(job.workDir, "postprocess-trace-report.json"), JSON.stringify(postprocessTraceReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
   await writeFile(join(job.workDir, "camotics-preview.nc"), camoticsPreviewGcode, "utf8");
   await writeFile(join(job.workDir, "air-run.nc"), airRunGcode, "utf8");
@@ -3134,6 +3142,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     camoticsInput,
     camHandoffQuality,
+    postprocessTraceReport,
     ncStaticAnalysis,
     machineControllerProfile,
     controllerDialectReport
@@ -3199,6 +3208,7 @@ async function processOrchestratorJob(job, settings) {
     simulationSummary,
     ncStaticAnalysis,
     camHandoffQuality,
+    postprocessTraceReport,
     neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
     controllerDialectReport,
     toolSetupSheet,
@@ -3224,6 +3234,7 @@ async function processOrchestratorJob(job, settings) {
     neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
     simulationSummary,
     ncStaticAnalysis,
+    postprocessTraceReport,
     controllerDialectReport,
     machineAcceptanceChecklist
   });
@@ -3240,6 +3251,7 @@ async function processOrchestratorJob(job, settings) {
     camoticsCliExecutionPlan,
     rotaryWrapPreviewReport,
     camHandoffQuality,
+    postprocessTraceReport,
     camServerConfig,
     productionEvidenceDossier,
     ncStaticAnalysis,
@@ -3296,6 +3308,7 @@ async function processOrchestratorJob(job, settings) {
   pushIfArtifactExists(job, "camotics-linux-run.sh");
   pushIfArtifactExists(job, "camotics-cli-package-report.json");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-trace-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
@@ -3357,6 +3370,7 @@ async function processOrchestratorJob(job, settings) {
         motionProfile: camoticsCliPackage.preferredGcodeIdentity?.motionProfile ?? null
       } : null,
       rotaryWrapPreviewReport,
+      postprocessTraceReport,
       ncStaticAnalysis,
       machineControllerProfile,
       machineAcceptanceChecklist,
@@ -4898,7 +4912,7 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, ncStaticAnalysis, controllerDialectReport }) {
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, postprocessTraceReport, ncStaticAnalysis, controllerDialectReport }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -4954,6 +4968,14 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   if (camoticsInput && !camoticsInput.compatibility.canRunInCamotics) {
     warnings.push(camoticsInput.compatibility.reason);
     requiredActions.push("若使用真实旋转轴 A 或四轴联动，需要用支持旋转轴的机床仿真软件复核。");
+  }
+
+  if (postprocessTraceReport?.level === "critical") {
+    blockers.push(`后处理追溯存在阻断项：${postprocessTraceReport.criticalIssues[0] ?? "请查看 postprocess-trace-report.json"}`);
+    requiredActions.push("修复旋转展开轴映射、点位顺序或 G-code 后处理，再重新生成 NC。");
+  } else if (postprocessTraceReport?.level === "review") {
+    warnings.push(`后处理追溯需要复核：${postprocessTraceReport.warningIssues[0] ?? "请查看 postprocess-trace-report.json"}`);
+    requiredActions.push("查看 postprocess-trace-report.json，确认机床 NC 与源刀路点的一致性。");
   }
 
   if (simulationSummary.riskLevel !== "ready") {
@@ -5028,6 +5050,8 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       simulationEvidenceLevel: simulationEvidence.level,
       realMaterialRemovalVerified: simulationEvidence.realMaterialRemovalVerified,
       simulationRiskLevel: simulationSummary.riskLevel,
+      postprocessTraceLevel: postprocessTraceReport?.level ?? "missing",
+      postprocessTraceFitRate: postprocessTraceReport?.metrics?.fitRate ?? null,
       camHandoffQualityLevel: camHandoffQuality?.level ?? "unknown",
       camHandoffSource: camHandoffQuality?.source ?? "unknown",
       fitRate: simulationSummary.metrics.fitRate,
@@ -5845,7 +5869,7 @@ function createOperatorRunbookMarkdown({ job, settings, toolpath, productionGate
   return `${lines.join("\n")}\n`;
 }
 
-function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, neutralToolpathImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
+function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
   const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const neutralToolpathHandoff = Boolean(
     neutralToolpathImportValidation
@@ -5920,6 +5944,14 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
       requiredForProduction: true
     },
     {
+      id: "postprocess-trace",
+      label: "后处理点位追溯",
+      status: postprocessTraceReport?.level === "ready" ? "pass" : postprocessTraceReport?.level === "critical" ? "block" : "review",
+      evidence: "postprocess-trace-report.json",
+      summary: postprocessTraceReport?.summary ?? "未生成后处理追溯报告。",
+      requiredForProduction: true
+    },
+    {
       id: "controller-dialect",
       label: "控制器方言兼容",
       status: controllerDialectReport?.level === "ready" ? "pass" : controllerDialectReport?.level === "critical" ? "block" : "review",
@@ -5975,6 +6007,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   const neutralToolpathImportValidation = readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json"));
   const simulationSummary = readJsonFile(join(job.workDir, "simulation-summary.json"));
   const ncStaticAnalysis = readJsonFile(join(job.workDir, "nc-static-analysis.json"));
+  const postprocessTraceReport = readJsonFile(join(job.workDir, "postprocess-trace-report.json"));
   const controllerDialectReport = readJsonFile(join(job.workDir, "controller-dialect-report.json"));
   const machineAcceptanceChecklist = readJsonFile(join(job.workDir, "machine-acceptance-checklist.json"));
   if (!productionGate) return null;
@@ -5986,6 +6019,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
     neutralToolpathImportValidation,
     simulationSummary,
     ncStaticAnalysis,
+    postprocessTraceReport,
     controllerDialectReport,
     machineAcceptanceChecklist,
     machineAcceptanceLog: overrides.machineAcceptanceLog ?? readJsonFile(join(job.workDir, "machine-acceptance-log.json")),
@@ -5994,7 +6028,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   });
 }
 
-function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, simulationSummary, ncStaticAnalysis, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
   const hasNeutralToolpathImport = Boolean(
@@ -6050,6 +6084,13 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       status: ncStaticAnalysis?.level === "ready" ? "pass" : ncStaticAnalysis?.level === "critical" ? "block" : "review",
       evidence: ["nc-static-analysis.json", "toolpath.nc", "air-run.nc"],
       summary: ncStaticAnalysis?.summary ?? "未生成 NC 静态分析。"
+    },
+    {
+      id: "postprocess-trace",
+      label: "后处理点位追溯",
+      status: postprocessTraceReport?.level === "ready" ? "pass" : postprocessTraceReport?.level === "critical" ? "block" : "review",
+      evidence: ["postprocess-trace-report.json", "toolpath.nc", "toolpath-summary.json"],
+      summary: postprocessTraceReport?.summary ?? "未生成后处理追溯报告。"
     },
     {
       id: "controller-dialect",
@@ -6492,6 +6533,194 @@ function createPostprocessProfile({ job, settings, toolpath, selectedEngine, res
       "若机床把旋转夹具接到 Y 轴，请确认控制器每转一圈等效距离与 rotaryWrapPerRevolutionMm 一致。"
     ]
   };
+}
+
+function createPostprocessTraceReport({ job, settings, toolpath, machineGcode, machineControllerProfile }) {
+  const postProcessor = settings.postProcessor ?? "generic";
+  const rotaryAxis = settings.camMode === "rotaryWrap"
+    ? String(settings.rotaryOutputAxis || (postProcessor === "wrapX" ? "X" : postProcessor === "wrapY" ? "Y" : "A")).toUpperCase()
+    : null;
+  const wrapPerRev = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const lengthAxis = settings.camMode === "rotaryWrap" && rotaryAxis === "X" ? "Y" : "X";
+  const sourcePoints = Array.isArray(toolpath.points) ? toolpath.points : [];
+  const machineMoves = extractMachineCuttingMovesForTrace(machineGcode, settings, { rotaryAxis, lengthAxis });
+  const compareCount = Math.min(sourcePoints.length, machineMoves.length);
+  const tolerances = {
+    lengthMm: 0.01,
+    rotaryLinearMm: 0.01,
+    rotaryDeg: 0.05,
+    zMm: 0.01
+  };
+  const mismatches = [];
+  const maxAbs = {
+    lengthMm: 0,
+    rotaryMachine: 0,
+    rotaryDeg: 0,
+    zMm: 0
+  };
+  let matched = 0;
+
+  for (let index = 0; index < compareCount; index += 1) {
+    const source = sourcePoints[index] ?? {};
+    const move = machineMoves[index] ?? {};
+    const expected = expectedMachineTracePoint(source, settings, { rotaryAxis, lengthAxis, wrapPerRev });
+    const deltas = {
+      lengthMm: absDelta(move[lengthAxis.toLowerCase()], expected[lengthAxis.toLowerCase()]),
+      zMm: absDelta(move.z, expected.z),
+      rotaryMachine: rotaryAxis ? absDelta(move[rotaryAxis.toLowerCase()], expected[rotaryAxis.toLowerCase()]) : 0,
+      rotaryDeg: settings.camMode === "rotaryWrap" ? absDelta(source.a, move.rotaryDeg) : 0
+    };
+    maxAbs.lengthMm = Math.max(maxAbs.lengthMm, deltas.lengthMm);
+    maxAbs.zMm = Math.max(maxAbs.zMm, deltas.zMm);
+    maxAbs.rotaryMachine = Math.max(maxAbs.rotaryMachine, deltas.rotaryMachine);
+    maxAbs.rotaryDeg = Math.max(maxAbs.rotaryDeg, deltas.rotaryDeg);
+    const rotaryTolerance = rotaryAxis === "A" ? tolerances.rotaryDeg : tolerances.rotaryLinearMm;
+    const ok = deltas.lengthMm <= tolerances.lengthMm
+      && deltas.zMm <= tolerances.zMm
+      && deltas.rotaryMachine <= rotaryTolerance
+      && (settings.camMode !== "rotaryWrap" || deltas.rotaryDeg <= tolerances.rotaryDeg);
+    if (ok) {
+      matched += 1;
+    } else if (mismatches.length < 20) {
+      mismatches.push({
+        index,
+        source: compactTracePoint(source),
+        expected: compactTracePoint(expected),
+        actual: compactTracePoint(move),
+        deltas
+      });
+    }
+  }
+
+  const missingMoves = Math.max(0, sourcePoints.length - machineMoves.length);
+  const extraMoves = Math.max(0, machineMoves.length - sourcePoints.length);
+  const fitRate = sourcePoints.length > 0 ? matched / sourcePoints.length : 0;
+  const criticalIssues = [];
+  const warningIssues = [];
+  if (sourcePoints.length <= 0) criticalIssues.push("源刀路点为空，无法追溯后处理输出。");
+  if (machineMoves.length <= 0) criticalIssues.push("机床 NC 中没有可追溯的切削运动。");
+  if (missingMoves > 0 || extraMoves > 0) criticalIssues.push(`源点与机床切削运动数量不一致：source=${sourcePoints.length}，machine=${machineMoves.length}。`);
+  if (fitRate < 0.995) criticalIssues.push(`后处理点位匹配率 ${(fitRate * 100).toFixed(2)}% 低于 99.5%。`);
+  if (maxAbs.lengthMm > tolerances.lengthMm) criticalIssues.push(`长度轴最大偏差 ${maxAbs.lengthMm.toFixed(4)}mm 超过 ${tolerances.lengthMm}mm。`);
+  if (maxAbs.zMm > tolerances.zMm) criticalIssues.push(`Z轴最大偏差 ${maxAbs.zMm.toFixed(4)}mm 超过 ${tolerances.zMm}mm。`);
+  if (settings.camMode === "rotaryWrap" && rotaryAxis !== "A" && maxAbs.rotaryMachine > tolerances.rotaryLinearMm) criticalIssues.push(`旋转线性化轴最大偏差 ${maxAbs.rotaryMachine.toFixed(4)}mm 超过 ${tolerances.rotaryLinearMm}mm。`);
+  if (settings.camMode === "rotaryWrap" && rotaryAxis === "A" && maxAbs.rotaryMachine > tolerances.rotaryDeg) criticalIssues.push(`A轴角度最大偏差 ${maxAbs.rotaryMachine.toFixed(4)}deg 超过 ${tolerances.rotaryDeg}deg。`);
+  if (settings.camMode === "rotaryWrap" && maxAbs.rotaryDeg > tolerances.rotaryDeg) criticalIssues.push(`回算旋转角最大偏差 ${maxAbs.rotaryDeg.toFixed(4)}deg 超过 ${tolerances.rotaryDeg}deg。`);
+  if (machineControllerProfile?.axisMapping?.rotaryAxis && rotaryAxis && machineControllerProfile.axisMapping.rotaryAxis !== rotaryAxis) {
+    criticalIssues.push(`机床配置旋转轴 ${machineControllerProfile.axisMapping.rotaryAxis} 与后处理旋转轴 ${rotaryAxis} 不一致。`);
+  }
+  if (fitRate < 1 && fitRate >= 0.995) warningIssues.push("后处理存在少量小偏差，请查看 mismatches 抽样。");
+
+  const level = criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "review" : "ready";
+  return {
+    schema: "hediao3d.postprocess-trace-report.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    level,
+    camMode: settings.camMode,
+    postProcessor: settings.postProcessor,
+    postProcessorName: toolpath.postProcessorName ?? postProcessorName(settings.postProcessor),
+    source: {
+      pointCount: sourcePoints.length,
+      toolpathSha256: createHash("sha256").update(JSON.stringify(sourcePoints)).digest("hex")
+    },
+    machineNc: {
+      filename: "toolpath.nc",
+      cuttingMoveCount: machineMoves.length,
+      sha256: createHash("sha256").update(String(machineGcode ?? ""), "utf8").digest("hex")
+    },
+    coordinateMapping: {
+      lengthAxis,
+      depthAxis: "Z",
+      rotaryAxis,
+      rotaryWrapPerRevolutionMm: settings.camMode === "rotaryWrap" ? wrapPerRev : null,
+      rotaryOutputMode: settings.camMode === "rotaryWrap"
+        ? rotaryAxis === "A" ? "degree-axis" : "linearized-rotary-axis"
+        : "plain-3axis"
+    },
+    tolerances,
+    metrics: {
+      compared: compareCount,
+      matched,
+      fitRate,
+      missingMoves,
+      extraMoves,
+      maxAbs
+    },
+    mismatches,
+    criticalIssues,
+    warningIssues,
+    summary: level === "ready"
+      ? "后处理追溯通过：机床 NC 切削运动与源刀路点一致。"
+      : level === "critical"
+        ? `后处理追溯发现 ${criticalIssues.length} 个阻断项。`
+        : `后处理追溯发现 ${warningIssues.length} 个复核项。`
+  };
+}
+
+function extractMachineCuttingMovesForTrace(gcode, settings, mapping) {
+  const lines = String(gcode ?? "").split(/\r?\n/);
+  const state = { x: NaN, y: NaN, z: NaN, a: NaN };
+  const moves = [];
+  const lengthWord = mapping.lengthAxis ?? "X";
+  const rotaryWord = settings.camMode === "rotaryWrap" ? mapping.rotaryAxis : null;
+  for (const rawLine of lines) {
+    const upper = rawLine.toUpperCase();
+    const x = parseGcodeWord(upper, "X");
+    const y = parseGcodeWord(upper, "Y");
+    const z = parseGcodeWord(upper, "Z");
+    const a = parseGcodeWord(upper, "A");
+    if (Number.isFinite(x)) state.x = x;
+    if (Number.isFinite(y)) state.y = y;
+    if (Number.isFinite(z)) state.z = z;
+    if (Number.isFinite(a)) state.a = a;
+    if (!/\bG0?1\b/.test(upper)) continue;
+    const hasLengthWord = new RegExp(`\\b${lengthWord}\\s*-?\\d`, "i").test(rawLine);
+    const hasRotaryWord = !rotaryWord || new RegExp(`\\b${rotaryWord}\\s*-?\\d`, "i").test(rawLine);
+    const hasPlanarWord = settings.camMode === "3axis" ? /\b[XY]\s*-?\d/i.test(rawLine) : true;
+    if (!hasLengthWord || !hasRotaryWord || !hasPlanarWord) continue;
+    if (!Number.isFinite(state.z)) continue;
+    const move = { ...state, line: rawLine.trim() };
+    if (settings.camMode === "rotaryWrap" && rotaryWord) {
+      move.rotaryDeg = rotaryWord === "A"
+        ? state.a
+        : ((state[rotaryWord.toLowerCase()] / Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100))) * 360);
+    }
+    moves.push(move);
+  }
+  return moves;
+}
+
+function expectedMachineTracePoint(point, settings, mapping) {
+  const expected = { x: NaN, y: NaN, z: Number(point.z ?? 0), a: NaN };
+  if (settings.camMode === "rotaryWrap") {
+    const rotaryMachine = mapping.rotaryAxis === "A"
+      ? Number(point.a ?? 0)
+      : (Number(point.a ?? 0) / 360) * mapping.wrapPerRev;
+    expected[mapping.lengthAxis.toLowerCase()] = Number(point.x ?? 0);
+    expected[mapping.rotaryAxis.toLowerCase()] = rotaryMachine;
+    expected.rotaryDeg = Number(point.a ?? 0);
+    return expected;
+  }
+  expected.x = Number(point.x ?? 0);
+  expected.y = Number(point.y ?? 0);
+  return expected;
+}
+
+function absDelta(actual, expected) {
+  const a = Number(actual);
+  const b = Number(expected);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.POSITIVE_INFINITY;
+  return Math.abs(a - b);
+}
+
+function compactTracePoint(point) {
+  const result = {};
+  for (const key of ["x", "y", "z", "a", "rotaryDeg", "depth"]) {
+    const value = Number(point?.[key]);
+    if (Number.isFinite(value)) result[key] = Number(value.toFixed(6));
+  }
+  return result;
 }
 
 function createNcStaticAnalysis({ settings, files }) {
@@ -7170,7 +7399,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, postprocessTraceReport, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const productionCandidate = productionGate.allowProductionNc ? "toolpath.nc" : null;
@@ -7202,6 +7431,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-handoff-quality.json"),
         getFile("cam-handoff-evidence.md"),
         getFile("rotary-wrap-preview-report.json"),
+        getFile("postprocess-trace-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("operator-runbook.md"),
@@ -7222,7 +7452,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -7259,6 +7489,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 machining-package-index.json 和 production-gate.json，确认包级别。",
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
+      "阅读 postprocess-trace-report.json，确认 toolpath.nc 的 X/Y/A/Z 输出与源刀路点逐点一致。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
       "试雕后填写 trial-feedback-template.json，把真实耗时、刀痕和旋转误差回填到工艺优化流程。",
       "阅读 machine-controller-profile.json，确认当前是目标机床配置，而不是默认保守配置。",
@@ -7304,6 +7535,16 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       pointCoverage: rotaryWrapPreviewReport.metrics?.pointCoverage ?? null,
       linearizationErrorRate: rotaryWrapPreviewReport.metrics?.linearizationErrorRate ?? null,
       artifact: "rotary-wrap-preview-report.json"
+    } : null,
+    postprocessTrace: postprocessTraceReport ? {
+      level: postprocessTraceReport.level,
+      summary: postprocessTraceReport.summary,
+      fitRate: postprocessTraceReport.metrics?.fitRate ?? null,
+      matched: postprocessTraceReport.metrics?.matched ?? null,
+      compared: postprocessTraceReport.metrics?.compared ?? null,
+      missingMoves: postprocessTraceReport.metrics?.missingMoves ?? null,
+      extraMoves: postprocessTraceReport.metrics?.extraMoves ?? null,
+      artifact: "postprocess-trace-report.json"
     } : null,
     productionEvidenceDossier: productionEvidenceDossier ? {
       status: productionEvidenceDossier.status,
@@ -7416,6 +7657,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
     createDeliveryFile(job.id, "cam-handoff-evidence.md", "CAM Handoff证据说明", "report", true, "用可读文本说明刀路来源、输入哈希、fixture/synthetic 风险、覆盖率和生产边界。"),
     createDeliveryFile(job.id, "rotary-wrap-preview-report.json", "旋转包裹预览一致性报告", "report", true, "检查中立刀路、Y/A旋转后处理、CAMotics展开预览和每圈等效距离是否一致。"),
+    createDeliveryFile(job.id, "postprocess-trace-report.json", "后处理点位追溯报告", "report", true, "逐点核对源刀路与 toolpath.nc 的 X/Y/A/Z 输出，防止轴映射、拉伸和点位错位。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
     createDeliveryFile(job.id, "camotics-simulation-plan.json", "CAMotics 仿真计划", "report", true, "记录 CAMotics 预览 NC、展开毛坯、刀具、坐标解释和待执行检查项。"),
@@ -8864,6 +9106,7 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
   const camoticsSimulationPlan = readJsonFile(join(workDir, "camotics-simulation-plan.json"));
   const camoticsCliExecutionPlan = readJsonFile(join(workDir, "camotics-cli-execution-plan.json"));
   const rotaryWrapPreviewReport = readJsonFile(join(workDir, "rotary-wrap-preview-report.json"));
+  const postprocessTraceReport = readJsonFile(join(workDir, "postprocess-trace-report.json"));
   const machiningPackageIndex = deliveryManifest && postprocessProfile && camoticsInput
     ? createMachiningPackageIndex({
       job,
@@ -8875,6 +9118,7 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
       camoticsSimulationPlan,
       camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
+      postprocessTraceReport,
       camHandoffQuality: readJsonFile(join(workDir, "cam-handoff-quality.json")),
       camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
       productionEvidenceDossier,
@@ -9078,6 +9322,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   await writeFile(join(workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-cli-execution-plan.json"), JSON.stringify(camoticsCliExecutionPlan, null, 2), "utf8");
   await writeFile(join(workDir, "rotary-wrap-preview-report.json"), JSON.stringify(rotaryWrapPreviewReport, null, 2), "utf8");
+  await writeFile(join(workDir, "postprocess-trace-report.json"), JSON.stringify(postprocessTraceReport, null, 2), "utf8");
   await writeFile(join(workDir, "camotics-run.md"), createCamoticsRunbook(camoticsInput), "utf8");
 
   const simulationSummary = createSimulationSummary(toolpath, settings, selectedEngine);
@@ -9102,6 +9347,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     simulationSummary,
     camoticsInput,
     camHandoffQuality,
+    postprocessTraceReport,
     ncStaticAnalysis,
     machineControllerProfile,
     controllerDialectReport
@@ -9146,6 +9392,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     simulationSummary,
     ncStaticAnalysis,
     camHandoffQuality,
+    postprocessTraceReport,
     neutralToolpathImportValidation: readJsonFile(join(workDir, "neutral-toolpath-import-validation.json")),
     controllerDialectReport,
     toolSetupSheet,
@@ -9169,6 +9416,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     camoticsCliExecutionPlan,
     rotaryWrapPreviewReport,
     camHandoffQuality,
+    postprocessTraceReport,
     camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
     productionEvidenceDossier,
     ncStaticAnalysis,
@@ -9207,6 +9455,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       camoticsSimulationPlan,
       camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
+      postprocessTraceReport,
       ncStaticAnalysis,
       controllerDialectReport,
       machineControllerProfile,

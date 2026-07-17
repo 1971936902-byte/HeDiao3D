@@ -121,6 +121,7 @@ async function main() {
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.simulationEvidence?.level === "material-removal-incomplete", `expected material-removal-incomplete evidence, got ${productionGate.simulationEvidence?.level}`);
+  assert(productionGate.checks?.postprocessTraceLevel === "ready", "production gate should include ready postprocess trace level");
   assert(productionGate.simulationEvidence?.productionUnlockEligible === false, "CAMotics result without input identity hash must not be production eligible");
   assert(productionGate.allowAirRun === true, "closed neutral handoff should allow air-run");
   assert(productionGate.allowTrialNc === true, `closed neutral handoff should allow trial NC; blockers: ${(productionGate.blockers ?? []).join("; ")}`);
@@ -128,12 +129,22 @@ async function main() {
   assert(productionGate.level === "trial-only", `closed neutral package should be trial-only, got ${productionGate.level}`);
   assert((productionGate.warnings ?? []).some((item) => /Native CAM|外部|adapter|heightfield|生产/i.test(item)), "production gate should explain why production remains locked");
 
+  const postprocessTrace = await getArtifactJson(job.id, "postprocess-trace-report.json");
+  assert(postprocessTrace.level === "ready", `closed neutral postprocess trace should be ready, got ${postprocessTrace.level}`);
+  assert(postprocessTrace.source?.pointCount === neutralToolpath.points.length, "postprocess trace should use neutral point count");
+  assert(postprocessTrace.machineNc?.cuttingMoveCount === neutralToolpath.points.length, "postprocess trace machine moves should match neutral points");
+  assert(postprocessTrace.coordinateMapping?.rotaryAxis === "Y", "postprocess trace should preserve Y rotary axis");
+  assert(postprocessTrace.metrics?.fitRate >= 0.999, "postprocess trace fit rate should be near 100%");
+
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.gates?.allowTrialNc === true, "package index should expose trial NC availability");
   assert(packageIndex.gates?.allowProductionNc === false, "package index must keep production locked");
+  assert(packageIndex.postprocessTrace?.level === "ready", "package index should expose ready postprocess trace");
   assert(packageIndex.filesByPurpose?.reports?.some((file) => file.filename === "opencamlib-cutter-envelope-report.json"), "package index should include cutter envelope report");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "postprocess-trace-report.json"), "package index readFirst should include postprocess trace report");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   assert(packageIntegrity.files?.some((file) => file.filename === "opencamlib-cutter-envelope-report.json" && file.sha256), "package integrity should hash cutter envelope report");
+  assert(packageIntegrity.files?.some((file) => file.filename === "postprocess-trace-report.json" && file.sha256), "package integrity should hash postprocess trace report");
 
   console.log(JSON.stringify({
     ok: true,
@@ -143,6 +154,7 @@ async function main() {
     meshVerdict: meshQuality.verdict,
     triangleCount: meshQuality.triangleCount,
     neutralPoints: neutralToolpath.points.length,
+    postprocessTrace: postprocessTrace.level,
     simulationEvidence: productionGate.simulationEvidence.level,
     production: productionGate.allowProductionNc,
     trial: productionGate.allowTrialNc,
@@ -253,9 +265,16 @@ async function waitForHealth() {
 }
 
 async function waitForJob(jobId, startedAt) {
+  let transientFetchFailures = 0;
   while (Date.now() - startedAt < timeoutMs) {
-    const job = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
-    if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return job;
+    try {
+      const job = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
+      transientFetchFailures = 0;
+      if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return job;
+    } catch (error) {
+      transientFetchFailures += 1;
+      if (transientFetchFailures > 5) throw error;
+    }
     await sleep(1000);
   }
   throw new Error(`job ${jobId} timed out after ${timeoutMs}ms`);

@@ -127,6 +127,19 @@ async function main() {
   assert(rotaryWrapPreview.axisRanges?.machineNc?.a?.count === 0, "wrapY machine NC should not contain A axis values");
   assert(rotaryWrapPreview.axisRanges?.camoticsPreviewNc?.z?.min < 0, "CAMotics preview should include negative cutting Z");
 
+  const postprocessTrace = await getArtifactJson(job.id, "postprocess-trace-report.json");
+  assert(postprocessTrace.schema === "hediao3d.postprocess-trace-report.v1", "postprocess trace schema mismatch");
+  assert(postprocessTrace.level === "ready", `postprocess trace expected ready, got ${postprocessTrace.level}: ${postprocessTrace.summary}`);
+  assert(postprocessTrace.coordinateMapping?.rotaryAxis === "Y", "postprocess trace should use Y rotary axis");
+  assert(postprocessTrace.coordinateMapping?.rotaryOutputMode === "linearized-rotary-axis", "postprocess trace should describe Y as linearized rotary");
+  assert(postprocessTrace.machineNc?.cuttingMoveCount === postprocessTrace.source?.pointCount, "postprocess trace move count should match source points");
+  assert(postprocessTrace.metrics?.fitRate >= 0.999, `postprocess trace fit rate too low: ${postprocessTrace.metrics?.fitRate}`);
+  assert(postprocessTrace.metrics?.missingMoves === 0, "postprocess trace should not miss source moves");
+  assert(postprocessTrace.metrics?.extraMoves === 0, "postprocess trace should not include extra cutting moves");
+  assert((postprocessTrace.metrics?.maxAbs?.lengthMm ?? 1) <= 0.01, "postprocess trace length deviation too high");
+  assert((postprocessTrace.metrics?.maxAbs?.rotaryMachine ?? 1) <= 0.01, "postprocess trace rotary deviation too high");
+  assert((postprocessTrace.metrics?.maxAbs?.zMm ?? 1) <= 0.01, "postprocess trace Z deviation too high");
+
   const dialect = await getArtifactJson(job.id, "controller-dialect-report.json");
   assert(dialect.level === "ready", `controller dialect expected ready, got ${dialect.level}: ${dialect.summary}`);
   assert(dialect.dialect.profileArtifact === "machine-controller-profile.json", "controller dialect report should reference machine-controller-profile.json");
@@ -149,11 +162,26 @@ async function main() {
   assert(profile.dialect?.allowedWords?.includes("Y"), "machine controller profile should allow Y word");
   assert(profile.dialect?.forbiddenWords?.includes("A"), "Y rotary machine profile should forbid A word");
 
+  const productionGate = await getArtifactJson(job.id, "production-gate.json");
+  assert(productionGate.checks?.postprocessTraceLevel === "ready", "production gate should include ready postprocess trace level");
+  assert(productionGate.checks?.postprocessTraceFitRate >= 0.999, "production gate should expose postprocess trace fit rate");
+
+  const unlockMatrix = await getArtifactJson(job.id, "production-unlock-matrix.json");
+  assert(unlockMatrix.rows?.some((row) => row.id === "postprocess-trace" && row.status === "pass"), "unlock matrix missing pass postprocess trace row");
+
+  const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
+  assert(packageIndex.postprocessTrace?.level === "ready", "package index should expose postprocess trace summary");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "postprocess-trace-report.json"), "readFirst should include postprocess trace report");
+
+  const manifest = await getArtifactJson(job.id, "delivery-manifest.json");
+  assert(manifest.files?.some((file) => file.filename === "postprocess-trace-report.json" && file.downloadable === true), "delivery manifest missing postprocess trace report");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
     level: analysis.level,
     dialect: dialect.level,
+    postprocessTrace: postprocessTrace.level,
     machineControllerProfile: profile.id,
     rotaryWrapPreview: rotaryWrapPreview.level,
     machineAxes: machine.axisCounts,
