@@ -109,6 +109,8 @@ async function main() {
   assert(job.result?.summary?.camEngineSelection?.schema === "hediao3d.cam-engine-selection.v1", "CAM engine selection report missing");
   assert(job.result?.summary?.camEngineSelection?.selectedEngineName, "CAM engine selection missing selected engine name");
   assert(job.result?.summary?.camServerConfig?.schema === "hediao3d.cam-server-config.v1", "CAM server config report missing");
+  assert(job.result.summary.camServerConfig.deploymentValidation?.schema === "hediao3d.cam-server-deployment-validation.v1", "job summary missing CAM server deployment validation");
+  assert(job.result.summary.camServerConfig.deploymentValidation.stages?.some((stage) => stage.id === "external-handoff-smoke"), "job summary deployment validation missing external handoff stage");
   assert(job.result.summary.camServerConfig.selectedEngineName, "CAM server config missing selected engine name");
 
   const requiredArtifacts = [

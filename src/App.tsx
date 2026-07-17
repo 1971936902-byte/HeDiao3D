@@ -4922,13 +4922,36 @@ export function App() {
                 </small>
               )}
               {v3Job?.result?.summary.camServerConfig && (
-                <small className={v3Job.result.summary.camServerConfig.status === "ready-to-attempt-external-cam" ? "v3-inline-ok" : v3Job.result.summary.camServerConfig.status === "missing-native-dependencies" ? "v3-inline-critical" : "v3-inline-warning"}>
-                  CAM服务器配置：{v3Job.result.summary.camServerConfig.status}
-                  {" · "}
-                  {v3Job.result.summary.camServerConfig.selectedEngineName}
-                  {" · "}
-                  缺失 {v3Job.result.summary.camServerConfig.missingRequired.length}
-                </small>
+                <>
+                  <small className={v3Job.result.summary.camServerConfig.status === "ready-to-attempt-external-cam" ? "v3-inline-ok" : v3Job.result.summary.camServerConfig.status === "missing-native-dependencies" ? "v3-inline-critical" : "v3-inline-warning"}>
+                    CAM服务器配置：{v3Job.result.summary.camServerConfig.status}
+                    {" · "}
+                    {v3Job.result.summary.camServerConfig.selectedEngineName}
+                    {" · "}
+                    缺失 {v3Job.result.summary.camServerConfig.missingRequired.length}
+                  </small>
+                  {v3Job.result.summary.camServerConfig.deploymentValidation && (
+                    <div className="v3-deployment-validation">
+                      <small>
+                        加工包CAM验收：{v3Job.result.summary.camServerConfig.deploymentValidation.requiredAdapters.join(" / ") || "未指定"}
+                        {" · "}
+                        阶段 {v3Job.result.summary.camServerConfig.deploymentValidation.stages.length}
+                      </small>
+                      <div className="v3-adapter-list">
+                        {v3Job.result.summary.camServerConfig.deploymentValidation.stages.slice(0, 5).map((stage) => (
+                          <span className={stage.blocksProduction ? "warning" : "ok"} key={stage.id} title={stage.command}>
+                            {stage.title}
+                          </span>
+                        ))}
+                      </div>
+                      {v3Job.result.summary.camServerConfig.deploymentValidation.fixtureOrSyntheticMustBeOff[0] && (
+                        <small className="v3-inline-warning">
+                          生产必须关闭：{v3Job.result.summary.camServerConfig.deploymentValidation.fixtureOrSyntheticMustBeOff.slice(0, 3).join("、")}
+                        </small>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
               {v3Job?.result?.summary.externalCamRecipe && (
                 <small>
