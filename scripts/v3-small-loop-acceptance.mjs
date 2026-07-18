@@ -27,6 +27,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-readiness-api-test.mjs")]
   },
   {
+    id: "readiness-runbook-result-import",
+    label: "V3 readiness runbook result import",
+    command: [process.execPath, join("scripts", "v3-readiness-runbook-result-import-api-test.mjs")]
+  },
+  {
     id: "native-cam-api",
     label: "Native CAM server package API",
     command: [process.execPath, join("scripts", "v3-native-cam-api-test.mjs")]

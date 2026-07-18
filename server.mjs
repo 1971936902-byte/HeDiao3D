@@ -2108,6 +2108,7 @@ async function importV3ReadinessRunbookResult(req, res) {
 
   const outputRoot = join(process.cwd(), "public", "orchestrator-readiness", "runbook-results");
   await mkdir(outputRoot, { recursive: true });
+  const linuxEvidence = zipBundle ? extractV3RunbookLinuxEvidence(zipBundle) : createEmptyV3RunbookLinuxEvidence();
   const imported = {
     ...result,
     importedAt: new Date().toISOString(),
@@ -2116,13 +2117,20 @@ async function importV3ReadinessRunbookResult(req, res) {
       route: "/api/orchestrator/readiness/runbook-result",
       note: "Imported from a Linux CAM/deployment acceptance runbook. Readiness gates consume this result but it does not unlock production by itself.",
       zipBundle: zipBundle ? "imported-v3-acceptance-runbook-result-bundle.zip" : null
-    }
+    },
+    linuxEvidence
   };
   const resultPath = join(outputRoot, "v3-acceptance-runbook-result.json");
   await writeFile(resultPath, JSON.stringify(imported, null, 2), "utf8");
   if (zipBundle) {
     await writeFile(join(outputRoot, "imported-v3-acceptance-runbook-result-bundle.zip"), zipBundle.sourceBuffer);
+    for (const evidence of linuxEvidence.files) {
+      if (evidence.json) {
+        await writeFile(join(outputRoot, evidence.filename), JSON.stringify(evidence.json, null, 2), "utf8");
+      }
+    }
   }
+  await writeFile(join(outputRoot, "v3-acceptance-runbook-linux-evidence.json"), JSON.stringify(linuxEvidence, null, 2), "utf8");
   await writeFile(join(outputRoot, "v3-acceptance-runbook-result-import.json"), JSON.stringify({
     schema: "hediao3d.v3-acceptance-runbook-result-import.v1",
     createdAt: imported.importedAt,
@@ -2133,7 +2141,19 @@ async function importV3ReadinessRunbookResult(req, res) {
     ok: Boolean(imported.ok),
     failedCount: Number(imported.failedCount ?? 0),
     blockingFailedCount: Number(imported.blockingFailedCount ?? 0),
-    productionSafe: Boolean(imported.productionSafe)
+    productionSafe: Boolean(imported.productionSafe),
+    linuxEvidence: {
+      status: linuxEvidence.status,
+      foundCount: linuxEvidence.foundCount,
+      requiredFoundCount: linuxEvidence.requiredFoundCount,
+      missingRequired: linuxEvidence.missingRequired,
+      files: linuxEvidence.files.map((file) => ({
+        filename: file.filename,
+        status: file.status,
+        schema: file.schema,
+        sizeBytes: file.sizeBytes
+      }))
+    }
   }, null, 2), "utf8");
 
   const summary = createV3RunbookResultPublicSummary(imported, resultPath);
@@ -2142,9 +2162,79 @@ async function importV3ReadinessRunbookResult(req, res) {
     apiArtifacts: {
       json: "/api/orchestrator/readiness/runbook-results/v3-acceptance-runbook-result.json",
       importJson: "/api/orchestrator/readiness/runbook-results/v3-acceptance-runbook-result-import.json",
+      linuxEvidence: "/api/orchestrator/readiness/runbook-results/v3-acceptance-runbook-linux-evidence.json",
       ...(zipBundle ? { zipBundle: "/api/orchestrator/readiness/runbook-results/imported-v3-acceptance-runbook-result-bundle.zip" } : {})
     }
   });
+}
+
+function createEmptyV3RunbookLinuxEvidence() {
+  return {
+    schema: "hediao3d.v3-runbook-linux-evidence.v1",
+    status: "missing-zip",
+    foundCount: 0,
+    requiredFoundCount: 0,
+    missingRequired: ["native-cam-closed-loop-check.json", "camotics-result-local-validation.json"],
+    files: []
+  };
+}
+
+function extractV3RunbookLinuxEvidence(zipBundle) {
+  const evidenceSpecs = [
+    { filename: "native-cam-server-package-self-check.json", required: false },
+    { filename: "native-cam-closed-loop-check.json", required: true },
+    { filename: "native-cam-real-output-acceptance.json", required: false },
+    { filename: "v3-external-adapter-validation.json", required: false },
+    { filename: "camotics-result-local-validation.json", required: true },
+    { filename: "camotics-result.json", required: false },
+    { filename: "camotics-cli-run-package.json", required: false }
+  ];
+  const entriesByBaseName = new Map((zipBundle.entries ?? []).map((entry) => [entry.name.toLowerCase().split("/").pop(), entry]));
+  const files = evidenceSpecs.map((spec) => {
+    const entry = entriesByBaseName.get(spec.filename.toLowerCase());
+    if (!entry) {
+      return {
+        filename: spec.filename,
+        required: spec.required,
+        status: "missing",
+        schema: null,
+        sizeBytes: 0,
+        json: null
+      };
+    }
+    try {
+      const parsed = parseJsonBuffer(entry.content, spec.filename);
+      return {
+        filename: spec.filename,
+        required: spec.required,
+        status: "imported",
+        schema: parsed?.schema ?? null,
+        sizeBytes: entry.content.length,
+        json: parsed
+      };
+    } catch {
+      return {
+        filename: spec.filename,
+        required: spec.required,
+        status: "invalid-json",
+        schema: null,
+        sizeBytes: entry.content.length,
+        json: null
+      };
+    }
+  });
+  const found = files.filter((file) => file.status === "imported");
+  const missingRequired = files
+    .filter((file) => file.required && file.status !== "imported")
+    .map((file) => file.filename);
+  return {
+    schema: "hediao3d.v3-runbook-linux-evidence.v1",
+    status: missingRequired.length ? "incomplete" : "ready-for-review",
+    foundCount: found.length,
+    requiredFoundCount: files.filter((file) => file.required && file.status === "imported").length,
+    missingRequired,
+    files
+  };
 }
 
 function extractV3RunbookResultZipBundle(value) {
@@ -2159,7 +2249,8 @@ function extractV3RunbookResultZipBundle(value) {
     result: parseJsonBuffer(resultEntry.content, "v3-acceptance-runbook-result.json"),
     entries: entries.map((entry) => ({
       name: entry.name,
-      sizeBytes: entry.content.length
+      sizeBytes: entry.content.length,
+      content: entry.content
     }))
   };
 }
@@ -2243,6 +2334,22 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
       platform: result.environment.platform ?? null,
       cwd: result.environment.cwd ?? null,
       apiBase: result.environment.apiBase ?? null
+    } : null,
+    linuxEvidence: result.linuxEvidence ? {
+      schema: result.linuxEvidence.schema ?? "hediao3d.v3-runbook-linux-evidence.v1",
+      status: result.linuxEvidence.status ?? "unknown",
+      foundCount: Number(result.linuxEvidence.foundCount ?? 0),
+      requiredFoundCount: Number(result.linuxEvidence.requiredFoundCount ?? 0),
+      missingRequired: Array.isArray(result.linuxEvidence.missingRequired) ? result.linuxEvidence.missingRequired.slice(0, 8) : [],
+      files: Array.isArray(result.linuxEvidence.files)
+        ? result.linuxEvidence.files.slice(0, 12).map((file) => ({
+          filename: file.filename,
+          required: Boolean(file.required),
+          status: file.status ?? "unknown",
+          schema: file.schema ?? null,
+          sizeBytes: Number(file.sizeBytes ?? 0)
+        }))
+        : []
     } : null,
     levelAtReport: result.levelAtReport ?? null,
     acceptanceAtReport: result.acceptanceAtReport ?? null,

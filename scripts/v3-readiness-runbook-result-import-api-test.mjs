@@ -38,6 +38,17 @@ async function main() {
   const zipResult = createRunbookResultFixture(readiness, true);
   const zipBytes = createZip([
     { name: "v3-acceptance-runbook-result.json", content: JSON.stringify(zipResult, null, 2) },
+    { name: "native-cam-closed-loop-check.json", content: JSON.stringify({
+      schema: "hediao3d.native-cam-closed-loop-check.v1",
+      ok: true,
+      productionLocked: true,
+      steps: []
+    }, null, 2) },
+    { name: "camotics-result-local-validation.json", content: JSON.stringify({
+      schema: "hediao3d.camotics-result-local-validation.v1",
+      ok: true,
+      level: "ready"
+    }, null, 2) },
     { name: "README-RUNBOOK-RESULT.md", content: "HeDiao3D V3 runbook result bundle\n" }
   ]);
   const zipImported = await postJson("/api/orchestrator/readiness/runbook-result", {
@@ -47,12 +58,20 @@ async function main() {
   assert(zipImported.ok === true, "zip imported runbook result should be ok");
   assert(zipImported.identityValid === true, "zip imported runbook result should be identity-valid");
   assert(zipImported.productionSafe === true, "zip imported all-pass result should be production-safe as a runbook result");
+  assert(zipImported.linuxEvidence?.status === "ready-for-review", `zip import should expose Linux evidence, got ${zipImported.linuxEvidence?.status}`);
+  assert(zipImported.linuxEvidence?.requiredFoundCount === 2, "zip import should count required Linux evidence files");
+  assert(zipImported.apiArtifacts?.linuxEvidence?.endsWith("v3-acceptance-runbook-linux-evidence.json"), "zip import should expose Linux evidence artifact");
   assert(zipImported.apiArtifacts?.zipBundle?.endsWith("imported-v3-acceptance-runbook-result-bundle.zip"), "zip import should expose preserved source bundle");
+  const linuxEvidenceArtifact = await getJson(zipImported.apiArtifacts.linuxEvidence);
+  assert(linuxEvidenceArtifact.schema === "hediao3d.v3-runbook-linux-evidence.v1", "Linux evidence artifact schema mismatch");
+  assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "native-cam-closed-loop-check.json" && file.status === "imported"), "Linux evidence should preserve closed-loop check");
+  assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.status === "imported"), "Linux evidence should preserve CAMotics validation");
 
   const latest = await getJson("/api/orchestrator/readiness/runbook-result/latest");
   assert(latest.latest?.readinessReportId === readiness.id, "latest runbook result should point to imported readiness id");
   assert(latest.latest.identityValid === true, "latest runbook result should remain identity-valid");
   assert(latest.latest.ok === true, "latest runbook result should be the zip all-pass import");
+  assert(latest.latest.linuxEvidence?.status === "ready-for-review", "latest runbook result should preserve Linux evidence summary");
 
   const readinessAfterImport = await postJson("/api/orchestrator/readiness", {});
   assert(readinessAfterImport.runbookResult?.readinessReportId === readiness.id, "readiness should include latest imported runbook result");
