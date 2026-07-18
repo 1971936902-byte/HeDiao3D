@@ -15531,6 +15531,7 @@ function getOrchestratorProductionPackage(jobId, res) {
     return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
   }
   if (evidenceDossier?.status !== "production-evidence-complete" || productionAudit?.allowProductionPackage !== true) {
+    const operatorGuidance = createLockedProductionPackageOperatorGuidance(safeJobId, manifest, productionGate, evidenceDossier, productionAudit);
     return json(res, 423, {
       error: !manifest.allowProductionNc || productionGate?.allowProductionNc !== true
         ? "V3 正式生产包未解锁"
@@ -15544,6 +15545,7 @@ function getOrchestratorProductionPackage(jobId, res) {
       summary: productionAudit?.summary ?? evidenceDossier?.summary ?? productionGate?.summary ?? "缺少 production-evidence-dossier.json，无法证明真实 CAM、仿真、试雕反馈和机床验收均绑定同一加工包。",
       blockers: productionGate?.blockers ?? [],
       warnings: productionGate?.warnings ?? [],
+      operatorGuidance,
       nextActions: [
         "完成真实外部 CAM 输出与非 synthetic CAMotics/等效材料去除仿真。",
         "下载同一 job 的安全试雕包，完成离料空跑和软料试雕。",
@@ -15587,6 +15589,49 @@ function getOrchestratorProductionPackage(jobId, res) {
     "Cache-Control": "no-store"
   });
   res.end(zip);
+}
+
+function createLockedProductionPackageOperatorGuidance(jobId, manifest, productionGate, evidenceDossier, productionAudit) {
+  const missingEvidence = Array.isArray(evidenceDossier?.missingEvidence) ? evidenceDossier.missingEvidence : [];
+  const neverMachineFiles = Array.isArray(manifest?.files)
+    ? manifest.files
+      .filter((file) => file.filename === "camotics-preview.nc" || file.machineUse?.allowedOnMachine === false || file.machineUse?.class === "simulation-only-never-machine")
+      .map((file) => ({
+        filename: file.filename,
+        reason: file.machineUse?.summary ?? "仅用于仿真、报告或 Linux CAM 证据链，禁止上机。"
+      }))
+    : [];
+  return {
+    schema: "hediao3d.locked-production-package-guidance.v1",
+    jobId,
+    status: "locked",
+    safeTrialPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/safe-trial-package`,
+    evidenceReviewPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/evidence-review-package`,
+    readFirstFiles: [
+      "operator-download-checklist.md",
+      "machining-package-index.json",
+      "production-gate.json",
+      "production-evidence-dossier.json",
+      "next-action-checklist.md",
+      "package-integrity.json"
+    ],
+    allowedBeforeUnlock: [
+      "下载安全试雕包。",
+      "核验 package-integrity.json 与 operator-download-checklist.md。",
+      "先运行 rotary-calibration-airrun.nc，再运行 air-run.nc。",
+      "只在软料/废料上低倍率试雕，并回填试雕反馈和机床验收。"
+    ],
+    neverRunOnMachine: neverMachineFiles,
+    evidenceGaps: missingEvidence.slice(0, 8).map((item) => ({
+      id: item.id,
+      label: item.label,
+      status: item.status,
+      summary: item.summary
+    })),
+    productionGateLevel: productionGate?.level ?? manifest?.packageLevel ?? "unknown",
+    productionAuditAllowed: Boolean(productionAudit?.allowProductionPackage),
+    summary: "正式生产包被锁定时，先走安全试雕包和证据回填流程；不要把仿真文件或报告文件上机。"
+  };
 }
 
 function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {

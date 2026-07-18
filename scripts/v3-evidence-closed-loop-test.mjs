@@ -136,6 +136,9 @@ async function main() {
   const lockedProductionPackage = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
   assert(["V3 正式生产包未解锁", "V3 正式生产包证据档案未闭环"].includes(lockedProductionPackage.error), "production package endpoint should remain locked");
   assert(lockedProductionPackage.allowProductionNc === false, "locked response should keep allowProductionNc=false");
+  assert(lockedProductionPackage.operatorGuidance?.schema === "hediao3d.locked-production-package-guidance.v1", "locked response should expose operator guidance schema");
+  assert(lockedProductionPackage.operatorGuidance?.safeTrialPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/safe-trial-package`), "locked response should point to the safe trial package");
+  assert(lockedProductionPackage.operatorGuidance?.neverRunOnMachine?.some((file) => file.filename === "camotics-preview.nc"), "locked response should keep simulation files off machine");
 
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.nativeCamRealOutputAcceptance?.level === "ready", "readiness should expose latest native CAM acceptance");
