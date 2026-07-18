@@ -542,6 +542,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "真实 OpenCAMLib neutral-toolpath runner 入口；未满足真实 contact 条件时 fail-closed 并写出 opencamlib-runner-readiness.json。"
       },
       {
+        filename: "opencamlib-real-candidate-run.mjs",
+        role: "opencamlib-real-candidate-orchestrator",
+        description: "Linux 侧一键串联 OpenCAMLib probe、contact spike、runner、strict contact 验收和候选包预检；只产出证据，默认 fail-closed。"
+      },
+      {
         filename: "opencamlib-candidate-package-validate.mjs",
         role: "opencamlib-candidate-package-validator",
         description: "预检真实 OpenCAMLib 候选输出目录，生成 contact 验证结果和轻量候选证据 ZIP。"
@@ -575,6 +580,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "python3 opencamlib-probe.py --out opencamlib-runtime-probe.json",
       "python3 opencamlib-contact-spike.py --out opencamlib-real-contact-spike.json --neutral-out neutral-toolpath-spike.json",
       "python3 opencamlib-runner.py job.json opencamlib-kernel-plan.json neutral-toolpath.json",
+      "node opencamlib-real-candidate-run.mjs .",
       "node opencamlib-candidate-package-validate.mjs --root .",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
       "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
@@ -595,6 +601,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "opencamlib-probe.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_probe.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-spike.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_contact_spike.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-runner.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_runner.py")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "opencamlib-real-candidate-run.mjs"), createOpenCamLibRealCandidateRunScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
@@ -613,6 +620,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "npm run test:v3:native-cam",
     "npm run test:v3:freecad-proof-handoff",
     "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+    "node opencamlib-real-candidate-run.mjs .",
     "OpenCAMLib 真实候选目录生成后运行 node opencamlib-candidate-package-validate.mjs --root .",
     "bash native-cam-real-output-check.sh",
     "上传 native-cam-real-output-bundle.zip 到 HeDiao3D V3 Native CAM 回填面板",
@@ -711,6 +719,7 @@ const requiredFiles = [
   "opencamlib-probe.py",
   "opencamlib-contact-spike.py",
   "opencamlib-runner.py",
+  "opencamlib-real-candidate-run.mjs",
   "opencamlib-contact-output-validate.mjs",
   "opencamlib-candidate-package-validate.mjs",
   "camotics-material-removal-validate.mjs",
@@ -734,6 +743,7 @@ check("command:diagnostics-bundle", commands.includes("native-cam-diagnostics-bu
 check("command:opencamlib-probe", commands.includes("opencamlib-probe.py"), "manifest.commands must include OpenCAMLib runtime probe.");
 check("command:opencamlib-contact-spike", commands.includes("opencamlib-contact-spike.py"), "manifest.commands must include OpenCAMLib real contact spike.");
 check("command:opencamlib-runner", commands.includes("opencamlib-runner.py"), "manifest.commands must include OpenCAMLib runner readiness handoff.");
+check("command:opencamlib-real-candidate", commands.includes("opencamlib-real-candidate-run.mjs"), "manifest.commands must include the one-command OpenCAMLib real candidate run.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
@@ -750,6 +760,7 @@ const openCamCandidateValidator = readTextIfExists(join(root, "opencamlib-candid
 const openCamProbe = readTextIfExists(join(root, "opencamlib-probe.py"));
 const openCamContactSpike = readTextIfExists(join(root, "opencamlib-contact-spike.py"));
 const openCamRunner = readTextIfExists(join(root, "opencamlib-runner.py"));
+const openCamRealCandidate = readTextIfExists(join(root, "opencamlib-real-candidate-run.mjs"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
@@ -760,6 +771,8 @@ check("opencamlib-contact-spike-schema", openCamContactSpike.includes("hediao3d.
 check("opencamlib-contact-spike-boundary", openCamContactSpike.includes("must not unlock trial or production NC"), "OpenCAMLib contact spike must keep the production boundary explicit.");
 check("opencamlib-runner-readiness-schema", openCamRunner.includes("hediao3d.opencamlib-runner-readiness-report.v1"), "OpenCAMLib runner must emit the runner readiness schema.");
 check("opencamlib-runner-production-lock", openCamRunner.includes("canEmitProductionCandidate") && openCamRunner.includes("must not unlock trial or production"), "OpenCAMLib runner readiness must keep production locked.");
+check("opencamlib-real-candidate-schema", openCamRealCandidate.includes("hediao3d.opencamlib-real-candidate-run.v1"), "OpenCAMLib real candidate runner must emit the candidate run schema.");
+check("opencamlib-real-candidate-fail-closed", openCamRealCandidate.includes("productionLocked: true") && openCamRealCandidate.includes("opencamlib-candidate-package-validate.mjs"), "OpenCAMLib real candidate runner must stay fail-closed and run candidate package validation.");
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
 check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");
@@ -1016,6 +1029,10 @@ HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=false
 # HEDIAO3D_FREECAD_EXTERNAL_COMMAND_JSON=["python","/opt/HeDiao3D/adapters/freecad/freecad_runner.py"]
 # HEDIAO3D_BLENDERCAM_EXTERNAL_COMMAND_JSON=["blender","--background","--python","/opt/HeDiao3D/adapters/blendercam/blendercam_runner.py","--"]
 # HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON=["python3","/opt/HeDiao3D/adapters/opencamlib/opencamlib_runner.py"]
+
+# Linux OpenCAMLib real candidate helper. This still stays evidence-only until
+# strict contact validation, material-removal simulation and machine gates pass.
+HEDIAO3D_OPENCAMLIB_RUNNER_PATH_DROPCUTTER_OUTPUT=false
 
 HEDIAO3D_FREECAD_EXTERNAL_TIMEOUT_SEC=240
 HEDIAO3D_BLENDERCAM_EXTERNAL_TIMEOUT_SEC=240
@@ -1365,6 +1382,196 @@ echo "[HeDiao3D] If this script exits 0 with production-candidate output, contin
 `;
 }
 
+function createOpenCamLibRealCandidateRunScript() {
+  return `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+
+const root = resolve(process.argv[2] ?? process.cwd());
+const python = process.env.V3_PYTHON_CMD || findCommand(["python3", "python"]);
+const jobPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_JOB_JSON ?? "job.json");
+const planPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_PLAN_JSON ?? "opencamlib-kernel-plan.json");
+const neutralPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON ?? "neutral-toolpath.json");
+const contactPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_CONTACT_JSON ?? "opencamlib-cutter-contact-report.json");
+const modelPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_MODEL_STL ?? "repaired-model.stl");
+const steps = [];
+
+recordInput("python", Boolean(python), python || "python3/python");
+recordInput("job-json", existsSync(jobPath), jobPath);
+recordInput("kernel-plan", existsSync(planPath), planPath);
+recordInput("source-model", existsSync(modelPath), modelPath);
+
+if (python && existsSync(join(root, "opencamlib-probe.py"))) {
+  runStep({
+    id: "opencamlib-runtime-probe",
+    required: true,
+    command: python,
+    args: ["opencamlib-probe.py", "--out", "opencamlib-runtime-probe.json"],
+    outputJson: "opencamlib-runtime-probe.json"
+  });
+}
+
+if (python && existsSync(join(root, "opencamlib-contact-spike.py"))) {
+  runStep({
+    id: "opencamlib-real-contact-spike",
+    required: true,
+    command: python,
+    args: ["opencamlib-contact-spike.py", "--out", "opencamlib-real-contact-spike.json", "--neutral-out", "neutral-toolpath-spike.json"],
+    outputJson: "opencamlib-real-contact-spike.json"
+  });
+}
+
+if (python && existsSync(jobPath) && existsSync(planPath) && existsSync(modelPath) && existsSync(join(root, "opencamlib-runner.py"))) {
+  runStep({
+    id: "opencamlib-real-runner",
+    required: true,
+    command: python,
+    args: ["opencamlib-runner.py", jobPath, planPath, neutralPath],
+    outputJson: "neutral-toolpath.json",
+    env: { HEDIAO3D_OPENCAMLIB_RUNNER_PATH_DROPCUTTER_OUTPUT: "true" }
+  });
+}
+
+if (existsSync(neutralPath) && existsSync(contactPath) && existsSync(join(root, "opencamlib-contact-output-validate.mjs"))) {
+  runStep({
+    id: "opencamlib-strict-contact-validate",
+    required: true,
+    command: "node",
+    args: [
+      "opencamlib-contact-output-validate.mjs",
+      "--neutral", neutralPath,
+      "--plan", planPath,
+      "--model", modelPath,
+      "--contact", contactPath
+    ],
+    outputJson: "opencamlib-contact-output-validation.json",
+    passStatuses: [0, 3]
+  });
+}
+
+if (existsSync(neutralPath) && existsSync(join(root, "opencamlib-candidate-package-validate.mjs"))) {
+  runStep({
+    id: "opencamlib-candidate-package-validate",
+    required: true,
+    command: "node",
+    args: ["opencamlib-candidate-package-validate.mjs", "--root", root],
+    outputJson: "opencamlib-candidate-package-validation.json",
+    passStatuses: [0, 3]
+  });
+}
+
+const contactValidation = readJsonIfExists(join(root, "opencamlib-contact-output-validation.json"));
+const candidatePackage = readJsonIfExists(join(root, "opencamlib-candidate-package-validation.json"));
+const requiredFailures = steps.filter((step) => step.required && step.status !== "pass");
+const productionCandidate = Boolean(
+  contactValidation?.productionCandidateEligible &&
+  contactValidation?.evidenceClass === "production-candidate" &&
+  candidatePackage?.level === "ready" &&
+  candidatePackage?.handoffContract?.status === "ready-for-hediao3d-import"
+);
+const report = {
+  schema: "hediao3d.opencamlib-real-candidate-run.v1",
+  createdAt: new Date().toISOString(),
+  root,
+  host: {
+    platform: process.platform,
+    release: os.release(),
+    arch: os.arch(),
+    hostname: os.hostname(),
+    node: process.version
+  },
+  ok: requiredFailures.length === 0 && productionCandidate,
+  level: productionCandidate ? "production-candidate-ready-for-import" : "blocked",
+  productionLocked: true,
+  productionBoundary: "This script creates and validates OpenCAMLib candidate evidence only. It does not unlock HeDiao3D production NC; material-removal simulation, air-run, trial feedback and machine acceptance must still pass.",
+  inputs: {
+    jobJson: jobPath,
+    kernelPlan: planPath,
+    sourceModel: modelPath,
+    neutralToolpath: neutralPath,
+    contactReport: contactPath
+  },
+  contactValidation: contactValidation ? {
+    level: contactValidation.level,
+    evidenceClass: contactValidation.evidenceClass,
+    productionCandidateEligible: Boolean(contactValidation.productionCandidateEligible),
+    failedCheckCount: Array.isArray(contactValidation.checks) ? contactValidation.checks.filter((check) => check.status === "fail").length : null
+  } : null,
+  candidatePackage: candidatePackage ? {
+    level: candidatePackage.level,
+    evidenceClass: candidatePackage.contactValidation?.evidenceClass ?? candidatePackage.artifactManifest?.evidenceClass ?? null,
+    readyForImport: candidatePackage.handoffContract?.status === "ready-for-hediao3d-import",
+    bundle: candidatePackage.bundlePath ?? "opencamlib-candidate-package-bundle.zip"
+  } : null,
+  steps,
+  blocking: [
+    ...requiredFailures.map((step) => step.id + ":" + step.status),
+    ...(productionCandidate ? [] : ["opencamlib-production-candidate-not-proven"])
+  ],
+  expectedNextFiles: [
+    "opencamlib-contact-output-validation.json",
+    "opencamlib-candidate-package-validation.json",
+    "opencamlib-candidate-package-bundle.zip",
+    "native-cam-real-output-bundle.zip",
+    "camotics-result-bundle.zip"
+  ]
+};
+
+writeFileSync(join(root, "opencamlib-real-candidate-run.json"), JSON.stringify(report, null, 2), "utf8");
+console.log(JSON.stringify(report, null, 2));
+if (!report.ok) process.exitCode = 3;
+
+function recordInput(id, ok, summary) {
+  steps.push({ id, required: true, status: ok ? "pass" : "missing-input", summary: String(summary) });
+}
+
+function runStep({ id, required, command, args, outputJson, passStatuses = [0], env = {} }) {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: false,
+    env: { ...process.env, ...env }
+  });
+  const exitCode = typeof result.status === "number" ? result.status : null;
+  const parsed = outputJson ? readJsonIfExists(join(root, outputJson)) || readJsonIfExists(outputJson) : null;
+  steps.push({
+    id,
+    required,
+    status: exitCode !== null && passStatuses.includes(exitCode) ? "pass" : "fail",
+    command: [command, ...args.map((arg) => String(arg))].join(" "),
+    exitCode,
+    outputJson: outputJson ?? null,
+    parsedSchema: parsed?.schema ?? null,
+    summary: parsed?.level ?? parsed?.status ?? parsed?.schema ?? (exitCode === 0 ? "passed" : "failed"),
+    stdoutTail: tail(result.stdout),
+    stderrTail: tail(result.stderr)
+  });
+}
+
+function findCommand(commands) {
+  for (const command of commands) {
+    const result = spawnSync(command, ["--version"], { encoding: "utf8", shell: false });
+    if (!result.error && result.status === 0) return command;
+  }
+  return null;
+}
+
+function readJsonIfExists(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function tail(value) {
+  return String(value ?? "").split(/\\r?\\n/).filter(Boolean).slice(-20);
+}
+`;
+}
+
 function createNativeCamDiagnosticsBundleScript() {
   return `#!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -1656,6 +1863,7 @@ ${rows.join("\n")}
 - [ ] \`node native-cam-server-package-self-check.mjs\`
 - [ ] \`npm run test:v3:freecad-proof-handoff\`
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
+- [ ] OpenCAMLib 真实候选输出优先运行 \`node opencamlib-real-candidate-run.mjs .\`
 - [ ] OpenCAMLib 真实输出后运行 \`node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json\`
 - [ ] CAMotics 材料去除结果回填前运行 \`node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json\`
 - [ ] \`bash native-cam-real-output-check.sh\`

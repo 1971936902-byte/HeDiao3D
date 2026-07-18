@@ -43,9 +43,27 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-boundary" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike boundary");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-runner-readiness-schema" && check.status === "pass"), "self-check should verify OpenCAMLib runner readiness schema");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-runner-production-lock" && check.status === "pass"), "self-check should verify OpenCAMLib runner production lock");
+  assert(readyReport.checks?.some((check) => check.id === "file:opencamlib-real-candidate-run.mjs" && check.status === "pass"), "self-check should require OpenCAMLib real candidate runner file");
+  assert(readyReport.checks?.some((check) => check.id === "command:opencamlib-real-candidate" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate command");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-real-candidate-schema" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate schema");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-real-candidate-fail-closed" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate production lock");
   assert(readyReport.checks?.some((check) => check.id === "real-output-runner-readiness" && check.status === "pass"), "self-check should verify real-output bundle carries OpenCAMLib runner readiness");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
+
+  const realCandidatePath = join(workDir, "opencamlib-real-candidate-run.mjs");
+  assert(existsSync(realCandidatePath), "generated server package missing OpenCAMLib real candidate runner");
+  const realCandidate = spawnSync(node, [realCandidatePath, workDir], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(realCandidate.status === 3, `real candidate runner should fail closed without job/plan/model inputs, got ${realCandidate.status}: ${realCandidate.stderr || realCandidate.stdout}`);
+  const realCandidateReport = JSON.parse(realCandidate.stdout);
+  assert(realCandidateReport.schema === "hediao3d.opencamlib-real-candidate-run.v1", "real candidate runner schema mismatch");
+  assert(realCandidateReport.productionLocked === true, "real candidate runner must keep production locked");
+  assert(realCandidateReport.blocking?.includes("opencamlib-production-candidate-not-proven"), "real candidate runner should block when production candidate is not proven");
+  assert(existsSync(join(workDir, "opencamlib-real-candidate-run.json")), "real candidate runner should write JSON report");
 
   const diagnosticsPath = join(workDir, "native-cam-diagnostics-bundle.mjs");
   assert(existsSync(diagnosticsPath), "generated server package missing diagnostics bundle script");
