@@ -37,11 +37,15 @@ try {
   assert(readyReport.schema === "hediao3d.opencamlib-candidate-package-validation.v1", "candidate package schema mismatch");
   assert(readyReport.level === "ready", `ready candidate package level mismatch: ${readyReport.level}`);
   assert(readyReport.contactValidation?.level === "ready", "ready package should include ready contact validation");
+  assert(readyReport.machineFit?.schema === "hediao3d.opencamlib-candidate-machine-fit-preflight.v1", "ready package should include machine-fit preflight");
+  assert(["ok", "review"].includes(readyReport.machineFit?.level), `ready machine-fit should be ok/review, got ${readyReport.machineFit?.level}`);
+  assert(readyReport.artifactManifest?.machineFitLevel === readyReport.machineFit.level, "artifact manifest should expose machine-fit level");
   assert(readyReport.artifactManifest?.schema === "hediao3d.opencamlib-candidate-artifact-manifest.v1", "ready package should include artifact manifest");
   assert(readyReport.artifactManifest?.readyForImport === true, "ready artifact manifest should be ready for import");
   assert(readyReport.handoffContract?.schema === "hediao3d.opencamlib-neutral-handoff-contract.v1", "ready package should include handoff contract");
   assert(readyReport.handoffContract?.status === "ready-for-hediao3d-import", "ready handoff contract should be import-ready");
   assert(readyReport.handoffContract?.strictAcceptance?.neutralHashBound === true, "ready handoff contract should confirm neutral hash binding");
+  assert(readyReport.handoffContract?.strictAcceptance?.machineFitLevel === readyReport.machineFit.level, "handoff contract should expose machine-fit level");
   assert(readyReport.files.neutral?.sha256 === sha256File(neutralPath), "ready package should hash neutral output");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-validation.json")), "candidate package report should be written");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-bundle.zip")), "candidate package bundle should be written");
@@ -96,6 +100,38 @@ try {
   assert(identityMismatchReport.handoffContract?.strictAcceptance?.planHashBound === false, "identity-mismatched handoff should mark plan hash as unbound");
   assert(identityMismatchReport.blockers?.some((item) => /strict contact validation is critical/.test(item)), "identity mismatch should block candidate package at strict contact validation");
   rmSync(identityMismatchDir, { recursive: true, force: true });
+
+  const machineMismatchDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-machine-mismatch-"));
+  const machineModelPath = join(machineMismatchDir, "repaired-model.stl");
+  const machinePlanPath = join(machineMismatchDir, "opencamlib-kernel-plan.json");
+  const machineNeutralPath = join(machineMismatchDir, "neutral-toolpath.json");
+  const machineContactPath = join(machineMismatchDir, "opencamlib-cutter-contact-report.json");
+  writeFileSync(machineModelPath, createStl(), "utf8");
+  writeFileSync(machinePlanPath, JSON.stringify(createPlan(machineModelPath), null, 2), "utf8");
+  const machineNeutral = createNeutralWithoutRotary(machineContactPath);
+  const machineNeutralSha = sha256JsonWithoutContact(machineNeutral);
+  const machineContact = createContact({
+    modelSha: sha256File(machineModelPath),
+    planSha: sha256File(machinePlanPath),
+    neutralSha: machineNeutralSha
+  });
+  machineNeutral.cutterContactReport = machineContact;
+  writeFileSync(machineNeutralPath, JSON.stringify(machineNeutral, null, 2), "utf8");
+  writeFileSync(machineContactPath, JSON.stringify(machineContact, null, 2), "utf8");
+  const machineMismatch = spawnSync(node, [validator, "--root", machineMismatchDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(machineMismatch.status === 3, `machine-mismatched candidate package should fail strict mode, got ${machineMismatch.status}: ${machineMismatch.stdout}`);
+  const machineMismatchReport = JSON.parse(machineMismatch.stdout);
+  assert(machineMismatchReport.level === "critical", "machine-mismatched package should be critical");
+  assert(machineMismatchReport.machineFit?.level === "critical", "machine-mismatched package should expose critical machine-fit");
+  assert(machineMismatchReport.machineFit?.checks?.rotaryCoordinatePresent === false, "machine-fit should fail missing rotary coordinate");
+  assert(machineMismatchReport.artifactManifest?.readyForImport === false, "machine-mismatched artifact manifest should not be import-ready");
+  assert(machineMismatchReport.handoffContract?.strictAcceptance?.rotaryCoordinatePresent === false, "handoff should expose missing rotary coordinate");
+  assert(machineMismatchReport.blockers?.some((item) => /machine-fit/i.test(item)), "machine mismatch should block candidate package at machine-fit preflight");
+  rmSync(machineMismatchDir, { recursive: true, force: true });
 
   const experimentalDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-experimental-"));
   const experimentalModelPath = join(experimentalDir, "repaired-model.stl");
@@ -187,6 +223,18 @@ function createExperimentalNeutral(contactPath) {
     ...createNeutral(contactPath),
     experimentalOpenCamLibPathDropCutter: true,
     runner: { mode: "opencamlib-path-drop-cutter-experimental" }
+  };
+}
+
+function createNeutralWithoutRotary(contactPath) {
+  return {
+    ...createNeutral(contactPath),
+    coordinate: { lengthAxis: "X", depthAxis: "Z" },
+    points: [
+      { x: -10, z: 21.5, depth: 0.5 },
+      { x: 0, z: 21.2, depth: 0.8 },
+      { x: 10, z: 21.6, depth: 0.4 }
+    ]
   };
 }
 

@@ -25,6 +25,7 @@ const files = {
   validator: createFileIdentity(validatorPath, "opencamlib-contact-output-validate.mjs")
 };
 const plan = files.plan.exists ? readJson(planPath, "OpenCAMLib kernel plan") : null;
+const neutral = files.neutral.exists ? readJson(neutralPath, "neutral toolpath") : null;
 const modelPath = explicitModelPath ?? resolveModelPath(plan, planPath);
 files.model = createFileIdentity(modelPath, modelPath ? basename(modelPath) : "model");
 
@@ -58,9 +59,13 @@ const blockers = [
   ...(contactValidation && contactValidation.level !== "ready" ? [`strict contact validation is ${contactValidation.level} (${contactValidation.evidenceClass ?? "unknown-evidence"})`] : []),
   ...(contactValidation?.evidenceClass === "experimental-real-api" ? ["experimental-real-api output is engineering evidence only, not a production candidate"] : [])
 ];
+const machineFit = createNeutralMachineFitPreflight(neutral, plan);
+if (machineFit.level === "critical") {
+  blockers.push(`neutral machine-fit preflight is critical: ${machineFit.summary}`);
+}
 const level = blockers.length ? "critical" : "ready";
-const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation });
-const handoffContract = createHandoffContract({ level, files, contactValidation });
+const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit });
+const handoffContract = createHandoffContract({ level, files, contactValidation, machineFit });
 const report = {
   schema: "hediao3d.opencamlib-candidate-package-validation.v1",
   createdAt: new Date().toISOString(),
@@ -70,6 +75,7 @@ const report = {
   files,
   artifactManifest,
   handoffContract,
+  machineFit,
   contactValidation: contactValidation ? createContactValidationSummary(contactValidation) : null,
   validatorRun: validatorRun ? {
     exitCode: validatorRun.status,
@@ -79,7 +85,9 @@ const report = {
   blockers,
   nextActions: level === "ready"
     ? [
-      "Import neutral-toolpath.json into HeDiao3D or include this output in native-cam-real-output-bundle.zip.",
+      machineFit.level === "review"
+        ? "Import neutral-toolpath.json into HeDiao3D only after reviewing machineFit warnings for rotary coverage, protected zones and depth limits."
+        : "Import neutral-toolpath.json into HeDiao3D or include this output in native-cam-real-output-bundle.zip.",
       "Continue CAMotics material-removal validation and field air-run/trial evidence before production unlock."
     ]
     : [
@@ -146,7 +154,7 @@ function createContactValidationSummary(value) {
   };
 }
 
-function createArtifactManifest({ files, outPath, bundlePath, contactValidation }) {
+function createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit }) {
   const entries = [
     createManifestEntry("neutral-toolpath", files.neutral, "required", "HeDiao3D imports this neutral cutter-contact point path before rotary-Y postprocessing."),
     createManifestEntry("opencamlib-kernel-plan", files.plan, "required", "Hash-bound CAM kernel plan used by the real OpenCAMLib run."),
@@ -158,8 +166,9 @@ function createArtifactManifest({ files, outPath, bundlePath, contactValidation 
   ];
   return {
     schema: "hediao3d.opencamlib-candidate-artifact-manifest.v1",
-    readyForImport: contactValidation?.level === "ready" && entries.every((entry) => entry.required !== true || entry.exists),
+    readyForImport: contactValidation?.level === "ready" && machineFit?.level !== "critical" && entries.every((entry) => entry.required !== true || entry.exists),
     evidenceClass: contactValidation?.evidenceClass ?? "missing",
+    machineFitLevel: machineFit?.level ?? "missing",
     entries,
     missingRequired: entries.filter((entry) => entry.required && !entry.exists).map((entry) => entry.filename ?? entry.kind),
     productionBoundary: "These artifacts can enter HeDiao3D as CAM evidence only; they do not bypass material-removal simulation, air-run, trial feedback or machine acceptance."
@@ -180,7 +189,7 @@ function createManifestEntry(kind, identity, role, description) {
   };
 }
 
-function createHandoffContract({ level, files, contactValidation }) {
+function createHandoffContract({ level, files, contactValidation, machineFit }) {
   const evidenceClass = contactValidation?.evidenceClass ?? "missing";
   return {
     schema: "hediao3d.opencamlib-neutral-handoff-contract.v1",
@@ -204,7 +213,11 @@ function createHandoffContract({ level, files, contactValidation }) {
       productionCandidateEligible: Boolean(contactValidation?.productionCandidateEligible),
       neutralHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-neutral" && check.status === "pass")),
       planHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-plan" && check.status === "pass")),
-      modelHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-model" && check.status === "pass"))
+      modelHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-model" && check.status === "pass")),
+      machineFitLevel: machineFit?.level ?? "missing",
+      rotaryCoordinatePresent: Boolean(machineFit?.checks?.rotaryCoordinatePresent),
+      protectedZoneClean: Boolean(machineFit?.checks?.protectedZoneClean),
+      depthWithinLimit: Boolean(machineFit?.checks?.depthWithinLimit)
     },
     blockedReason: level === "ready"
       ? null
@@ -213,6 +226,160 @@ function createHandoffContract({ level, files, contactValidation }) {
         : "Candidate output is missing required files or failed strict cutter-contact validation.",
     machineUse: "report-only-until-full-production-gates-pass"
   };
+}
+
+function createNeutralMachineFitPreflight(neutral, plan) {
+  const settings = extractMachineFitSettings(plan);
+  const warnings = [];
+  const errors = [];
+  const points = Array.isArray(neutral?.points) ? neutral.points : [];
+  const finitePoints = points.filter((point) => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.z)));
+  if (!neutral) errors.push("neutral-toolpath.json is missing or unreadable.");
+  if (neutral && neutral.schema !== "hediao3d.neutral-toolpath.v1") {
+    errors.push(`neutral schema must be hediao3d.neutral-toolpath.v1, got ${neutral.schema ?? "unknown"}.`);
+  }
+  if (points.length === 0) errors.push("neutral-toolpath has no points.");
+  if (finitePoints.length !== points.length) {
+    errors.push(`${points.length - finitePoints.length} neutral points are missing finite X/Z coordinates.`);
+  }
+
+  const rotaryValues = finitePoints.map((point) => {
+    if (Number.isFinite(Number(point.a))) return normalizeAngle(Number(point.a));
+    if (settings.rotaryOutputAxis !== "A" && Number.isFinite(Number(point.y))) {
+      return normalizeAngle((Number(point.y) / settings.wrapPerRevMm) * 360);
+    }
+    return null;
+  }).filter((value) => Number.isFinite(value));
+  if (settings.rotaryMode && finitePoints.length > 0 && rotaryValues.length === 0) {
+    errors.push("rotary-wrap neutral output has no usable A angle or Y linearized rotary coordinate.");
+  }
+
+  const xs = finitePoints.map((point) => Number(point.x));
+  const depths = finitePoints.map((point) => Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, settings.safeZ - Number(point.z)));
+  const xMin = xs.length ? Math.min(...xs) : null;
+  const xMax = xs.length ? Math.max(...xs) : null;
+  const depthMax = depths.length ? Math.max(...depths) : null;
+  const holdZonePointCount = finitePoints.filter((point) => Number(point.x) < settings.safeMinX || Number(point.x) > settings.safeMaxX).length;
+  const deepPointCount = depths.filter((depth) => depth > settings.depthLimitMm).length;
+  const rotaryCoverage = calculateRotaryCoverage(rotaryValues);
+  const expectedRotaryCoverageDeg = settings.expectedRotaryCoverageDeg;
+  const rotaryCoverageRatio = settings.rotaryMode && expectedRotaryCoverageDeg > 0
+    ? Math.min(1, rotaryCoverage.spanDeg / expectedRotaryCoverageDeg)
+    : null;
+
+  if (holdZonePointCount > 0) {
+    warnings.push(`${holdZonePointCount} neutral points fall inside protected end/holding zones.`);
+  }
+  if (deepPointCount > 0) {
+    warnings.push(`${deepPointCount} neutral points exceed depth limit ${settings.depthLimitMm.toFixed(2)}mm.`);
+  }
+  if (settings.rotaryMode && rotaryValues.length > 2 && expectedRotaryCoverageDeg >= 300 && rotaryCoverage.spanDeg < expectedRotaryCoverageDeg * 0.72) {
+    warnings.push(`rotary coverage is ${rotaryCoverage.spanDeg.toFixed(1)}deg, below expected ${expectedRotaryCoverageDeg.toFixed(1)}deg.`);
+  }
+
+  const level = errors.length ? "critical" : warnings.length ? "review" : "ok";
+  return {
+    schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+    level,
+    summary: level === "ok"
+      ? "neutral output matches the target rotary-Y machine boundary for pre-import review."
+      : level === "critical"
+        ? "neutral output cannot be proven compatible with the target rotary-Y machine boundary."
+        : "neutral output can be imported for engineering review, but machine boundary warnings remain.",
+    targetMachine: {
+      controllerClass: settings.rotaryMode ? "3axis-controller-with-rotary-fixture" : "3axis-cartesian",
+      axisMapping: settings.rotaryMode
+        ? `X=length, ${settings.rotaryOutputAxis}=rotary fixture, Z=depth/safe height`
+        : "X/Y=plane, Z=depth/safe height",
+      rotaryOutputAxis: settings.rotaryOutputAxis,
+      wrapPerRevolutionMm: settings.wrapPerRevMm,
+      toolProfileId: plan?.tool?.toolProfileId ?? null
+    },
+    stockEnvelope: {
+      lengthMm: settings.lengthMm,
+      safeMinX: settings.safeMinX,
+      safeMaxX: settings.safeMaxX,
+      leftHoldMm: settings.leftHoldMm,
+      rightHoldMm: settings.rightHoldMm,
+      endTransitionMm: settings.endTransitionMm,
+      depthLimitMm: settings.depthLimitMm
+    },
+    coverage: {
+      pointCount: points.length,
+      finitePointCount: finitePoints.length,
+      xMin,
+      xMax,
+      xSpanMm: xMin == null || xMax == null ? 0 : Math.max(0, xMax - xMin),
+      rotarySampleCount: rotaryValues.length,
+      rotaryMinDeg: rotaryCoverage.minDeg,
+      rotaryMaxDeg: rotaryCoverage.maxDeg,
+      rotarySpanDeg: rotaryCoverage.spanDeg,
+      expectedRotaryCoverageDeg,
+      rotaryCoverageRatio,
+      depthMax
+    },
+    riskCounts: {
+      holdZonePointCount,
+      deepPointCount,
+      invalidPointCount: Math.max(0, points.length - finitePoints.length),
+      missingRotaryCount: settings.rotaryMode ? Math.max(0, finitePoints.length - rotaryValues.length) : 0
+    },
+    checks: {
+      schemaValid: neutral?.schema === "hediao3d.neutral-toolpath.v1",
+      hasPoints: points.length > 0,
+      finiteXz: finitePoints.length === points.length && points.length > 0,
+      rotaryCoordinatePresent: !settings.rotaryMode || rotaryValues.length > 0,
+      protectedZoneClean: holdZonePointCount === 0,
+      depthWithinLimit: deepPointCount === 0
+    },
+    warnings,
+    errors
+  };
+}
+
+function extractMachineFitSettings(plan) {
+  const stock = plan?.stock ?? {};
+  const sampling = plan?.sampling ?? {};
+  const axisMapping = sampling.axisMapping ?? {};
+  const lengthMm = Math.max(1, Number(stock.lengthMm ?? sampling.lengthMm ?? 24));
+  const leftHoldMm = Math.max(0, Number(stock.leftHoldMm ?? 0));
+  const rightHoldMm = Math.max(0, Number(stock.rightHoldMm ?? 0));
+  const endTransitionMm = Math.max(0, Number(stock.endTransitionMm ?? 0));
+  const halfLength = lengthMm / 2;
+  const maxCutDepthMm = Math.max(0.05, Number(sampling.maxCutDepthMm ?? sampling.depthLimitMm ?? 3));
+  return {
+    rotaryMode: sampling.recommendedPrimary === "unwrapped-rotary-drop-cutter" || Boolean(axisMapping.rotaryAxis),
+    rotaryOutputAxis: String(axisMapping.rotaryAxis ?? "Y").toUpperCase(),
+    wrapPerRevMm: Math.max(0.001, Number(axisMapping.rotaryWrapPerRevolutionMm ?? sampling.rotaryWrapPerRevolutionMm ?? 100)),
+    expectedRotaryCoverageDeg: Math.max(0, Number(sampling.expectedRotaryCoverageDeg ?? sampling.reliefAngleDeg ?? 360)),
+    lengthMm,
+    leftHoldMm,
+    rightHoldMm,
+    endTransitionMm,
+    safeMinX: -halfLength + leftHoldMm + endTransitionMm,
+    safeMaxX: halfLength - rightHoldMm - endTransitionMm,
+    safeZ: Number(sampling.safeZ ?? 0),
+    depthLimitMm: maxCutDepthMm + Math.max(0, Number(sampling.stockAllowanceMm ?? 0)) + 0.5
+  };
+}
+
+function calculateRotaryCoverage(angles) {
+  const normalized = [...new Set(angles.map((angle) => normalizeAngle(angle)))].sort((a, b) => a - b);
+  if (normalized.length === 0) return { minDeg: null, maxDeg: null, spanDeg: 0 };
+  if (normalized.length === 1) return { minDeg: normalized[0], maxDeg: normalized[0], spanDeg: 0 };
+  const directSpan = normalized[normalized.length - 1] - normalized[0];
+  const wrapGap = 360 - directSpan;
+  const gaps = normalized.slice(1).map((angle, index) => angle - normalized[index]);
+  const largestGap = Math.max(wrapGap, ...gaps);
+  return {
+    minDeg: normalized[0],
+    maxDeg: normalized[normalized.length - 1],
+    spanDeg: Math.max(0, 360 - largestGap)
+  };
+}
+
+function normalizeAngle(value) {
+  return ((Number(value) % 360) + 360) % 360;
 }
 
 function createBundleFiles(report, reportPath, identities) {
