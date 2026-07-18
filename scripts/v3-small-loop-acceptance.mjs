@@ -72,6 +72,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-opencamlib-contact-output-validate-test.mjs")]
   },
   {
+    id: "opencamlib-probe",
+    label: "OpenCAMLib runtime capability probe",
+    command: [process.execPath, join("scripts", "v3-opencamlib-probe-test.mjs")]
+  },
+  {
     id: "opencamlib-candidate-package",
     label: "OpenCAMLib candidate package preflight",
     command: [process.execPath, join("scripts", "v3-opencamlib-candidate-package-validate-test.mjs")]

@@ -522,6 +522,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
       },
       {
+        filename: "opencamlib-probe.py",
+        role: "opencamlib-runtime-probe",
+        description: "探测 Linux Python 环境实际暴露的 opencamlib/ocl 模块、版本、surface/cutter/drop-cutter 候选符号，作为真实 runner 实现前的证据。"
+      },
+      {
         filename: "opencamlib-candidate-package-validate.mjs",
         role: "opencamlib-candidate-package-validator",
         description: "预检真实 OpenCAMLib 候选输出目录，生成 contact 验证结果和轻量候选证据 ZIP。"
@@ -551,6 +556,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      "python3 opencamlib-probe.py --out opencamlib-runtime-probe.json",
       "node opencamlib-candidate-package-validate.mjs --root .",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
       "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
@@ -567,6 +573,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-server-package-self-check.mjs"), createNativeCamServerPackageSelfCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-closed-loop-check.mjs"), createNativeCamClosedLoopCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "opencamlib-probe.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_probe.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
@@ -678,6 +685,7 @@ const requiredFiles = [
   "native-cam-real-output-check.sh",
   "native-cam-server-package-self-check.mjs",
   "native-cam-closed-loop-check.mjs",
+  "opencamlib-probe.py",
   "opencamlib-contact-output-validate.mjs",
   "opencamlib-candidate-package-validate.mjs",
   "camotics-material-removal-validate.mjs",
@@ -697,6 +705,7 @@ for (const filename of requiredFiles) {
 const commands = Array.isArray(manifest?.commands) ? manifest.commands.join("\\n") : "";
 check("command:self-check", commands.includes("native-cam-server-package-self-check.mjs"), "manifest.commands must include the self-check command.");
 check("command:closed-loop-check", commands.includes("native-cam-closed-loop-check.mjs"), "manifest.commands must include the closed-loop check command.");
+check("command:opencamlib-probe", commands.includes("opencamlib-probe.py"), "manifest.commands must include OpenCAMLib runtime probe.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
@@ -710,9 +719,12 @@ check("target-tool", target.tool?.toolProfileId === "vflat-4mm-25deg", "target t
 
 const openCamValidator = readTextIfExists(join(root, "opencamlib-contact-output-validate.mjs"));
 const openCamCandidateValidator = readTextIfExists(join(root, "opencamlib-candidate-package-validate.mjs"));
+const openCamProbe = readTextIfExists(join(root, "opencamlib-probe.py"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
+check("opencamlib-probe-schema", openCamProbe.includes("hediao3d.opencamlib-runtime-probe.v1"), "OpenCAMLib probe must emit the runtime probe schema.");
+check("opencamlib-probe-boundary", openCamProbe.includes("must not be used as cutter-contact output"), "OpenCAMLib probe must keep the production boundary explicit.");
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
 check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");
