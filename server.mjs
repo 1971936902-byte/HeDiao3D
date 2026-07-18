@@ -4262,11 +4262,13 @@ function evaluateNeutralImportCutterContactReport(neutral, expectedIdentity = {}
   const level = String(quality.level ?? report.level ?? "");
   const previewScaffold = /preview|scaffold/i.test(schema) || /preview|scaffold/i.test(level) || Boolean(quality.previewScaffold);
   const inputIdentityBinding = createNeutralImportContactIdentityBinding(report.inputIdentity, expectedIdentity);
+  const strictEvidence = evaluateNeutralImportContactStrictEvidence(report);
   const productionCandidate = schema === "hediao3d.opencamlib-cutter-contact-report.v1"
     && Boolean(quality.productionCandidate)
     && Boolean(quality.postprocessEligible)
     && !previewScaffold
-    && inputIdentityBinding.status === "bound";
+    && inputIdentityBinding.status === "bound"
+    && strictEvidence.status === "ready";
   return {
     schema: "hediao3d.opencamlib-contact-report-summary.v1",
     status: productionCandidate ? "production-candidate" : previewScaffold ? "preview-scaffold" : "contact-report-review",
@@ -4274,9 +4276,60 @@ function evaluateNeutralImportCutterContactReport(neutral, expectedIdentity = {}
     productionCandidate,
     postprocessEligible: Boolean(quality.postprocessEligible),
     previewScaffold,
+    strictEvidence,
     inputIdentityBinding,
     summary: quality.summary ?? report.summary ?? "OpenCAMLib cutter-contact report evaluated from neutral-toolpath API import."
   };
+}
+
+function evaluateNeutralImportContactStrictEvidence(report) {
+  const checks = [];
+  const tool = report?.tool && typeof report.tool === "object" ? report.tool : {};
+  const sampling = report?.contactSampling && typeof report.contactSampling === "object" ? report.contactSampling : {};
+  const samplingQuality = sampling.samplingQuality && typeof sampling.samplingQuality === "object" ? sampling.samplingQuality : {};
+  const residual = report?.residualMaterial && typeof report.residualMaterial === "object" ? report.residualMaterial : {};
+  const tolerances = report?.tolerances && typeof report.tolerances === "object" ? report.tolerances : {};
+  const algorithm = String(sampling.algorithm ?? report?.mode ?? "");
+  const hitRate = finiteNumberOrNull(sampling.hitRate);
+  const pointCount = finiteNumberOrNull(sampling.pointCount);
+  const contactPointCount = finiteNumberOrNull(sampling.contactPointCount ?? sampling.pointCount);
+  const stepRatio = finiteNumberOrNull(sampling.stepToCutterRatio ?? samplingQuality.stepToCutterRatio);
+  const maxGouge = finiteNumberOrNull(residual.maxGougeMm);
+  const maxUndercut = finiteNumberOrNull(residual.maxUndercutMm);
+  const maxGougeTolerance = finiteNumberOrNull(tolerances.maxGougeMm) ?? 0.03;
+  const maxUndercutTolerance = finiteNumberOrNull(tolerances.maxUndercutMm) ?? 0.08;
+
+  addNeutralImportStrictCheck(checks, "contact-algorithm-real", /(drop-cutter|cutter-contact|waterline)/i.test(algorithm) && !/(preview|heightfield|scaffold|fixture|synthetic)/i.test(algorithm), `algorithm=${algorithm || "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-tool-diameter", finiteNumberOrNull(tool.diameterMm) > 0, `diameterMm=${tool.diameterMm ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-tool-angle", finiteNumberOrNull(tool.angleDeg) > 0, `angleDeg=${tool.angleDeg ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-tool-flat-tip", finiteNumberOrNull(tool.flatTipMm) >= 0, `flatTipMm=${tool.flatTipMm ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-sampling-hit-rate", hitRate !== null && hitRate >= 0.995, `hitRate=${hitRate ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-sampling-point-count", pointCount !== null && pointCount > 0 && contactPointCount !== null && contactPointCount > 0, `pointCount=${pointCount ?? "missing"}, contactPointCount=${contactPointCount ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-sampling-step-ratio", stepRatio !== null && stepRatio <= 0.25, `stepToCutterRatio=${stepRatio ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-residual-gouge", maxGouge !== null && maxGouge <= maxGougeTolerance, `maxGougeMm=${maxGouge ?? "missing"}, tolerance=${maxGougeTolerance}`);
+  addNeutralImportStrictCheck(checks, "contact-residual-undercut", maxUndercut !== null && maxUndercut <= maxUndercutTolerance, `maxUndercutMm=${maxUndercut ?? "missing"}, tolerance=${maxUndercutTolerance}`);
+  const failed = checks.filter((check) => check.status !== "pass");
+  return {
+    schema: "hediao3d.opencamlib-contact-strict-evidence.v1",
+    status: failed.length ? "review" : "ready",
+    ready: failed.length === 0,
+    checkCount: checks.length,
+    failedCheckCount: failed.length,
+    checks,
+    summary: failed.length
+      ? `strict contact evidence missing/weak: ${failed[0].id} ${failed[0].summary}`
+      : "strict contact evidence ready"
+  };
+}
+
+function addNeutralImportStrictCheck(checks, id, passed, summary) {
+  checks.push({ id, status: passed ? "pass" : "fail", summary });
+}
+
+function finiteNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function createNeutralImportContactIdentityBinding(identity, expectedIdentity = {}) {

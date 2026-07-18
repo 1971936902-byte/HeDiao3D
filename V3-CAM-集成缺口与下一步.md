@@ -116,6 +116,8 @@ Native CAM 真实输出回填已经与该门槛绑定：`native-cam-real-output-
 
 OpenCAMLib adapter 自身也已同步收紧：`opencamlib_job.py` 的 handoff 分类现在要求 contact report 具备 strict evidence，包含真实算法族、刀具几何、采样命中率、步距/刀径比例和残料误差字段；生成的 `opencamlib-run-template.py` 会固定写入 `tool`、`contactSampling`、`residualMaterial` 和 `tolerances`，避免 Linux 侧实现真实点位后因报告字段不完整而无法通过 Native CAM 验收。
 
+后端 neutral-toolpath 直接导入入口也已统一口径：弱 contact report 即使声明 `quality.productionCandidate=true` 且 neutral 哈希绑定，只要缺少 strict evidence，就只能分类为 `contact-report-review`，不能成为 production-candidate handoff。
+
 该验证器现在要求真实 OpenCAMLib contact report 同时满足：
 
 - `contactSampling.algorithm` 属于 `drop-cutter` / `cutter-contact` / `waterline`，且不含 `preview` / `heightfield` / `scaffold`。

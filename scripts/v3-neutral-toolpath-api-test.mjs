@@ -179,8 +179,31 @@ async function main() {
   const candidateHash = sha256Json(candidateNeutral);
   candidateNeutral.cutterContactReport = {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    mode: "opencamlib-drop-cutter-contact",
     inputIdentity: {
       neutralToolpathWithoutContactReportSha256: candidateHash
+    },
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      flatTipMm: 0.4,
+      angleDeg: 25
+    },
+    contactSampling: {
+      algorithm: "opencamlib-drop-cutter-contact",
+      pointCount: 3,
+      contactPointCount: 3,
+      hitRate: 1,
+      stepToCutterRatio: 0.18
+    },
+    residualMaterial: {
+      maxGougeMm: 0.01,
+      maxUndercutMm: 0.03,
+      residualVolumeMm3: 0.4
+    },
+    tolerances: {
+      maxGougeMm: 0.03,
+      maxUndercutMm: 0.08
     },
     quality: {
       level: "ready",
@@ -196,6 +219,7 @@ async function main() {
   });
   assert(candidateImported.ok === true, "candidate neutral import should succeed");
   assert(candidateImported.validation?.cutterContactReport?.status === "production-candidate", "candidate contact report should be production-candidate");
+  assert(candidateImported.validation.cutterContactReport.strictEvidence?.status === "ready", "candidate contact report should expose ready strict evidence");
   assert(candidateImported.validation.cutterContactReport.inputIdentityBinding?.status === "bound", "candidate contact report should bind submitted neutral hash");
   assert(candidateImported.validation.handoffEvidence?.classification === "production-candidate", "candidate validation should classify handoff as production-candidate");
   assert(candidateImported.validation.handoffEvidence?.productionCandidate === true, "candidate validation should mark productionCandidate true");
@@ -207,6 +231,42 @@ async function main() {
   assert(candidateSummary.camHandoffQuality?.adapterHandoffEvidence?.classification === "production-candidate", "CAM handoff quality should consume candidate handoff evidence");
   assert(candidateSummary.camHandoffQuality?.previewScaffold === false, "candidate contact handoff should not be preview scaffold");
   assert(candidateSummary.productionGate?.allowProductionNc !== true, "candidate contact report alone must not unlock production NC");
+
+  const weakNeutral = {
+    ...candidateNeutral,
+    points: candidateNeutral.points.map((point) => ({ ...point, source: "weak-contact-fixture" }))
+  };
+  delete weakNeutral.cutterContactReport;
+  const weakHash = sha256Json(weakNeutral);
+  weakNeutral.cutterContactReport = {
+    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    inputIdentity: {
+      neutralToolpathWithoutContactReportSha256: weakHash
+    },
+    quality: {
+      level: "ready",
+      productionCandidate: true,
+      postprocessEligible: true,
+      summary: "Weak report intentionally lacks strict contact evidence and must not become production-candidate."
+    }
+  };
+  const weakImported = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
+    sourceName: "weak-opencamlib-neutral-toolpath.json",
+    engine: "opencamlib",
+    neutralToolpath: weakNeutral
+  });
+  assert(weakImported.ok === true, "weak neutral import should still be accepted for review");
+  assert(weakImported.validation?.cutterContactReport?.status === "contact-report-review", "weak contact report should be review, not production-candidate");
+  assert(weakImported.validation.cutterContactReport.strictEvidence?.status === "review", "weak contact report should expose strict evidence review status");
+  assert(weakImported.validation.handoffEvidence?.classification === "contact-report-review", "weak validation should classify handoff as contact-report-review");
+  assert(weakImported.validation.handoffEvidence?.productionCandidate === false, "weak validation must not mark productionCandidate true");
+
+  const restoredCandidate = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
+    sourceName: "validated-opencamlib-neutral-toolpath-restored.json",
+    engine: "opencamlib",
+    neutralToolpath: candidateNeutral
+  });
+  assert(restoredCandidate.validation?.handoffEvidence?.classification === "production-candidate", "restored candidate should return job to production-candidate handoff state");
 
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.postprocessHandoffReadiness?.source === "latest-job-evidence-dossier", "readiness postprocess handoff should use latest job evidence dossier");
