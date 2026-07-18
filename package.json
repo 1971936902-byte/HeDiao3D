@@ -30,6 +30,7 @@
     "test:v3:neutral-toolpath-api": "node scripts/v3-neutral-toolpath-api-test.mjs",
     "test:v3:camotics-import": "node scripts/v3-camotics-result-import-test.mjs",
     "test:v3:camotics-cli-prepare": "node scripts/v3-camotics-cli-prepare-test.mjs",
+    "test:v3:camotics-material-validate": "node scripts/v3-camotics-material-removal-validate-test.mjs",
     "test:v3:camotics-cli-package-api": "node scripts/v3-camotics-cli-package-api-test.mjs",
     "test:v3:camotics-result-api": "node scripts/v3-camotics-result-api-test.mjs",
     "test:v3:evidence-closed-loop": "node scripts/v3-evidence-closed-loop-test.mjs",

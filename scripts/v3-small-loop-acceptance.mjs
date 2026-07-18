@@ -57,6 +57,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-camotics-cli-package-api-test.mjs")]
   },
   {
+    id: "camotics-material-validate",
+    label: "CAMotics material-removal validator",
+    command: [process.execPath, join("scripts", "v3-camotics-material-removal-validate-test.mjs")]
+  },
+  {
     id: "camotics-result-api",
     label: "CAMotics result import API",
     command: [process.execPath, join("scripts", "v3-camotics-result-api-test.mjs")]
