@@ -79,6 +79,9 @@ async function main() {
   assert(manifest.files?.some((file) => file.filename === "production-gate.json" && /^[a-f0-9]{64}$/.test(file.sha256)), "manifest missing production gate hash");
   assert(manifest.files?.some((file) => file.filename === "package-integrity.json" && /^[a-f0-9]{64}$/.test(file.sha256)), "manifest missing package integrity hash");
   assert(manifest.missing?.includes("camotics-result.json"), "fresh job should show missing CAMotics result evidence");
+  assert(manifest.productionEvidenceDossier?.missingEvidenceCount > 0, "manifest should expose production evidence gap count");
+  assert(manifest.productionEvidenceDossier?.missingEvidenceTop?.some((item) => item.id === "material-removal-simulation" || item.id === "machine-acceptance"), "manifest should expose top production evidence gaps");
+  assert(manifest.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "manifest should expose field evidence gaps");
   assert(manifest.nextEvidence?.some((item) => item.includes("CAMotics Linux")), "manifest should guide CAMotics Linux evidence flow");
 
   const readme = entries.get("hediao3d-v3-evidence/README-EVIDENCE-REVIEW.md").toString("utf8");
@@ -86,6 +89,8 @@ async function main() {
   assert(readme.includes("不是安全试雕包，也不是正式生产包"), "README should state package boundary");
   assert(readme.includes("本包不应作为上机加工交付物"), "README should forbid machine delivery use");
   assert(readme.includes("camotics-result.json"), "README should list missing CAMotics result");
+  assert(readme.includes("证据档案缺口"), "README should include production evidence gap section");
+  assert(readme.includes("现场证据缺口"), "README should include field evidence gap section");
 
   const lockedProductionPackage = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
   assert(lockedProductionPackage.allowProductionNc === false, "production package must stay locked after evidence review download");

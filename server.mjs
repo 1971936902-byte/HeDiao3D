@@ -13934,7 +13934,8 @@ function getOrchestratorEvidenceReviewPackage(jobId, res) {
       bytes: statSync(join(workDir, filename)).size
     }));
   const missing = evidenceFilenames.filter((filename) => !existsSync(join(workDir, filename)));
-  const reviewManifest = createEvidenceReviewPackageManifest(safeJobId, deliveryManifest, included, missing);
+  const productionEvidenceDossier = readJsonFileSafe(join(workDir, "production-evidence-dossier.json"));
+  const reviewManifest = createEvidenceReviewPackageManifest(safeJobId, deliveryManifest, included, missing, productionEvidenceDossier);
   const files = included.map((file) => ({
     name: `hediao3d-v3-evidence/evidence/${file.filename}`,
     content: readFileSync(join(workDir, file.filename))
@@ -14148,8 +14149,9 @@ function sha256File(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
-function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, missing) {
+function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, missing, productionEvidenceDossier = null) {
   const productionGate = deliveryManifest?.productionGate ?? {};
+  const evidenceGapSummary = createEvidenceGapSummary(productionEvidenceDossier);
   return {
     schema: "hediao3d.v3-evidence-review-package.v1",
     jobId,
@@ -14172,12 +14174,38 @@ function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, 
     },
     files: included,
     missing,
+    productionEvidenceDossier: evidenceGapSummary,
     nextEvidence: [
       "确认 production-evidence-dossier.json 的 blocked/review 项。",
       "若缺少 camotics-result.json 或 camotics-result-local-validation.json，先下载 CAMotics Linux 仿真包并在服务器完成材料去除仿真。",
       "若缺少 trial-feedback-log.json 或 machine-acceptance-log.json，先做离料空跑/软料试雕并回填现场证据。",
       "生产 NC 只能由 production-package 接口在总门禁放行后生成。"
     ]
+  };
+}
+
+function createEvidenceGapSummary(productionEvidenceDossier) {
+  const missingEvidence = Array.isArray(productionEvidenceDossier?.missingEvidence)
+    ? productionEvidenceDossier.missingEvidence
+    : [];
+  return {
+    status: productionEvidenceDossier?.status ?? "missing",
+    summary: productionEvidenceDossier?.summary ?? "未找到 production-evidence-dossier.json。",
+    missingEvidenceCount: missingEvidence.length,
+    missingEvidenceTop: missingEvidence.slice(0, 8).map(createEvidenceGapItemSummary),
+    fieldEvidenceGaps: missingEvidence
+      .filter((item) => ["air-run-evidence", "rotary-calibration-evidence", "machine-acceptance", "trial-feedback"].includes(item.id))
+      .map(createEvidenceGapItemSummary)
+  };
+}
+
+function createEvidenceGapItemSummary(item) {
+  return {
+    id: item.id,
+    label: item.label,
+    status: item.status,
+    summary: item.summary,
+    evidence: item.evidence
   };
 }
 
@@ -14355,6 +14383,13 @@ function createEvidenceReviewPackageReadme(packageManifest) {
   const missing = packageManifest.missing.length
     ? packageManifest.missing.map((filename) => `- ${filename}`).join("\n")
     : "- 无";
+  const dossier = packageManifest.productionEvidenceDossier ?? {};
+  const evidenceGaps = Array.isArray(dossier.missingEvidenceTop) && dossier.missingEvidenceTop.length
+    ? dossier.missingEvidenceTop.map((item) => `- ${item.label}: ${item.status} / ${item.summary}`).join("\n")
+    : "- 无";
+  const fieldGaps = Array.isArray(dossier.fieldEvidenceGaps) && dossier.fieldEvidenceGaps.length
+    ? dossier.fieldEvidenceGaps.map((item) => `- ${item.label}: ${item.status} / ${item.summary}`).join("\n")
+    : "- 无";
   return [
     "# HeDiao3D V3 证据审查包",
     "",
@@ -14377,6 +14412,20 @@ function createEvidenceReviewPackageReadme(packageManifest) {
     "## 缺失证据",
     "",
     missing,
+    "",
+    "## 证据档案缺口",
+    "",
+    `状态: ${dossier.status ?? "missing"}`,
+    `摘要: ${dossier.summary ?? "未生成证据档案。"}`,
+    `缺口数量: ${dossier.missingEvidenceCount ?? 0}`,
+    "",
+    "### 优先缺口",
+    "",
+    evidenceGaps,
+    "",
+    "### 现场证据缺口",
+    "",
+    fieldGaps,
     "",
     "## 下一步",
     "",
