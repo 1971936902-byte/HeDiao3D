@@ -81,6 +81,11 @@ const checks = [
     id: "linux-cam-job-package-download",
     ok: source.includes("handleDownloadV3LinuxCamJobPackage") && source.includes("linux-cam-job-package") && source.includes("下载Linux整单包") && source.includes("OpenCAMLib 输入、CAMotics 准备文件和证据回填说明"),
     summary: "Focused operator UI should expose a unified Linux CAM job package download."
+  },
+  {
+    id: "linux-cam-job-validation-import",
+    ok: source.includes("handleImportV3LinuxCamJobValidation") && source.includes("linux-cam-job-validation") && source.includes("linux-cam-job-local-validation.json") && source.includes("整单校验JSON") && source.includes("回填整单校验"),
+    summary: "Focused operator UI should accept Linux CAM job local validation evidence after running the unified package."
   }
 ];
 

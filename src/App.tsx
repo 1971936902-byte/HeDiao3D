@@ -2251,11 +2251,13 @@ export function App() {
   const [isV3RunbookResultImporting, setIsV3RunbookResultImporting] = useState(false);
   const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
   const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
+  const [isV3LinuxCamJobValidationImporting, setIsV3LinuxCamJobValidationImporting] = useState(false);
   const [isV3CamoticsPackagePreparing, setIsV3CamoticsPackagePreparing] = useState(false);
   const [v3CamoticsResultFile, setV3CamoticsResultFile] = useState<File | null>(null);
   const [v3CamoticsResultZipFile, setV3CamoticsResultZipFile] = useState<File | null>(null);
   const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
+  const [v3LinuxCamJobValidationFile, setV3LinuxCamJobValidationFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceFile, setV3NativeCamAcceptanceFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceZipFile, setV3NativeCamAcceptanceZipFile] = useState<File | null>(null);
   const [v3RunbookResultFile, setV3RunbookResultFile] = useState<File | null>(null);
@@ -3119,6 +3121,86 @@ export function App() {
       });
     } finally {
       setIsV3CamoticsImporting(false);
+    }
+  };
+
+  const handleImportV3LinuxCamJobValidation = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再回填 Linux CAM 整单校验。");
+      return;
+    }
+    if (!v3LinuxCamJobValidationFile) {
+      setV3Status("请先选择 linux-cam-job-local-validation.json。");
+      return;
+    }
+    setIsV3LinuxCamJobValidationImporting(true);
+    try {
+      const validation = JSON.parse(await v3LinuxCamJobValidationFile.text());
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/linux-cam-job-validation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          validation,
+          sourceName: v3LinuxCamJobValidationFile.name
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Linux CAM 整单校验导入失败");
+      setV3Status(`Linux CAM 整单校验已导入：${data.validation?.level ?? "unknown"}，等待真实证据包回填`);
+      setV3UserNotice({
+        level: "info",
+        title: "Linux CAM 整单校验已回填",
+        detail: `${data.validation?.level ?? "unknown"}；该报告只说明 Linux 执行进度，不解锁生产 NC。`
+      });
+      recordTask({
+        category: "cam",
+        status: data.validation?.level === "ready-for-v3-upload" ? "ok" : "warning",
+        title: "导入 Linux CAM 整单校验",
+        detail: `${v3LinuxCamJobValidationFile.name} / ${data.validation?.summary ?? data.validation?.level ?? "unknown"}`
+      });
+      setV3LinuxCamJobValidationFile(null);
+      setV3Job((current) => current && current.id === v3Job.id ? {
+        ...current,
+        result: current.result ? {
+          ...current.result,
+          summary: {
+            ...(current.result.summary ?? {}),
+            linuxCamJobValidation: {
+              level: data.validation?.level ?? "unknown",
+              summary: data.validation?.summary ?? null,
+              expectedUploads: data.validation?.expectedUploads ?? null,
+              productionUnlockEligible: false,
+              artifact: "linux-cam-job-local-validation.json",
+              importAudit: "linux-cam-job-validation-import.json"
+            },
+            ...(data.deliveryManifest ? { deliveryManifest: data.deliveryManifest } : {}),
+            ...(data.packageIntegrity ? {
+              packageIntegrity: {
+                schema: data.packageIntegrity.schema,
+                status: data.packageIntegrity.status,
+                summary: data.packageIntegrity.summary,
+                fileCount: data.packageIntegrity.fileCount,
+                downloadableCount: data.packageIntegrity.downloadableCount,
+                missingDownloadableCount: data.packageIntegrity.missingDownloadableCount,
+                totalBytes: data.packageIntegrity.totalBytes,
+                files: data.packageIntegrity.files
+              }
+            } : {})
+          } as any
+        } : current.result
+      } : current);
+      await refreshV3JobHistory();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Linux CAM 整单校验导入失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "Linux CAM 整单校验导入失败",
+        detail: message
+      });
+    } finally {
+      setIsV3LinuxCamJobValidationImporting(false);
     }
   };
 
@@ -6825,6 +6907,30 @@ export function App() {
                         <small>该准备包只用于仿真服务器；回填前先运行结果校验脚本，不会直接解锁生产 NC。</small>
                       </div>
                     )}
+                    {(v3Job.result.summary as any).linuxCamJobValidation && (
+                      <small className={(v3Job.result.summary as any).linuxCamJobValidation.level === "ready-for-v3-upload" ? "v3-inline-ok" : "v3-inline-warning"}>
+                        Linux整单校验：{(v3Job.result.summary as any).linuxCamJobValidation.level}
+                        {(v3Job.result.summary as any).linuxCamJobValidation.summary ? ` · ${(v3Job.result.summary as any).linuxCamJobValidation.summary}` : ""}
+                      </small>
+                    )}
+                    <label>
+                      <span>整单校验JSON</span>
+                      <input
+                        accept=".json,application/json"
+                        type="file"
+                        onChange={(event) => setV3LinuxCamJobValidationFile(event.target.files?.[0] ?? null)}
+                      />
+                      <small>{v3LinuxCamJobValidationFile?.name ?? "选择 linux-cam-job-local-validation.json"}</small>
+                    </label>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handleImportV3LinuxCamJobValidation}
+                      disabled={!v3Job?.id || !v3LinuxCamJobValidationFile || isV3LinuxCamJobValidationImporting}
+                    >
+                      <UploadCloud size={17} />
+                      {isV3LinuxCamJobValidationImporting ? "回填中..." : "回填整单校验"}
+                    </button>
                     <label>
                       <span>结果ZIP</span>
                       <input
