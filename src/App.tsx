@@ -1631,6 +1631,12 @@ type V3ReadinessSummary = {
             ready?: boolean;
             summary?: string | null;
           } | null;
+          protectedZones?: {
+            status?: string;
+            ready?: boolean;
+            summary?: string | null;
+          } | null;
+          protectedZonesReady?: boolean;
           candidatePackageLevel?: string;
           candidatePackageReadyForImport?: boolean;
           candidatePackageBlockedReason?: string | null;
@@ -8604,13 +8610,23 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const candidate = openCamLib?.realCandidateReady ? "真实候选 ready" : openCamLib?.realCandidateKnown ? "真实候选待复核" : "真实候选缺失";
   const coverageStatus = openCamLib?.contactPathCoverage?.status ?? "missing";
   const coverage = `覆盖率 ${formatOpenCamLibCoverageStatus(coverageStatus)}`;
+  const protectedZonesStatus = openCamLib?.protectedZones?.status ?? "missing";
+  const protectedZones = `端部保护 ${formatOpenCamLibProtectedZonesStatus(protectedZonesStatus)}`;
   const packageLevel = openCamLib?.candidatePackageLevel ?? "missing";
   const packageStatus = `候选包 ${packageLevel}${openCamLib?.candidatePackageReadyForImport ? "/可导入" : ""}`;
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
-  return [candidate, coverage, packageStatus, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+  return [candidate, coverage, protectedZones, packageStatus, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
 }
 
 function formatOpenCamLibCoverageStatus(status?: string) {
+  if (status === "ready") return "达标";
+  if (status === "review") return "待复核";
+  if (status === "missing") return "缺失";
+  if (status === "not-required") return "暂不要求";
+  return status ?? "未知";
+}
+
+function formatOpenCamLibProtectedZonesStatus(status?: string) {
   if (status === "ready") return "达标";
   if (status === "review") return "待复核";
   if (status === "missing") return "缺失";

@@ -54,8 +54,8 @@ const checks = [
   },
   {
     id: "linux-opencamlib-evidence-visible",
-    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage"),
-    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage and candidate package blocker diagnostics."
+    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage") && source.includes("protectedZones") && source.includes("端部保护"),
+    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, and candidate package blocker diagnostics."
   }
 ];
 
