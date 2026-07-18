@@ -1278,6 +1278,25 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !nativeCam || nativeCam.summary.level !== "ready"
     }),
     createAcceptanceStep({
+      order: 2.5,
+      id: "native-cam-package-self-check",
+      title: "Native CAM 服务包离线自检",
+      status: nativeCam?.apiArtifacts?.packageSelfCheck && nativeCam.packageArtifacts?.files?.some((file) => file.filename === "native-cam-server-package-self-check.mjs")
+        ? "done"
+        : "pending",
+      command: "node native-cam-server-package-self-check.mjs",
+      evidence: [
+        "native-cam-server-package-self-check.mjs",
+        "native-cam-server-package-self-check.json",
+        "native-cam-server-package.json",
+        "server-package.zip"
+      ],
+      detail: nativeCam?.apiArtifacts?.packageSelfCheck
+        ? `服务包自检脚本已公开: ${nativeCam.apiArtifacts.packageSelfCheck}`
+        : "尚未生成 Native CAM 服务包自检脚本直链；请重新运行 Native CAM 环境验收。",
+      blocksProduction: !nativeCam?.apiArtifacts?.packageSelfCheck
+    }),
+    createAcceptanceStep({
       order: 3,
       id: "cam-server-config",
       title: "CAM 服务器配置矩阵",
