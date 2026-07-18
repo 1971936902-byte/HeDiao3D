@@ -512,6 +512,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "服务端包离线自检脚本，确认包内 manifest、目标机型边界、真实输出验收器和 CAMotics/OpenCAMLib 验收器齐全。"
       },
       {
+        filename: "native-cam-closed-loop-check.mjs",
+        role: "server-closed-loop-check",
+        description: "Linux 服务端一键闭环检查入口，串联服务包自检、真实 CAM 输出验收和 CAMotics 材料去除验收，并输出 native-cam-closed-loop-check.json。"
+      },
+      {
         filename: "opencamlib-contact-output-validate.mjs",
         role: "opencamlib-contact-output-validator",
         description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
@@ -537,6 +542,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
       "cp native-cam-env.template .env.cam",
       "node native-cam-server-package-self-check.mjs",
+      "node native-cam-closed-loop-check.mjs",
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
@@ -553,6 +559,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-server-package-self-check.mjs"), createNativeCamServerPackageSelfCheckScript(), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "native-cam-closed-loop-check.mjs"), createNativeCamClosedLoopCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
@@ -566,6 +573,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
     "cp native-cam-env.template .env.cam",
     "node native-cam-server-package-self-check.mjs",
+    "node native-cam-closed-loop-check.mjs",
     "npm run test:v3:native-cam",
     "npm run test:v3:freecad-proof-handoff",
     "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
@@ -587,6 +595,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "camotics-result-local-validation.json",
     "camotics-result-bundle.zip",
     "native-cam-server-package-self-check.json",
+    "native-cam-closed-loop-check.json",
     "production-evidence-dossier.json",
     "next-action-checklist.md",
     "package-integrity.json",
@@ -658,6 +667,7 @@ const requiredFiles = [
   "native-cam-acceptance-checklist.md",
   "native-cam-real-output-check.sh",
   "native-cam-server-package-self-check.mjs",
+  "native-cam-closed-loop-check.mjs",
   "opencamlib-contact-output-validate.mjs",
   "camotics-material-removal-validate.mjs",
   "linux-cam-closed-loop-handoff.md",
@@ -675,6 +685,7 @@ for (const filename of requiredFiles) {
 
 const commands = Array.isArray(manifest?.commands) ? manifest.commands.join("\\n") : "";
 check("command:self-check", commands.includes("native-cam-server-package-self-check.mjs"), "manifest.commands must include the self-check command.");
+check("command:closed-loop-check", commands.includes("native-cam-closed-loop-check.mjs"), "manifest.commands must include the closed-loop check command.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
 
@@ -688,11 +699,14 @@ check("target-tool", target.tool?.toolProfileId === "vflat-4mm-25deg", "target t
 const openCamValidator = readTextIfExists(join(root, "opencamlib-contact-output-validate.mjs"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
+const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("camotics-validator-schema", camoticsValidator.includes("hediao3d.camotics-result-local-validation.v1"), "CAMotics validator must emit local validation schema.");
 check("camotics-validator-bundle", camoticsValidator.includes("camotics-result-bundle.zip"), "CAMotics validator must generate camotics-result-bundle.zip when passing.");
 check("real-output-production-candidate", realOutputCheck.includes("production-candidate"), "real output checker must require production-candidate evidence.");
 check("real-output-target-boundary", realOutputCheck.includes("target-machine-boundary.json"), "real output checker must write target-machine-boundary.json.");
+check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
+check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
 
 const failed = checks.filter((item) => !item.ok);
 const report = {
@@ -725,6 +739,119 @@ function readJsonIfExists(path) {
 function readTextIfExists(path) {
   if (!existsSync(path)) return "";
   return readFileSync(path, "utf8");
+}
+`;
+}
+
+function createNativeCamClosedLoopCheckScript() {
+  return `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+
+const root = resolve(process.argv[2] ?? process.cwd());
+const selfCheckOnly = process.argv.includes("--self-check-only");
+const steps = [];
+
+runStep({
+  id: "package-self-check",
+  required: true,
+  command: "node",
+  args: ["native-cam-server-package-self-check.mjs", root],
+  outputJson: "native-cam-server-package-self-check.json"
+});
+
+if (!selfCheckOnly) {
+  if (existsSync(join(root, "native-cam-real-output-check.sh"))) {
+    runStep({
+      id: "native-cam-real-output-check",
+      required: true,
+      command: "bash",
+      args: ["native-cam-real-output-check.sh"],
+      outputJson: "native-cam-real-output-acceptance.json"
+    });
+  } else {
+    recordMissing("native-cam-real-output-check", true, "native-cam-real-output-check.sh");
+  }
+
+  if (existsSync(join(root, "camotics-result.json")) && existsSync(join(root, "camotics-cli-run-package.json"))) {
+    runStep({
+      id: "camotics-material-removal-validate",
+      required: true,
+      command: "node",
+      args: ["camotics-material-removal-validate.mjs", "--result", "camotics-result.json", "--run-package", "camotics-cli-run-package.json"],
+      outputJson: "camotics-result-local-validation.json"
+    });
+  } else {
+    recordMissing("camotics-material-removal-validate", true, "camotics-result.json and camotics-cli-run-package.json");
+  }
+}
+
+const blocking = steps.filter((step) => step.required && step.status !== "pass");
+const report = {
+  schema: "hediao3d.native-cam-closed-loop-check.v1",
+  createdAt: new Date().toISOString(),
+  root,
+  selfCheckOnly,
+  ok: blocking.length === 0,
+  level: blocking.length ? "blocked" : "ready-for-readiness-import",
+  productionLocked: true,
+  productionBoundary: "This script only validates Linux-side evidence files. It does not unlock production NC; HeDiao3D readiness, CAMotics import, air-run, trial feedback and machine acceptance must still pass.",
+  expectedUploadBundles: [
+    "native-cam-real-output-bundle.zip",
+    "camotics-result-bundle.zip",
+    "v3-acceptance-runbook-result-bundle.zip"
+  ],
+  steps,
+  blocking: blocking.map((step) => ({ id: step.id, status: step.status, summary: step.summary }))
+};
+
+writeFileSync(join(root, "native-cam-closed-loop-check.json"), JSON.stringify(report, null, 2), "utf8");
+console.log(JSON.stringify(report, null, 2));
+if (!report.ok) process.exitCode = selfCheckOnly ? 0 : 3;
+
+function runStep({ id, required, command, args, outputJson }) {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: false,
+    env: { ...process.env }
+  });
+  const parsed = outputJson ? readJsonIfExists(join(root, outputJson)) : null;
+  const status = result.status === 0 ? "pass" : "fail";
+  steps.push({
+    id,
+    required,
+    status,
+    command: [command, ...args].join(" "),
+    exitCode: result.status,
+    outputJson,
+    parsedSchema: parsed?.schema ?? null,
+    summary: parsed?.level ?? parsed?.status ?? (status === "pass" ? "passed" : "command failed"),
+    stdoutTail: tail(result.stdout),
+    stderrTail: tail(result.stderr)
+  });
+}
+
+function recordMissing(id, required, filename) {
+  steps.push({
+    id,
+    required,
+    status: "missing-input",
+    summary: "Missing required input: " + filename
+  });
+}
+
+function readJsonIfExists(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function tail(value) {
+  return String(value ?? "").split(/\\r?\\n/).filter(Boolean).slice(-20);
 }
 `;
 }
