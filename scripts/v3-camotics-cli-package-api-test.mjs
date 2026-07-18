@@ -58,6 +58,19 @@ async function main() {
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
   const previewSha256 = createHash("sha256").update(previewText).digest("hex");
   const previewMotionProfile = createPreviewMotionProfile(previewText);
+  const candidatePackageValidationText = JSON.stringify({
+    schema: "hediao3d.opencamlib-candidate-package-validation.v1",
+    level: "ready",
+    handoffContract: { status: "ready-for-hediao3d-import" },
+    contactValidation: { level: "ready", evidenceClass: "production-candidate", checkCount: 27 },
+    artifactManifest: { readyForImport: true, evidenceClass: "production-candidate" }
+  }, null, 2);
+  const candidatePackageBundleText = "PK fixture candidate package bundle";
+  const jobDir = join(process.cwd(), "public", "orchestrator-jobs", job.id);
+  writeFileSync(join(jobDir, "opencamlib-candidate-package-validation.json"), candidatePackageValidationText, "utf8");
+  writeFileSync(join(jobDir, "opencamlib-candidate-package-bundle.zip"), candidatePackageBundleText, "utf8");
+  const candidatePackageValidationSha = createHash("sha256").update(candidatePackageValidationText).digest("hex");
+  const candidatePackageBundleSha = createHash("sha256").update(candidatePackageBundleText).digest("hex");
 
   const prepared = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-cli-package`, {});
   assert(prepared.ok === true, `CAMotics CLI package should be ready, got ${prepared.status}`);
@@ -72,6 +85,8 @@ async function main() {
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMin === previewMotionProfile.zMin, "run package zMin mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMax === previewMotionProfile.zMax, "run package zMax mismatch");
   assert(runPackage.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "run package should expose upstream CAM evidence binding");
+  assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.exists && file.sha256 === candidatePackageValidationSha), "run package should hash-bind OpenCAMLib candidate package validation");
+  assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.exists && file.sha256 === candidatePackageBundleSha), "run package should hash-bind OpenCAMLib candidate package bundle");
   assert(runPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "run package must keep production locked");
   const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
   const runPackageSha256 = createHash("sha256").update(runPackageText).digest("hex");
@@ -83,6 +98,8 @@ async function main() {
   assert(template.inputs?.machineContext?.rotaryWrapAxis === "Y", "result template should bind Y rotary machine context");
   assert(template.inputs?.machineContext?.rotaryWrapPerRevolutionMm === 100, "result template should bind rotary wrap distance");
   assert(template.inputs?.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "result template should include upstream CAM evidence binding");
+  assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
+  assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
 
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
@@ -101,6 +118,8 @@ async function main() {
   assert(validatorScript.includes("machine-context"), "validator should check machine context");
   assert(validatorScript.includes(runPackageSha256), "validator should bind to current run package hash");
   assert(validatorScript.includes(previewSha256), "validator should bind to current preview G-code hash");
+  assert(validatorScript.includes("opencamlibCandidatePackageValidation"), "validator should bind CAMotics results to candidate package validation evidence");
+  assert(validatorScript.includes("opencamlibCandidatePackageBundle"), "validator should bind CAMotics results to candidate package bundle evidence");
   runLocalValidatorFixture({
     jobId: job.id,
     validatorScript,

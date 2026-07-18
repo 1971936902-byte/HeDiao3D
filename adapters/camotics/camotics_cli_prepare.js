@@ -35,6 +35,7 @@ const optionalInputKeys = [
   ["opencamlibContactValidation", plan.inputs?.opencamlibContactValidation ?? "opencamlib-contact-output-validation.json"],
   ["opencamlibRealCandidateRun", plan.inputs?.opencamlibRealCandidateRun ?? "opencamlib-real-candidate-run.json"],
   ["opencamlibCandidatePackageValidation", plan.inputs?.opencamlibCandidatePackageValidation ?? "opencamlib-candidate-package-validation.json"],
+  ["opencamlibCandidatePackageBundle", plan.inputs?.opencamlibCandidatePackageBundle ?? "opencamlib-candidate-package-bundle.zip"],
   ["sourceAdapterValidation", plan.inputs?.sourceAdapterValidation ?? "v3-external-adapter-validation.json"]
 ];
 
@@ -208,6 +209,7 @@ function createUpstreamCamEvidence(inspectedInputs) {
     ["opencamlibContactValidation", "opencamlib-contact-output-validation.json", "OpenCAMLib strict contact 验收"],
     ["opencamlibRealCandidateRun", "opencamlib-real-candidate-run.json", "OpenCAMLib 一键真实候选链路"],
     ["opencamlibCandidatePackageValidation", "opencamlib-candidate-package-validation.json", "OpenCAMLib 候选包预检"],
+    ["opencamlibCandidatePackageBundle", "opencamlib-candidate-package-bundle.zip", "OpenCAMLib 候选包证据包"],
     ["sourceAdapterValidation", "v3-external-adapter-validation.json", "外部 CAM adapter 源报告"]
   ];
   const files = candidates.map(([key, expectedFilename, label]) => {
