@@ -704,6 +704,8 @@ check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencam
 check("camotics-validator-schema", camoticsValidator.includes("hediao3d.camotics-result-local-validation.v1"), "CAMotics validator must emit local validation schema.");
 check("camotics-validator-bundle", camoticsValidator.includes("camotics-result-bundle.zip"), "CAMotics validator must generate camotics-result-bundle.zip when passing.");
 check("real-output-production-candidate", realOutputCheck.includes("production-candidate"), "real output checker must require production-candidate evidence.");
+check("real-output-contact-validation", realOutputCheck.includes("opencamlib-contact-output-validation.json"), "real output checker must bind OpenCAMLib strict contact validation.");
+check("real-output-contact-ready-gate", realOutputCheck.includes("strict contact validation"), "real output checker must block production candidates without ready strict contact validation.");
 check("real-output-target-boundary", realOutputCheck.includes("target-machine-boundary.json"), "real output checker must write target-machine-boundary.json.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
@@ -990,28 +992,41 @@ cat > "$OUT_DIR/target-machine-boundary.json" <<'JSON'
 ${JSON.stringify(report.targetMachineBoundary, null, 2)}
 JSON
 
-echo "[HeDiao3D] Step 1/3 native readiness"
+echo "[HeDiao3D] Step 1/4 native readiness"
 npm run test:v3:native-cam
 
-echo "[HeDiao3D] Step 2/3 proof-backed FreeCAD handoff"
+echo "[HeDiao3D] Step 2/4 proof-backed FreeCAD handoff"
 npm run test:v3:freecad-proof-handoff
 
-echo "[HeDiao3D] Step 3/3 external adapter validation with native commands"
+echo "[HeDiao3D] Step 3/4 external adapter validation with native commands"
 V3_ADAPTER_USE_NATIVE_COMMANDS=true V3_ADAPTER_VALIDATION_DIR="$OUT_DIR" npm run test:v3:external-adapters
 
 REPORT="$OUT_DIR/v3-external-adapter-validation.json"
 ACCEPTANCE_REPORT="$OUT_DIR/native-cam-real-output-acceptance.json"
 ACCEPTANCE_BUNDLE="$OUT_DIR/native-cam-real-output-bundle.zip"
 TARGET_BOUNDARY="$OUT_DIR/target-machine-boundary.json"
+CONTACT_VALIDATION_REPORT="$OUT_DIR/opencamlib-contact-output-validation.json"
 if [[ ! -s "$REPORT" ]]; then
   echo "[HeDiao3D] Missing validation report: $REPORT" >&2
   exit 2
 fi
 
-node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" "$TARGET_BOUNDARY" <<'NODE'
+echo "[HeDiao3D] Step 4/4 OpenCAMLib strict contact validation"
+if [[ -s "$OUT_DIR/neutral-toolpath.json" && -s "$OUT_DIR/opencamlib-kernel-plan.json" && -s "$OUT_DIR/repaired-model.stl" && -s "$OUT_DIR/opencamlib-cutter-contact-report.json" ]]; then
+  node opencamlib-contact-output-validate.mjs \
+    --neutral "$OUT_DIR/neutral-toolpath.json" \
+    --plan "$OUT_DIR/opencamlib-kernel-plan.json" \
+    --model "$OUT_DIR/repaired-model.stl" \
+    --contact "$OUT_DIR/opencamlib-cutter-contact-report.json" \
+    --out "$CONTACT_VALIDATION_REPORT"
+else
+  echo "[HeDiao3D] OpenCAMLib contact validation inputs not found in $OUT_DIR; acceptance will stay blocked for production candidates." >&2
+fi
+
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" "$TARGET_BOUNDARY" "$CONTACT_VALIDATION_REPORT" <<'NODE'
 const { readFileSync, writeFileSync } = require("fs");
 const { createHash } = require("crypto");
-const [reportPath, acceptancePath, strictValue, expectValue, targetBoundaryPath] = process.argv.slice(2);
+const [reportPath, acceptancePath, strictValue, expectValue, targetBoundaryPath, contactValidationPath] = process.argv.slice(2);
 const strict = /^(1|true|yes|on)$/i.test(strictValue || "");
 const expectProductionCandidate = /^(1|true|yes|on)$/i.test(expectValue || "");
 const reportBytes = readFileSync(reportPath);
@@ -1019,6 +1034,40 @@ const reportText = reportBytes.toString("utf8");
 const report = JSON.parse(reportText);
 const targetMachineBoundaryBytes = readFileSync(targetBoundaryPath);
 const targetMachineBoundary = JSON.parse(targetMachineBoundaryBytes.toString("utf8"));
+let contactValidation = null;
+try {
+  const contactValidationBytes = readFileSync(contactValidationPath);
+  const parsed = JSON.parse(contactValidationBytes.toString("utf8"));
+  contactValidation = {
+    schema: parsed.schema || null,
+    path: contactValidationPath,
+    sha256: createHash("sha256").update(contactValidationBytes).digest("hex"),
+    level: parsed.level || "missing",
+    strict: Boolean(parsed.strict),
+    expectProductionCandidate: Boolean(parsed.expectProductionCandidate),
+    productionCandidateEligible: Boolean(parsed.productionCandidateEligible),
+    checkCount: Array.isArray(parsed.checks) ? parsed.checks.length : 0,
+    failedCheckCount: Array.isArray(parsed.checks) ? parsed.checks.filter((check) => check.status === "fail").length : 0,
+    errorCount: Array.isArray(parsed.errors) ? parsed.errors.length : 0,
+    warningCount: Array.isArray(parsed.warnings) ? parsed.warnings.length : 0,
+    firstError: Array.isArray(parsed.errors) ? parsed.errors[0] || null : null
+  };
+} catch {
+  contactValidation = {
+    schema: "hediao3d.opencamlib-contact-output-validation.v1",
+    path: contactValidationPath,
+    sha256: null,
+    level: "missing",
+    strict: false,
+    expectProductionCandidate,
+    productionCandidateEligible: false,
+    checkCount: 0,
+    failedCheckCount: 0,
+    errorCount: 1,
+    warningCount: 0,
+    firstError: "opencamlib-contact-output-validation.json missing"
+  };
+}
 const adapters = Array.isArray(report.adapters) ? report.adapters : [];
 const rows = adapters.map((adapter) => ({
   id: adapter.id,
@@ -1041,7 +1090,8 @@ const missing = rows.filter((row) => ["missing", "not-generated"].includes(row.c
 const candidates = rows.filter((row) => row.productionCandidate && row.classification === "production-candidate");
 const blockers = [
   ...unsafe.map((row) => row.id + " uses unsafe " + row.classification),
-  ...(expectProductionCandidate && candidates.length === 0 ? ["no production-candidate adapter output found"] : [])
+  ...(expectProductionCandidate && candidates.length === 0 ? ["no production-candidate adapter output found"] : []),
+  ...(candidates.some((row) => row.id === "opencamlib") && contactValidation.level !== "ready" ? ["OpenCAMLib production-candidate output lacks ready strict contact validation: " + (contactValidation.firstError || contactValidation.level)] : [])
 ];
 const warnings = missing.map((row) => row.id + " did not generate real output: " + row.classification);
 const acceptance = {
@@ -1070,6 +1120,7 @@ const acceptance = {
   productionCandidateCount: candidates.length,
   unsafeCount: unsafe.length,
   missingCount: missing.length,
+  contactValidation,
   adapters: rows,
   blockers,
   warnings,
@@ -1102,9 +1153,9 @@ if (strict && (unsafe.length || (expectProductionCandidate && candidates.length 
 }
 NODE
 
-node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" "$TARGET_BOUNDARY" <<'NODE'
-const { readFileSync, writeFileSync } = require("fs");
-const [reportPath, acceptancePath, bundlePath, targetBoundaryPath] = process.argv.slice(2);
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" "$TARGET_BOUNDARY" "$CONTACT_VALIDATION_REPORT" <<'NODE'
+const { existsSync, readFileSync, writeFileSync } = require("fs");
+const [reportPath, acceptancePath, bundlePath, targetBoundaryPath, contactValidationPath] = process.argv.slice(2);
 const files = [
   { name: "v3-external-adapter-validation.json", content: readFileSync(reportPath) },
   { name: "native-cam-real-output-acceptance.json", content: readFileSync(acceptancePath) },
@@ -1120,6 +1171,7 @@ const files = [
       "- native-cam-real-output-acceptance.json",
       "- v3-external-adapter-validation.json",
       "- target-machine-boundary.json",
+      "- opencamlib-contact-output-validation.json, when OpenCAMLib contact validation inputs were available",
       "",
       "Target machine boundary:",
       "- 3-axis controller + Y-axis rotary fixture",
@@ -1132,6 +1184,9 @@ const files = [
     ].join("\\n"), "utf8")
   }
 ];
+if (existsSync(contactValidationPath)) {
+  files.splice(3, 0, { name: "opencamlib-contact-output-validation.json", content: readFileSync(contactValidationPath) });
+}
 writeFileSync(bundlePath, createZip(files));
 console.log("[HeDiao3D] Wrote real-output import bundle: " + bundlePath);
 

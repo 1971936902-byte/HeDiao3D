@@ -1369,7 +1369,7 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       command: "bash native-cam-real-output-check.sh",
       evidence: ["native-cam-real-output-acceptance.json", "v3-external-adapter-validation.json", "adapter-report.json"],
       detail: nativeCamRealOutputAcceptance
-        ? `${nativeCamRealOutputAcceptance.level} / productionCandidate=${nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${nativeCamRealOutputAcceptance.unsafeCount} / missing=${nativeCamRealOutputAcceptance.missingCount} / sourceBinding=${nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing"}`
+        ? `${nativeCamRealOutputAcceptance.level} / productionCandidate=${nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${nativeCamRealOutputAcceptance.unsafeCount} / missing=${nativeCamRealOutputAcceptance.missingCount} / sourceBinding=${nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing"} / contact=${nativeCamRealOutputAcceptance.contactValidationStatus?.status ?? "missing"}`
         : "尚未运行 Linux CAM 服务端真实输出验收脚本。",
       blocksProduction: !nativeCamRealOutputAcceptance
         || nativeCamRealOutputAcceptance.level !== "ready"
@@ -2012,6 +2012,10 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
     ? report.sourceReportSnapshot
     : null;
   const sourceReportHandoffAudit = sourceReportSnapshot?.handoffClassificationAudit ?? null;
+  const contactValidationStatus = createNativeCamContactValidationStatus(report);
+  const contactValidationChecks = Array.isArray(report.contactValidation?.checks) ? report.contactValidation.checks : null;
+  const contactValidationErrors = Array.isArray(report.contactValidation?.errors) ? report.contactValidation.errors : null;
+  const contactValidationWarnings = Array.isArray(report.contactValidation?.warnings) ? report.contactValidation.warnings : null;
   return {
     id: acceptanceId,
     schema: report.schema ?? "hediao3d.native-cam-real-output-acceptance.v1",
@@ -2036,6 +2040,19 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
     missingCount: Number(report.missingCount ?? 0),
     strict: Boolean(report.strict),
     expectProductionCandidate: Boolean(report.expectProductionCandidate),
+    contactValidationStatus,
+    contactValidation: report.contactValidation && typeof report.contactValidation === "object" ? {
+      schema: report.contactValidation.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
+      level: report.contactValidation.level ?? "missing",
+      strict: Boolean(report.contactValidation.strict),
+      productionCandidateEligible: Boolean(report.contactValidation.productionCandidateEligible),
+      checkCount: Number(report.contactValidation.checkCount ?? contactValidationChecks?.length ?? 0),
+      failedCheckCount: Number(report.contactValidation.failedCheckCount ?? contactValidationChecks?.filter((check) => check?.status === "fail").length ?? 0),
+      errorCount: Number(report.contactValidation.errorCount ?? contactValidationErrors?.length ?? 0),
+      warningCount: Number(report.contactValidation.warningCount ?? contactValidationWarnings?.length ?? 0),
+      firstError: report.contactValidation.firstError ?? contactValidationErrors?.[0] ?? null,
+      sha256: report.contactValidation.sha256 ?? null
+    } : null,
     targetMachineBoundaryStatus,
     targetMachineBoundary: report.targetMachineBoundary ? {
       schema: report.targetMachineBoundary.schema ?? "hediao3d.target-machine-boundary.v1",
@@ -2060,6 +2077,91 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand)
     }))
   };
+}
+
+function createNativeCamContactValidationStatus(report) {
+  const candidates = Number(report?.productionCandidateCount ?? 0);
+  const opencamlibCandidate = Array.isArray(report?.adapters)
+    && report.adapters.some((adapter) => adapter?.id === "opencamlib" && adapter?.classification === "production-candidate" && adapter?.productionCandidate === true);
+  const required = candidates > 0 || opencamlibCandidate || report?.expectProductionCandidate === true;
+  const contact = report?.contactValidation && typeof report.contactValidation === "object" ? report.contactValidation : null;
+  if (!required) {
+    return {
+      schema: "hediao3d.native-cam-contact-validation-status.v1",
+      status: "not-required",
+      ready: true,
+      required: false,
+      summary: "当前验收未声明生产候选输出，strict contact 验证暂不作为本项硬门。"
+    };
+  }
+  if (!contact) {
+    return {
+      schema: "hediao3d.native-cam-contact-validation-status.v1",
+      status: "missing",
+      ready: false,
+      required: true,
+      summary: "Native CAM 真实输出缺少 OpenCAMLib strict contact 验证，不能作为生产候选证据。"
+    };
+  }
+  const ready = contact.schema === "hediao3d.opencamlib-contact-output-validation.v1"
+    && contact.level === "ready"
+    && contact.strict === true
+    && contact.productionCandidateEligible === true
+    && Number(contact.failedCheckCount ?? (Array.isArray(contact.checks) ? contact.checks.filter((check) => check?.status === "fail").length : 0)) === 0
+    && Number(contact.errorCount ?? (Array.isArray(contact.errors) ? contact.errors.length : 0)) === 0;
+  const checkCount = Number(contact.checkCount ?? (Array.isArray(contact.checks) ? contact.checks.length : 0));
+  const failedCheckCount = Number(contact.failedCheckCount ?? (Array.isArray(contact.checks) ? contact.checks.filter((check) => check?.status === "fail").length : 0));
+  const errorCount = Number(contact.errorCount ?? (Array.isArray(contact.errors) ? contact.errors.length : 0));
+  const warningCount = Number(contact.warningCount ?? (Array.isArray(contact.warnings) ? contact.warnings.length : 0));
+  return {
+    schema: "hediao3d.native-cam-contact-validation-status.v1",
+    status: ready ? "ready" : contact.level === "critical" ? "critical" : "review",
+    ready,
+    required: true,
+    level: contact.level ?? "missing",
+    checkCount,
+    failedCheckCount,
+    errorCount,
+    warningCount,
+    summary: ready
+      ? `OpenCAMLib strict contact 验证 ready：${checkCount} checks。`
+      : `OpenCAMLib strict contact 验证未达到生产候选门槛：level=${contact.level ?? "missing"}，failed=${failedCheckCount}，errors=${errorCount}。`
+  };
+}
+
+function createNativeCamContactValidationSummary(report, rawBytes = null) {
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const errors = Array.isArray(report?.errors) ? report.errors : [];
+  const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
+  return {
+    schema: report?.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
+    createdAt: report?.createdAt ?? null,
+    level: report?.level ?? "missing",
+    strict: Boolean(report?.strict),
+    expectProductionCandidate: Boolean(report?.expectProductionCandidate),
+    productionCandidateEligible: Boolean(report?.productionCandidateEligible),
+    checkCount: checks.length,
+    failedCheckCount: checks.filter((check) => check?.status === "fail").length,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    firstError: errors[0] ?? null,
+    sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
+  };
+}
+
+function createNativeCamRealOutputImportLevel(acceptance, targetMachineBoundaryStatus, contactValidationStatus) {
+  const blockers = [];
+  const startingLevel = acceptance?.level ?? "missing";
+  if (contactValidationStatus.required && !contactValidationStatus.ready) {
+    blockers.push(contactValidationStatus.summary);
+  }
+  if (startingLevel === "ready" && blockers.length) {
+    return { level: "critical", blockers };
+  }
+  if (startingLevel === "ready" && targetMachineBoundaryStatus.status !== "matched") {
+    return { level: "review", blockers };
+  }
+  return { level: startingLevel, blockers };
 }
 
 function createNativeCamSourceReportSnapshot(validationReport, sourceReportBinding, source) {
@@ -3556,29 +3658,37 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     return json(res, 400, { error: error instanceof Error ? error.message : "native CAM 真实输出验收 ZIP 无法解析" });
   }
   const acceptance = input.acceptance ?? zipBundle?.acceptance ?? input;
+  const acceptanceWithContactValidation = {
+    ...acceptance,
+    ...(zipBundle?.contactValidationReport && !acceptance.contactValidation
+      ? { contactValidation: createNativeCamContactValidationSummary(zipBundle.contactValidationReport, zipBundle.contactValidationReportBytes) }
+      : {})
+  };
   const bindingInput = {
     ...input,
     ...(zipBundle?.validationReport && !input.validationReport ? { validationReport: zipBundle.validationReport } : {})
   };
-  const validation = validateNativeCamRealOutputAcceptance(acceptance);
+  const validation = validateNativeCamRealOutputAcceptance(acceptanceWithContactValidation);
   if (!validation.ok) {
     return json(res, 400, { error: validation.error });
   }
-  const sourceReportBinding = createNativeCamRealOutputSourceReportBinding(acceptance, bindingInput);
+  const sourceReportBinding = createNativeCamRealOutputSourceReportBinding(acceptanceWithContactValidation, bindingInput);
   if (sourceReportBinding.status === "mismatch") {
     return json(res, 400, {
       error: sourceReportBinding.summary,
       sourceReportBinding
     });
   }
-  const targetMachineBoundaryStatus = createNativeCamTargetMachineBoundaryStatus(acceptance.targetMachineBoundary);
+  const targetMachineBoundaryStatus = createNativeCamTargetMachineBoundaryStatus(acceptanceWithContactValidation.targetMachineBoundary);
+  const contactValidationStatus = createNativeCamContactValidationStatus(acceptanceWithContactValidation);
+  const importLevel = createNativeCamRealOutputImportLevel(acceptanceWithContactValidation, targetMachineBoundaryStatus, contactValidationStatus);
 
   const importId = `imported-real-output-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
   const outputRoot = join(process.cwd(), "public", "orchestrator-adapter-validation", importId);
   await mkdir(outputRoot, { recursive: true });
 
   const imported = {
-    ...acceptance,
+    ...acceptanceWithContactValidation,
     importedAt: new Date().toISOString(),
     importSource: {
       sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : zipBundle?.sourceName ?? "native-cam-real-output-acceptance.json",
@@ -3586,11 +3696,16 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       note: "Imported from a Linux/native CAM server acceptance run. This evidence is consumed by readiness gates but does not unlock production by itself.",
       zipBundle: zipBundle ? "imported-native-cam-real-output-bundle.zip" : null
     },
-    level: acceptance.level === "ready" && targetMachineBoundaryStatus.status !== "matched" ? "review" : acceptance.level,
+    level: importLevel.level,
     targetMachineBoundaryStatus,
+    contactValidationStatus,
     warnings: [
-      ...(Array.isArray(acceptance.warnings) ? acceptance.warnings : []),
+      ...(Array.isArray(acceptanceWithContactValidation.warnings) ? acceptanceWithContactValidation.warnings : []),
       ...(targetMachineBoundaryStatus.status === "matched" ? [] : [targetMachineBoundaryStatus.summary])
+    ],
+    blockers: [
+      ...(Array.isArray(acceptanceWithContactValidation.blockers) ? acceptanceWithContactValidation.blockers : []),
+      ...importLevel.blockers
     ],
     sourceReportBinding,
     sourceReportSnapshot: createNativeCamSourceReportSnapshot(
@@ -3613,6 +3728,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     acceptanceLevel: imported.level ?? null,
     sourceReportBinding,
     targetMachineBoundaryStatus,
+    contactValidationStatus,
     productionCandidateCount: Number(imported.productionCandidateCount ?? 0),
     unsafeCount: Number(imported.unsafeCount ?? 0),
     missingCount: Number(imported.missingCount ?? 0)
@@ -3636,11 +3752,14 @@ function extractNativeCamRealOutputAcceptanceZipBundle(value) {
   const acceptanceEntry = findEntry((name) => /(^|\/)native-cam-real-output-acceptance\.json$/.test(name));
   if (!acceptanceEntry) throw new Error("ZIP 中找不到 native-cam-real-output-acceptance.json。");
   const validationEntry = findEntry((name) => /(^|\/)v3-external-adapter-validation\.json$/.test(name));
+  const contactValidationEntry = findEntry((name) => /(^|\/)opencamlib-contact-output-validation\.json$/.test(name));
   return {
     sourceBuffer: buffer,
     sourceName: "native-cam-real-output-bundle.zip",
     acceptance: parseJsonBuffer(acceptanceEntry.content, "native-cam-real-output-acceptance.json"),
     validationReport: validationEntry ? parseJsonBuffer(validationEntry.content, "v3-external-adapter-validation.json") : null,
+    contactValidationReport: contactValidationEntry ? parseJsonBuffer(contactValidationEntry.content, "opencamlib-contact-output-validation.json") : null,
+    contactValidationReportBytes: contactValidationEntry?.content ?? null,
     entries: entries.map((entry) => ({
       name: entry.name,
       sizeBytes: entry.content.length
@@ -3759,6 +3878,14 @@ function validateNativeCamRealOutputAcceptance(acceptance) {
     }
     if (adapter.classification && !allowedClassifications.has(String(adapter.classification))) {
       return { ok: false, error: `adapter ${adapter.id} 的 classification 不受支持：${adapter.classification}` };
+    }
+  }
+  if (acceptance.contactValidation !== undefined) {
+    if (!acceptance.contactValidation || typeof acceptance.contactValidation !== "object") {
+      return { ok: false, error: "contactValidation 必须是 JSON object。" };
+    }
+    if (acceptance.contactValidation.schema && acceptance.contactValidation.schema !== "hediao3d.opencamlib-contact-output-validation.v1") {
+      return { ok: false, error: "contactValidation.schema 必须是 hediao3d.opencamlib-contact-output-validation.v1。" };
     }
   }
   return { ok: true };
@@ -10524,6 +10651,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       level: nativeCamRealOutputAcceptance.level,
       productionCandidateCount: nativeCamRealOutputAcceptance.productionCandidateCount,
       sourceReportBindingStatus: nativeCamRealOutputAcceptance.sourceReportBindingStatus ?? "missing",
+      contactValidationStatus: nativeCamRealOutputAcceptance.contactValidationStatus ?? null,
+      contactValidation: nativeCamRealOutputAcceptance.contactValidation ?? null,
       targetMachineBoundaryStatus: nativeCamRealOutputAcceptance.targetMachineBoundaryStatus ?? null,
       targetMachineBoundary: nativeCamRealOutputAcceptance.targetMachineBoundary ?? null,
       summary: nativeCamRealOutputAcceptance.summary
@@ -10532,6 +10661,14 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       level: "missing",
       productionCandidateCount: 0,
       sourceReportBindingStatus: "missing",
+      contactValidationStatus: {
+        schema: "hediao3d.native-cam-contact-validation-status.v1",
+        status: "missing",
+        ready: false,
+        required: true,
+        summary: "未回填 native-cam-real-output-bundle.zip，尚未证明 OpenCAMLib strict contact 输出。"
+      },
+      contactValidation: null,
       targetMachineBoundaryStatus: {
         schema: "hediao3d.native-cam-target-machine-boundary-status.v1",
         status: "missing",

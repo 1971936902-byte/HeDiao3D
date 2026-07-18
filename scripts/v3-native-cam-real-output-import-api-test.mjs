@@ -43,6 +43,8 @@ async function main() {
   assert(imported.sourceReportSha256 === validationReportSha256, "imported acceptance should expose source report hash");
   assert(imported.sourceReportHandoffAudit?.productionCandidateCount === 1, "imported acceptance should expose source report production candidate audit");
   assert(imported.sourceReportHandoffAudit?.unsafeCount === 0, "imported acceptance should expose source report unsafe audit");
+  assert(imported.contactValidationStatus?.status === "ready", "imported acceptance should expose ready strict contact validation");
+  assert(imported.contactValidation?.checkCount >= 9, "imported acceptance should expose contact validation check count");
   assert(imported.apiArtifacts?.json?.includes("native-cam-real-output-acceptance.json"), "imported acceptance should expose JSON artifact");
 
   const artifact = await getJson(imported.apiArtifacts.json);
@@ -50,7 +52,17 @@ async function main() {
   assert(artifact.adapters?.some((adapter) => adapter.classification === "production-candidate"), "artifact should preserve production-candidate classification");
   assert(artifact.sourceReportBinding?.status === "matched", "artifact should preserve source report binding");
   assert(artifact.targetMachineBoundaryStatus?.status === "matched", "artifact should preserve target machine boundary status");
+  assert(artifact.contactValidationStatus?.status === "ready", "artifact should preserve strict contact validation status");
   assert(artifact.sourceReportSnapshot?.handoffClassificationAudit?.productionCandidateCount === 1, "artifact should preserve source report handoff audit snapshot");
+
+  const missingContact = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
+    sourceName: "native-cam-real-output-acceptance-missing-contact.json",
+    validationReport,
+    acceptance: createAcceptanceFixture(validationReportSha256, { includeContactValidation: false })
+  });
+  assert(missingContact.level === "critical", "production-candidate acceptance without strict contact validation should be critical");
+  assert(missingContact.contactValidationStatus?.status === "missing", "missing contact validation should expose missing status");
+  assert(missingContact.blockers?.some((item) => /strict contact/i.test(item)), "missing contact validation should add a blocker");
 
   const missingBoundary = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-acceptance-missing-boundary.json",
@@ -63,13 +75,15 @@ async function main() {
   const zipImported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-bundle.zip",
     acceptanceZipDataUrl: toZipDataUrl({
-      "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256), null, 2),
-      "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2)
+      "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256, { includeContactValidation: false }), null, 2),
+      "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2),
+      "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2)
     })
   });
   assert(zipImported.schema === "hediao3d.native-cam-real-output-acceptance.v1", "zip imported acceptance schema mismatch");
   assert(zipImported.sourceReportBindingStatus === "matched", "zip imported acceptance should bind validation report");
   assert(zipImported.targetMachineBoundaryStatus?.status === "matched", "zip import should preserve matched target boundary");
+  assert(zipImported.contactValidationStatus?.status === "ready", "zip import should preserve ready contact validation");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
   assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
@@ -82,6 +96,7 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.level === "ready", "readiness should preserve acceptance level");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose matched source report binding");
   assert(readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus?.status === "matched", "readiness should expose matched target machine boundary");
+  assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose ready strict contact validation");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
@@ -135,6 +150,7 @@ function createValidationReportFixture() {
 
 function createAcceptanceFixture(sourceReportSha256, options = {}) {
   const includeTargetMachineBoundary = options.includeTargetMachineBoundary !== false;
+  const includeContactValidation = options.includeContactValidation !== false;
   return {
     schema: "hediao3d.native-cam-real-output-acceptance.v1",
     createdAt: new Date().toISOString(),
@@ -149,6 +165,7 @@ function createAcceptanceFixture(sourceReportSha256, options = {}) {
     strict: true,
     expectProductionCandidate: true,
     ...(includeTargetMachineBoundary ? { targetMachineBoundary: createTargetMachineBoundaryFixture() } : {}),
+    ...(includeContactValidation ? { contactValidation: createContactValidationFixture() } : {}),
     productionCandidateCount: 1,
     unsafeCount: 0,
     missingCount: 0,
@@ -167,6 +184,44 @@ function createAcceptanceFixture(sourceReportSha256, options = {}) {
         generatedByExternalCommand: true
       }
     ]
+  };
+}
+
+function createContactValidationFixture(overrides = {}) {
+  const checks = [
+    "neutral-schema",
+    "neutral-points",
+    "neutral-not-synthetic",
+    "neutral-not-fixture",
+    "neutral-not-preview",
+    "contact-schema",
+    "quality-postprocessEligible",
+    "quality-productionCandidate",
+    "quality-not-preview",
+    "contact-algorithm-real",
+    "contact-tool-diameter",
+    "contact-tool-angle",
+    "contact-tool-flat-tip",
+    "contact-sampling-hit-rate",
+    "contact-sampling-point-count",
+    "contact-sampling-step-ratio",
+    "contact-residual-gouge",
+    "contact-residual-undercut",
+    "identity-neutral",
+    "identity-plan",
+    "identity-model"
+  ].map((id) => ({ id, status: "pass", summary: `${id} pass` }));
+  return {
+    schema: "hediao3d.opencamlib-contact-output-validation.v1",
+    createdAt: new Date().toISOString(),
+    level: "ready",
+    strict: true,
+    expectProductionCandidate: true,
+    productionCandidateEligible: true,
+    checks,
+    errors: [],
+    warnings: [],
+    ...overrides
   };
 }
 

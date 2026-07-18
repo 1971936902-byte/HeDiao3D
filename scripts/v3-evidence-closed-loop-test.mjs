@@ -59,12 +59,14 @@ async function main() {
     sourceName: "native-cam-real-output-bundle.zip",
     acceptanceZipDataUrl: toZipDataUrl({
       "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256), null, 2),
-      "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2)
+      "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2),
+      "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2)
     })
   });
   assert(nativeCamImport.level === "ready", `native CAM acceptance should be ready, got ${nativeCamImport.level}`);
   assert(nativeCamImport.sourceReportBindingStatus === "matched", "native CAM acceptance should bind to adapter validation report");
   assert(nativeCamImport.targetMachineBoundaryStatus?.status === "matched", "native CAM acceptance should bind target machine boundary");
+  assert(nativeCamImport.contactValidationStatus?.status === "ready", "native CAM acceptance should bind strict contact validation");
   assert(nativeCamImport.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "native CAM import should preserve source ZIP");
 
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
@@ -117,6 +119,7 @@ async function main() {
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.nativeCamRealOutputAcceptance?.level === "ready", "readiness should expose latest native CAM acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose native CAM source binding");
+  assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose strict contact validation");
   assert(readiness.readinessCamoticsEvidence?.source === "latest-job-evidence-dossier", `readiness should use latest job CAMotics evidence, got ${readiness.readinessCamoticsEvidence?.source}`);
   assert(readiness.readinessCamoticsEvidence.productionEvidenceEligible === true, "readiness should mark latest job CAMotics evidence eligible");
   assert(readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched", "readiness CAMotics evidence should preserve matched input identity");
@@ -173,6 +176,7 @@ function createAcceptanceFixture(sourceReportSha256) {
     strict: true,
     expectProductionCandidate: true,
     targetMachineBoundary: createTargetMachineBoundaryFixture(),
+    contactValidation: createContactValidationFixture(),
     productionCandidateCount: 1,
     unsafeCount: 0,
     missingCount: 0,
@@ -191,6 +195,43 @@ function createAcceptanceFixture(sourceReportSha256) {
         generatedByExternalCommand: true
       }
     ]
+  };
+}
+
+function createContactValidationFixture() {
+  const checks = [
+    "neutral-schema",
+    "neutral-points",
+    "neutral-not-synthetic",
+    "neutral-not-fixture",
+    "neutral-not-preview",
+    "contact-schema",
+    "quality-postprocessEligible",
+    "quality-productionCandidate",
+    "quality-not-preview",
+    "contact-algorithm-real",
+    "contact-tool-diameter",
+    "contact-tool-angle",
+    "contact-tool-flat-tip",
+    "contact-sampling-hit-rate",
+    "contact-sampling-point-count",
+    "contact-sampling-step-ratio",
+    "contact-residual-gouge",
+    "contact-residual-undercut",
+    "identity-neutral",
+    "identity-plan",
+    "identity-model"
+  ].map((id) => ({ id, status: "pass", summary: `${id} pass` }));
+  return {
+    schema: "hediao3d.opencamlib-contact-output-validation.v1",
+    createdAt: new Date().toISOString(),
+    level: "ready",
+    strict: true,
+    expectProductionCandidate: true,
+    productionCandidateEligible: true,
+    checks,
+    errors: [],
+    warnings: []
   };
 }
 

@@ -112,6 +112,8 @@ stepToCutterRatio 达标
 npm run test:v3:opencamlib-contact-validate
 ```
 
+Native CAM 真实输出回填已经与该门槛绑定：`native-cam-real-output-bundle.zip` 可随包携带 `opencamlib-contact-output-validation.json`，导入端会生成 `contactValidationStatus`；OpenCAMLib production-candidate 若缺少 ready strict contact 验证，会被降级为 critical，不能作为生产证据。
+
 该验证器现在要求真实 OpenCAMLib contact report 同时满足：
 
 - `contactSampling.algorithm` 属于 `drop-cutter` / `cutter-contact` / `waterline`，且不含 `preview` / `heightfield` / `scaffold`。
