@@ -552,6 +552,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "预检真实 OpenCAMLib 候选输出目录，生成 contact 验证结果和轻量候选证据 ZIP。"
       },
       {
+        filename: "camotics-material-removal-run.mjs",
+        role: "camotics-material-removal-runner",
+        description: "Linux 侧一键尝试执行 CAMotics/等效材料去除仿真，写出 camotics-result.json 后自动调用 validator 生成 camotics-result-bundle.zip；没有真实仿真器时 fail-closed。"
+      },
+      {
         filename: "camotics-material-removal-validate.mjs",
         role: "camotics-material-removal-validator",
         description: "验证真实 CAMotics/等效材料去除结果与 camotics-cli-run-package.json 的哈希、运动画像、机床上下文和截图/STL 证据绑定。"
@@ -583,6 +588,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "node opencamlib-real-candidate-run.mjs .",
       "node opencamlib-candidate-package-validate.mjs --root .",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
+      "node camotics-material-removal-run.mjs --run-package camotics-cli-run-package.json",
       "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
       "bash native-cam-real-output-check.sh",
       "npm run test:v3:readiness-api"
@@ -603,6 +609,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "opencamlib-runner.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_runner.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-real-candidate-run.mjs"), createOpenCamLibRealCandidateRunScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "camotics-material-removal-run.mjs"), createCamoticsMaterialRemovalRunScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
@@ -625,6 +632,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "bash native-cam-real-output-check.sh",
     "上传 native-cam-real-output-bundle.zip 到 HeDiao3D V3 Native CAM 回填面板",
     "在当前 V3 job 下载 CAMotics Linux 仿真包并在 Linux 服务器执行",
+    "node camotics-material-removal-run.mjs --run-package camotics-cli-run-package.json",
     "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
     "上传 camotics-result-bundle.zip 到当前 V3 job 的 CAMotics 结果回填面板",
     "npm run test:v3:readiness-api",
@@ -695,6 +703,254 @@ ${report.summary.executionPlan.productionLocks.map((item) => `- ${item}`).join("
 `;
 }
 
+function createCamoticsMaterialRemovalRunScript() {
+  return `#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+
+const args = parseArgs(process.argv.slice(2));
+const root = resolve(args.root || process.cwd());
+const runPackagePath = resolve(root, args.runPackage || args["run-package"] || "camotics-cli-run-package.json");
+const resultPath = resolve(root, args.result || "camotics-result.json");
+const reportPath = resolve(root, args.report || "camotics-material-removal-run.json");
+const bundlePath = resolve(root, args.bundle || "camotics-result-bundle.zip");
+const validationPath = resolve(root, args.validation || "camotics-result-local-validation.json");
+const runPackage = readJsonIfExists(runPackagePath);
+const steps = [];
+
+let result = {
+  schema: "hediao3d.camotics-material-removal-run.v1",
+  createdAt: new Date().toISOString(),
+  root,
+  runPackagePath,
+  resultPath,
+  validationPath,
+  bundlePath,
+  ok: false,
+  level: "blocked",
+  productionLocked: true,
+  productionBoundary: "This runner only attempts CAMotics/equivalent material-removal execution and then calls the validator. It never unlocks production NC by itself.",
+  simulator: null,
+  command: null,
+  steps,
+  blocking: [],
+  expectedUploadBundle: "camotics-result-bundle.zip"
+};
+
+try {
+  if (!runPackage || runPackage.schema !== "hediao3d.camotics-cli-run-package.v1") {
+    block("missing-run-package", "camotics-cli-run-package.json missing or schema mismatch.");
+    finish(3);
+  }
+  const preferredGcode = resolve(root, runPackage.preferredGcodeIdentity?.filename || runPackage.inputs?.preferredGcode || "camotics-preview.nc");
+  const projectTemplate = resolve(root, runPackage.projectTemplate?.artifact || runPackage.inputs?.projectTemplate || "camotics-project-template.json");
+  const resultTemplate = resolve(root, "camotics-result-template.json");
+  const providedResult = process.env.HEDIAO3D_CAMOTICS_RESULT_JSON ? resolve(process.env.HEDIAO3D_CAMOTICS_RESULT_JSON) : null;
+  if (providedResult && existsSync(providedResult)) {
+    copyFileSync(providedResult, resultPath);
+    steps.push({ id: "copy-provided-result", status: "pass", summary: providedResult });
+  } else {
+    const commandInfo = resolveSimulatorCommand({ root, preferredGcode, projectTemplate, resultPath, runPackage });
+    result.simulator = commandInfo.simulator;
+    result.command = commandInfo.command;
+    if (!commandInfo.command) {
+      block("missing-simulator-command", "No CAMotics/equivalent simulator command found. Set HEDIAO3D_CAMOTICS_COMMAND or HEDIAO3D_CAMOTICS_RUN_COMMAND.");
+      finish(3);
+    }
+    const run = spawnSync(commandInfo.command, {
+      cwd: root,
+      encoding: "utf8",
+      shell: true,
+      env: {
+        ...process.env,
+        HEDIAO3D_CAMOTICS_RUN_PACKAGE: runPackagePath,
+        HEDIAO3D_CAMOTICS_RESULT_JSON: resultPath,
+        HEDIAO3D_CAMOTICS_PREFERRED_GCODE: preferredGcode,
+        HEDIAO3D_CAMOTICS_PROJECT_TEMPLATE: projectTemplate
+      },
+      timeout: Number(process.env.HEDIAO3D_CAMOTICS_RUN_TIMEOUT_MS || 30 * 60 * 1000)
+    });
+    steps.push({
+      id: "simulator-command",
+      status: run.status === 0 ? "pass" : "fail",
+      command: commandInfo.command,
+      exitCode: typeof run.status === "number" ? run.status : null,
+      stdoutTail: tail(run.stdout),
+      stderrTail: tail(run.stderr)
+    });
+    if (run.status !== 0) {
+      block("simulator-command-failed", "CAMotics/equivalent simulator command failed.");
+      finish(3);
+    }
+  }
+
+  if (!existsSync(resultPath)) {
+    if (existsSync(resultTemplate)) {
+      block("missing-result-json", "Simulator did not write camotics-result.json. Fill camotics-result-template.json with real non-synthetic outputs, then rerun validator.");
+    } else {
+      block("missing-result-json", "Simulator did not write camotics-result.json.");
+    }
+    finish(3);
+  }
+  const resultJson = readJsonIfExists(resultPath);
+  result.materialRemoval = {
+    schema: resultJson?.schema ?? null,
+    status: resultJson?.status ?? null,
+    synthetic: resultJson?.synthetic ?? null,
+    riskLevel: resultJson?.riskLevel ?? null,
+    preferredGcodeSha256: resultJson?.inputs?.preferredGcodeSha256 ?? null,
+    materialRemovedMm3: resultJson?.metrics?.materialRemovedMm3 ?? null
+  };
+
+  const validation = spawnSync(process.execPath, [
+    "camotics-material-removal-validate.mjs",
+    "--result",
+    resultPath,
+    "--run-package",
+    runPackagePath,
+    "--bundle",
+    bundlePath
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    shell: false,
+    env: { ...process.env }
+  });
+  const validationJson = readJsonIfExists(validationPath);
+  steps.push({
+    id: "camotics-material-removal-validate",
+    status: validation.status === 0 ? "pass" : "fail",
+    command: "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
+    exitCode: typeof validation.status === "number" ? validation.status : null,
+    parsedSchema: validationJson?.schema ?? null,
+    summary: validationJson?.summary ?? validationJson?.level ?? (validation.status === 0 ? "passed" : "failed"),
+    stdoutTail: tail(validation.stdout),
+    stderrTail: tail(validation.stderr)
+  });
+  if (validation.status !== 0 || !existsSync(bundlePath)) {
+    block("material-removal-validation-failed", "camotics-material-removal-validate.mjs did not produce camotics-result-bundle.zip.");
+    finish(3);
+  }
+  result.ok = true;
+  result.level = "ready-for-import";
+  result.validation = validationJson;
+  result.bundle = {
+    path: bundlePath,
+    sha256: sha256File(bundlePath)
+  };
+  finish(0);
+} catch (error) {
+  block("runner-exception", error instanceof Error ? error.message : String(error));
+  finish(3);
+}
+
+function resolveSimulatorCommand({ root, preferredGcode, projectTemplate, resultPath, runPackage }) {
+  const template = process.env.HEDIAO3D_CAMOTICS_RUN_COMMAND;
+  if (template) {
+    return {
+      simulator: {
+        name: process.env.HEDIAO3D_CAMOTICS_SIMULATOR_NAME || "custom-material-removal-simulator",
+        version: process.env.HEDIAO3D_CAMOTICS_SIMULATOR_VERSION || null,
+        sourceCommand: template
+      },
+      command: expandTemplate(template, { root, preferredGcode, projectTemplate, resultPath })
+    };
+  }
+  const configured = process.env.HEDIAO3D_CAMOTICS_COMMAND;
+  if (configured) {
+    return {
+      simulator: {
+        name: "camotics",
+        version: detectVersion(configured),
+        sourceCommand: configured
+      },
+      command: quote(configured) + " " + quote(projectTemplate)
+    };
+  }
+  const command = findCommand(["camotics-cli", "camotics"]);
+  if (!command) return { simulator: null, command: null };
+  return {
+    simulator: {
+      name: command,
+      version: detectVersion(command),
+      sourceCommand: command
+    },
+    command: quote(command) + " " + quote(projectTemplate)
+  };
+}
+
+function expandTemplate(template, values) {
+  return String(template)
+    .replaceAll("{root}", quote(values.root))
+    .replaceAll("{gcode}", quote(values.preferredGcode))
+    .replaceAll("{project}", quote(values.projectTemplate))
+    .replaceAll("{result}", quote(values.resultPath));
+}
+
+function findCommand(candidates) {
+  for (const command of candidates) {
+    const probe = spawnSync(command, ["--version"], { encoding: "utf8", shell: false });
+    if (!probe.error && probe.status === 0) return command;
+  }
+  return null;
+}
+
+function detectVersion(command) {
+  const probe = spawnSync(command, ["--version"], { encoding: "utf8", shell: false });
+  if (probe.error || probe.status !== 0) return null;
+  return tail(String(probe.stdout || probe.stderr)).join(" ").slice(0, 180) || null;
+}
+
+function block(id, summary) {
+  result.blocking.push({ id, required: true, status: "blocked", summary });
+}
+
+function finish(code) {
+  result.ok = code === 0;
+  if (code !== 0 && result.level !== "ready-for-import") result.level = "blocked";
+  writeFileSync(reportPath, JSON.stringify(result, null, 2), "utf8");
+  console.log(JSON.stringify(result, null, 2));
+  process.exit(code);
+}
+
+function parseArgs(argv) {
+  const parsed = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const item = argv[index];
+    if (!item.startsWith("--")) continue;
+    const key = item.slice(2);
+    const next = argv[index + 1];
+    parsed[key] = next && !next.startsWith("--") ? next : true;
+    if (parsed[key] === next) index += 1;
+  }
+  return parsed;
+}
+
+function readJsonIfExists(path) {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function quote(value) {
+  return "'" + String(value).replace(/'/g, "'\\\\''") + "'";
+}
+
+function tail(value) {
+  return String(value ?? "").split(/\\r?\\n/).filter(Boolean).slice(-20);
+}
+`;
+}
+
 function createNativeCamServerPackageSelfCheckScript() {
   return `#!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -722,6 +978,7 @@ const requiredFiles = [
   "opencamlib-real-candidate-run.mjs",
   "opencamlib-contact-output-validate.mjs",
   "opencamlib-candidate-package-validate.mjs",
+  "camotics-material-removal-run.mjs",
   "camotics-material-removal-validate.mjs",
   "linux-cam-closed-loop-handoff.md",
   "native-cam-server-package.json"
@@ -746,6 +1003,7 @@ check("command:opencamlib-runner", commands.includes("opencamlib-runner.py"), "m
 check("command:opencamlib-real-candidate", commands.includes("opencamlib-real-candidate-run.mjs"), "manifest.commands must include the one-command OpenCAMLib real candidate run.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
+check("command:camotics-material-run", commands.includes("camotics-material-removal-run.mjs"), "manifest.commands must include CAMotics material-removal runner.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
 
 const target = manifest?.targetMachineBoundary ?? {};
@@ -761,6 +1019,7 @@ const openCamProbe = readTextIfExists(join(root, "opencamlib-probe.py"));
 const openCamContactSpike = readTextIfExists(join(root, "opencamlib-contact-spike.py"));
 const openCamRunner = readTextIfExists(join(root, "opencamlib-runner.py"));
 const openCamRealCandidate = readTextIfExists(join(root, "opencamlib-real-candidate-run.mjs"));
+const camoticsRunner = readTextIfExists(join(root, "camotics-material-removal-run.mjs"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
@@ -776,6 +1035,9 @@ check("opencamlib-real-candidate-fail-closed", openCamRealCandidate.includes("pr
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
 check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");
+check("camotics-runner-schema", camoticsRunner.includes("hediao3d.camotics-material-removal-run.v1"), "CAMotics runner must emit the material-removal run schema.");
+check("camotics-runner-fail-closed", camoticsRunner.includes("productionLocked: true") && camoticsRunner.includes("camotics-material-removal-validate.mjs"), "CAMotics runner must stay production-locked and call the validator.");
+check("camotics-runner-real-command", camoticsRunner.includes("HEDIAO3D_CAMOTICS_COMMAND") && camoticsRunner.includes("camotics-result-bundle.zip"), "CAMotics runner must use a real/equivalent simulator command and produce the upload bundle only after validation.");
 check("camotics-validator-schema", camoticsValidator.includes("hediao3d.camotics-result-local-validation.v1"), "CAMotics validator must emit local validation schema.");
 check("camotics-validator-bundle", camoticsValidator.includes("camotics-result-bundle.zip"), "CAMotics validator must generate camotics-result-bundle.zip when passing.");
 check("real-output-production-candidate", realOutputCheck.includes("production-candidate"), "real output checker must require production-candidate evidence.");
@@ -870,6 +1132,23 @@ if (!selfCheckOnly) {
       args: ["camotics-material-removal-validate.mjs", "--result", "camotics-result.json", "--run-package", "camotics-cli-run-package.json"],
       outputJson: "camotics-result-local-validation.json"
     });
+  } else if (existsSync(join(root, "camotics-cli-run-package.json")) && existsSync(join(root, "camotics-material-removal-run.mjs"))) {
+    runStep({
+      id: "camotics-material-removal-run",
+      required: true,
+      command: "node",
+      args: ["camotics-material-removal-run.mjs", "--run-package", "camotics-cli-run-package.json"],
+      outputJson: "camotics-material-removal-run.json"
+    });
+    if (existsSync(join(root, "camotics-result.json"))) {
+      runStep({
+        id: "camotics-material-removal-validate",
+        required: true,
+        command: "node",
+        args: ["camotics-material-removal-validate.mjs", "--result", "camotics-result.json", "--run-package", "camotics-cli-run-package.json"],
+        outputJson: "camotics-result-local-validation.json"
+      });
+    }
   } else {
     recordMissing("camotics-material-removal-validate", true, "camotics-result.json and camotics-cli-run-package.json");
   }
@@ -2181,6 +2460,7 @@ ${rows.join("\n")}
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
 - [ ] OpenCAMLib 真实候选输出优先运行 \`node opencamlib-real-candidate-run.mjs .\`
 - [ ] OpenCAMLib 真实输出后运行 \`node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json\`
+- [ ] CAMotics/等效材料去除仿真优先运行 \`node camotics-material-removal-run.mjs --run-package camotics-cli-run-package.json\`
 - [ ] CAMotics 材料去除结果回填前运行 \`node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json\`
 - [ ] \`bash native-cam-real-output-check.sh\`
 - [ ] \`npm run test:v3:freecad-external-handoff\` for 3-axis/regular-solid route

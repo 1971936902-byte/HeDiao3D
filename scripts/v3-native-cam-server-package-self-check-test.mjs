@@ -40,6 +40,10 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-evidence-chain" && check.status === "pass"), "self-check should verify closed-loop evidence-chain support");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-opencamlib-coverage" && check.status === "pass"), "self-check should verify closed-loop OpenCAMLib coverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-opencamlib-protected-zones" && check.status === "pass"), "self-check should verify closed-loop OpenCAMLib protected-zone diagnostics");
+  assert(readyReport.checks?.some((check) => check.id === "command:camotics-material-run" && check.status === "pass"), "self-check should verify CAMotics material-removal runner command");
+  assert(readyReport.checks?.some((check) => check.id === "camotics-runner-schema" && check.status === "pass"), "self-check should verify CAMotics runner schema");
+  assert(readyReport.checks?.some((check) => check.id === "camotics-runner-fail-closed" && check.status === "pass"), "self-check should verify CAMotics runner fail-closed production lock");
+  assert(readyReport.checks?.some((check) => check.id === "camotics-runner-real-command" && check.status === "pass"), "self-check should verify CAMotics runner real command and bundle path");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-schema" && check.status === "pass"), "self-check should verify diagnostics bundle schema");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-schema" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike schema");
@@ -86,6 +90,20 @@ try {
   assert(realCandidateReport.productionLocked === true, "real candidate runner must keep production locked");
   assert(realCandidateReport.blocking?.includes("opencamlib-production-candidate-not-proven"), "real candidate runner should block when production candidate is not proven");
   assert(existsSync(join(workDir, "opencamlib-real-candidate-run.json")), "real candidate runner should write JSON report");
+
+  const camoticsRunnerPath = join(workDir, "camotics-material-removal-run.mjs");
+  assert(existsSync(camoticsRunnerPath), "generated server package missing CAMotics material-removal runner");
+  const camoticsRunner = spawnSync(node, [camoticsRunnerPath, "--run-package", "missing-camotics-cli-run-package.json"], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(camoticsRunner.status === 3, `CAMotics runner should fail closed without run package, got ${camoticsRunner.status}: ${camoticsRunner.stderr || camoticsRunner.stdout}`);
+  const camoticsRunnerReport = JSON.parse(camoticsRunner.stdout);
+  assert(camoticsRunnerReport.schema === "hediao3d.camotics-material-removal-run.v1", "CAMotics runner schema mismatch");
+  assert(camoticsRunnerReport.productionLocked === true, "CAMotics runner must keep production locked");
+  assert(camoticsRunnerReport.blocking?.some((item) => item.id === "missing-run-package"), "CAMotics runner should explain missing run package");
+  assert(existsSync(join(workDir, "camotics-material-removal-run.json")), "CAMotics runner should write JSON report");
 
   const diagnosticsPath = join(workDir, "native-cam-diagnostics-bundle.mjs");
   assert(existsSync(diagnosticsPath), "generated server package missing diagnostics bundle script");
