@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -105,6 +106,34 @@ try {
   assert(camoticsRunnerReport.blocking?.some((item) => item.id === "missing-run-package"), "CAMotics runner should explain missing run package");
   assert(existsSync(join(workDir, "camotics-material-removal-run.json")), "CAMotics runner should write JSON report");
 
+  writeFileSync(join(workDir, "camotics-preview.nc"), "(ROTARY_WRAP_AXIS=Y)\n(ROTARY_WRAP_PER_REV_MM=100)\n(LENGTH_AXIS=X)\nG0 X0 Y0 Z22\nG1 X10 Y5 Z21.45\n", "utf8");
+  writeFileSync(join(workDir, "camotics-preview.png"), "fixture screenshot", "utf8");
+  writeFileSync(join(workDir, "camotics-material-removal.stl"), "solid removed\nendsolid removed\n", "utf8");
+  const camoticsRunPackage = createCamoticsRunPackage(workDir);
+  const camoticsRunPackagePath = join(workDir, "camotics-cli-run-package.json");
+  writeJson(camoticsRunPackagePath, camoticsRunPackage);
+  const providedResultPath = join(workDir, "provided-camotics-result.json");
+  writeJson(providedResultPath, createCamoticsResult(camoticsRunPackage, sha256File(camoticsRunPackagePath)));
+  const camoticsProvidedRunner = spawnSync(node, [camoticsRunnerPath, "--run-package", camoticsRunPackagePath], {
+    cwd: workDir,
+    env: {
+      ...process.env,
+      HEDIAO3D_CAMOTICS_RESULT_JSON: providedResultPath
+    },
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(camoticsProvidedRunner.status === 0, `CAMotics runner should validate provided real result and write bundle, got ${camoticsProvidedRunner.status}: ${camoticsProvidedRunner.stderr || camoticsProvidedRunner.stdout}`);
+  const camoticsProvidedRunnerReport = JSON.parse(camoticsProvidedRunner.stdout);
+  assert(camoticsProvidedRunnerReport.ok === true, "CAMotics runner should be ok with a valid provided result");
+  assert(camoticsProvidedRunnerReport.level === "ready-for-import", "CAMotics runner should mark valid result ready for import");
+  assert(camoticsProvidedRunnerReport.productionLocked === true, "CAMotics provided-result runner must still keep production locked");
+  assert(camoticsProvidedRunnerReport.steps?.some((step) => step.id === "copy-provided-result" && step.status === "pass"), "CAMotics runner should copy provided result");
+  assert(camoticsProvidedRunnerReport.steps?.some((step) => step.id === "camotics-material-removal-validate" && step.status === "pass"), "CAMotics runner should call material-removal validator");
+  assert(camoticsProvidedRunnerReport.validation?.productionEvidenceEligible === true, "CAMotics runner should expose production-eligible material-removal validation");
+  assert(camoticsProvidedRunnerReport.validation?.upstreamCamEvidence?.status === "matched", "CAMotics runner should preserve upstream CAM evidence binding");
+  assert(existsSync(join(workDir, "camotics-result-bundle.zip")), "CAMotics runner should write import bundle for valid provided result");
+
   const diagnosticsPath = join(workDir, "native-cam-diagnostics-bundle.mjs");
   assert(existsSync(diagnosticsPath), "generated server package missing diagnostics bundle script");
   const diagnostics = spawnSync(node, [diagnosticsPath, workDir], {
@@ -146,4 +175,119 @@ try {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function createCamoticsRunPackage() {
+  const machineContext = createMachineContext();
+  return {
+    schema: "hediao3d.camotics-cli-run-package.v1",
+    status: "ready-for-linux-camotics",
+    preferredGcodeIdentity: {
+      filename: "camotics-preview.nc",
+      sha256: sha256File(join(workDir, "camotics-preview.nc")),
+      sizeBytes: readFileSync(join(workDir, "camotics-preview.nc")).length,
+      motionProfile: {
+        motionLineCount: 2,
+        zMin: 21.45,
+        zMax: 22,
+        machineContext
+      },
+      machineContext
+    },
+    expectedOutputs: {
+      resultJson: "camotics-result.json",
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl"
+    },
+    upstreamCamEvidence: createUpstreamCamEvidence(),
+    safetyLocks: {
+      productionUnlockFromPreparePackage: false,
+      syntheticResultAllowedForProduction: false
+    }
+  };
+}
+
+function createCamoticsResult(runPackage, runPackageSha) {
+  return {
+    schema: "hediao3d.camotics-result.v1",
+    engine: "camotics",
+    simulator: {
+      schema: "hediao3d.material-removal-simulator.v1",
+      name: "CAMotics",
+      version: "1.2.0-test",
+      sourceCommand: "provided external CAMotics/equivalent result",
+      equivalentSimulator: false
+    },
+    status: "completed",
+    synthetic: false,
+    riskLevel: "ready",
+    inputs: {
+      preferredGcodeSha256: runPackage.preferredGcodeIdentity.sha256,
+      camoticsCliRunPackageSha256: runPackageSha,
+      machineContext: runPackage.preferredGcodeIdentity.machineContext,
+      upstreamCamEvidence: runPackage.upstreamCamEvidence
+    },
+    metrics: {
+      motionLineCount: runPackage.preferredGcodeIdentity.motionProfile.motionLineCount,
+      zMin: runPackage.preferredGcodeIdentity.motionProfile.zMin,
+      zMax: runPackage.preferredGcodeIdentity.motionProfile.zMax,
+      materialRemovedMm3: 12.4
+    },
+    artifacts: {
+      screenshot: "camotics-preview.png",
+      materialMesh: "camotics-material-removal.stl"
+    }
+  };
+}
+
+function createMachineContext() {
+  return {
+    schema: "hediao3d.camotics-machine-context.v1",
+    camMode: "rotaryWrap",
+    rotaryWrapAxis: "Y",
+    rotaryOutputAxis: "Y",
+    rotaryWrapPerRevolutionMm: 100,
+    lengthAxis: "X",
+    simulationInterpretation: "linearized-rotary-wrap-as-3axis"
+  };
+}
+
+function createUpstreamCamEvidence() {
+  return {
+    schema: "hediao3d.camotics-upstream-cam-evidence.v1",
+    status: "hash-bound",
+    required: true,
+    presentCount: 2,
+    files: [
+      {
+        key: "opencamlibRealCandidateRun",
+        label: "OpenCAMLib 一键真实候选链路",
+        filename: "opencamlib-real-candidate-run.json",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("real-candidate-fixture")
+      },
+      {
+        key: "opencamlibContactValidation",
+        label: "OpenCAMLib strict contact 验收",
+        filename: "opencamlib-contact-output-validation.json",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("contact-validation-fixture")
+      }
+    ],
+    summary: "Fixture upstream CAM evidence for CAMotics runner self-check."
+  };
+}
+
+function writeJson(path, value) {
+  writeFileSync(path, JSON.stringify(value, null, 2), "utf8");
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function sha256Text(text) {
+  return createHash("sha256").update(text).digest("hex");
 }
