@@ -117,6 +117,14 @@ try {
       assert(existsSync(report.metrics.opencamlibPlan.planPath), "opencamlib kernel plan file missing");
       assert(existsSync(report.metrics.opencamlibPlan.runTemplatePath), "opencamlib run template file missing");
       assert(typeof report.metrics.opencamlibPlan.recommendedPrimary === "string", "opencamlib recommended strategy missing");
+      const kernelPlan = JSON.parse(readFileSync(report.metrics.opencamlibPlan.planPath, "utf8"));
+      assert(kernelPlan.outputs?.cutterContactReport === "opencamlib-cutter-contact-report.json", "opencamlib plan should declare contact report output");
+      assert(kernelPlan.productionCandidateCriteria?.some((item) => /material removal simulation/i.test(item)), "opencamlib plan should keep simulation in production criteria");
+      const runTemplate = readFileSync(report.metrics.opencamlibPlan.runTemplatePath, "utf8");
+      assert(runTemplate.includes("write_candidate_outputs"), "opencamlib template should expose candidate output writer");
+      assert(runTemplate.includes("hediao3d.opencamlib-cutter-contact-report.v1"), "opencamlib template should write contact report schema");
+      assert(runTemplate.includes("neutralToolpathWithoutContactReportSha256"), "opencamlib template should bind neutral-without-contact hash");
+      assert(runTemplate.includes("Template is fail-closed"), "opencamlib template should fail closed until real contact is implemented");
     }
     results.push({
       id: adapter.id,
