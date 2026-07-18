@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 
 SCHEMA = "hediao3d.opencamlib-runtime-probe.v1"
-MODULE_CANDIDATES = ("opencamlib", "ocl")
+MODULE_CANDIDATES = ("opencamlib.ocl", "opencamlib", "ocl")
 
 
 def main() -> int:
@@ -126,7 +126,7 @@ def create_recommended_bindings(selected: Optional[Dict[str, Any]]) -> Dict[str,
     samples = {item.get("name"): item for item in selected.get("callableSamples") or []}
     surface = choose_symbol(candidates.get("surfaces") or [], ["STLSurf", "STLSurface", "Surface", "Triangle"])
     cutter = choose_symbol(candidates.get("cutters") or [], ["CylCutter", "BallCutter", "BullCutter", "ConeCutter", "FlatCutter"])
-    drop = choose_symbol(candidates.get("dropCutter") or [], ["BatchDropCutter", "DropCutter", "CLPoint", "CutterLocation", "Contact"])
+    drop = choose_symbol(candidates.get("dropCutter") or [], ["PathDropCutter", "AdaptivePathDropCutter", "BatchDropCutter", "PointDropCutter", "DropCutter", "CLPoint", "CutterLocation", "Contact"])
     waterline = choose_symbol(candidates.get("waterline") or [], ["Waterline", "Weave", "Fiber"])
     required = [surface, cutter, drop]
     status = "candidate-complete" if all(required) else "candidate-incomplete"
@@ -223,9 +223,9 @@ def classify_symbols(symbols: List[str]) -> Dict[str, List[str]]:
     groups = {
         "surfaces": r"(STL|Surf|Surface|Triangle|Mesh)",
         "cutters": r"(Cutter|Ball|Bull|Cyl|Cone|Flat|V)",
-        "dropCutter": r"(Drop|BatchDrop|CLPoint|CutterLocation|Contact)",
+        "dropCutter": r"(Drop|PathDrop|BatchDrop|PointDrop|AdaptivePathDrop|CLPoint|CutterLocation|Contact)",
         "waterline": r"(Waterline|Weave|Path|Fiber)",
-        "utilities": r"(Point|Vector|Line|Interval|Adaptive|Batch)",
+        "utilities": r"(Point|Vector|Line|Path|Arc|Interval|Adaptive|Batch)",
     }
     return {
         group: [symbol for symbol in symbols if re.search(pattern, symbol, re.I)][:80]
@@ -315,7 +315,7 @@ def safe_find_spec(name: str) -> Any:
 
 
 def detect_distribution_version(name: str) -> Optional[str]:
-    candidates = [name, "OpenCAMLib", "opencamlib"]
+    candidates = [name, name.split(".")[0], "OpenCAMLib", "opencamlib"]
     for candidate in candidates:
         try:
             return importlib.metadata.version(candidate)

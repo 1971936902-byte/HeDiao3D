@@ -160,7 +160,7 @@ def validate_inputs(job: Dict[str, Any], plan: Dict[str, Any]) -> List[str]:
 def detect_opencamlib() -> Dict[str, Any]:
     modules: Dict[str, Any] = {}
     selected: Optional[Dict[str, Any]] = None
-    for name in ("opencamlib", "ocl"):
+    for name in ("opencamlib.ocl", "opencamlib", "ocl"):
         spec = safe_find_spec(name)
         modules[name] = {
             "available": spec is not None,

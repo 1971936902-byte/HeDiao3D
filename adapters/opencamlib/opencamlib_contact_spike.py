@@ -86,6 +86,10 @@ def run_spike(neutral_path: Path, force: bool) -> Dict[str, Any]:
 
 
 def try_common_batch_drop_cutter(module: Any, bindings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    path_spike = try_common_path_drop_cutter(module, bindings)
+    if path_spike is not None:
+        return path_spike
+
     point_cls = find_attr(module, ["Point"])
     triangle_cls = find_attr(module, ["Triangle"])
     surface_cls = find_attr(module, ["STLSurf", "STLSurface"])
@@ -116,6 +120,57 @@ def try_common_batch_drop_cutter(module: Any, bindings: Dict[str, Any]) -> Optio
         "outputPoints": output,
         "metrics": {
             "algorithm": "opencamlib-batch-drop-cutter-spike",
+            "pointCount": len(output),
+            "contactPointCount": len(output),
+            "hitRate": 1.0 if output else 0.0,
+            "bindings": {
+                "surface": bindings.get("surface", {}).get("symbol") if isinstance(bindings.get("surface"), dict) else None,
+                "cutter": bindings.get("cutter", {}).get("symbol") if isinstance(bindings.get("cutter"), dict) else None,
+                "dropCutter": bindings.get("dropCutter", {}).get("symbol") if isinstance(bindings.get("dropCutter"), dict) else None,
+            },
+        },
+    }
+
+
+def try_common_path_drop_cutter(module: Any, bindings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    point_cls = find_attr(module, ["Point"])
+    triangle_cls = find_attr(module, ["Triangle"])
+    surface_cls = find_attr(module, ["STLSurf", "STLSurface"])
+    cutter_cls = find_attr(module, ["CylCutter", "FlatCutter", "BallCutter"])
+    line_cls = find_attr(module, ["Line"])
+    path_cls = find_attr(module, ["Path"])
+    dropper_cls = find_attr(module, ["PathDropCutter", "AdaptivePathDropCutter"])
+    if not all([point_cls, triangle_cls, surface_cls, cutter_cls, line_cls, path_cls, dropper_cls]):
+        return None
+
+    surface = surface_cls()
+    add_triangle(surface, triangle_cls, point_cls, [[0, 0, 0], [20, 0, 0], [0, 20, 0]])
+    add_triangle(surface, triangle_cls, point_cls, [[20, 0, 0], [20, 20, 1.2], [0, 20, 0]])
+    cutter = instantiate_cutter(cutter_cls)
+    path = path_cls()
+    input_points = []
+    for y in [2.0, 10.0, 18.0]:
+        start = point_cls(2.0, y, 10.0)
+        end = point_cls(18.0, y, 10.0)
+        line = line_cls(start, end)
+        append_path_segment(path, line)
+        input_points.append((2.0, y, 10.0))
+        input_points.append((18.0, y, 10.0))
+
+    dropper = dropper_cls()
+    call_first(dropper, ["setSTL", "setSTLSurf", "setSurface"], surface)
+    call_first(dropper, ["setCutter"], cutter)
+    call_first(dropper, ["setPath"], path)
+    call_optional(dropper, ["setZ"], 10.0)
+    call_first(dropper, ["run", "dropCutter", "runDropCutter"])
+    output = get_points(dropper)
+    if not output:
+        return None
+    return {
+        "inputPoints": input_points,
+        "outputPoints": output,
+        "metrics": {
+            "algorithm": "opencamlib-path-drop-cutter-spike",
             "pointCount": len(output),
             "contactPointCount": len(output),
             "hitRate": 1.0 if output else 0.0,
@@ -165,6 +220,22 @@ def call_first(obj: Any, methods: List[str], *args: Any) -> Any:
         if hasattr(obj, method):
             return getattr(obj, method)(*args)
     raise RuntimeError(f"object {type(obj).__name__} missing methods {methods}")
+
+
+def call_optional(obj: Any, methods: List[str], *args: Any) -> bool:
+    for method in methods:
+        if hasattr(obj, method):
+            getattr(obj, method)(*args)
+            return True
+    return False
+
+
+def append_path_segment(path: Any, segment: Any) -> None:
+    for method in ("append", "push_back", "add", "addLine"):
+        if hasattr(path, method):
+            getattr(path, method)(segment)
+            return
+    raise RuntimeError("path object does not expose append/push_back/add/addLine")
 
 
 def append_drop_point(dropper: Any, point_cls: Any, cl_point_cls: Any, x: float, y: float, z: float) -> None:

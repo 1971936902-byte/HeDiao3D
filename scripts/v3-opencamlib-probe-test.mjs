@@ -21,7 +21,8 @@ try {
   const report = JSON.parse(readFileSync(outPath, "utf8"));
   assert(report.schema === "hediao3d.opencamlib-runtime-probe.v1", "probe schema mismatch");
   assert(["ready", "partial", "missing"].includes(report.level), `probe level mismatch: ${report.level}`);
-  assert(Array.isArray(report.modules) && report.modules.length === 2, "probe should inspect opencamlib and ocl modules");
+  assert(Array.isArray(report.modules) && report.modules.length === 3, "probe should inspect opencamlib.ocl, opencamlib and ocl modules");
+  assert(report.modules.some((item) => item.name === "opencamlib.ocl"), "probe missing opencamlib.ocl module report");
   assert(report.modules.some((item) => item.name === "opencamlib"), "probe missing opencamlib module report");
   assert(report.modules.some((item) => item.name === "ocl"), "probe missing ocl module report");
   assert(report.python?.executable, "probe should record python executable");
