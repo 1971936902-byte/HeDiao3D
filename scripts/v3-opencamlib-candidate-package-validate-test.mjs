@@ -64,6 +64,39 @@ try {
   assert(existsSync(join(blockedDir, "opencamlib-candidate-package-validation.json")), "blocked package should still write report");
   rmSync(blockedDir, { recursive: true, force: true });
 
+  const identityMismatchDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-identity-mismatch-"));
+  const mismatchModelPath = join(identityMismatchDir, "repaired-model.stl");
+  const mismatchPlanPath = join(identityMismatchDir, "opencamlib-kernel-plan.json");
+  const mismatchNeutralPath = join(identityMismatchDir, "neutral-toolpath.json");
+  const mismatchContactPath = join(identityMismatchDir, "opencamlib-cutter-contact-report.json");
+  writeFileSync(mismatchModelPath, createStl(), "utf8");
+  writeFileSync(mismatchPlanPath, JSON.stringify(createPlan(mismatchModelPath), null, 2), "utf8");
+  const mismatchNeutral = createNeutral(mismatchContactPath);
+  const mismatchNeutralSha = sha256JsonWithoutContact(mismatchNeutral);
+  const mismatchContact = createContact({
+    modelSha: sha256File(mismatchModelPath),
+    planSha: sha256Text("wrong-plan-hash"),
+    neutralSha: mismatchNeutralSha
+  });
+  mismatchNeutral.cutterContactReport = mismatchContact;
+  writeFileSync(mismatchNeutralPath, JSON.stringify(mismatchNeutral, null, 2), "utf8");
+  writeFileSync(mismatchContactPath, JSON.stringify(mismatchContact, null, 2), "utf8");
+  const identityMismatch = spawnSync(node, [validator, "--root", identityMismatchDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(identityMismatch.status === 3, `identity-mismatched candidate package should fail strict mode, got ${identityMismatch.status}: ${identityMismatch.stdout}`);
+  const identityMismatchReport = JSON.parse(identityMismatch.stdout);
+  assert(identityMismatchReport.level === "critical", "identity-mismatched package should be critical");
+  assert(identityMismatchReport.contactValidation?.level === "critical", "identity-mismatched package should expose critical contact validation");
+  assert(identityMismatchReport.contactValidation?.firstError?.includes("planSha256"), "identity mismatch should name the plan hash binding failure");
+  assert(identityMismatchReport.artifactManifest?.readyForImport === false, "identity-mismatched artifact manifest should not be import-ready");
+  assert(identityMismatchReport.handoffContract?.status === "blocked", "identity-mismatched handoff contract should be blocked");
+  assert(identityMismatchReport.handoffContract?.strictAcceptance?.planHashBound === false, "identity-mismatched handoff should mark plan hash as unbound");
+  assert(identityMismatchReport.blockers?.some((item) => /strict contact validation is critical/.test(item)), "identity mismatch should block candidate package at strict contact validation");
+  rmSync(identityMismatchDir, { recursive: true, force: true });
+
   const experimentalDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-experimental-"));
   const experimentalModelPath = join(experimentalDir, "repaired-model.stl");
   const experimentalPlanPath = join(experimentalDir, "opencamlib-kernel-plan.json");
@@ -277,6 +310,10 @@ function sha256JsonWithoutContact(value) {
   delete copy.cutterContactReportPath;
   delete copy.cutterEnvelopeReportPath;
   return createHash("sha256").update(JSON.stringify(copy, null, 2)).digest("hex");
+}
+
+function sha256Text(text) {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 function assert(condition, message) {
