@@ -442,6 +442,8 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
   const expectedCliPackageHash = inputIdentity?.cliRunPackageIdentity?.sha256 ?? null;
   const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
   const machineContext = evaluateCamoticsMachineContext(result?.inputs?.machineContext ?? null, inputIdentity?.machineContext ?? null);
+  const bundleManifestIntegrity = result?.importBundleManifestIntegrity ?? null;
+  const bundleManifestIntegrityOk = !bundleManifestIntegrity || bundleManifestIntegrity.status === "matched";
   const expectedJobId = adapterJob?.jobId ?? null;
   const importedJobId = result?.jobId ?? null;
   const jobIdentityOk = nonEmptyString(expectedJobId) && importedJobId === expectedJobId;
@@ -507,6 +509,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       message: machineContext.message
     },
     {
+      id: "bundleManifestIntegrity",
+      ok: bundleManifestIntegrityOk,
+      message: "When camotics-result-bundle-manifest.json is present, its file hashes and identity claims must match the ZIP entries and result JSON."
+    },
+    {
       id: "visualOrMeshArtifact",
       ok: hasVerifiedArtifact,
       message: "A screenshot or material-removal mesh file must exist, be copied into the job package and have a SHA-256 hash."
@@ -565,6 +572,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
     },
     motionConsistency,
     machineContext,
+    bundleManifestIntegrity,
     artifactEvidence,
     summary: missing.length === 0
       ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."

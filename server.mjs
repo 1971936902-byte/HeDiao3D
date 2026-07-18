@@ -12660,7 +12660,7 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
   if (!result) throw new Error("CAMotics result 不能为空，需传入 result 对象。");
   if (result.schema !== "hediao3d.camotics-result.v1") throw new Error("result.schema 必须是 hediao3d.camotics-result.v1。");
   if (result.synthetic === true) throw new Error("不能通过真实结果回填接口导入 synthetic CAMotics 结果。");
-  const localValidation = normalizeCamoticsLocalValidation(input?.localValidation ?? zipBundle?.localValidation);
+  let localValidation = normalizeCamoticsLocalValidation(input?.localValidation ?? zipBundle?.localValidation);
 
   const screenshotBuffer = input.screenshotDataUrl
     ? decodeInlineFile(input.screenshotDataUrl)
@@ -12683,6 +12683,24 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
     await writeFile(join(workDir, zipBundleFilename), zipBundle.sourceBuffer);
   }
 
+  const manifestIntegrity = createCamoticsResultBundleManifestIntegrity({
+    manifest: zipBundle?.manifest,
+    entries: zipBundle?.entries,
+    result,
+    localValidation
+  });
+  if (manifestIntegrity) {
+    result.importBundleManifestIntegrity = manifestIntegrity;
+    if (manifestIntegrity.status !== "matched" && localValidation) {
+      localValidation = {
+        ...localValidation,
+        ok: false,
+        productionEvidenceEligible: false,
+        missing: dedupeStrings([...(localValidation.missing ?? []), "camotics-result-bundle-manifest-integrity"]),
+        summary: `${localValidation.summary ?? "CAMotics local validation imported."} Bundle manifest integrity failed: ${manifestIntegrity.summary}`
+      };
+    }
+  }
   result.artifacts = {
     ...(result.artifacts ?? {}),
     ...(screenshotFilename ? { screenshot: join(workDir, screenshotFilename) } : {}),
@@ -12725,7 +12743,7 @@ function createCamoticsResultImportAudit({ workDir, input, result, localValidati
     importRoute: "/api/orchestrator/jobs/:id/camotics-result",
     zipBundle: zipBundleFilename,
     zipEntries: Array.isArray(zipBundle?.entries) ? zipBundle.entries.slice(0, 80) : [],
-    zipManifest: summarizeCamoticsResultBundleManifest(zipBundle?.manifest),
+    zipManifest: summarizeCamoticsResultBundleManifest(zipBundle?.manifest, result.importBundleManifestIntegrity),
     result: {
       schema: result?.schema ?? null,
       jobId: result?.jobId ?? null,
@@ -12789,7 +12807,8 @@ function extractCamoticsResultZipBundle(value) {
     sourceBuffer: buffer,
     entries: entries.map((entry) => ({
       name: entry.name,
-      sizeBytes: entry.content.length
+      sizeBytes: entry.content.length,
+      sha256: createHash("sha256").update(entry.content).digest("hex")
     })),
     result: parseJsonBuffer(resultEntry.content, "camotics-result.json"),
     localValidation: localValidationEntry ? parseJsonBuffer(localValidationEntry.content, "camotics-result-local-validation.json") : null,
@@ -12799,7 +12818,73 @@ function extractCamoticsResultZipBundle(value) {
   };
 }
 
-function summarizeCamoticsResultBundleManifest(manifest) {
+function createCamoticsResultBundleManifestIntegrity({ manifest, entries, result, localValidation }) {
+  if (!manifest || typeof manifest !== "object") return null;
+  const mismatches = [];
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const entriesByName = new Map((entries ?? []).map((entry) => [String(entry.name).toLowerCase(), entry]));
+  const findEntry = (filename) => {
+    const normalized = String(filename ?? "").replace(/\\/g, "/").toLowerCase();
+    return entriesByName.get(normalized)
+      ?? [...entriesByName.entries()].find(([name]) => name.endsWith(`/${normalized}`))?.[1]
+      ?? null;
+  };
+  for (const file of files) {
+    const filename = String(file?.filename ?? "");
+    if (!filename) continue;
+    const entry = findEntry(filename);
+    if (!entry) {
+      mismatches.push({ id: `file:${filename}`, reason: "missing-zip-entry", expected: filename, actual: null });
+      continue;
+    }
+    const expectedSha = typeof file?.sha256 === "string" ? file.sha256.toLowerCase() : null;
+    const actualSha = typeof entry.sha256 === "string" ? entry.sha256.toLowerCase() : null;
+    if (expectedSha && actualSha && expectedSha !== actualSha) {
+      mismatches.push({ id: `file:${filename}`, reason: "sha256-mismatch", expected: expectedSha, actual: actualSha });
+    }
+    const expectedSize = Number(file?.sizeBytes);
+    if (Number.isFinite(expectedSize) && expectedSize !== entry.sizeBytes) {
+      mismatches.push({ id: `file:${filename}`, reason: "size-mismatch", expected: expectedSize, actual: entry.sizeBytes });
+    }
+  }
+  if (manifest.schema !== "hediao3d.camotics-result-bundle-manifest.v1") {
+    mismatches.push({ id: "schema", reason: "schema-mismatch", expected: "hediao3d.camotics-result-bundle-manifest.v1", actual: manifest.schema ?? null });
+  }
+  if (manifest.jobId && result?.jobId && manifest.jobId !== result.jobId) {
+    mismatches.push({ id: "jobId", reason: "job-id-mismatch", expected: result.jobId, actual: manifest.jobId });
+  }
+  const manifestPreferred = typeof manifest.result?.preferredGcodeSha256 === "string" ? manifest.result.preferredGcodeSha256.toLowerCase() : null;
+  const resultPreferred = typeof result?.inputs?.preferredGcodeSha256 === "string" ? result.inputs.preferredGcodeSha256.toLowerCase() : null;
+  if (manifestPreferred && resultPreferred && manifestPreferred !== resultPreferred) {
+    mismatches.push({ id: "preferredGcodeSha256", reason: "preferred-gcode-hash-mismatch", expected: resultPreferred, actual: manifestPreferred });
+  }
+  const manifestRunPackage = typeof manifest.result?.camoticsCliRunPackageSha256 === "string" ? manifest.result.camoticsCliRunPackageSha256.toLowerCase() : null;
+  const resultRunPackage = typeof result?.inputs?.camoticsCliRunPackageSha256 === "string" ? result.inputs.camoticsCliRunPackageSha256.toLowerCase() : null;
+  if (manifestRunPackage && resultRunPackage && manifestRunPackage !== resultRunPackage) {
+    mismatches.push({ id: "camoticsCliRunPackageSha256", reason: "run-package-hash-mismatch", expected: resultRunPackage, actual: manifestRunPackage });
+  }
+  if (manifest.localValidation?.ok !== undefined && localValidation && Boolean(manifest.localValidation.ok) !== Boolean(localValidation.ok)) {
+    mismatches.push({ id: "localValidation.ok", reason: "local-validation-ok-mismatch", expected: Boolean(localValidation.ok), actual: Boolean(manifest.localValidation.ok) });
+  }
+  if (manifest.safetyLocks?.productionUnlockFromBundle === true) {
+    mismatches.push({ id: "safetyLocks.productionUnlockFromBundle", reason: "unsafe-production-unlock-claim", expected: false, actual: true });
+  }
+  return {
+    schema: "hediao3d.camotics-result-bundle-manifest-integrity.v1",
+    status: mismatches.length === 0 ? "matched" : "mismatch",
+    checkedAt: new Date().toISOString(),
+    manifestPresent: true,
+    manifestFileCount: files.length,
+    zipEntryCount: Array.isArray(entries) ? entries.length : 0,
+    mismatchCount: mismatches.length,
+    mismatches: mismatches.slice(0, 80),
+    summary: mismatches.length === 0
+      ? "CAMotics 回填包 manifest 与 ZIP 条目、result/local validation 声明一致。"
+      : `CAMotics 回填包 manifest 存在 ${mismatches.length} 个一致性问题。`
+  };
+}
+
+function summarizeCamoticsResultBundleManifest(manifest, integrity = null) {
   if (!manifest || typeof manifest !== "object") return null;
   const files = Array.isArray(manifest.files) ? manifest.files : [];
   return {
@@ -12832,7 +12917,8 @@ function summarizeCamoticsResultBundleManifest(manifest) {
       requiresServerImportAudit: manifest.safetyLocks?.requiresServerImportAudit === true,
       requiresReadinessRegeneration: manifest.safetyLocks?.requiresReadinessRegeneration === true,
       note: typeof manifest.safetyLocks?.note === "string" ? manifest.safetyLocks.note.slice(0, 500) : null
-    }
+    },
+    integrity
   };
 }
 

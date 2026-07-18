@@ -119,13 +119,28 @@ async function main() {
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
+  const zipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2);
+  const zipLocalValidationText = JSON.stringify(createLocalValidation(true), null, 2);
+  const zipScreenshotText = "zip-fixture-camotics-png";
+  const zipMaterialText = "solid zip_material\nendsolid zip_material\n";
   const zipImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({
-      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2),
-      "camotics-result-local-validation.json": JSON.stringify(createLocalValidation(true), null, 2),
-      "camotics-result-bundle-manifest.json": JSON.stringify(createBundleManifest(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2),
-      "camotics-preview.png": "zip-fixture-camotics-png",
-      "camotics-material-removal.stl": "solid zip_material\nendsolid zip_material\n"
+      "camotics-result.json": zipResultText,
+      "camotics-result-local-validation.json": zipLocalValidationText,
+      "camotics-result-bundle-manifest.json": JSON.stringify(createBundleManifest({
+        jobId: job.id,
+        preferredGcodeSha256: previewSha256,
+        motionProfile: previewMotionProfile,
+        runPackageSha256,
+        files: {
+          "camotics-result.json": zipResultText,
+          "camotics-result-local-validation.json": zipLocalValidationText,
+          "camotics-preview.png": zipScreenshotText,
+          "camotics-material-removal.stl": zipMaterialText
+        }
+      }), null, 2),
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
     })
   });
   assert(zipImport.ok === true, "zip import should succeed");
@@ -143,6 +158,33 @@ async function main() {
   assert(zipImportAuditArtifact.zipManifest?.schema === "hediao3d.camotics-result-bundle-manifest.v1", "zip import audit should record result bundle manifest");
   assert(zipImportAuditArtifact.zipManifest?.jobId === job.id, "zip import audit should expose manifest job id");
   assert(zipImportAuditArtifact.zipManifest?.safetyLocks?.productionUnlockFromBundle === false, "zip manifest should keep production unlock locked");
+  assert(zipImportAuditArtifact.zipManifest?.integrity?.status === "matched", "zip manifest integrity should match for generated bundle");
+
+  const badManifestImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": zipResultText,
+      "camotics-result-local-validation.json": zipLocalValidationText,
+      "camotics-result-bundle-manifest.json": JSON.stringify(createBundleManifest({
+        jobId: job.id,
+        preferredGcodeSha256: previewSha256,
+        motionProfile: previewMotionProfile,
+        runPackageSha256,
+        files: {
+          "camotics-result.json": "tampered-manifest-hash",
+          "camotics-result-local-validation.json": zipLocalValidationText,
+          "camotics-preview.png": zipScreenshotText
+        }
+      }), null, 2),
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    })
+  });
+  assert(badManifestImport.ok === true, "bad manifest import should still be recorded for audit");
+  assert(badManifestImport.simulationEvidence?.productionUnlockEligible === false, "bad manifest integrity must not be production eligible");
+  const badManifestArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  assert(badManifestArtifact.evidenceQuality?.missing?.includes("bundleManifestIntegrity"), "bad manifest should become evidence quality missing item");
+  const badManifestAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(badManifestAudit.zipManifest?.integrity?.status === "mismatch", "bad manifest audit should record mismatch");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256),
@@ -246,7 +288,7 @@ function createLocalValidation(ok) {
   };
 }
 
-function createBundleManifest(jobId, preferredGcodeSha256, motionProfile, runPackageSha256) {
+function createBundleManifest({ jobId, preferredGcodeSha256, motionProfile, runPackageSha256, files }) {
   return {
     schema: "hediao3d.camotics-result-bundle-manifest.v1",
     createdAt: new Date().toISOString(),
@@ -267,10 +309,18 @@ function createBundleManifest(jobId, preferredGcodeSha256, motionProfile, runPac
       productionEvidenceEligible: true,
       missing: []
     },
-    files: [
-      { filename: "camotics-result.json", role: "material-removal-result", sizeBytes: 1, sha256: "0".repeat(64) },
-      { filename: "camotics-result-local-validation.json", role: "local-validation", sizeBytes: 1, sha256: "1".repeat(64) }
-    ],
+    files: Object.entries(files).map(([filename, content]) => ({
+      filename,
+      role: filename === "camotics-result.json"
+        ? "material-removal-result"
+        : filename === "camotics-result-local-validation.json"
+          ? "local-validation"
+          : filename.endsWith(".stl")
+            ? "material-removal-mesh"
+            : "visual-evidence",
+      sizeBytes: Buffer.from(String(content)).byteLength,
+      sha256: createHash("sha256").update(String(content)).digest("hex")
+    })),
     safetyLocks: {
       productionUnlockFromBundle: false,
       requiresServerImportAudit: true,
