@@ -6165,6 +6165,46 @@ export function App() {
                   <button
                     className="demo-action package-action"
                     type="button"
+                    onClick={handleDownloadOperatorPackage}
+                    disabled={!canDownloadOperatorPackage}
+                    title="下载 V3 后端生成的操作员说明或下载核验清单"
+                  >
+                    <Download size={17} />
+                    加工包说明
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={handleDownloadAirRun}
+                    disabled={!canDownloadAirRun}
+                    title="下载主轴关闭、Z 保持安全高度的离料空跑 NC"
+                  >
+                    <Download size={17} />
+                    下载空跑 NC
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={() => handleDownloadSafetyReport("json")}
+                    disabled={!canDownloadSafetyReport}
+                    title="下载 V3 生产门禁或 NC 静态分析 JSON 报告"
+                  >
+                    <Download size={17} />
+                    下载安全报告 JSON
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
+                    onClick={() => handleDownloadSafetyReport("md")}
+                    disabled={!canDownloadSafetyReport}
+                    title="下载 V3 操作员说明或下载核验 Markdown"
+                  >
+                    <Download size={17} />
+                    下载安全报告 MD
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
                     onClick={handlePrepareV3CamoticsCliPackage}
                     disabled={!v3Job?.id || isV3CamoticsPackagePreparing}
                     title="生成给 Linux CAM/CAMotics 服务器使用的材料去除仿真输入包"

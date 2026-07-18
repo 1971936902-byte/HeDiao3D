@@ -170,6 +170,11 @@ try {
     return downloads.some((item) => /trial|试雕|safe|package|zip/i.test(item.download || "") && item.blob?.size > 1000);
   }, 60000, "safe trial package download triggered");
 
+  await assertArtifactDownload(page, "加工包说明", /operator-runbook|operator-download-checklist|operator-note/i, "operator package note download");
+  await assertArtifactDownload(page, "下载空跑 NC", /air-run\.nc$/i, "air-run NC download");
+  await assertArtifactDownload(page, "下载安全报告 JSON", /production-gate|nc-static-analysis|safety-report.*\.json/i, "safety report JSON download");
+  await assertArtifactDownload(page, "下载安全报告 MD", /operator-runbook|operator-download-checklist|safety-report.*\.md/i, "safety report Markdown download");
+
   const summary = await page.evaluate(() => {
     const activeTab = [...document.querySelectorAll(".workbench-tabs button.active")].map((item) => item.textContent?.trim()).join(" ");
     const canvases = [...document.querySelectorAll("canvas")].map((canvas) => ({
@@ -185,6 +190,12 @@ try {
       canvasCount: canvases.length,
       visibleCanvasCount: canvases.filter((item) => item.width > 100 && item.height > 100).length,
       downloads,
+      artifactDownloads: {
+        operator: downloads.some((item) => /operator-runbook|operator-download-checklist|operator-note/i.test(item.download || "")),
+        airRun: downloads.some((item) => /air-run\.nc$/i.test(item.download || "")),
+        safetyJson: downloads.some((item) => /production-gate|nc-static-analysis|safety-report.*\.json/i.test(item.download || "")),
+        safetyMarkdown: downloads.some((item) => /operator-runbook|operator-download-checklist|safety-report.*\.md/i.test(item.download || ""))
+      },
       safeTrialButtonEnabled: [...document.querySelectorAll("button")].some((button) => button.textContent?.includes("下载安全试雕包") && !button.disabled)
     };
   });
@@ -346,6 +357,16 @@ async function clickButtonIfPresent(page, text) {
   }, text);
   await sleep(150);
   return Boolean(result);
+}
+
+async function assertArtifactDownload(page, buttonText, filenamePattern, label) {
+  const beforeCount = await page.evaluate(() => (window.__hediaoDownloads || []).length);
+  await clickButton(page, buttonText);
+  await waitForCondition(page, ({ patternSource, previousCount }) => {
+    const pattern = new RegExp(patternSource, "i");
+    const downloads = window.__hediaoDownloads || [];
+    return downloads.slice(previousCount).some((item) => pattern.test(item.download || "") && item.blob?.size > 0);
+  }, 60000, label, { patternSource: filenamePattern.source, previousCount: beforeCount });
 }
 
 async function waitForCondition(page, fn, limitMs, label, arg) {
