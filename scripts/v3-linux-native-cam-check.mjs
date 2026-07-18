@@ -1014,7 +1014,7 @@ function findWorkingCommand(commands, args) {
   for (const command of commands) {
     attempted.push(command);
     const result = spawn(command, args);
-    if (!result.error && (result.exitCode === 0 || result.stdout || result.stderr)) {
+    if (!result.error && result.exitCode === 0) {
       return {
         command,
         version: firstLine(result.stdout || result.stderr),

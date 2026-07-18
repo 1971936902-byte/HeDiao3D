@@ -14155,7 +14155,7 @@ function detectOpenCamLibEngine() {
 function detectCommandEngine({ id, name, commands, role, adapterReady }) {
   for (const command of commands) {
     const probe = spawnSync(command, ["--version"], { encoding: "utf8", windowsHide: true, timeout: 2500 });
-    if (!probe.error || probe.status === 0) {
+    if (!probe.error && probe.status === 0) {
       return {
         id,
         name,
