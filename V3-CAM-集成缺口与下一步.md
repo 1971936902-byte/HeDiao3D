@@ -118,6 +118,8 @@ OpenCAMLib adapter 自身也已同步收紧：`opencamlib_job.py` 的 handoff �
 
 后端 neutral-toolpath 直接导入入口也已统一口径：弱 contact report 即使声明 `quality.productionCandidate=true` 且 neutral 哈希绑定，只要缺少 strict evidence，就只能分类为 `contact-report-review`，不能成为 production-candidate handoff。
 
+Linux 侧现在可先运行 `node opencamlib-candidate-package-validate.mjs --root .` 对真实 OpenCAMLib 候选目录做预检，生成 `opencamlib-candidate-package-validation.json` 和 `opencamlib-candidate-package-bundle.zip`。这一步用于在 Native CAM 回填前确认 neutral/contact/plan/model 哈希和 strict contact 指标已经闭合。
+
 该验证器现在要求真实 OpenCAMLib contact report 同时满足：
 
 - `contactSampling.algorithm` 属于 `drop-cutter` / `cutter-contact` / `waterline`，且不含 `preview` / `heightfield` / `scaffold`。

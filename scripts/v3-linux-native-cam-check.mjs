@@ -522,6 +522,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
       },
       {
+        filename: "opencamlib-candidate-package-validate.mjs",
+        role: "opencamlib-candidate-package-validator",
+        description: "预检真实 OpenCAMLib 候选输出目录，生成 contact 验证结果和轻量候选证据 ZIP。"
+      },
+      {
         filename: "camotics-material-removal-validate.mjs",
         role: "camotics-material-removal-validator",
         description: "验证真实 CAMotics/等效材料去除结果与 camotics-cli-run-package.json 的哈希、运动画像、机床上下文和截图/STL 证据绑定。"
@@ -546,6 +551,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      "node opencamlib-candidate-package-validate.mjs --root .",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
       "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
       "bash native-cam-real-output-check.sh",
@@ -561,6 +567,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-server-package-self-check.mjs"), createNativeCamServerPackageSelfCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-closed-loop-check.mjs"), createNativeCamClosedLoopCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
@@ -577,6 +584,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "npm run test:v3:native-cam",
     "npm run test:v3:freecad-proof-handoff",
     "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+    "OpenCAMLib 真实候选目录生成后运行 node opencamlib-candidate-package-validate.mjs --root .",
     "bash native-cam-real-output-check.sh",
     "上传 native-cam-real-output-bundle.zip 到 HeDiao3D V3 Native CAM 回填面板",
     "在当前 V3 job 下载 CAMotics Linux 仿真包并在 Linux 服务器执行",
@@ -588,6 +596,8 @@ function createLinuxCamClosedLoopHandoff(report) {
   const evidence = [
     "native-cam-readiness.json",
     "v3-external-adapter-validation.json",
+    "opencamlib-candidate-package-validation.json",
+    "opencamlib-candidate-package-bundle.zip",
     "native-cam-real-output-acceptance.json",
     "native-cam-real-output-bundle.zip",
     "camotics-cli-run-package.json",
@@ -669,6 +679,7 @@ const requiredFiles = [
   "native-cam-server-package-self-check.mjs",
   "native-cam-closed-loop-check.mjs",
   "opencamlib-contact-output-validate.mjs",
+  "opencamlib-candidate-package-validate.mjs",
   "camotics-material-removal-validate.mjs",
   "linux-cam-closed-loop-handoff.md",
   "native-cam-server-package.json"
@@ -687,6 +698,7 @@ const commands = Array.isArray(manifest?.commands) ? manifest.commands.join("\\n
 check("command:self-check", commands.includes("native-cam-server-package-self-check.mjs"), "manifest.commands must include the self-check command.");
 check("command:closed-loop-check", commands.includes("native-cam-closed-loop-check.mjs"), "manifest.commands must include the closed-loop check command.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
+check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
 
 const target = manifest?.targetMachineBoundary ?? {};
@@ -697,10 +709,13 @@ check("target-postprocessor", target.postProcessor === "wrapY", "target postproc
 check("target-tool", target.tool?.toolProfileId === "vflat-4mm-25deg", "target tool must be 4mm 25deg flat-tip V cutter.");
 
 const openCamValidator = readTextIfExists(join(root, "opencamlib-contact-output-validate.mjs"));
+const openCamCandidateValidator = readTextIfExists(join(root, "opencamlib-candidate-package-validate.mjs"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
+check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
+check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");
 check("camotics-validator-schema", camoticsValidator.includes("hediao3d.camotics-result-local-validation.v1"), "CAMotics validator must emit local validation schema.");
 check("camotics-validator-bundle", camoticsValidator.includes("camotics-result-bundle.zip"), "CAMotics validator must generate camotics-result-bundle.zip when passing.");
 check("real-output-production-candidate", realOutputCheck.includes("production-candidate"), "real output checker must require production-candidate evidence.");
