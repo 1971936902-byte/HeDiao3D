@@ -62,11 +62,12 @@ async function main() {
       },
       estimatedMinutes: 1.5,
       points: [
+        { x: 15, a: 0, z: 21.65, depth: 0.35 },
         { x: -15, a: 0, z: 21.7, depth: 0.3 },
-        { x: -7.5, a: 45, z: 21.45, depth: 0.55 },
-        { x: 0, a: 90, z: 21.1, depth: 0.9 },
-        { x: 7.5, a: 180, z: 21.35, depth: 0.65 },
-        { x: 15, a: 270, z: 21.65, depth: 0.35 }
+        { x: 0, a: 0, z: 21.1, depth: 0.9 },
+        { x: -15, a: 45, z: 21.45, depth: 0.55 },
+        { x: 0, a: 45, z: 21.3, depth: 0.7 },
+        { x: 15, a: 45, z: 21.6, depth: 0.4 }
       ]
     }
   });
@@ -112,6 +113,12 @@ async function main() {
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   const summary = reloaded.result?.summary ?? {};
   assert(summary.toolpathSummary?.source === "external-adapter", "reloaded job should expose external-adapter summary");
+  assert(summary.toolpathSummary?.sequencingReport === "toolpath-sequencing-report.json", "toolpath summary should reference sequencing report");
+  assert(summary.toolpathSequencingReport?.schema === "hediao3d.toolpath-sequencing-report.v1", "reloaded job should expose sequencing report");
+  assert(summary.toolpathSequencingReport.mode === "rotary-wrap-boustrophedon", "neutral toolpath should use rotary boustrophedon sequencing");
+  assert(summary.toolpathSequencingReport.changed === true, "intentionally unordered neutral points should be resequenced");
+  assert(summary.toolpathSequencingReport.output?.rowCount === 2, "sequencing report should detect two rotary rows");
+  assert(summary.toolpathSequencingReport.output?.rotaryJumpCount <= summary.toolpathSequencingReport.input?.rotaryJumpCount, "sequencing should not increase rotary jumps");
   assert(summary.camHandoffQuality?.level !== "internal-fallback", "CAM handoff should no longer be internal fallback");
   assert(summary.camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff should snapshot neutral toolpath");
   assert(summary.neutralToolpathImportValidation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "reloaded job should expose neutral import validation");
@@ -127,14 +134,19 @@ async function main() {
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.exists), "delivery manifest should include neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "imported-neutral-toolpath.json" && file.exists), "delivery manifest should include imported-neutral-toolpath.json");
   assert(summary.deliveryManifest?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.exists), "delivery manifest should include neutral import validation");
+  assert(summary.deliveryManifest?.files?.some((file) => file.filename === "toolpath-sequencing-report.json" && file.exists), "delivery manifest should include sequencing report");
   assert(summary.packageIntegrity?.files?.some((file) => file.filename === "neutral-toolpath.json" && file.sha256), "package integrity should hash neutral-toolpath.json");
   assert(summary.packageIntegrity?.files?.some((file) => file.filename === "neutral-toolpath-import-validation.json" && file.sha256), "package integrity should hash neutral import validation");
+  assert(summary.packageIntegrity?.files?.some((file) => file.filename === "toolpath-sequencing-report.json" && file.sha256), "package integrity should hash sequencing report");
   assert(summary.productionGate?.allowProductionNc !== true, "neutral import alone must not unlock production NC");
   assert(summary.productionGate?.checks?.neutralSourceBindingStatus === "bound", "production gate should expose bound neutral source status");
 
   const neutralArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath.json`);
   assert(neutralArtifact.importedFromApi === true, "neutral artifact should be marked as API import");
-  assert(neutralArtifact.points?.length === 5, "neutral artifact should preserve source points");
+  assert(neutralArtifact.points?.length === 6, "neutral artifact should preserve source points");
+  const sequencingArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/toolpath-sequencing-report.json`);
+  assert(sequencingArtifact.changedPointCount > 0, "sequencing artifact should record changed point order");
+  assert(sequencingArtifact.output?.rowCount === 2, "sequencing artifact should preserve row count");
   const validationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/neutral-toolpath-import-validation.json`);
   assert(validationArtifact.sourceBinding?.sourceSnapshot?.matchesPostprocessArtifact === true, "validation artifact should preserve postprocess source binding");
   assert(validationArtifact.machineFit?.coverage?.xCoverageRatio > 0.5, "validation artifact should preserve machine-fit coverage");
@@ -154,6 +166,7 @@ async function main() {
     ok: true,
     jobId: job.id,
     points: summary.toolpathSummary.points,
+    sequencing: summary.toolpathSequencingReport.mode,
     productionAllowed: summary.productionGate.allowProductionNc
   }, null, 2));
 }

@@ -3662,7 +3662,11 @@ function createToolpathFromNeutralAdapterOutput(adapterReport, job, settings, se
     return null;
   }
 
-  const points = normalizeNeutralToolpathPoints(neutral, settings);
+  const normalizedPoints = normalizeNeutralToolpathPoints(neutral, settings);
+  const sequencing = createNeutralToolpathSequencingReport(normalizedPoints, settings, neutral, {
+    sourceName: `${selectedEngine.name} neutral adapter`
+  });
+  const points = sequencing.points;
   if (points.length === 0) return null;
   const sourceSnapshot = createExternalHandoffSourceSnapshot(candidatePath, "neutral-toolpath", {
     neutral,
@@ -3694,6 +3698,7 @@ function createToolpathFromNeutralAdapterOutput(adapterReport, job, settings, se
     estimatedMinutes,
     postProcessorName: `${selectedEngine.name} neutral + ${postProcessorName(settings.postProcessor)}`,
     externalSourceSnapshot: sourceSnapshot,
+    sequencingReport: sequencing.report,
     summary: summarizePoints(points, [...warnings, ...(adapterReport.warnings ?? [])])
   };
 }
@@ -4257,7 +4262,7 @@ function normalizeNeutralToolpathPoints(neutral, settings) {
   const rotaryLinearToDeg = (value) => (Number(value) / wrapPerRev) * 360;
 
   return sourcePoints
-    .map((point) => {
+    .map((point, index) => {
       const x = Number(point.x ?? point.xMm ?? point.lengthMm);
       const y = point.y ?? point.yMm;
       const a = point.a ?? point.aDeg ?? point.angleDeg;
@@ -4272,12 +4277,125 @@ function normalizeNeutralToolpathPoints(neutral, settings) {
             ? rotaryLinearToDeg(Number(y))
             : 0,
         z,
-        depth: Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, safeZ - z)
+        depth: Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, safeZ - z),
+        sourceIndex: index
       };
       if (settings.camMode === "3axis" && normalized.y == null) normalized.y = 0;
       return normalized;
     })
     .filter(Boolean);
+}
+
+function createNeutralToolpathSequencingReport(points, settings, neutral, context = {}) {
+  const sourcePoints = Array.isArray(points) ? points : [];
+  const before = analyzeToolpathSequencing(sourcePoints, settings);
+  const shouldSequence = settings.camMode === "rotaryWrap"
+    && sourcePoints.length > 2
+    && sourcePoints.some((point) => Number.isFinite(Number(point.a)));
+  const sequencedPoints = shouldSequence
+    ? sequenceRotaryWrapToolpathRows(sourcePoints, settings)
+    : [...sourcePoints];
+  const after = analyzeToolpathSequencing(sequencedPoints, settings);
+  const changedCount = sequencedPoints.reduce((count, point, index) => count + (point.sourceIndex === sourcePoints[index]?.sourceIndex ? 0 : 1), 0);
+  return {
+    points: sequencedPoints,
+    report: {
+      schema: "hediao3d.toolpath-sequencing-report.v1",
+      createdAt: new Date().toISOString(),
+      sourceName: context.sourceName ?? null,
+      sourceSchema: neutral?.schema ?? null,
+      mode: shouldSequence ? "rotary-wrap-boustrophedon" : "preserve-input-order",
+      strategy: shouldSequence
+        ? "按旋转角分行，奇偶行沿 X 方向往复排序，减少三轴控制器 + 旋转夹具的长距离回跳。"
+        : "输入点未满足旋转包裹排序条件，保留原始顺序。",
+      changed: changedCount > 0,
+      changedPointCount: changedCount,
+      input: before,
+      output: after,
+      improvement: {
+        travelMm: roundMetric(before.travelMm - after.travelMm),
+        rotaryJumpCount: before.rotaryJumpCount - after.rotaryJumpCount,
+        xRetraceCount: before.xRetraceCount - after.xRetraceCount
+      },
+      productionBoundary: [
+        "排序报告只证明 neutral 点到机床 NC 的行走顺序更连续。",
+        "它不证明 OpenCAMLib cutter-contact、CAMotics 材料去除仿真或真实试雕已经通过。"
+      ]
+    }
+  };
+}
+
+function sequenceRotaryWrapToolpathRows(points, settings) {
+  const angleTolerance = Math.max(0.0001, Number(settings.stepoverDeg ?? 5) * 0.25);
+  const rows = [];
+  for (const point of points) {
+    const angle = normalizeAngleDeg(Number(point.a ?? 0));
+    let row = rows.find((candidate) => Math.abs(candidate.angle - angle) <= angleTolerance);
+    if (!row) {
+      row = { angle, points: [] };
+      rows.push(row);
+    }
+    row.points.push({ ...point, a: angle });
+  }
+  rows.sort((a, b) => a.angle - b.angle);
+  return rows.flatMap((row, rowIndex) => {
+    const sorted = [...row.points].sort((a, b) => Number(a.x) - Number(b.x));
+    const rowPoints = rowIndex % 2 === 0 ? sorted : sorted.reverse();
+    return rowPoints.map((point, pointIndex) => ({
+      ...point,
+      sequenceRowIndex: rowIndex,
+      sequencePointIndex: pointIndex,
+      sequenceStrategy: "rotary-wrap-boustrophedon"
+    }));
+  });
+}
+
+function analyzeToolpathSequencing(points, settings) {
+  const safePoints = Array.isArray(points) ? points : [];
+  const wrapRadius = Math.max(0.001, Number(settings.diameterMm ?? 0) / 2);
+  const angleValues = safePoints
+    .map((point) => Number(point.a))
+    .filter((value) => Number.isFinite(value));
+  const uniqueAngles = [...new Set(angleValues.map((angle) => roundMetric(normalizeAngleDeg(angle), 4)))].sort((a, b) => a - b);
+  let travelMm = 0;
+  let rotaryJumpCount = 0;
+  let xRetraceCount = 0;
+  let maxSegmentMm = 0;
+  for (let index = 1; index < safePoints.length; index += 1) {
+    const previous = safePoints[index - 1];
+    const current = safePoints[index];
+    const dx = Number(current.x ?? 0) - Number(previous.x ?? 0);
+    const dz = Number(current.z ?? 0) - Number(previous.z ?? 0);
+    const da = circularAngleDeltaDeg(Number(current.a ?? 0), Number(previous.a ?? 0));
+    const arc = Math.abs(da) * Math.PI / 180 * wrapRadius;
+    const segment = Math.sqrt(dx * dx + dz * dz + arc * arc);
+    travelMm += segment;
+    maxSegmentMm = Math.max(maxSegmentMm, segment);
+    if (Math.abs(da) > Math.max(0.5, Number(settings.stepoverDeg ?? 5) * 1.5)) rotaryJumpCount += 1;
+    if (index > 1) {
+      const previousDx = Number(previous.x ?? 0) - Number(safePoints[index - 2].x ?? 0);
+      if (Math.sign(previousDx) !== 0 && Math.sign(dx) !== 0 && Math.sign(previousDx) !== Math.sign(dx)) xRetraceCount += 1;
+    }
+  }
+  return {
+    pointCount: safePoints.length,
+    rowCount: uniqueAngles.length,
+    firstAngleDeg: uniqueAngles[0] ?? null,
+    lastAngleDeg: uniqueAngles[uniqueAngles.length - 1] ?? null,
+    travelMm: roundMetric(travelMm),
+    maxSegmentMm: roundMetric(maxSegmentMm),
+    rotaryJumpCount,
+    xRetraceCount
+  };
+}
+
+function circularAngleDeltaDeg(next, previous) {
+  const delta = ((next - previous + 540) % 360) - 180;
+  return Number.isFinite(delta) ? delta : 0;
+}
+
+function roundMetric(value, digits = 6) {
+  return Number(Number(value).toFixed(digits));
 }
 
 function parseGcodeMotionPoints(gcode, settings) {
@@ -4615,12 +4733,17 @@ async function processOrchestratorJob(job, settings) {
     fallbackFrom: selected.id,
     source: externalToolpath ? "external-adapter" : "internal-fallback",
     externalSourceSnapshot: toolpath.externalSourceSnapshot ?? null,
+    sequencingReport: toolpath.sequencingReport ? "toolpath-sequencing-report.json" : null,
     points: toolpath.points.length,
     previewPoints: toolpath.previewPoints?.length ?? 0,
     estimatedMinutes: toolpath.estimatedMinutes,
     postProcessorName: toolpath.postProcessorName,
     warnings: toolpath.summary?.warnings ?? []
   }, null, 2), "utf8");
+  if (toolpath.sequencingReport) {
+    await writeFile(join(job.workDir, "toolpath-sequencing-report.json"), JSON.stringify(toolpath.sequencingReport, null, 2), "utf8");
+    pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-sequencing-report.json"));
+  }
   const camoticsInput = createCamoticsInputPlan(job, toolpath, settings, selected);
   const camoticsSimulationPlan = createCamoticsSimulationPlan(job, toolpath, settings, selected, camoticsInput);
   const camoticsCliExecutionPlan = createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPlan, settings);
@@ -4886,6 +5009,7 @@ async function processOrchestratorJob(job, settings) {
   pushIfArtifactExists(job, "camotics-execution-preflight.md");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-trace-report.json"));
+  pushIfArtifactExists(job, "toolpath-sequencing-report.json");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
@@ -4967,6 +5091,7 @@ async function processOrchestratorJob(job, settings) {
       } : null,
       rotaryWrapPreviewReport,
       postprocessTraceReport,
+      toolpathSequencingReport: toolpath.sequencingReport ?? null,
       ncStaticAnalysis,
       machineControllerProfile,
       machineAcceptanceChecklist,
@@ -9811,6 +9936,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-handoff-evidence.md"),
         getFile("rotary-wrap-preview-report.json"),
         getFile("postprocess-trace-report.json"),
+        getFile("toolpath-sequencing-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
         getFile("next-action-checklist.md"),
@@ -10094,6 +10220,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-handoff-evidence.md", "CAM Handoff证据说明", "report", true, "用可读文本说明刀路来源、输入哈希、fixture/synthetic 风险、覆盖率和生产边界。"),
     createDeliveryFile(job.id, "rotary-wrap-preview-report.json", "旋转包裹预览一致性报告", "report", true, "检查中立刀路、Y/A旋转后处理、CAMotics展开预览和每圈等效距离是否一致。"),
     createDeliveryFile(job.id, "postprocess-trace-report.json", "后处理点位追溯报告", "report", true, "逐点核对源刀路与 toolpath.nc 的 X/Y/A/Z 输出，防止轴映射、拉伸和点位错位。"),
+    createDeliveryFile(job.id, "toolpath-sequencing-report.json", "刀路连续排序报告", "report", existsSync(join(job.workDir, "toolpath-sequencing-report.json")), "记录 neutral 点进入 wrapY/wrapA 后处理前是否按旋转角分行、X 向往复排序，以及排序前后跳跃和行走距离变化。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
     createDeliveryFile(job.id, "camotics-simulation-plan.json", "CAMotics 仿真计划", "report", true, "记录 CAMotics 预览 NC、展开毛坯、刀具、坐标解释和待执行检查项。"),
@@ -12265,12 +12392,16 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     fallbackFrom: selectedEngine.id,
     source: "external-adapter",
     externalSourceSnapshot: toolpath.externalSourceSnapshot ?? null,
+    sequencingReport: toolpath.sequencingReport ? "toolpath-sequencing-report.json" : null,
     points: toolpath.points.length,
     previewPoints: toolpath.previewPoints?.length ?? 0,
     estimatedMinutes: toolpath.estimatedMinutes,
     postProcessorName: toolpath.postProcessorName,
     warnings: toolpath.summary?.warnings ?? []
   }, null, 2), "utf8");
+  if (toolpath.sequencingReport) {
+    await writeFile(join(workDir, "toolpath-sequencing-report.json"), JSON.stringify(toolpath.sequencingReport, null, 2), "utf8");
+  }
 
   const machineControllerProfile = createMachineControllerProfile(settings);
   const airRunGcode = createServerAirRunGcode(toolpath.points, settings, toolpath.estimatedMinutes, "V3 imported neutral air run");
@@ -12477,6 +12608,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
       postprocessTraceReport,
+      toolpathSequencingReport: toolpath.sequencingReport ?? null,
       ncStaticAnalysis,
       controllerDialectReport,
       machineControllerProfile,
