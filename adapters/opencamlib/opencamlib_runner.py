@@ -604,6 +604,7 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
     envelope_lifts = [float(point.get("cutterEnvelopeLiftMm")) for point in points if is_number(point.get("cutterEnvelopeLiftMm"))]
     surface_radii = [float(point.get("surfaceRadius")) for point in points if is_number(point.get("surfaceRadius"))]
     raw_surface_radii = [float(point.get("rawSurfaceRadius")) for point in points if is_number(point.get("rawSurfaceRadius"))]
+    sampling_quality = compute_heightfield_sampling_quality(heightfield, point_count, miss_count, rotary_envelope)
     return {
         "schema": "hediao3d.opencamlib-cutter-envelope-report.v1",
         "jobId": job.get("jobId"),
@@ -644,6 +645,7 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
             "contactSamplesMin": min(contact_samples) if contact_samples else 0,
             "contactSamplesMax": max(contact_samples) if contact_samples else 0,
             "contactSamplesAvg": round(sum(contact_samples) / len(contact_samples), 6) if contact_samples else 0,
+            "quality": sampling_quality,
         },
         "rotaryEnvelope": {
             "enabled": rotary_envelope,
@@ -666,6 +668,7 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
             "level": "preview-scaffold",
             "postprocessEligible": False,
             "productionCandidate": False,
+            "samplingReadyForUpgrade": sampling_quality["level"] in {"fine", "production-sampling-candidate"},
             "summary": "Geometry-derived STL rotary envelope was generated for trial visualization, but it is not validated OpenCAMLib drop-cutter output." if rotary_envelope else "Geometry-derived STL heightfield envelope was generated for trial visualization, but it is not validated OpenCAMLib drop-cutter output.",
             "requiredUpgrade": "Replace rotary heightfield preview with real OpenCAMLib/ocl cutter-contact or drop-cutter sampling before production unlock." if rotary_envelope else "Replace heightfield preview with real OpenCAMLib/ocl cutter-contact or drop-cutter sampling before production unlock.",
         },
@@ -687,6 +690,7 @@ def create_cutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neut
     hit_rate = point_count / total_sites if total_sites else 0
     preview_scaffold = "preview" in mode.lower() or bool(neutral.get("experimentalHeightfield")) or bool(neutral.get("experimentalRotaryHeightfield"))
     neutral_without_contact_sha = sha256_json_without_contact_report(neutral)
+    sampling_quality = compute_heightfield_sampling_quality(heightfield, point_count, miss_count, rotary_envelope)
     return {
         "schema": "hediao3d.opencamlib-cutter-contact-report.v1",
         "jobId": job.get("jobId"),
@@ -723,12 +727,14 @@ def create_cutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neut
             "cutterEnvelopeSampleCount": heightfield.get("cutterSampleCount") or heightfield.get("cutterEnvelopeSampleCount"),
             "cutterEnvelopeLiftMaxMm": heightfield.get("cutterEnvelopeLiftMaxMm"),
             "cutterEnvelopeLiftAvgMm": heightfield.get("cutterEnvelopeLiftAvgMm"),
+            "samplingQuality": sampling_quality,
         },
         "quality": {
             "level": "preview-scaffold" if preview_scaffold else "review",
             "previewScaffold": preview_scaffold,
             "postprocessEligible": False,
             "productionCandidate": False,
+            "samplingReadyForUpgrade": sampling_quality["level"] in {"fine", "production-sampling-candidate"},
             "summary": "OpenCAMLib contact-report contract is present and hash-bound, but current output is still heightfield preview scaffold rather than validated drop-cutter/cutter-contact output.",
             "requiredUpgrade": "Replace this preview contact sampler with OpenCAMLib drop-cutter/cutter-contact calculation and independent material-removal simulation before production unlock.",
         },
@@ -737,6 +743,64 @@ def create_cutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neut
             "It intentionally remains non-production while the runner mode is preview/scaffold.",
             "Production still requires validated cutter-contact output, CAMotics/equivalent material removal evidence, air-run, trial feedback and machine acceptance.",
         ],
+    }
+
+
+def compute_heightfield_sampling_quality(heightfield: Dict[str, Any], point_count: int, miss_count: int, rotary_envelope: bool) -> Dict[str, Any]:
+    rows = int(heightfield.get("rows") or 0)
+    cols = int(heightfield.get("cols") or 0)
+    output_length = float(heightfield.get("outputLengthMm") or 0)
+    cutter_radius = float(heightfield.get("cutterRadiusMm") or 0)
+    stock_radius = float(heightfield.get("stockRadiusMm") or 0)
+    cutter_diameter = cutter_radius * 2
+    total_sites = point_count + miss_count
+    hit_rate = point_count / total_sites if total_sites else 0.0
+    x_step = output_length / max(1, cols - 1) if cols > 1 and output_length > 0 else None
+    angle_step_deg = 360.0 / max(1, rows - 1) if rotary_envelope and rows > 1 else None
+    rotary_surface_step = (2 * math.pi * stock_radius) / max(1, rows - 1) if rotary_envelope and rows > 1 and stock_radius > 0 else None
+    y_step = None if rotary_envelope else x_step
+    effective_cross_step = rotary_surface_step if rotary_envelope else y_step
+    linear_steps = [step for step in (x_step, effective_cross_step) if step is not None]
+    max_linear_step = max(linear_steps) if linear_steps else None
+    step_to_cutter_ratio = max_linear_step / cutter_diameter if max_linear_step is not None and cutter_diameter > 0 else None
+
+    blockers: List[str] = []
+    warnings: List[str] = []
+    if hit_rate < 0.98:
+        blockers.append("hit-rate-below-98-percent")
+    if step_to_cutter_ratio is None:
+        warnings.append("step-to-cutter-ratio-unavailable")
+    elif step_to_cutter_ratio > 0.25:
+        blockers.append("sampling-step-larger-than-quarter-cutter-diameter")
+    elif step_to_cutter_ratio > 0.12:
+        warnings.append("sampling-step-larger-than-fine-finishing-target")
+    if rotary_envelope and (angle_step_deg is None or angle_step_deg > 3.0):
+        warnings.append("rotary-angle-step-above-3deg")
+    if rows < 2 or cols < 2:
+        blockers.append("sampling-grid-too-small")
+
+    if blockers:
+        level = "coarse"
+    elif warnings:
+        level = "fine"
+    else:
+        level = "production-sampling-candidate"
+
+    return {
+        "schema": "hediao3d.opencamlib-heightfield-sampling-quality.v1",
+        "level": level,
+        "hitRate": round(hit_rate, 6),
+        "rows": rows,
+        "cols": cols,
+        "xStepMm": round(x_step, 6) if x_step is not None else None,
+        "rotaryAngleStepDeg": round(angle_step_deg, 6) if angle_step_deg is not None else None,
+        "rotarySurfaceStepMm": round(rotary_surface_step, 6) if rotary_surface_step is not None else None,
+        "maxLinearStepMm": round(max_linear_step, 6) if max_linear_step is not None else None,
+        "cutterDiameterMm": round(cutter_diameter, 6) if cutter_diameter > 0 else None,
+        "stepToCutterRatio": round(step_to_cutter_ratio, 6) if step_to_cutter_ratio is not None else None,
+        "blockers": blockers,
+        "warnings": warnings,
+        "summary": "Preview sampling is dense enough to be considered for a real OpenCAMLib cutter-contact upgrade." if level == "production-sampling-candidate" else "Preview sampling is useful for visualization/air-run review, but should be refined or replaced before real cutter-contact production.",
     }
 
 

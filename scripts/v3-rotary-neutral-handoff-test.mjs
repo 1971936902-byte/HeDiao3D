@@ -121,10 +121,15 @@ async function main() {
   assert(envelope.mode === "stl-rotary-heightfield-preview", "envelope report should use rotary mode");
   assert(envelope.sampling?.rotaryEnvelope === true, "envelope report should mark rotary envelope");
   assert(envelope.rotaryEnvelope?.cutterEnvelopeLiftMaxMm > 0, "envelope report should expose cutter lift");
+  assert(envelope.sampling?.quality?.level === "coarse", `rotary handoff preview sampling should be coarse, got ${envelope.sampling?.quality?.level}`);
+  assert(envelope.sampling.quality.blockers?.includes("sampling-step-larger-than-quarter-cutter-diameter"), "rotary handoff should expose stepover blocker");
   assert(envelope.quality?.productionCandidate === false, "rotary preview envelope must not be production candidate");
+  assert(envelope.quality?.samplingReadyForUpgrade === false, "coarse preview envelope must not be ready for production upgrade");
   const contact = await getArtifactJson(job.id, "opencamlib-cutter-contact-report.json");
   assert(contact.quality?.previewScaffold === true, "contact artifact should classify preview scaffold");
   assert(contact.quality?.productionCandidate === false, "contact artifact must not be production candidate");
+  assert(contact.contactSampling?.samplingQuality?.level === "coarse", "contact artifact should expose sampling quality");
+  assert(contact.quality?.samplingReadyForUpgrade === false, "coarse contact artifact must not be ready for production upgrade");
 
   const toolpathSummary = await getArtifactJson(job.id, "toolpath-summary.json");
   assert(toolpathSummary.source === "external-adapter", "toolpath should come from external adapter");

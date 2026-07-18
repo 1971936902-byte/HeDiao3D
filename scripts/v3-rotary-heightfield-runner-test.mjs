@@ -118,7 +118,13 @@ try {
   assert(envelopeReport.tool?.angleDeg === 25, "envelope report should include 25 degree tool angle");
   assert(envelopeReport.tool?.flatTipMm === 0.4, "envelope report should include flat tip");
   assert(envelopeReport.rotaryEnvelope?.cutterEnvelopeLiftMaxMm > 0, "envelope report should expose cutter envelope lift");
+  assert(envelopeReport.sampling?.quality?.schema === "hediao3d.opencamlib-heightfield-sampling-quality.v1", "envelope report should include sampling quality schema");
+  assert(envelopeReport.sampling.quality.level === "coarse", `7x33 preview sampling should remain coarse, got ${envelopeReport.sampling.quality.level}`);
+  assert(envelopeReport.sampling.quality.blockers?.includes("sampling-step-larger-than-quarter-cutter-diameter"), "sampling quality should block overly large stepover");
   assert(envelopeReport.quality?.productionCandidate === false, "rotary preview envelope must not be production candidate");
+  assert(envelopeReport.quality?.samplingReadyForUpgrade === false, "coarse preview sampling must not be marked ready for cutter-contact upgrade");
+  assert(neutral.cutterContactReport.contactSampling?.samplingQuality?.level === "coarse", "contact report should echo coarse sampling quality");
+  assert(neutral.cutterContactReport.quality?.samplingReadyForUpgrade === false, "contact report should keep coarse sampling below upgrade threshold");
 
   console.log(JSON.stringify({
     ok: true,
