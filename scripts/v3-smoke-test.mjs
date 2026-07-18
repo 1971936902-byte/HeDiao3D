@@ -301,6 +301,8 @@ async function main() {
   assert(operatorDownloadChecklist.includes("Get-FileHash .\\toolpath.nc -Algorithm SHA256"), "operator download checklist missing PowerShell hash command");
   assert(operatorDownloadChecklist.includes("生产门禁未放行"), "operator download checklist should warn when production is locked");
   assert(operatorDownloadChecklist.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "operator download checklist should state exact wrapY axis mapping");
+  assert(operatorDownloadChecklist.includes("CAMotics 上游绑定"), "operator download checklist should show CAMotics upstream binding check");
+  assert(operatorDownloadChecklist.includes("候选包预检"), "operator download checklist should mention candidate package validation binding");
   assert(operatorDownloadChecklist.includes("camotics-preview.nc"), "operator download checklist should list never-machine simulation file");
   assert(packageIndex.recommendedSequence?.some((line) => line.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度")), "package index recommended sequence should state exact wrapY axis mapping");
   assert(packageIntegrity.files?.some((file) => file.filename === "toolpath.nc" && file.sha256), "package integrity missing toolpath hash");

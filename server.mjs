@@ -6058,7 +6058,8 @@ async function processOrchestratorJob(job, settings) {
     productionGate,
     machineControllerProfile,
     camHandoffQuality,
-    simulationSummary
+    simulationSummary,
+    productionEvidenceDossier
   }), "utf8");
   packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
   await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
@@ -11936,7 +11937,7 @@ function createPackageIntegrityReport(job, deliveryManifest) {
   };
 }
 
-function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packageIntegrity, productionGate, machineControllerProfile, camHandoffQuality, simulationSummary }) {
+function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packageIntegrity, productionGate, machineControllerProfile, camHandoffQuality, simulationSummary, productionEvidenceDossier = null }) {
   const manifestByName = new Map((deliveryManifest.files ?? []).map((file) => [file.filename, file]));
   const integrityFiles = packageIntegrity.files ?? [];
   const fileRows = integrityFiles
@@ -11950,6 +11951,7 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
   const airRunFiles = fileRows.filter((file) => file.machineUse?.class === "air-run-no-cut");
   const neverMachineFiles = fileRows.filter((file) => file.machineUse?.allowedOnMachine === false);
   const missing = integrityFiles.filter((file) => file.downloadable && !file.exists);
+  const camoticsUpstreamEvidence = productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidence ?? null;
   const axisInstruction = createOperatorAxisInstruction({
     camMode: machineControllerProfile?.camMode,
     coordinateMapping: machineControllerProfile?.axisMapping
@@ -11973,6 +11975,8 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
     "- [ ] 已阅读 `package-integrity.json`，并用本清单核对下载后的文件哈希。",
     `- [ ] 已确认机床接线与 \`machine-controller-profile.json\` 中的轴向一致：${axisInstruction}。`,
     "- [ ] 已确认刀具与 `tool-setup-sheet.json` 一致，尤其是 4mm 25度平底尖刀、进给、转速和最大切深。",
+    `- [ ] 已核对 CAMotics 上游绑定：${formatCamoticsUpstreamEvidenceLine(camoticsUpstreamEvidence)}。`,
+    "- [ ] 如果上游绑定显示候选包预检/证据包未绑定，当前材料去除仿真不能作为生产证据。",
     "- [ ] 先运行 `rotary-calibration-airrun.nc`，再运行 `air-run.nc`，两者都必须主轴关闭、Z 保持安全高度。",
     productionGate.allowProductionNc
       ? "- [ ] 生产门禁已放行；仍需完成离料空跑、低进给试雕和现场验收后再运行 `toolpath.nc`。"
@@ -12073,7 +12077,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     productionGate: readJsonFile(join(job.workDir, "production-gate.json")) ?? { allowProductionNc: false },
     machineControllerProfile: readJsonFile(join(job.workDir, "machine-controller-profile.json")),
     camHandoffQuality: readJsonFile(join(job.workDir, "cam-handoff-quality.json")),
-    simulationSummary: readJsonFile(join(job.workDir, "simulation-summary.json"))
+    simulationSummary: readJsonFile(join(job.workDir, "simulation-summary.json")),
+    productionEvidenceDossier: readJsonFile(join(job.workDir, "production-evidence-dossier.json"))
   }), "utf8");
   packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
   await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
@@ -14220,7 +14225,8 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     productionGate,
     machineControllerProfile,
     camHandoffQuality,
-    simulationSummary
+    simulationSummary,
+    productionEvidenceDossier
   }), "utf8");
   packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
   await writeFile(join(workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");

@@ -104,6 +104,7 @@ async function main() {
   const localValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-local-validation.json`);
   const importAuditArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
+  const operatorDownloadChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/operator-download-checklist.md`);
   assert(localValidationArtifact.productionEvidenceEligible === true, "local validation artifact should preserve production evidence eligibility");
   assert(localValidationArtifact.importedVia === "api-camotics-result", "local validation artifact should record API import");
   assert(importAuditArtifact.schema === "hediao3d.camotics-result-import-audit.v1", "import audit schema mismatch");
@@ -112,6 +113,8 @@ async function main() {
   assert(importAuditArtifact.localValidation?.productionEvidenceEligible === true, "import audit should summarize local validation");
   assert(nextActionChecklist.includes("## 证据状态"), "next action checklist should be refreshed with evidence status");
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next action checklist should show imported CAMotics evidence level");
+  assert(operatorDownloadChecklist.includes("CAMotics 上游绑定"), "operator download checklist should show CAMotics upstream binding after import");
+  assert(operatorDownloadChecklist.includes("候选包预检"), "operator download checklist should mention candidate package validation binding after import");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
