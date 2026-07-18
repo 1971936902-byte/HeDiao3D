@@ -25,6 +25,7 @@ async function main() {
   assert(run.apiArtifacts?.envTemplate?.endsWith("native-cam-env.template"), "native CAM summary should expose env template artifact");
   assert(run.apiArtifacts?.closedLoopHandoff?.endsWith("linux-cam-closed-loop-handoff.md"), "native CAM summary should expose closed-loop handoff artifact");
   assert(run.apiArtifacts?.realOutputCheck?.endsWith("native-cam-real-output-check.sh"), "native CAM summary should expose real output check artifact");
+  assert(run.apiArtifacts?.packageSelfCheck?.endsWith("native-cam-server-package-self-check.mjs"), "native CAM summary should expose package self-check artifact");
   assert(run.apiArtifacts?.packageZip?.endsWith("server-package.zip"), "native CAM summary should expose server package zip artifact");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-acceptance-checklist.md"), "native CAM summary should expose server package files");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM summary should expose real output check package file");
@@ -32,6 +33,7 @@ async function main() {
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "opencamlib-contact-output-validate.mjs"), "native CAM summary should expose OpenCAMLib contact validator package file");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "camotics-material-removal-validate.mjs"), "native CAM summary should expose CAMotics material-removal validator package file");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "native CAM summary should expose closed-loop handoff package file");
+  assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-server-package.json"), "native CAM summary should expose package manifest file");
   assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
   assert(run.checks.some((check) => check.id === "opencamlib" && check.capabilities?.outputFormats?.includes("neutral-toolpath")), "OpenCAMLib public check should expose neutral toolpath capability");
 
@@ -101,7 +103,7 @@ async function main() {
   assert(realOutputCheck.includes("hediao3d.native-cam-real-output-acceptance.v1"), "real output check should write acceptance schema");
   assert(realOutputCheck.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true"), "real output check should run native adapter validation");
   assert(realOutputCheck.includes("npm run test:v3:freecad-proof-handoff"), "real output check should run proof-backed FreeCAD handoff validation");
-  const selfCheck = await fetchText(`/api/orchestrator/native-cam/${encodeURIComponent(run.id)}/native-cam-server-package-self-check.mjs`);
+  const selfCheck = await fetchText(latest.latest.apiArtifacts.packageSelfCheck);
   assert(selfCheck.includes("hediao3d.native-cam-server-package-self-check.v1"), "package self-check should emit schema");
   assert(selfCheck.includes("desktop-3axis-rotary-y"), "package self-check should validate target machine profile");
   assert(selfCheck.includes("camotics-result-bundle.zip"), "package self-check should validate CAMotics result bundle support");
@@ -130,6 +132,8 @@ async function main() {
   assert(zipNames.includes("hediao3d-native-cam-server/camotics-material-removal-validate.mjs"), "native CAM zip missing CAMotics material-removal validator");
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-server-package.json"), "native CAM zip missing package manifest");
   assert(zipNames.includes("hediao3d-native-cam-server/README-NATIVE-CAM.md"), "native CAM zip missing README");
+  const readme = await readZipText(packageZip.bytes, "hediao3d-native-cam-server/README-NATIVE-CAM.md");
+  assert(readme.includes("native-cam-server-package-self-check.mjs"), "native CAM ZIP README should instruct package self-check");
 
   console.log(JSON.stringify({
     ok: true,
@@ -155,6 +159,7 @@ function validateSummary(summary, label) {
   assert(summary.apiArtifacts?.closedLoopHandoff, `${label} missing closed-loop handoff artifact`);
   assert(summary.apiArtifacts?.checklist, `${label} missing checklist artifact`);
   assert(summary.apiArtifacts?.realOutputCheck, `${label} missing real output check artifact`);
+  assert(summary.apiArtifacts?.packageSelfCheck, `${label} missing package self-check artifact`);
   assert(summary.apiArtifacts?.packageManifest, `${label} missing package manifest artifact`);
   assert(summary.apiArtifacts?.packageZip, `${label} missing package zip artifact`);
   assert(summary.packageArtifacts?.schema === "hediao3d.native-cam-server-package.v1", `${label} missing packageArtifacts summary`);
@@ -216,6 +221,29 @@ function listZipFilenames(bytes) {
     offset = nameEnd + extraLength + compressedSize;
   }
   return names;
+}
+
+async function readZipText(bytes, filename) {
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = readUInt32LE(bytes, offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    if (signature !== 0x04034b50) {
+      offset += 1;
+      continue;
+    }
+    const compressedSize = readUInt32LE(bytes, offset + 18);
+    const nameLength = readUInt16LE(bytes, offset + 26);
+    const extraLength = readUInt16LE(bytes, offset + 28);
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + nameLength;
+    const name = new TextDecoder().decode(bytes.slice(nameStart, nameEnd));
+    const dataStart = nameEnd + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (name === filename) return new TextDecoder().decode(bytes.slice(dataStart, dataEnd));
+    offset = dataEnd;
+  }
+  throw new Error(`ZIP entry not found: ${filename}`);
 }
 
 function readUInt16LE(bytes, offset) {

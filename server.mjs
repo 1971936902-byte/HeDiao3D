@@ -3202,7 +3202,7 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
     packageArtifacts: report.artifacts ? {
       schema: report.artifacts.schema ?? null,
       files: Array.isArray(report.artifacts.files)
-        ? report.artifacts.files.slice(0, 8).map((file) => ({
+        ? report.artifacts.files.slice(0, 12).map((file) => ({
           filename: file.filename,
           role: file.role,
           description: file.description,
@@ -3236,6 +3236,7 @@ function createNativeCamReadinessArtifactLinks(checkId) {
     checklist: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-acceptance-checklist.md`,
     closedLoopHandoff: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/linux-cam-closed-loop-handoff.md`,
     realOutputCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-real-output-check.sh`,
+    packageSelfCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package-self-check.mjs`,
     packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`,
     packageZip: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/server-package.zip`
   };
@@ -3310,6 +3311,7 @@ function createNativeCamServerPackageReadme(checkId, manifest) {
     "- Read native-cam-acceptance-checklist.md.",
     "- Copy native-cam-env.template to your server environment file and keep synthetic CAMotics disabled.",
     "- Run native-cam-server-bootstrap.sh in dry-run mode first.",
+    "- Run native-cam-server-package-self-check.mjs after unpacking this ZIP.",
     "- Read linux-cam-closed-loop-handoff.md before moving between Native CAM, CAMotics and V3 upload panels.",
     "- Run native-cam-real-output-check.sh only after external CAM commands are configured.",
     "",
