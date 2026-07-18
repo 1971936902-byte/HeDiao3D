@@ -196,6 +196,22 @@ async function main() {
   const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
   assert(linuxCamJobValidator.includes("native-cam-real-output-bundle.zip") && linuxCamJobValidator.includes("camotics-result-bundle.zip"), "Linux CAM job validator should name expected upload bundles");
+  const linuxCamJobExtractDir = join(tmpdir(), `hediao3d-linux-cam-job-${job.id}`);
+  rmSync(linuxCamJobExtractDir, { recursive: true, force: true });
+  mkdirSync(linuxCamJobExtractDir, { recursive: true });
+  extractStoredZip(linuxCamJobPackage.bytes, linuxCamJobExtractDir);
+  const linuxCamJobRoot = join(linuxCamJobExtractDir, "hediao3d-v3-linux-cam-job");
+  const localValidationRun = spawnSync(process.execPath, ["validate-linux-cam-job.mjs", "."], {
+    cwd: linuxCamJobRoot,
+    encoding: "utf8"
+  });
+  assert(localValidationRun.status === 0, `Linux CAM job local validator failed: ${localValidationRun.stderr || localValidationRun.stdout}`);
+  const localValidation = JSON.parse(readFileSync(join(linuxCamJobRoot, "linux-cam-job-local-validation.json"), "utf8"));
+  assert(localValidation.schema === "hediao3d.v3-linux-cam-job-local-validation.v1", "Linux CAM job local validation schema mismatch");
+  assert(localValidation.level === "waiting-for-linux-evidence", `Linux CAM job local validation should wait for real evidence, got ${localValidation.level}`);
+  assert(localValidation.productionUnlockEligible === false, "Linux CAM job local validation must not unlock production");
+  assert(localValidation.expectedUploads?.nativeCam === "native-cam-real-output-bundle.zip", "Linux CAM job local validation missing Native CAM expected upload");
+  assert(localValidation.expectedUploads?.camotics === "camotics-result-bundle.zip", "Linux CAM job local validation missing CAMotics expected upload");
 
   console.log(JSON.stringify({
     ok: true,
@@ -436,6 +452,34 @@ function readStoredZipEntry(bytes, wantedName) {
     offset += 1;
   }
   throw new Error(`ZIP entry not found: ${wantedName}`);
+}
+
+function extractStoredZip(bytes, targetDir) {
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = bytes.readUInt32LE(offset);
+    if (signature === 0x04034b50) {
+      const compressedSize = bytes.readUInt32LE(offset + 18);
+      const fileNameLength = bytes.readUInt16LE(offset + 26);
+      const extraLength = bytes.readUInt16LE(offset + 28);
+      const nameStart = offset + 30;
+      const nameEnd = nameStart + fileNameLength;
+      const name = bytes.subarray(nameStart, nameEnd).toString("utf8");
+      const dataStart = nameEnd + extraLength;
+      const dataEnd = dataStart + compressedSize;
+      const normalized = name.replace(/\\/g, "/");
+      assert(!normalized.includes("..") && !normalized.startsWith("/"), `unsafe ZIP entry path: ${name}`);
+      if (!normalized.endsWith("/")) {
+        const outputPath = join(targetDir, ...normalized.split("/"));
+        mkdirSync(join(outputPath, ".."), { recursive: true });
+        writeFileSync(outputPath, bytes.subarray(dataStart, dataEnd));
+      }
+      offset = dataEnd;
+      continue;
+    }
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    offset += 1;
+  }
 }
 
 function assert(condition, message) {
