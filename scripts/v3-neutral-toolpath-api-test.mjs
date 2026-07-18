@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
 const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
@@ -123,6 +125,9 @@ async function main() {
   assert(summary.camHandoffQuality?.sourceSnapshot?.kind === "neutral-toolpath", "CAM handoff should snapshot neutral toolpath");
   assert(summary.neutralToolpathImportValidation?.schema === "hediao3d.neutral-toolpath-import-validation.v1", "reloaded job should expose neutral import validation");
   assert(summary.neutralToolpathImportValidation.postprocessEligible === true, "reloaded neutral validation should be eligible");
+  assert(summary.neutralToolpathImportValidation.handoffEvidence?.classification === "missing-contact-report", "neutral without contact report should classify as missing-contact-report");
+  assert(summary.neutralToolpathImportValidation.handoffEvidence?.productionCandidate === false, "neutral without contact report must not be production-candidate");
+  assert(summary.neutralToolpathImportValidation.cutterContactReport?.status === "missing", "neutral without contact report should expose missing contact status");
   assert(summary.neutralToolpathImportValidation.sourceBinding?.status === "bound", "reloaded neutral validation should expose source binding");
   assert(summary.neutralToolpathImportValidation.machineFit?.targetMachine?.rotaryOutputAxis === "Y", "reloaded neutral validation should expose machine-fit rotary axis");
   assert(summary.neutralToolpathImportValidation.machineFit?.riskCounts?.holdZonePointCount === 0, "sample neutral path should avoid hold zones");
@@ -152,6 +157,56 @@ async function main() {
   assert(validationArtifact.machineFit?.coverage?.xCoverageRatio > 0.5, "validation artifact should preserve machine-fit coverage");
   const adapterReport = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/adapter-report.json`);
   assert(adapterReport.metrics?.neutralToolpath?.sourceBinding?.status === "bound", "adapter report should preserve neutral source binding");
+  assert(adapterReport.metrics?.handoffEvidence?.classification === "missing-contact-report", "adapter report should preserve missing contact classification");
+
+  const candidateNeutral = {
+    schema: "hediao3d.neutral-toolpath.v1",
+    engine: "opencamlib",
+    synthetic: false,
+    coordinate: {
+      lengthAxis: "X",
+      rotaryAxis: "Y",
+      depthAxis: "Z",
+      rotaryUnit: "degree"
+    },
+    estimatedMinutes: 1.1,
+    points: [
+      { x: -12, a: 0, z: 21.55, depth: 0.45 },
+      { x: 0, a: 90, z: 21.15, depth: 0.85 },
+      { x: 12, a: 180, z: 21.5, depth: 0.5 }
+    ]
+  };
+  const candidateHash = sha256Json(candidateNeutral);
+  candidateNeutral.cutterContactReport = {
+    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    inputIdentity: {
+      sourceNeutralToolpathSha256: candidateHash
+    },
+    quality: {
+      level: "ready",
+      productionCandidate: true,
+      postprocessEligible: true,
+      summary: "API test fixture representing validated OpenCAMLib cutter-contact output."
+    }
+  };
+  const candidateImported = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
+    sourceName: "validated-opencamlib-neutral-toolpath.json",
+    engine: "opencamlib",
+    neutralToolpath: candidateNeutral
+  });
+  assert(candidateImported.ok === true, "candidate neutral import should succeed");
+  assert(candidateImported.validation?.cutterContactReport?.status === "production-candidate", "candidate contact report should be production-candidate");
+  assert(candidateImported.validation.cutterContactReport.inputIdentityBinding?.status === "bound", "candidate contact report should bind submitted neutral hash");
+  assert(candidateImported.validation.handoffEvidence?.classification === "production-candidate", "candidate validation should classify handoff as production-candidate");
+  assert(candidateImported.validation.handoffEvidence?.productionCandidate === true, "candidate validation should mark productionCandidate true");
+
+  const candidateReloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
+  const candidateSummary = candidateReloaded.result?.summary ?? {};
+  assert(candidateSummary.neutralToolpathImportValidation?.handoffEvidence?.classification === "production-candidate", "reloaded candidate should preserve production-candidate handoff");
+  assert(candidateSummary.neutralToolpathImportValidation?.cutterContactReport?.inputIdentityBinding?.status === "bound", "reloaded candidate should preserve contact report binding");
+  assert(candidateSummary.camHandoffQuality?.adapterHandoffEvidence?.classification === "production-candidate", "CAM handoff quality should consume candidate handoff evidence");
+  assert(candidateSummary.camHandoffQuality?.previewScaffold === false, "candidate contact handoff should not be preview scaffold");
+  assert(candidateSummary.productionGate?.allowProductionNc !== true, "candidate contact report alone must not unlock production NC");
 
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.postprocessHandoffReadiness?.source === "latest-job-evidence-dossier", "readiness postprocess handoff should use latest job evidence dossier");
@@ -165,9 +220,10 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
-    points: summary.toolpathSummary.points,
-    sequencing: summary.toolpathSequencingReport.mode,
-    productionAllowed: summary.productionGate.allowProductionNc
+    points: candidateSummary.toolpathSummary.points,
+    sequencing: candidateSummary.toolpathSequencingReport.mode,
+    candidateClassification: candidateSummary.neutralToolpathImportValidation.handoffEvidence.classification,
+    productionAllowed: candidateSummary.productionGate.allowProductionNc
   }, null, 2));
 }
 
@@ -207,6 +263,10 @@ async function postJson(path, body, expectOk) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function sha256Json(value) {
+  return createHash("sha256").update(JSON.stringify(value, null, 2)).digest("hex");
 }
 
 main().catch((error) => {

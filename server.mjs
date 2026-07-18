@@ -3773,6 +3773,10 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
     || /preview|scaffold/i.test(String(runner?.mode ?? ""))
     || /preview|scaffold/i.test(String(runner?.warning ?? ""))
   );
+  const cutterContactReport = evaluateNeutralImportCutterContactReport(neutral, {
+    sourceNeutralToolpathSha256: source.sourceBinding?.submitted?.sha256 ?? null,
+    neutralToolpathWithoutContactReportSha256: sha256NeutralWithoutContactReport(neutral)
+  });
 
   if (neutral?.schema !== "hediao3d.neutral-toolpath.v1") {
     errors.push(`schema 必须是 hediao3d.neutral-toolpath.v1，当前为 ${neutral?.schema ?? "unknown"}。`);
@@ -3792,6 +3796,11 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
     errors.push("preview/heightfield scaffold 只能用于预览验证，不能通过真实导入接口进入后处理。");
   } else if (previewScaffold) {
     warnings.push("preview/heightfield scaffold 仅允许进入外部 adapter trial-only 小闭环，不能作为生产级 OpenCAMLib 刀具接触证据。");
+  }
+  if (cutterContactReport.status === "missing") {
+    warnings.push("neutral-toolpath 未提供 OpenCAMLib cutter-contact report，只能作为后处理候选，不能作为真实 CAM production-candidate 证据。");
+  } else if (cutterContactReport.status !== "production-candidate") {
+    warnings.push(`OpenCAMLib cutter-contact report 状态为 ${cutterContactReport.status}，不能作为 production-candidate 证据。`);
   }
   if (coordinate.depthAxis && String(coordinate.depthAxis).toUpperCase() !== "Z") {
     errors.push(`coordinate.depthAxis 必须是 Z，当前为 ${coordinate.depthAxis}。`);
@@ -3865,8 +3874,16 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
       previewScaffold,
       imported: true,
       generatedByExternalCommand: Boolean(neutral?.generatedByExternalCommand),
-      allowPreviewScaffold: Boolean(source.allowPreviewScaffold)
+      allowPreviewScaffold: Boolean(source.allowPreviewScaffold),
+      cutterContactReportStatus: cutterContactReport.status,
+      productionCandidate: cutterContactReport.productionCandidate
     },
+    cutterContactReport,
+    handoffEvidence: createNeutralImportHandoffEvidence(neutral, {
+      previewScaffold,
+      cutterContactReport,
+      generatedByExternalCommand: Boolean(neutral?.generatedByExternalCommand)
+    }),
     coordinate: {
       lengthAxis: coordinate.lengthAxis ?? null,
       rotaryAxis: coordinate.rotaryAxis ?? null,
@@ -3891,6 +3908,120 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
       "该校验只证明 neutral-toolpath 可进入 HeDiao3D 后处理，不解锁生产 NC。",
       "生产仍需 production-candidate handoffEvidence、非 synthetic 材料去除仿真、空跑、软料试雕和机床验收。"
     ]
+  };
+}
+
+function evaluateNeutralImportCutterContactReport(neutral, expectedIdentity = {}) {
+  const embedded = neutral?.cutterContactReport && typeof neutral.cutterContactReport === "object"
+    ? neutral.cutterContactReport
+    : null;
+  const report = embedded;
+  if (!report) {
+    return {
+      schema: "hediao3d.opencamlib-contact-report-summary.v1",
+      status: "missing",
+      reportSchema: null,
+      productionCandidate: false,
+      postprocessEligible: false,
+      previewScaffold: false,
+      inputIdentityBinding: createNeutralImportContactIdentityBinding(null, expectedIdentity),
+      summary: "neutral-toolpath does not include an embedded OpenCAMLib cutter-contact report."
+    };
+  }
+  const schema = String(report.schema ?? "");
+  const quality = report.quality && typeof report.quality === "object" ? report.quality : {};
+  const level = String(quality.level ?? report.level ?? "");
+  const previewScaffold = /preview|scaffold/i.test(schema) || /preview|scaffold/i.test(level) || Boolean(quality.previewScaffold);
+  const inputIdentityBinding = createNeutralImportContactIdentityBinding(report.inputIdentity, expectedIdentity);
+  const productionCandidate = schema === "hediao3d.opencamlib-cutter-contact-report.v1"
+    && Boolean(quality.productionCandidate)
+    && Boolean(quality.postprocessEligible)
+    && !previewScaffold
+    && inputIdentityBinding.status === "bound";
+  return {
+    schema: "hediao3d.opencamlib-contact-report-summary.v1",
+    status: productionCandidate ? "production-candidate" : previewScaffold ? "preview-scaffold" : "contact-report-review",
+    reportSchema: schema || null,
+    productionCandidate,
+    postprocessEligible: Boolean(quality.postprocessEligible),
+    previewScaffold,
+    inputIdentityBinding,
+    summary: quality.summary ?? report.summary ?? "OpenCAMLib cutter-contact report evaluated from neutral-toolpath API import."
+  };
+}
+
+function createNeutralImportContactIdentityBinding(identity, expectedIdentity = {}) {
+  const acceptable = [
+    expectedIdentity.sourceNeutralToolpathSha256,
+    expectedIdentity.neutralToolpathSha256,
+    expectedIdentity.neutralToolpathWithoutContactReportSha256
+  ].filter(Boolean).map(String);
+  const reported = identity && typeof identity === "object"
+    ? identity.sourceNeutralToolpathSha256 ?? identity.neutralToolpathSha256 ?? identity.externalNeutralToolpathSha256 ?? null
+    : null;
+  const status = acceptable.length > 0 && reported && acceptable.includes(String(reported))
+    ? "bound"
+    : reported
+      ? "mismatch"
+      : "missing";
+  return {
+    schema: "hediao3d.opencamlib-contact-report-input-binding.v1",
+    status,
+    neutralToolpathHashMatched: status === "bound",
+    requiredChecks: acceptable.length ? [{
+      field: "sourceNeutralToolpathSha256",
+      expected: acceptable[0],
+      acceptable,
+      reported,
+      required: true,
+      matches: status === "bound"
+    }] : [],
+    optionalChecks: [],
+    summary: status === "bound"
+      ? "Contact report input identity matches the submitted neutral-toolpath hash."
+      : "Contact report is missing or mismatches the submitted neutral-toolpath hash."
+  };
+}
+
+function sha256NeutralWithoutContactReport(neutral) {
+  if (!neutral || typeof neutral !== "object") return null;
+  const copy = { ...neutral };
+  delete copy.cutterContactReport;
+  delete copy.cutterContactReportPath;
+  delete copy.cutterEnvelopeReportPath;
+  return createHash("sha256").update(JSON.stringify(copy, null, 2)).digest("hex");
+}
+
+function createNeutralImportHandoffEvidence(neutral, { previewScaffold, cutterContactReport, generatedByExternalCommand }) {
+  const fixture = Boolean(neutral?.fixture);
+  const synthetic = Boolean(neutral?.synthetic);
+  const pointCount = Array.isArray(neutral?.points) ? neutral.points.length : 0;
+  const classification = synthetic
+    ? "synthetic-contract"
+    : fixture
+      ? "fixture-contract"
+      : previewScaffold
+        ? "preview-scaffold"
+        : cutterContactReport.status === "missing"
+          ? "missing-contact-report"
+          : cutterContactReport.productionCandidate
+            ? "production-candidate"
+            : "contact-report-review";
+  return {
+    schema: "hediao3d.adapter-handoff-evidence.v1",
+    engine: neutral?.engine ?? "opencamlib",
+    outputKind: "neutral-toolpath",
+    classification,
+    fixture,
+    synthetic,
+    previewScaffold,
+    heightfieldPreview: Boolean(neutral?.experimentalHeightfield),
+    imported: true,
+    generatedByExternalCommand,
+    contactReportStatus: cutterContactReport.status,
+    pointCount,
+    productionCandidate: pointCount > 0 && classification === "production-candidate",
+    productionBoundary: "This evidence classifies neutral API import only; production gates still require material removal simulation, postprocess validation, air-run, trial feedback and machine acceptance."
   };
 }
 
@@ -11880,10 +12011,12 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
         synthetic: Boolean(neutral.synthetic),
         fixture: Boolean(neutral.fixture),
         previewScaffold: Boolean(importValidation.classification.previewScaffold),
+        cutterContactReport: importValidation.cutterContactReport,
         importValidation: "neutral-toolpath-import-validation.json",
         sourceBinding: neutralSourceBinding,
         pointCount
       },
+      handoffEvidence: importValidation.handoffEvidence,
       estimatedMinutes: Number(neutral.estimatedMinutes ?? 0) || null
     }
   };
