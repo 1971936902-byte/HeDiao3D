@@ -295,8 +295,9 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     output_depth = max(0.001, float(settings.get("depthMm") or settings.get("maxCutDepth") or max(0.001, float(geometry.get("dimensions", {}).get("z") or 1))))
     rotary_axis = axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y"
     cutter_radius = compute_preview_cutter_radius(tool, settings)
-    cols = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS") or 8)))
-    rows = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS") or 6)))
+    grid = resolve_heightfield_grid(job, plan, geometry, output_length, output_depth, cutter_radius, rotary=False, default_cols=8, default_rows=6)
+    cols = int(grid["cols"])
+    rows = int(grid["rows"])
     x_min = float(min_bounds["x"])
     x_max = float(max_bounds["x"])
     y_min = float(min_bounds["y"])
@@ -369,6 +370,12 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
             "heightfield": {
                 "rows": rows,
                 "cols": cols,
+                "adaptiveSampling": grid["adaptiveSampling"],
+                "samplingSource": grid["samplingSource"],
+                "targetStepoverMm": grid["targetStepoverMm"],
+                "targetStepoverDeg": grid["targetStepoverDeg"],
+                "maxRows": grid["maxRows"],
+                "maxCols": grid["maxCols"],
                 "pointCount": len(points),
                 "missCount": miss_count,
                 "fallbackCount": fallback_count,
@@ -410,8 +417,9 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
     stock_radius = max(0.001, float(stock.get("diameterMm") or settings.get("diameterMm") or 15) / 2)
     rotary_axis = axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y"
     cutter_radius = compute_preview_cutter_radius(tool, settings)
-    cols = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS") or 8)))
-    rows = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS") or 12)))
+    grid = resolve_heightfield_grid(job, plan, geometry, output_length, output_depth, cutter_radius, rotary=True, default_cols=8, default_rows=12)
+    cols = int(grid["cols"])
+    rows = int(grid["rows"])
 
     x_min = float(min_bounds["x"])
     x_max = float(max_bounds["x"])
@@ -525,6 +533,12 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
             "heightfield": {
                 "rows": rows,
                 "cols": cols,
+                "adaptiveSampling": grid["adaptiveSampling"],
+                "samplingSource": grid["samplingSource"],
+                "targetStepoverMm": grid["targetStepoverMm"],
+                "targetStepoverDeg": grid["targetStepoverDeg"],
+                "maxRows": grid["maxRows"],
+                "maxCols": grid["maxCols"],
                 "pointCount": len(points),
                 "missCount": miss_count,
                 "fallbackCount": 0,
@@ -585,6 +599,117 @@ def compute_preview_cutter_radius(tool: Dict[str, Any], settings: Dict[str, Any]
     scale = float(os.environ.get("HEDIAO3D_OPENCAMLIB_CUTTER_RADIUS_SCALE") or 1.0)
     radius = max(flat_tip / 2, diameter / 2 * max(0.0, scale))
     return max(0.0, radius)
+
+
+def resolve_heightfield_grid(
+    job: Dict[str, Any],
+    plan: Dict[str, Any],
+    geometry: Dict[str, Any],
+    output_length: float,
+    output_depth: float,
+    cutter_radius: float,
+    rotary: bool,
+    default_cols: int,
+    default_rows: int,
+) -> Dict[str, Any]:
+    settings = job.get("settings") or {}
+    stock = plan.get("stock") or {}
+    env_cols = read_positive_env_int("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS")
+    env_rows = read_positive_env_int("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS")
+    max_cols = read_positive_env_int("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_MAX_COLS") or 121
+    max_rows = read_positive_env_int("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_MAX_ROWS") or (181 if rotary else 121)
+
+    tool_diameter = max(0.001, cutter_radius * 2)
+    target_stepover_mm = read_positive_number(
+        settings.get("stepoverMm"),
+        find_operation_positive_number(plan, "stepoverMm"),
+        (plan.get("sampling") or {}).get("stepoverMm"),
+        tool_diameter * 0.12,
+    )
+    target_stepover_deg = read_positive_number(
+        settings.get("stepoverDeg"),
+        find_operation_positive_number(plan, "stepoverDeg"),
+        (plan.get("sampling") or {}).get("stepoverDeg"),
+    )
+    x_span = max(0.001, float(output_length or 0) or float((geometry.get("dimensions") or {}).get("x") or 1))
+    y_span = max(0.001, float((geometry.get("dimensions") or {}).get("y") or stock.get("diameterMm") or settings.get("diameterMm") or 1))
+    stock_radius = max(0.001, float(stock.get("diameterMm") or settings.get("diameterMm") or y_span) / 2)
+    circumference = max(0.001, 2 * math.pi * stock_radius)
+
+    adaptive_cols = math.ceil(x_span / target_stepover_mm) + 1
+    if rotary:
+        if target_stepover_deg is not None:
+            adaptive_rows = math.ceil(360.0 / target_stepover_deg) + 1
+            row_source = "settings-stepover-deg"
+        else:
+            adaptive_rows = math.ceil(circumference / target_stepover_mm) + 1
+            row_source = "settings-stepover-mm-circumference"
+    else:
+        adaptive_rows = math.ceil(y_span / target_stepover_mm) + 1
+        row_source = "settings-stepover-mm-yspan"
+
+    cols = clamp_int(env_cols if env_cols is not None else adaptive_cols, 2, max_cols)
+    rows = clamp_int(env_rows if env_rows is not None else adaptive_rows, 2, max_rows)
+    env_override = env_cols is not None or env_rows is not None
+    capped = cols < int(env_cols if env_cols is not None else adaptive_cols) or rows < int(env_rows if env_rows is not None else adaptive_rows)
+    if env_override:
+        source = "env-override"
+    elif capped:
+        source = f"adaptive-capped:{row_source}"
+    else:
+        source = f"adaptive:{row_source}"
+
+    return {
+        "rows": rows,
+        "cols": cols,
+        "adaptiveSampling": not env_override,
+        "samplingSource": source,
+        "targetStepoverMm": round(target_stepover_mm, 6),
+        "targetStepoverDeg": round(target_stepover_deg, 6) if target_stepover_deg is not None else None,
+        "maxRows": max_rows,
+        "maxCols": max_cols,
+        "outputDepthMm": round(float(output_depth or 0), 6),
+    }
+
+
+def read_positive_env_int(name: str) -> Optional[int]:
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def read_positive_number(*values: Any) -> float:
+    for value in values:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return 0.5
+
+
+def find_operation_positive_number(plan: Dict[str, Any], key: str) -> Optional[float]:
+    for operation in plan.get("operations") or []:
+        if not isinstance(operation, dict):
+            continue
+        value = operation.get(key)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
+def clamp_int(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, int(value)))
 
 
 def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path, neutral_path: Path) -> Dict[str, Any]:

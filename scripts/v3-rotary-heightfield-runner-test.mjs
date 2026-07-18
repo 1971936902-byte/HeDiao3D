@@ -126,10 +126,43 @@ try {
   assert(neutral.cutterContactReport.contactSampling?.samplingQuality?.level === "coarse", "contact report should echo coarse sampling quality");
   assert(neutral.cutterContactReport.quality?.samplingReadyForUpgrade === false, "contact report should keep coarse sampling below upgrade threshold");
 
+  const adaptiveOutputPath = join(workDir, "neutral-toolpath-adaptive.json");
+  const adaptiveJob = {
+    ...job,
+    jobId: "v3-rotary-heightfield-runner-adaptive-test",
+    outputs: {
+      neutralToolpath: adaptiveOutputPath
+    }
+  };
+  const adaptiveJobPath = join(workDir, "job-adaptive.json");
+  writeFileSync(adaptiveJobPath, JSON.stringify(adaptiveJob, null, 2), "utf8");
+  const adaptiveRun = spawnSync(python, [resolve("adapters", "opencamlib", "opencamlib_runner.py"), adaptiveJobPath, planPath, adaptiveOutputPath], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT: "true"
+    },
+    encoding: "utf8"
+  });
+
+  assert(adaptiveRun.status === 0, `adaptive runner failed: ${adaptiveRun.stderr || adaptiveRun.stdout}`);
+  const adaptiveNeutral = JSON.parse(readFileSync(adaptiveOutputPath, "utf8"));
+  const adaptiveHeightfield = adaptiveNeutral.runner?.heightfield;
+  assert(adaptiveHeightfield?.adaptiveSampling === true, "adaptive run should mark adaptive sampling");
+  assert(/^adaptive/.test(adaptiveHeightfield?.samplingSource ?? ""), `adaptive sampling source expected, got ${adaptiveHeightfield?.samplingSource}`);
+  assert(adaptiveHeightfield.cols > 8, `adaptive cols should exceed old default 8, got ${adaptiveHeightfield.cols}`);
+  assert(adaptiveHeightfield.rows > 12, `adaptive rows should exceed old default 12, got ${adaptiveHeightfield.rows}`);
+  assert(adaptiveNeutral.points.length > neutral.points.length, "adaptive run should create denser samples than explicit coarse grid");
+  const adaptiveEnvelope = JSON.parse(readFileSync(adaptiveHeightfield.cutterEnvelopeReport, "utf8"));
+  assert(adaptiveEnvelope.sampling?.quality?.level !== "coarse", `adaptive sampling should remove coarse blockers, got ${adaptiveEnvelope.sampling?.quality?.level}`);
+  assert(!adaptiveEnvelope.sampling?.quality?.blockers?.includes("sampling-step-larger-than-quarter-cutter-diameter"), "adaptive sampling should not exceed quarter-cutter blocker");
+
   console.log(JSON.stringify({
     ok: true,
     mode: neutral.runner.mode,
     points: neutral.points.length,
+    adaptivePoints: adaptiveNeutral.points.length,
     missCount: neutral.runner.heightfield.missCount,
     angleCount: angles.size,
     cutterRadiusMm: neutral.runner.heightfield.cutterRadiusMm,
