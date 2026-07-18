@@ -117,20 +117,21 @@
 
 ## 主要风险
 
-### 1. 后端 Orchestrator 尚未直接复用前端制造参数校验
+### 1. 后端 Orchestrator 已新增制造参数综合校验
 
-前端 `validateManufacturingSetup()` 会同时考虑刀具、材料和机床，例如橄榄核材料上限、刀具推荐进给、机床最大进给等。但后端 Orchestrator 的生产门控更多依赖加工包证据链、NC 检查、仿真和现场验收，没有直接调用同一套制造参数校验。
+前端 `validateManufacturingSetup()` 会同时考虑刀具、材料和机床，例如橄榄核材料上限、刀具推荐进给、机床最大进给等。后端现在已新增 `manufacturing-setup-report.json`，把刀具、材料、机床、进给、转速、切深、步距、Y 旋转夹具边界统一纳入 Orchestrator 证据链。
 
-影响：
+当前行为：
 
-- 当前不会因此放行生产，因为生产门控仍被外部 CAM、仿真和现场证据锁住。
-- 但后端报告中的刀具核验对 `vflat-4mm-25deg` 的切深阈值偏向刀具上限，未充分体现“橄榄核材料更保守”的约束。
+- 橄榄核 + 4mm 25度平底尖刀超过材料保守切深时进入 review。
+- 明显危险切深、未知刀具/材料/机床、Y 旋转夹具边界不匹配会进入 critical。
+- critical 项进入 `production-gate.json` blockers，同时在 `production-unlock-matrix.json` 和 `production-evidence-dossier.json` 中可审计。
+- 当前 `npm run test:v3:manufacturing-setup` 与 `npm run test:v3:small-loop-acceptance` 已覆盖 review 与 critical 两类场景。
 
-建议：
+仍需注意：
 
-- 后端新增 `manufacturing-setup-report.json`，统一校验刀具、材料、机床、进给、转速、切深、步距。
-- `production-gate.json` 把该报告的 critical 作为阻断项。
-- 保留当前 fail-closed，不把 warning 自动转为生产放行。
+- 该报告是参数安全门，不等于真实 CAM 精度证明。
+- review 项不会单独阻断试雕包，但生产包仍需要真实 CAM、材料去除仿真、空跑、试雕和机床验收同包闭环。
 
 ### 2. `wrapY` 依赖真实控制器脉冲/每圈距离校准
 
@@ -175,9 +176,7 @@ Y 轴旋转夹具在 CAMotics 中被准备为展开平面 X/Y/Z 检查，适合�
 
 ## 建议下一步
 
-1. 后端增加 `manufacturing-setup-report.json`，把刀具/材料/机床参数校验纳入 Orchestrator 证据链。
-2. 针对 `vflat-4mm-25deg + olive-core + desktop-3axis-rotary-y` 增加后端 API 回归测试，确认橄榄核材料切深超限时生产门控阻断。
-3. 完成 Linux 侧 OpenCAMLib/BlenderCAM neutral 刀位点闭环，把内置 Mesh CAM 从生产候选路径中剥离。
-4. 把旋转标定回填值用于推荐 `rotaryWrapPerRevolutionMm`，差异过大时要求重新生成 NC。
-5. 增加端部夹持不可达区报告，避免两端缺损被误认为刀路错误。
-
+1. 完成 Linux 侧 OpenCAMLib/BlenderCAM neutral 刀位点闭环，把内置 Mesh CAM 从生产候选路径中剥离。
+2. 把旋转标定回填值用于推荐 `rotaryWrapPerRevolutionMm`，差异过大时要求重新生成 NC。
+3. 增加端部夹持不可达区报告，避免两端缺损被误认为刀路错误。
+4. 后续将制造 Profile 抽成前后端共享 JSON，避免 Profile 常量在前端和后端长期重复维护。

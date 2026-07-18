@@ -5313,9 +5313,16 @@ async function processOrchestratorJob(job, settings) {
     machineGcode: toolpath.gcode,
     machineControllerProfile
   });
+  const manufacturingSetupReport = createManufacturingSetupReport({
+    job,
+    settings,
+    toolpath,
+    machineControllerProfile
+  });
   await writeFile(join(job.workDir, "machine-controller-profile.json"), JSON.stringify(machineControllerProfile, null, 2), "utf8");
   await writeFile(join(job.workDir, "nc-static-analysis.json"), JSON.stringify(ncStaticAnalysis, null, 2), "utf8");
   await writeFile(join(job.workDir, "controller-dialect-report.json"), JSON.stringify(controllerDialectReport, null, 2), "utf8");
+  await writeFile(join(job.workDir, "manufacturing-setup-report.json"), JSON.stringify(manufacturingSetupReport, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-input.json"), JSON.stringify(camoticsInput, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-simulation-plan.json"), JSON.stringify(camoticsSimulationPlan, null, 2), "utf8");
   await writeFile(join(job.workDir, "camotics-project-template.json"), JSON.stringify(camoticsSimulationPlan.projectTemplate, null, 2), "utf8");
@@ -5355,6 +5362,7 @@ async function processOrchestratorJob(job, settings) {
     postprocessTraceReport,
     ncStaticAnalysis,
     machineControllerProfile,
+    manufacturingSetupReport,
     controllerDialectReport
   });
   const postprocessProfile = createPostprocessProfile({
@@ -5422,6 +5430,7 @@ async function processOrchestratorJob(job, settings) {
     neutralToolpathImportValidation: readJsonFile(join(job.workDir, "neutral-toolpath-import-validation.json")),
     externalGcodeImportValidation: readJsonFile(join(job.workDir, "external-gcode-import-validation.json")),
     controllerDialectReport,
+    manufacturingSetupReport,
     toolSetupSheet,
     rotaryCalibrationSheet
   });
@@ -5448,6 +5457,7 @@ async function processOrchestratorJob(job, settings) {
     ncStaticAnalysis,
     postprocessTraceReport,
     controllerDialectReport,
+    manufacturingSetupReport,
     machineAcceptanceChecklist
   });
   await writeFile(join(job.workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
@@ -5499,6 +5509,7 @@ async function processOrchestratorJob(job, settings) {
     camEngineSelection,
     openSourceCamExecutionPlan,
     machineControllerProfile,
+    manufacturingSetupReport,
     machineAcceptanceChecklist,
     controllerDialectReport,
     deliveryManifest
@@ -5526,6 +5537,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "toolpath-summary.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-handoff-quality.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "cam-handoff-evidence.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "manufacturing-setup-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "tool-setup-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-sheet.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
@@ -5640,6 +5652,7 @@ async function processOrchestratorJob(job, settings) {
       } : null,
       rotaryWrapPreviewReport,
       postprocessTraceReport,
+      manufacturingSetupReport,
       toolpathSequencingReport: toolpath.sequencingReport ?? null,
       ncStaticAnalysis,
       machineControllerProfile,
@@ -7182,7 +7195,150 @@ function createAdapterDeploymentHints(engineId) {
   ];
 }
 
-function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, neutralToolpathImportValidation = null, postprocessTraceReport, ncStaticAnalysis, controllerDialectReport }) {
+const MANUFACTURING_TOOL_PROFILES = {
+  "ball-0.6": { id: "ball-0.6", name: "0.6mm 球刀 - 通用精雕", type: "ball", diameterMm: 0.6, recommendedRpm: 12000, recommendedFeed: 160, recommendedStepoverMm: 0.1, maxCutDepthMm: 0.18 },
+  "ball-0.3": { id: "ball-0.3", name: "0.3mm 球刀 - 高精细纹理", type: "ball", diameterMm: 0.3, recommendedRpm: 16000, recommendedFeed: 90, recommendedStepoverMm: 0.045, maxCutDepthMm: 0.08 },
+  "flat-1.0": { id: "flat-1.0", name: "1.0mm 平刀 - 快速开粗", type: "flat", diameterMm: 1, recommendedRpm: 10000, recommendedFeed: 220, recommendedStepoverMm: 0.28, maxCutDepthMm: 0.25 },
+  "vflat-4mm-25deg": { id: "vflat-4mm-25deg", aliases: ["vbit-flat-4mm-25deg"], name: "4mm 25° 平底尖刀 - 三轴浮雕", type: "v-bit", diameterMm: 4, angleDeg: 25, flatTipMm: 0.4, recommendedRpm: 12000, recommendedFeed: 450, recommendedStepoverMm: 0.28, maxCutDepthMm: 0.45 },
+  "taper-0.2": { id: "taper-0.2", name: "0.2mm 锥刀 - 微细线条", type: "taper", diameterMm: 0.2, angleDeg: 20, recommendedRpm: 18000, recommendedFeed: 55, recommendedStepoverMm: 0.025, maxCutDepthMm: 0.04 }
+};
+
+const MANUFACTURING_MATERIAL_PROFILES = {
+  "olive-core": { id: "olive-core", name: "橄榄核", density: "hard", spindleRpm: 13000, roughFeed: 150, finishFeed: 95, maxCutDepthMm: 0.16, minWallMm: 0.8 },
+  "peach-core": { id: "peach-core", name: "桃核", density: "medium", spindleRpm: 11500, roughFeed: 180, finishFeed: 115, maxCutDepthMm: 0.2, minWallMm: 1 },
+  "ivory-nut": { id: "ivory-nut", name: "象牙果", density: "medium", spindleRpm: 14000, roughFeed: 170, finishFeed: 120, maxCutDepthMm: 0.18, minWallMm: 0.9 },
+  "resin-test": { id: "resin-test", name: "树脂测试料", density: "soft", spindleRpm: 9000, roughFeed: 260, finishFeed: 180, maxCutDepthMm: 0.3, minWallMm: 0.6 }
+};
+
+const MANUFACTURING_MACHINE_PROFILES = {
+  "desktop-3axis-rotary-y": { id: "desktop-3axis-rotary-y", name: "三轴控制器 + Y轴旋转夹具", axes: "3axis", xMin: -80, xMax: 80, yMin: -120, yMax: 120, zMin: -20, zMax: 45, safeZ: 16, maxFeed: 900, maxRpm: 24000 },
+  "desktop-3axis-generic": { id: "desktop-3axis-generic", name: "桌面三轴雕刻机 - 通用", axes: "3axis", xMin: -80, xMax: 80, yMin: -60, yMax: 60, zMin: -20, zMax: 45, safeZ: 12, maxFeed: 1200, maxRpm: 24000 },
+  "desktop-4axis-generic": { id: "desktop-4axis-generic", name: "桌面四轴雕刻机 - 通用", axes: "4axis", xMin: -45, xMax: 45, yMin: -20, yMax: 20, zMin: 0, zMax: 35, safeZ: 22, maxFeed: 500, maxRpm: 18000 },
+  "weihong-4axis-small": { id: "weihong-4axis-small", name: "维宏小型四轴", axes: "4axis", xMin: -55, xMax: 55, yMin: -25, yMax: 25, zMin: 0, zMax: 40, safeZ: 24, maxFeed: 600, maxRpm: 24000 },
+  "syntec-4axis-small": { id: "syntec-4axis-small", name: "新代小型四轴", axes: "4axis", xMin: -60, xMax: 60, yMin: -30, yMax: 30, zMin: 0, zMax: 45, safeZ: 25, maxFeed: 700, maxRpm: 24000 }
+};
+
+function createManufacturingSetupReport({ job, settings, toolpath, machineControllerProfile }) {
+  const tool = getServerToolProfile(settings.toolProfileId);
+  const material = getServerMaterialProfile(settings.materialProfileId);
+  const machine = getServerMachineProfile(settings.machineProfileId);
+  const checks = [];
+  const toolDiameter = Number(settings.toolDiameter ?? 0);
+  const feedRate = Number(settings.feedRate ?? 0);
+  const spindleRpm = Number(settings.spindleRpm ?? 0);
+  const maxCutDepth = Number(settings.maxCutDepth ?? settings.depthMm ?? 0);
+  const stepoverMm = Number(settings.stepoverMm ?? 0);
+  const stepoverDeg = Number(settings.stepoverDeg ?? 0);
+  const safeZ = Number(settings.safeZ ?? 0);
+  const depthMm = Number(settings.depthMm ?? 0);
+  const effectiveMaxCutDepth = Math.min(tool.maxCutDepthMm, material.maxCutDepthMm);
+  const criticalMaxCutDepth = Math.min(tool.maxCutDepthMm + 1e-6, material.maxCutDepthMm * 3);
+  const feedLimit = Math.min(machine.maxFeed, tool.recommendedFeed * 1.8);
+  const hardMaterialFeedLimit = material.density === "hard" ? Math.max(material.finishFeed, material.roughFeed * 1.35) : material.roughFeed * 1.6;
+  const rpmLimit = Math.min(machine.maxRpm, tool.recommendedRpm * 1.35);
+  const finishStepoverLimit = Math.max(0.001, tool.diameterMm * 0.12);
+  const trialStepoverLimit = Math.max(0.001, tool.diameterMm * 0.25);
+
+  checks.push(createManufacturingCheck("tool-profile", "刀具预设", tool.id === "unknown" ? "critical" : "ready", "已知刀具 Profile", settings.toolProfileId ?? "missing", tool.id === "unknown" ? "未知刀具 Profile，无法建立后端安全阈值。" : `使用 ${tool.name}。`));
+  checks.push(createManufacturingCheck("tool-diameter", "刀具直径", Math.abs(toolDiameter - tool.diameterMm) <= 0.05 ? "ready" : "review", `${fmt(tool.diameterMm, 3)} mm`, `${fmt(toolDiameter, 3)} mm`, Math.abs(toolDiameter - tool.diameterMm) <= 0.05 ? "刀具直径与 Profile 匹配。" : "刀具直径与 Profile 不一致，上机前必须确认实际装刀。"));
+  checks.push(createManufacturingCheck("material-profile", "材料预设", material.id === "unknown" ? "critical" : "ready", "已知材料 Profile", settings.materialProfileId ?? "missing", material.id === "unknown" ? "未知材料 Profile，无法使用材料保守切深。" : `材料为 ${material.name}，密度 ${material.density}。`));
+  checks.push(createManufacturingCheck("machine-profile", "机床预设", machine.id === "unknown" ? "critical" : "ready", "已知机床 Profile", settings.machineProfileId ?? "missing", machine.id === "unknown" ? "未知机床 Profile，无法检查行程/进给/转速。" : `机床为 ${machine.name}。`));
+  checks.push(createManufacturingCheck("target-machine-boundary", "目标机床边界", settings.camMode === "rotaryWrap" && settings.rotaryOutputAxis === "Y" && machineControllerProfile?.controllerClass === "3axis-controller-with-rotary-fixture" ? "ready" : "critical", "三轴控制器 + Y轴旋转夹具 / wrapY", `${settings.camMode ?? "missing"} / ${settings.rotaryOutputAxis ?? "missing"} / ${machineControllerProfile?.controllerClass ?? "missing"}`, "当前项目主线要求 X=长度、Y=旋转夹具、Z=刀深。"));
+  checks.push(createManufacturingCheck("max-cut-depth", "单刀最大切深", maxCutDepth <= effectiveMaxCutDepth + 1e-6 ? "ready" : maxCutDepth <= criticalMaxCutDepth ? "review" : "critical", `建议 <= ${fmt(effectiveMaxCutDepth, 3)} mm，阻断 > ${fmt(criticalMaxCutDepth, 3)} mm（刀具 ${fmt(tool.maxCutDepthMm, 3)} / 材料 ${fmt(material.maxCutDepthMm, 3)}）`, `${fmt(maxCutDepth, 3)} mm`, maxCutDepth <= effectiveMaxCutDepth + 1e-6 ? "单刀切深未超过刀具/材料的共同保守上限。" : "单刀切深超过材料保守上限，橄榄核等硬材料应小切深多遍加工；超出阻断阈值会禁止试雕 NC。"));
+  checks.push(createManufacturingCheck("feed-rate", "进给速度", feedRate <= Math.min(feedLimit, hardMaterialFeedLimit) + 1e-6 ? "ready" : feedRate <= feedLimit ? "review" : "critical", `<= ${fmt(Math.min(feedLimit, hardMaterialFeedLimit), 1)} mm/min（机床/刀具/材料综合）`, `${fmt(feedRate, 1)} mm/min`, feedRate <= Math.min(feedLimit, hardMaterialFeedLimit) + 1e-6 ? "进给在保守范围内。" : "进给超过当前刀具/材料推荐范围，试雕前建议降速。"));
+  checks.push(createManufacturingCheck("spindle-rpm", "主轴转速", spindleRpm <= rpmLimit + 1e-6 && spindleRpm >= Math.max(3000, tool.recommendedRpm * 0.55) ? "ready" : spindleRpm <= machine.maxRpm ? "review" : "critical", `${Math.round(Math.max(3000, tool.recommendedRpm * 0.55))} - ${Math.round(rpmLimit)} rpm`, `${Math.round(spindleRpm)} rpm`, "转速按刀具推荐和机床上限综合校验。"));
+  checks.push(createManufacturingCheck("stepover-mm", "X向步距", stepoverMm <= trialStepoverLimit + 1e-6 ? stepoverMm <= finishStepoverLimit + 1e-6 ? "ready" : "review" : "critical", `精加工 <= ${fmt(finishStepoverLimit, 3)} mm，试雕上限 <= ${fmt(trialStepoverLimit, 3)} mm`, `${fmt(stepoverMm, 3)} mm`, stepoverMm <= trialStepoverLimit + 1e-6 ? "步距未超过刀径 25% 试雕上限。" : "步距过大，容易留下明显台阶并造成欠切。"));
+  checks.push(createManufacturingCheck("stepover-deg", "旋转步距", stepoverDeg > 0 && stepoverDeg <= 8 ? stepoverDeg <= 3 ? "ready" : "review" : "critical", "精加工 <= 3deg，试雕上限 <= 8deg", `${fmt(stepoverDeg, 3)} deg`, "旋转步距决定周向刀痕和包络连续性。"));
+  checks.push(createManufacturingCheck("safe-z", "安全高度", safeZ >= Math.max(machine.safeZ, 12) && safeZ <= machine.zMax ? "ready" : "critical", `${fmt(Math.max(machine.safeZ, 12), 1)} - ${fmt(machine.zMax, 1)} mm`, `${fmt(safeZ, 1)} mm`, "安全高度必须高于机床 Profile 的保守安全 Z，且不能超过 Z 行程。"));
+  checks.push(createManufacturingCheck("rotary-wrap-distance", "旋转每圈等效距离", settings.camMode === "rotaryWrap" && settings.rotaryOutputAxis !== "A" ? Number(settings.rotaryWrapPerRevolutionMm) > 0 ? "ready" : "critical" : "ready", "Y/X 代旋转时必须 > 0 mm/rev", `${fmt(Number(settings.rotaryWrapPerRevolutionMm ?? 0), 3)} mm/rev`, "该值必须由真实夹具 90/180/360 度标定复核。"));
+
+  if (toolpath?.summary) {
+    const summary = toolpath.summary;
+    checks.push(createManufacturingCheck("x-travel", "X行程", summary.xMin >= machine.xMin && summary.xMax <= machine.xMax ? "ready" : "critical", `${fmt(machine.xMin, 1)} - ${fmt(machine.xMax, 1)} mm`, `${fmt(summary.xMin, 1)} - ${fmt(summary.xMax, 1)} mm`, "长度方向不得超出机床有效行程和夹持边界。"));
+    if (settings.camMode === "rotaryWrap" && settings.rotaryOutputAxis === "Y") {
+      const yMin = (Number(summary.aMin ?? 0) / 360) * Number(settings.rotaryWrapPerRevolutionMm ?? 0);
+      const yMax = (Number(summary.aMax ?? 0) / 360) * Number(settings.rotaryWrapPerRevolutionMm ?? 0);
+      checks.push(createManufacturingCheck("rotary-y-travel", "Y旋转行程", yMin >= machine.yMin && yMax <= machine.yMax ? "ready" : "critical", `${fmt(machine.yMin, 1)} - ${fmt(machine.yMax, 1)} mm`, `${fmt(yMin, 1)} - ${fmt(yMax, 1)} mm`, "由 A 角度展开换算得到的 Y 行程必须在机床范围内。"));
+    }
+    checks.push(createManufacturingCheck("program-depth", "程序最大深度", Number(summary.maxDepth ?? 0) <= depthMm + 0.05 ? "ready" : "review", `<= ${fmt(depthMm + 0.05, 3)} mm`, `${fmt(Number(summary.maxDepth ?? 0), 3)} mm`, "刀路最大深度不应明显超过模型目标深度。"));
+  }
+
+  const criticalIssues = checks.filter((item) => item.status === "critical").map((item) => `${item.label}: ${item.summary}`);
+  const warningIssues = checks.filter((item) => item.status === "review").map((item) => `${item.label}: ${item.summary}`);
+  const level = criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "review" : "ready";
+
+  return {
+    schema: "hediao3d.manufacturing-setup-report.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    level,
+    summary: level === "ready" ? "制造参数综合校验通过。" : level === "critical" ? `制造参数存在 ${criticalIssues.length} 个阻断项。` : `制造参数有 ${warningIssues.length} 个复核项。`,
+    profiles: { tool, material, machine },
+    settings: {
+      toolProfileId: settings.toolProfileId ?? null,
+      materialProfileId: settings.materialProfileId ?? null,
+      machineProfileId: settings.machineProfileId ?? null,
+      camMode: settings.camMode ?? null,
+      postProcessor: settings.postProcessor ?? null,
+      rotaryOutputAxis: settings.rotaryOutputAxis ?? null,
+      rotaryWrapPerRevolutionMm: Number(settings.rotaryWrapPerRevolutionMm ?? 0),
+      toolDiameterMm: toolDiameter,
+      maxCutDepthMm: maxCutDepth,
+      depthMm,
+      stepoverMm,
+      stepoverDeg,
+      feedRateMmMin: feedRate,
+      spindleRpm,
+      safeZ
+    },
+    limits: {
+      effectiveMaxCutDepthMm: effectiveMaxCutDepth,
+      criticalMaxCutDepthMm: criticalMaxCutDepth,
+      feedRateMmMin: Math.min(feedLimit, hardMaterialFeedLimit),
+      spindleRpmMax: rpmLimit,
+      finishingStepoverMm: finishStepoverLimit,
+      trialStepoverMm: trialStepoverLimit
+    },
+    checks,
+    criticalIssues,
+    warningIssues,
+    productionGateImpact: {
+      blocksProduction: criticalIssues.length > 0,
+      blocksTrial: criticalIssues.length > 0,
+      evidence: "manufacturing-setup-report.json"
+    },
+    nextActions: criticalIssues.length > 0
+      ? [
+          "先调整制造参数并重新生成刀路，不要下载 toolpath.nc 上机。",
+          "橄榄核材料建议 maxCutDepth 不超过 0.16mm，并先做离料空跑和软料试雕。",
+          "确认机床为 desktop-3axis-rotary-y，后处理为 wrapY，旋转夹具接在 Y 轴。"
+        ]
+      : warningIssues.length > 0
+        ? ["上机前按复核项确认实际装刀、材料、步距、进给和旋转标定。"]
+        : ["继续执行 CAM/仿真/空跑/试雕证据闭环。"]
+  };
+}
+
+function createManufacturingCheck(id, label, status, expected, actual, summary) {
+  return { id, label, status, expected, actual, summary };
+}
+
+function getServerToolProfile(id) {
+  const direct = MANUFACTURING_TOOL_PROFILES[id];
+  if (direct) return direct;
+  const alias = Object.values(MANUFACTURING_TOOL_PROFILES).find((profile) => profile.aliases?.includes(id));
+  return alias ?? { id: "unknown", name: "未知刀具", type: "unknown", diameterMm: Number.NaN, recommendedRpm: 0, recommendedFeed: 0, recommendedStepoverMm: 0, maxCutDepthMm: 0 };
+}
+
+function getServerMaterialProfile(id) {
+  return MANUFACTURING_MATERIAL_PROFILES[id] ?? { id: "unknown", name: "未知材料", density: "unknown", spindleRpm: 0, roughFeed: 0, finishFeed: 0, maxCutDepthMm: 0, minWallMm: 0 };
+}
+
+function getServerMachineProfile(id) {
+  return MANUFACTURING_MACHINE_PROFILES[id] ?? { id: "unknown", name: "未知机床", axes: "unknown", xMin: 0, xMax: 0, yMin: 0, yMax: 0, zMin: 0, zMax: 0, safeZ: 0, maxFeed: 0, maxRpm: 0 };
+}
+
+function createProductionGate({ toolpath, settings, selectedEngine, resultEngine, meshQuality, repairPlan, repairExecution, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, camoticsInput, camHandoffQuality, neutralToolpathImportValidation = null, postprocessTraceReport, ncStaticAnalysis, manufacturingSetupReport, controllerDialectReport }) {
   const blockers = [];
   const warnings = [];
   const requiredActions = [];
@@ -7255,6 +7411,17 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
   } else if (postprocessTraceReport?.level === "review") {
     warnings.push(`后处理追溯需要复核：${postprocessTraceReport.warningIssues[0] ?? "请查看 postprocess-trace-report.json"}`);
     requiredActions.push("查看 postprocess-trace-report.json，确认机床 NC 与源刀路点的一致性。");
+  }
+
+  if (manufacturingSetupReport?.level === "critical") {
+    blockers.push(`制造参数存在阻断项：${manufacturingSetupReport.criticalIssues[0] ?? "请查看 manufacturing-setup-report.json"}`);
+    requiredActions.push("按 manufacturing-setup-report.json 调整刀具、材料、机床、进给、转速、切深或步距后重新生成。");
+  } else if (manufacturingSetupReport?.level === "review") {
+    warnings.push(`制造参数需要复核：${manufacturingSetupReport.warningIssues[0] ?? "请查看 manufacturing-setup-report.json"}`);
+    requiredActions.push("查看 manufacturing-setup-report.json，确认 4mm 25度平底尖刀、橄榄核材料和三轴Y旋转夹具参数均匹配。");
+  } else if (!manufacturingSetupReport) {
+    warnings.push("尚未生成制造参数综合校验报告。");
+    requiredActions.push("重新生成 V3 job，确保 manufacturing-setup-report.json 进入加工包。");
   }
 
   if (simulationSummary.riskLevel !== "ready") {
@@ -7331,6 +7498,9 @@ function createProductionGate({ toolpath, settings, selectedEngine, resultEngine
       simulationRiskLevel: simulationSummary.riskLevel,
       postprocessTraceLevel: postprocessTraceReport?.level ?? "missing",
       postprocessTraceFitRate: postprocessTraceReport?.metrics?.fitRate ?? null,
+      manufacturingSetupLevel: manufacturingSetupReport?.level ?? "missing",
+      manufacturingSetupCriticalCount: manufacturingSetupReport?.criticalIssues?.length ?? null,
+      manufacturingSetupWarningCount: manufacturingSetupReport?.warningIssues?.length ?? null,
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       camHandoffQualityLevel: camHandoffQuality?.level ?? "unknown",
       camHandoffSource: camHandoffQuality?.source ?? "unknown",
@@ -8319,7 +8489,7 @@ function createExternalGcodeBindingGateStatus(externalGcodeImportValidation, cam
   };
 }
 
-function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, controllerDialectReport, toolSetupSheet, rotaryCalibrationSheet }) {
+function createProductionUnlockMatrix({ job, productionGate, meshQuality, repairPlan, camInputPlan, engineReadiness, nativeCamReadiness, simulationSummary, ncStaticAnalysis, camHandoffQuality, postprocessTraceReport, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, controllerDialectReport, manufacturingSetupReport, toolSetupSheet, rotaryCalibrationSheet }) {
   const simulationEvidence = productionGate.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const neutralBinding = createNeutralToolpathBindingGateStatus(neutralToolpathImportValidation, camHandoffQuality);
   const externalGcodeBinding = createExternalGcodeBindingGateStatus(externalGcodeImportValidation, camHandoffQuality);
@@ -8422,6 +8592,14 @@ function createProductionUnlockMatrix({ job, productionGate, meshQuality, repair
       requiredForProduction: true
     },
     {
+      id: "manufacturing-setup",
+      label: "制造参数综合校验",
+      status: manufacturingSetupReport?.level === "ready" ? "pass" : manufacturingSetupReport?.level === "critical" ? "block" : "review",
+      evidence: "manufacturing-setup-report.json",
+      summary: manufacturingSetupReport?.summary ?? "未生成制造参数综合校验报告。",
+      requiredForProduction: true
+    },
+    {
       id: "tool-setup",
       label: "刀具装夹参数",
       status: toolSetupSheet?.warnings?.length ? "review" : "pass",
@@ -8472,6 +8650,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   const ncStaticAnalysis = readJsonFile(join(job.workDir, "nc-static-analysis.json"));
   const postprocessTraceReport = readJsonFile(join(job.workDir, "postprocess-trace-report.json"));
   const controllerDialectReport = readJsonFile(join(job.workDir, "controller-dialect-report.json"));
+  const manufacturingSetupReport = readJsonFile(join(job.workDir, "manufacturing-setup-report.json"));
   const machineAcceptanceChecklist = readJsonFile(join(job.workDir, "machine-acceptance-checklist.json"));
   if (!productionGate) return null;
   return createProductionEvidenceDossier({
@@ -8485,6 +8664,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
     ncStaticAnalysis,
     postprocessTraceReport,
     controllerDialectReport,
+    manufacturingSetupReport,
     machineAcceptanceChecklist,
     machineAcceptanceLog: overrides.machineAcceptanceLog ?? readJsonFile(join(job.workDir, "machine-acceptance-log.json")),
     trialFeedbackLog: overrides.trialFeedbackLog ?? readJsonFile(join(job.workDir, "trial-feedback-log.json")),
@@ -8492,7 +8672,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   });
 }
 
-function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, manufacturingSetupReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(simulationEvidence);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
@@ -8613,6 +8793,13 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       status: controllerDialectReport?.level === "ready" ? "pass" : controllerDialectReport?.level === "critical" ? "block" : "review",
       evidence: ["controller-dialect-report.json", "machine-controller-profile.json"],
       summary: controllerDialectReport?.summary ?? "未生成控制器方言报告。"
+    },
+    {
+      id: "manufacturing-setup",
+      label: "制造参数综合校验",
+      status: manufacturingSetupReport?.level === "ready" ? "pass" : manufacturingSetupReport?.level === "critical" ? "block" : "review",
+      evidence: ["manufacturing-setup-report.json", "tool-setup-sheet.json", "machine-controller-profile.json"],
+      summary: manufacturingSetupReport?.summary ?? "未生成制造参数综合校验报告。"
     },
     {
       id: "air-run-evidence",
@@ -10519,7 +10706,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, postprocessTraceReport, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, postprocessTraceReport, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, manufacturingSetupReport, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
@@ -10560,6 +10747,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-handoff-evidence.md"),
         getFile("rotary-wrap-preview-report.json"),
         getFile("postprocess-trace-report.json"),
+        getFile("manufacturing-setup-report.json"),
         getFile("toolpath-sequencing-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
@@ -10587,7 +10775,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "manufacturing-setup-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -10630,6 +10818,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       "阅读 production-unlock-matrix.json，明确生产 NC 仍差哪些条件。",
       "阅读 rotary-wrap-preview-report.json，确认旋转包裹展开预览、Y/A 后处理和 CAMotics 预览坐标关系。",
       "阅读 postprocess-trace-report.json，确认 toolpath.nc 的 X/Y/A/Z 输出与源刀路点逐点一致。",
+      "阅读 manufacturing-setup-report.json，确认刀具、材料、机床、进给、转速、切深和步距没有阻断项。",
       "若使用 FreeCAD/BlenderCAM 外部 G-code，阅读 external-gcode-import-validation.json，确认源 G-code、toolpath.nc 和 CAM proof 已绑定。",
       "先阅读 operator-runbook.md，按操作员说明书执行空跑和试雕。",
       "阅读 safe-trial-execution-plan.json，按四步安全试雕计划执行并保留现场证据。",
@@ -10660,6 +10849,14 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       level: ncStaticAnalysis?.level ?? "unknown",
       summary: ncStaticAnalysis?.summary ?? null
     },
+    manufacturingSetup: manufacturingSetupReport ? {
+      level: manufacturingSetupReport.level,
+      summary: manufacturingSetupReport.summary,
+      criticalCount: manufacturingSetupReport.criticalIssues?.length ?? 0,
+      warningCount: manufacturingSetupReport.warningIssues?.length ?? 0,
+      effectiveMaxCutDepthMm: manufacturingSetupReport.limits?.effectiveMaxCutDepthMm ?? null,
+      feedRateLimitMmMin: manufacturingSetupReport.limits?.feedRateMmMin ?? null
+    } : null,
     camHandoffQuality: camHandoffQuality ? {
       level: camHandoffQuality.level,
       source: camHandoffQuality.source,
@@ -10893,6 +11090,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-handoff-evidence.md", "CAM Handoff证据说明", "report", true, "用可读文本说明刀路来源、输入哈希、fixture/synthetic 风险、覆盖率和生产边界。"),
     createDeliveryFile(job.id, "rotary-wrap-preview-report.json", "旋转包裹预览一致性报告", "report", true, "检查中立刀路、Y/A旋转后处理、CAMotics展开预览和每圈等效距离是否一致。"),
     createDeliveryFile(job.id, "postprocess-trace-report.json", "后处理点位追溯报告", "report", true, "逐点核对源刀路与 toolpath.nc 的 X/Y/A/Z 输出，防止轴映射、拉伸和点位错位。"),
+    createDeliveryFile(job.id, "manufacturing-setup-report.json", "制造参数综合校验报告", "report", true, "后端统一校验刀具、材料、机床、进给、转速、切深、步距和三轴Y旋转夹具边界。"),
     createDeliveryFile(job.id, "toolpath-sequencing-report.json", "刀路连续排序报告", "report", existsSync(join(job.workDir, "toolpath-sequencing-report.json")), "记录 neutral 点进入 wrapY/wrapA 后处理前是否按旋转角分行、X 向往复排序，以及排序前后跳跃和行走距离变化。"),
     createDeliveryFile(job.id, "simulation-summary.json", "仿真摘要", "report", true, "当前记录内置预览或 CAMotics 仿真结果。"),
     createDeliveryFile(job.id, "camotics-input.json", "CAMotics 输入计划", "report", true, "准备 CAMotics/机床仿真复核所需的刀路、毛坯和刀具参数。"),
@@ -13283,6 +13481,13 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
 
   const simulationSummary = createSimulationSummary(toolpath, settings, selectedEngine);
   await writeFile(join(workDir, "simulation-summary.json"), JSON.stringify(simulationSummary, null, 2), "utf8");
+  const manufacturingSetupReport = createManufacturingSetupReport({
+    job,
+    settings,
+    toolpath,
+    machineControllerProfile
+  });
+  await writeFile(join(workDir, "manufacturing-setup-report.json"), JSON.stringify(manufacturingSetupReport, null, 2), "utf8");
   const meshQuality = readJsonFile(join(workDir, "mesh-quality.json")) ?? { verdict: "review", score: 0 };
   const repairPlan = readJsonFile(join(workDir, "repair-plan.json")) ?? { status: "review-required" };
   const repairExecution = readJsonFile(join(workDir, "repair-execution.json")) ?? null;
@@ -13307,6 +13512,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     postprocessTraceReport,
     ncStaticAnalysis,
     machineControllerProfile,
+    manufacturingSetupReport,
     controllerDialectReport
   });
   await writeFile(join(workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
@@ -13353,6 +13559,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     neutralToolpathImportValidation: readJsonFile(join(workDir, "neutral-toolpath-import-validation.json")),
     externalGcodeImportValidation: readJsonFile(join(workDir, "external-gcode-import-validation.json")),
     controllerDialectReport,
+    manufacturingSetupReport,
     toolSetupSheet,
     rotaryCalibrationSheet
   });
@@ -13382,6 +13589,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
     openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
     machineControllerProfile,
+    manufacturingSetupReport,
     machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
     controllerDialectReport,
     deliveryManifest
@@ -13414,6 +13622,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       camoticsCliExecutionPlan,
       rotaryWrapPreviewReport,
       postprocessTraceReport,
+      manufacturingSetupReport,
       toolpathSequencingReport: toolpath.sequencingReport ?? null,
       ncStaticAnalysis,
       controllerDialectReport,

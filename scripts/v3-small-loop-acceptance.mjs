@@ -27,6 +27,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-obj-model-import-api-test.mjs")]
   },
   {
+    id: "manufacturing-setup",
+    label: "Manufacturing setup report and gate",
+    command: [process.execPath, join("scripts", "v3-manufacturing-setup-report-test.mjs")]
+  },
+  {
     id: "postprocess-regression",
     label: "3-axis rotary-Y postprocess regression",
     command: [process.execPath, join("scripts", "v3-postprocess-regression-test.mjs")]
