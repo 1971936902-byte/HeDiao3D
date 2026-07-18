@@ -37,6 +37,7 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "target-rotary-output-axis" && check.status === "pass"), "self-check should verify Y rotary output axis");
   assert(readyReport.checks?.some((check) => check.id === "camotics-validator-bundle" && check.status === "pass"), "self-check should verify CAMotics result bundle support");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-schema" && check.status === "pass"), "self-check should verify closed-loop check support");
+  assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-evidence-chain" && check.status === "pass"), "self-check should verify closed-loop evidence-chain support");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-schema" && check.status === "pass"), "self-check should verify diagnostics bundle schema");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-schema" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike schema");
@@ -51,6 +52,21 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "real-output-real-candidate" && check.status === "pass"), "self-check should verify real-output bundle carries OpenCAMLib real candidate evidence");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
+
+  const closedLoopPath = join(workDir, "native-cam-closed-loop-check.mjs");
+  assert(existsSync(closedLoopPath), "generated server package missing closed-loop check script");
+  const closedLoop = spawnSync(node, [closedLoopPath, workDir, "--self-check-only"], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(closedLoop.status === 0, `closed-loop self-check-only should pass generated package: ${closedLoop.stderr || closedLoop.stdout}`);
+  const closedLoopReport = JSON.parse(closedLoop.stdout);
+  assert(closedLoopReport.schema === "hediao3d.native-cam-closed-loop-check.v1", "closed-loop report schema mismatch");
+  assert(closedLoopReport.productionLocked === true, "closed-loop report must keep production locked");
+  assert(closedLoopReport.evidenceChain?.schema === "hediao3d.native-cam-linux-evidence-chain.v1", "closed-loop report should include evidence chain schema");
+  assert(closedLoopReport.evidenceChain?.crossChecks?.camoticsUpstreamEvidenceMatched === true, "closed-loop self-check-only should treat absent CAMotics upstream evidence as not required");
+  assert(existsSync(join(workDir, "native-cam-closed-loop-check.json")), "closed-loop check should write JSON report");
 
   const realCandidatePath = join(workDir, "opencamlib-real-candidate-run.mjs");
   assert(existsSync(realCandidatePath), "generated server package missing OpenCAMLib real candidate runner");

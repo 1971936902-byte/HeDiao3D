@@ -118,6 +118,8 @@ async function main() {
   assert(selfCheck.includes("native-cam-closed-loop-check.mjs"), "package self-check should validate closed-loop check support");
   const closedLoopCheck = await fetchText(latest.latest.apiArtifacts.closedLoopCheck);
   assert(closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop check should emit schema");
+  assert(closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1"), "closed-loop check should emit evidence chain schema");
+  assert(closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop check should summarize CAMotics upstream evidence binding");
   assert(closedLoopCheck.includes("productionLocked: true"), "closed-loop check should preserve production lock");
   const packageManifest = await getJson(latest.latest.apiArtifacts.packageManifest);
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");

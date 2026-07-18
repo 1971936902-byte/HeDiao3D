@@ -786,6 +786,7 @@ check("real-output-runner-readiness", realOutputCheck.includes("opencamlib-runne
 check("real-output-real-candidate", realOutputCheck.includes("opencamlib-real-candidate-run.json") && realOutputCheck.includes("openCamLibRealCandidate"), "real output checker must carry OpenCAMLib one-command real candidate evidence into the upload bundle.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
+check("closed-loop-check-evidence-chain", closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1") && closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop checker must summarize Native CAM/OpenCAMLib/CAMotics evidence chain and upstream binding.");
 check("diagnostics-bundle-schema", diagnosticsBundle.includes("hediao3d.native-cam-diagnostics-bundle.v1"), "diagnostics bundle must emit the diagnostics schema.");
 check("diagnostics-bundle-zip", diagnosticsBundle.includes("native-cam-diagnostics-bundle.zip"), "diagnostics bundle must generate native-cam-diagnostics-bundle.zip.");
 
@@ -826,6 +827,7 @@ function readTextIfExists(path) {
 
 function createNativeCamClosedLoopCheckScript() {
   return `#!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -869,13 +871,15 @@ if (!selfCheckOnly) {
 }
 
 const blocking = steps.filter((step) => step.required && step.status !== "pass");
+const evidenceChain = createEvidenceChain(root, steps);
+const evidenceBlocking = evidenceChain.blocking.filter((item) => item.required);
 const report = {
   schema: "hediao3d.native-cam-closed-loop-check.v1",
   createdAt: new Date().toISOString(),
   root,
   selfCheckOnly,
-  ok: blocking.length === 0,
-  level: blocking.length ? "blocked" : "ready-for-readiness-import",
+  ok: blocking.length === 0 && evidenceBlocking.length === 0,
+  level: blocking.length || evidenceBlocking.length ? "blocked" : "ready-for-readiness-import",
   productionLocked: true,
   productionBoundary: "This script only validates Linux-side evidence files. It does not unlock production NC; HeDiao3D readiness, CAMotics import, air-run, trial feedback and machine acceptance must still pass.",
   expectedUploadBundles: [
@@ -883,8 +887,12 @@ const report = {
     "camotics-result-bundle.zip",
     "v3-acceptance-runbook-result-bundle.zip"
   ],
+  evidenceChain,
   steps,
-  blocking: blocking.map((step) => ({ id: step.id, status: step.status, summary: step.summary }))
+  blocking: [
+    ...blocking.map((step) => ({ id: step.id, status: step.status, summary: step.summary })),
+    ...evidenceBlocking.map((item) => ({ id: item.id, status: item.status, summary: item.summary }))
+  ]
 };
 
 writeFileSync(join(root, "native-cam-closed-loop-check.json"), JSON.stringify(report, null, 2), "utf8");
@@ -921,6 +929,104 @@ function recordMissing(id, required, filename) {
     status: "missing-input",
     summary: "Missing required input: " + filename
   });
+}
+
+function createEvidenceChain(root, steps) {
+  const nativeAcceptance = readJsonIfExists(join(root, "native-cam-real-output-acceptance.json"));
+  const realCandidate = readJsonIfExists(join(root, "opencamlib-real-candidate-run.json"));
+  const contactValidation = readJsonIfExists(join(root, "opencamlib-contact-output-validation.json"));
+  const camoticsResult = readJsonIfExists(join(root, "camotics-result.json"));
+  const camoticsLocalValidation = readJsonIfExists(join(root, "camotics-result-local-validation.json"));
+  const camoticsRunPackage = readJsonIfExists(join(root, "camotics-cli-run-package.json"));
+  const nativeBundle = inspectFile(join(root, "native-cam-real-output-bundle.zip"));
+  const camoticsBundle = inspectFile(join(root, "camotics-result-bundle.zip"));
+  const nativeStep = steps.find((step) => step.id === "native-cam-real-output-check") ?? null;
+  const camoticsStep = steps.find((step) => step.id === "camotics-material-removal-validate") ?? null;
+  const upstreamRequired = camoticsRunPackage?.upstreamCamEvidence?.required === true;
+  const upstreamStatus = camoticsLocalValidation?.upstreamCamEvidence?.status
+    ?? camoticsResult?.evidenceQuality?.upstreamCamEvidence?.status
+    ?? (upstreamRequired ? "missing" : "not-required");
+  const nativeReady = nativeAcceptance?.level === "ready";
+  const contactReady = nativeAcceptance?.contactValidation?.level === "ready"
+    || nativeAcceptance?.contactValidationStatus?.status === "ready"
+    || contactValidation?.level === "ready";
+  const realCandidateKnown = Boolean(realCandidate);
+  const realCandidateReady = realCandidate?.level === "ready" || realCandidate?.candidateReadyForImport === true || realCandidate?.ok === true;
+  const camoticsReady = camoticsLocalValidation?.ok === true
+    && camoticsLocalValidation?.productionEvidenceEligible === true
+    && (!upstreamRequired || upstreamStatus === "matched");
+  const blocking = [];
+  if (!selfCheckOnly && nativeStep?.required && nativeStep.status === "pass" && !nativeReady) {
+    blocking.push({ id: "native-cam-real-output-ready", required: true, status: nativeAcceptance?.level ?? "missing", summary: "native-cam-real-output-acceptance.json is not ready." });
+  }
+  if (!selfCheckOnly && nativeStep?.required && nativeStep.status === "pass" && !contactReady) {
+    blocking.push({ id: "opencamlib-contact-validation-ready", required: true, status: "missing-or-not-ready", summary: "OpenCAMLib strict contact validation is not ready or not bound." });
+  }
+  if (!selfCheckOnly && camoticsStep?.required && camoticsStep.status === "pass" && !camoticsReady) {
+    blocking.push({ id: "camotics-material-removal-ready", required: true, status: camoticsLocalValidation?.level ?? "missing", summary: "CAMotics local validation is not productionEvidenceEligible or upstream evidence is not matched." });
+  }
+  return {
+    schema: "hediao3d.native-cam-linux-evidence-chain.v1",
+    createdAt: new Date().toISOString(),
+    status: blocking.length ? "blocked" : "ready-or-awaiting-inputs",
+    nativeCam: {
+      realOutputAcceptance: summarizeJson("native-cam-real-output-acceptance.json", nativeAcceptance),
+      level: nativeAcceptance?.level ?? "missing",
+      productionCandidateCount: Number(nativeAcceptance?.productionCandidateCount ?? 0),
+      sourceReportBindingStatus: nativeAcceptance?.sourceReportBinding?.status ?? nativeAcceptance?.sourceReportBindingStatus ?? "missing",
+      targetMachineBoundaryStatus: nativeAcceptance?.targetMachineBoundaryStatus?.status ?? nativeAcceptance?.targetMachineBoundary?.status ?? "missing",
+      contactValidationStatus: contactReady ? "ready" : "missing-or-not-ready",
+      bundle: nativeBundle
+    },
+    openCamLib: {
+      realCandidate: summarizeJson("opencamlib-real-candidate-run.json", realCandidate),
+      realCandidateReady,
+      realCandidateKnown,
+      productionLocked: realCandidate?.productionLocked !== false,
+      firstBlocking: realCandidate?.firstBlocking ?? (Array.isArray(realCandidate?.blocking) ? realCandidate.blocking[0] : null),
+      contactValidation: summarizeJson("opencamlib-contact-output-validation.json", contactValidation)
+    },
+    camotics: {
+      localValidation: summarizeJson("camotics-result-local-validation.json", camoticsLocalValidation),
+      result: summarizeJson("camotics-result.json", camoticsResult),
+      runPackage: summarizeJson("camotics-cli-run-package.json", camoticsRunPackage),
+      bundle: camoticsBundle,
+      productionEvidenceEligible: Boolean(camoticsLocalValidation?.productionEvidenceEligible),
+      upstreamEvidenceRequired: upstreamRequired,
+      upstreamEvidenceStatus: upstreamStatus,
+      simulator: camoticsLocalValidation?.simulator ?? camoticsResult?.simulator ?? null
+    },
+    crossChecks: {
+      nativeRealOutputStep: nativeStep?.status ?? "missing",
+      camoticsValidationStep: camoticsStep?.status ?? "missing",
+      camoticsUpstreamEvidenceMatched: !upstreamRequired || upstreamStatus === "matched",
+      materialRemovalBoundToUpstreamCam: camoticsReady
+    },
+    blocking
+  };
+}
+
+function summarizeJson(filename, value) {
+  return {
+    filename,
+    exists: Boolean(value),
+    schema: value?.schema ?? null,
+    level: value?.level ?? null,
+    status: value?.status ?? null,
+    ok: typeof value?.ok === "boolean" ? value.ok : null,
+    sha256: inspectFile(join(root, filename)).sha256
+  };
+}
+
+function inspectFile(path) {
+  if (!existsSync(path)) return { path, exists: false, sizeBytes: null, sha256: null };
+  const bytes = readFileSync(path);
+  return {
+    path,
+    exists: true,
+    sizeBytes: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex")
+  };
 }
 
 function readJsonIfExists(path) {
