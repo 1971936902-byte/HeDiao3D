@@ -2080,6 +2080,19 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       firstError: report.contactValidation.firstError ?? contactValidationErrors?.[0] ?? null,
       sha256: report.contactValidation.sha256 ?? null
     } : null,
+    runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(report.runnerReadiness),
+    runnerReadiness: report.runnerReadiness && typeof report.runnerReadiness === "object" ? {
+      schema: report.runnerReadiness.schema ?? "hediao3d.opencamlib-runner-readiness-summary.v1",
+      status: report.runnerReadiness.status ?? "missing",
+      ready: Boolean(report.runnerReadiness.ready),
+      level: report.runnerReadiness.level ?? null,
+      selectedModule: report.runnerReadiness.selectedModule ?? null,
+      dropCutterReady: report.runnerReadiness.dropCutterReady ?? null,
+      contactSpikeStatus: report.runnerReadiness.contactSpikeStatus ?? null,
+      blockerCount: Number(report.runnerReadiness.blockerCount ?? 0),
+      firstBlocker: report.runnerReadiness.firstBlocker ?? null,
+      sha256: report.runnerReadiness.sha256 ?? null
+    } : null,
     targetMachineBoundaryStatus,
     targetMachineBoundary: report.targetMachineBoundary ? {
       schema: report.targetMachineBoundary.schema ?? "hediao3d.target-machine-boundary.v1",
@@ -2103,6 +2116,35 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       previewScaffold: Boolean(adapter.previewScaffold),
       generatedByExternalCommand: Boolean(adapter.generatedByExternalCommand)
     }))
+  };
+}
+
+function createOpenCamLibRunnerReadinessStatus(runnerReadiness) {
+  const readiness = runnerReadiness && typeof runnerReadiness === "object" ? runnerReadiness : null;
+  if (!readiness) {
+    return {
+      schema: "hediao3d.opencamlib-runner-readiness-status.v1",
+      status: "missing",
+      ready: false,
+      required: false,
+      summary: "Native CAM 回填包未随附 opencamlib-runner-readiness.json。"
+    };
+  }
+  const ready = readiness.ready === true || readiness.status === "ready";
+  const blockerCount = Number(readiness.blockerCount ?? (Array.isArray(readiness.blockers) ? readiness.blockers.length : 0));
+  return {
+    schema: "hediao3d.opencamlib-runner-readiness-status.v1",
+    status: ready ? "ready" : readiness.status === "blocked" ? "blocked" : "review",
+    ready,
+    required: false,
+    level: readiness.level ?? null,
+    selectedModule: readiness.selectedModule ?? null,
+    dropCutterReady: readiness.dropCutterReady ?? null,
+    contactSpikeStatus: readiness.contactSpikeStatus ?? null,
+    blockerCount,
+    summary: ready
+      ? `OpenCAMLib runner readiness ready：module=${readiness.selectedModule ?? "unknown"}。`
+      : `OpenCAMLib runner readiness 未就绪：status=${readiness.status ?? "missing"}，blockers=${blockerCount}。`
   };
 }
 
@@ -2153,6 +2195,31 @@ function createNativeCamContactValidationStatus(report) {
     summary: ready
       ? `OpenCAMLib strict contact 验证 ready：${checkCount} checks。`
       : `OpenCAMLib strict contact 验证未达到生产候选门槛：level=${contact.level ?? "missing"}，failed=${failedCheckCount}，errors=${errorCount}。`
+  };
+}
+
+function createOpenCamLibRunnerReadinessSummary(report, rawBytes = null) {
+  const blockers = Array.isArray(report?.blockers) ? report.blockers : [];
+  const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
+  const probe = report?.probe && typeof report.probe === "object" ? report.probe : null;
+  const contactSpike = report?.contactSpike && typeof report.contactSpike === "object" ? report.contactSpike : null;
+  const selectedModule = report?.selectedModule ?? probe?.selectedModule ?? null;
+  const dropCutterReady = report?.dropCutterReady ?? probe?.dropCutterReady ?? null;
+  return {
+    schema: "hediao3d.opencamlib-runner-readiness-summary.v1",
+    sourceSchema: report?.schema ?? null,
+    createdAt: report?.createdAt ?? null,
+    status: report?.status ?? (blockers.length ? "blocked" : "review"),
+    ready: report?.status === "ready" || report?.ready === true,
+    level: report?.level ?? null,
+    selectedModule,
+    dropCutterReady,
+    contactSpikeStatus: contactSpike?.status ?? report?.contactSpikeStatus ?? null,
+    blockerCount: blockers.length,
+    warningCount: warnings.length,
+    firstBlocker: blockers[0] ?? null,
+    firstWarning: warnings[0] ?? null,
+    sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
   };
 }
 
@@ -3690,6 +3757,9 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     ...acceptance,
     ...(zipBundle?.contactValidationReport && !acceptance.contactValidation
       ? { contactValidation: createNativeCamContactValidationSummary(zipBundle.contactValidationReport, zipBundle.contactValidationReportBytes) }
+      : {}),
+    ...(zipBundle?.runnerReadinessReport && !acceptance.runnerReadiness
+      ? { runnerReadiness: createOpenCamLibRunnerReadinessSummary(zipBundle.runnerReadinessReport, zipBundle.runnerReadinessReportBytes) }
       : {})
   };
   const bindingInput = {
@@ -3727,6 +3797,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     level: importLevel.level,
     targetMachineBoundaryStatus,
     contactValidationStatus,
+    runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(acceptanceWithContactValidation.runnerReadiness),
     warnings: [
       ...(Array.isArray(acceptanceWithContactValidation.warnings) ? acceptanceWithContactValidation.warnings : []),
       ...(targetMachineBoundaryStatus.status === "matched" ? [] : [targetMachineBoundaryStatus.summary])
@@ -3757,6 +3828,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     sourceReportBinding,
     targetMachineBoundaryStatus,
     contactValidationStatus,
+    runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(imported.runnerReadiness),
     productionCandidateCount: Number(imported.productionCandidateCount ?? 0),
     unsafeCount: Number(imported.unsafeCount ?? 0),
     missingCount: Number(imported.missingCount ?? 0)
@@ -3781,6 +3853,7 @@ function extractNativeCamRealOutputAcceptanceZipBundle(value) {
   if (!acceptanceEntry) throw new Error("ZIP 中找不到 native-cam-real-output-acceptance.json。");
   const validationEntry = findEntry((name) => /(^|\/)v3-external-adapter-validation\.json$/.test(name));
   const contactValidationEntry = findEntry((name) => /(^|\/)opencamlib-contact-output-validation\.json$/.test(name));
+  const runnerReadinessEntry = findEntry((name) => /(^|\/)opencamlib-runner-readiness\.json$/.test(name));
   return {
     sourceBuffer: buffer,
     sourceName: "native-cam-real-output-bundle.zip",
@@ -3788,6 +3861,8 @@ function extractNativeCamRealOutputAcceptanceZipBundle(value) {
     validationReport: validationEntry ? parseJsonBuffer(validationEntry.content, "v3-external-adapter-validation.json") : null,
     contactValidationReport: contactValidationEntry ? parseJsonBuffer(contactValidationEntry.content, "opencamlib-contact-output-validation.json") : null,
     contactValidationReportBytes: contactValidationEntry?.content ?? null,
+    runnerReadinessReport: runnerReadinessEntry ? parseJsonBuffer(runnerReadinessEntry.content, "opencamlib-runner-readiness.json") : null,
+    runnerReadinessReportBytes: runnerReadinessEntry?.content ?? null,
     entries: entries.map((entry) => ({
       name: entry.name,
       sizeBytes: entry.content.length
@@ -3914,6 +3989,14 @@ function validateNativeCamRealOutputAcceptance(acceptance) {
     }
     if (acceptance.contactValidation.schema && acceptance.contactValidation.schema !== "hediao3d.opencamlib-contact-output-validation.v1") {
       return { ok: false, error: "contactValidation.schema 必须是 hediao3d.opencamlib-contact-output-validation.v1。" };
+    }
+  }
+  if (acceptance.runnerReadiness !== undefined) {
+    if (!acceptance.runnerReadiness || typeof acceptance.runnerReadiness !== "object") {
+      return { ok: false, error: "runnerReadiness 必须是 JSON object。" };
+    }
+    if (acceptance.runnerReadiness.schema && acceptance.runnerReadiness.schema !== "hediao3d.opencamlib-runner-readiness-summary.v1") {
+      return { ok: false, error: "runnerReadiness.schema 必须是 hediao3d.opencamlib-runner-readiness-summary.v1。" };
     }
   }
   return { ok: true };
