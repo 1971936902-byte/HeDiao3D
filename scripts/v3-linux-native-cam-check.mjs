@@ -537,6 +537,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "在 Linux 侧尝试最小真实 OpenCAMLib/ocl drop-cutter 调用；成功只证明 API 可调用，不解锁生产 NC。"
       },
       {
+        filename: "opencamlib-runner.py",
+        role: "opencamlib-runner-readiness-handoff",
+        description: "真实 OpenCAMLib neutral-toolpath runner 入口；未满足真实 contact 条件时 fail-closed 并写出 opencamlib-runner-readiness.json。"
+      },
+      {
         filename: "opencamlib-candidate-package-validate.mjs",
         role: "opencamlib-candidate-package-validator",
         description: "预检真实 OpenCAMLib 候选输出目录，生成 contact 验证结果和轻量候选证据 ZIP。"
@@ -569,6 +574,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
       "python3 opencamlib-probe.py --out opencamlib-runtime-probe.json",
       "python3 opencamlib-contact-spike.py --out opencamlib-real-contact-spike.json --neutral-out neutral-toolpath-spike.json",
+      "python3 opencamlib-runner.py job.json opencamlib-kernel-plan.json neutral-toolpath.json",
       "node opencamlib-candidate-package-validate.mjs --root .",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
       "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
@@ -588,6 +594,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-probe.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_probe.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-spike.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_contact_spike.py")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "opencamlib-runner.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_runner.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
@@ -703,6 +710,7 @@ const requiredFiles = [
   "native-cam-diagnostics-bundle.mjs",
   "opencamlib-probe.py",
   "opencamlib-contact-spike.py",
+  "opencamlib-runner.py",
   "opencamlib-contact-output-validate.mjs",
   "opencamlib-candidate-package-validate.mjs",
   "camotics-material-removal-validate.mjs",
@@ -725,6 +733,7 @@ check("command:closed-loop-check", commands.includes("native-cam-closed-loop-che
 check("command:diagnostics-bundle", commands.includes("native-cam-diagnostics-bundle.mjs"), "manifest.commands must include the diagnostics bundle command.");
 check("command:opencamlib-probe", commands.includes("opencamlib-probe.py"), "manifest.commands must include OpenCAMLib runtime probe.");
 check("command:opencamlib-contact-spike", commands.includes("opencamlib-contact-spike.py"), "manifest.commands must include OpenCAMLib real contact spike.");
+check("command:opencamlib-runner", commands.includes("opencamlib-runner.py"), "manifest.commands must include OpenCAMLib runner readiness handoff.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
@@ -740,6 +749,7 @@ const openCamValidator = readTextIfExists(join(root, "opencamlib-contact-output-
 const openCamCandidateValidator = readTextIfExists(join(root, "opencamlib-candidate-package-validate.mjs"));
 const openCamProbe = readTextIfExists(join(root, "opencamlib-probe.py"));
 const openCamContactSpike = readTextIfExists(join(root, "opencamlib-contact-spike.py"));
+const openCamRunner = readTextIfExists(join(root, "opencamlib-runner.py"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
@@ -748,6 +758,8 @@ check("opencamlib-probe-schema", openCamProbe.includes("hediao3d.opencamlib-runt
 check("opencamlib-probe-boundary", openCamProbe.includes("must not be used as cutter-contact output"), "OpenCAMLib probe must keep the production boundary explicit.");
 check("opencamlib-contact-spike-schema", openCamContactSpike.includes("hediao3d.opencamlib-real-contact-spike.v1"), "OpenCAMLib contact spike must emit the spike schema.");
 check("opencamlib-contact-spike-boundary", openCamContactSpike.includes("must not unlock trial or production NC"), "OpenCAMLib contact spike must keep the production boundary explicit.");
+check("opencamlib-runner-readiness-schema", openCamRunner.includes("hediao3d.opencamlib-runner-readiness-report.v1"), "OpenCAMLib runner must emit the runner readiness schema.");
+check("opencamlib-runner-production-lock", openCamRunner.includes("canEmitProductionCandidate") && openCamRunner.includes("must not unlock trial or production"), "OpenCAMLib runner readiness must keep production locked.");
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
 check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");

@@ -41,6 +41,8 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-schema" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike schema");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-boundary" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike boundary");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-runner-readiness-schema" && check.status === "pass"), "self-check should verify OpenCAMLib runner readiness schema");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-runner-production-lock" && check.status === "pass"), "self-check should verify OpenCAMLib runner production lock");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
 

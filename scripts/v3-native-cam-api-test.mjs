@@ -123,10 +123,12 @@ async function main() {
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-diagnostics-bundle.mjs"), "native CAM package manifest missing diagnostics bundle");
   assert(packageManifest.files?.some((file) => file.filename === "opencamlib-probe.py"), "native CAM package manifest missing OpenCAMLib runtime probe");
   assert(packageManifest.files?.some((file) => file.filename === "opencamlib-contact-spike.py"), "native CAM package manifest missing OpenCAMLib contact spike");
+  assert(packageManifest.files?.some((file) => file.filename === "opencamlib-runner.py"), "native CAM package manifest missing OpenCAMLib runner");
   assert(packageManifest.files?.some((file) => file.filename === "opencamlib-contact-output-validate.mjs"), "native CAM package manifest missing OpenCAMLib contact validator");
   assert(packageManifest.files?.some((file) => file.filename === "camotics-material-removal-validate.mjs"), "native CAM package manifest missing CAMotics material-removal validator");
   assert(packageManifest.commands?.some((command) => command.includes("opencamlib-probe.py")), "native CAM package manifest should include OpenCAMLib runtime probe command");
   assert(packageManifest.commands?.some((command) => command.includes("opencamlib-contact-spike.py")), "native CAM package manifest should include OpenCAMLib contact spike command");
+  assert(packageManifest.commands?.some((command) => command.includes("opencamlib-runner.py")), "native CAM package manifest should include OpenCAMLib runner command");
   assert(packageManifest.commands?.some((command) => command.includes("opencamlib-contact-output-validate.mjs")), "native CAM package manifest should include contact validator command");
   assert(packageManifest.commands?.some((command) => command.includes("native-cam-server-package-self-check.mjs")), "native CAM package manifest should include package self-check command");
   assert(packageManifest.commands?.some((command) => command.includes("native-cam-closed-loop-check.mjs")), "native CAM package manifest should include closed-loop check command");
@@ -148,6 +150,7 @@ async function main() {
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-diagnostics-bundle.mjs"), "native CAM zip missing diagnostics bundle");
   assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-probe.py"), "native CAM zip missing OpenCAMLib runtime probe");
   assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-contact-spike.py"), "native CAM zip missing OpenCAMLib contact spike");
+  assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-runner.py"), "native CAM zip missing OpenCAMLib runner");
   assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-contact-output-validate.mjs"), "native CAM zip missing OpenCAMLib contact validator");
   assert(zipNames.includes("hediao3d-native-cam-server/camotics-material-removal-validate.mjs"), "native CAM zip missing CAMotics material-removal validator");
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-server-package.json"), "native CAM zip missing package manifest");
@@ -156,6 +159,7 @@ async function main() {
   assert(readme.includes("native-cam-server-package-self-check.mjs"), "native CAM ZIP README should instruct package self-check");
   assert(readme.includes("native-cam-diagnostics-bundle.mjs"), "native CAM ZIP README should instruct diagnostics bundle");
   assert(readme.includes("opencamlib-contact-spike.py"), "native CAM ZIP README should instruct contact spike");
+  assert(readme.includes("opencamlib-runner.py"), "native CAM ZIP README should instruct OpenCAMLib runner");
   assert(readme.includes("native-cam-closed-loop-check.mjs"), "native CAM ZIP README should instruct closed-loop check");
 
   console.log(JSON.stringify({
