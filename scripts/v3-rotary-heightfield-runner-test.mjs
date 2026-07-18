@@ -22,6 +22,8 @@ try {
       safeZ: 18,
       toolDiameter: 4,
       toolProfileId: "vflat-4mm-25deg",
+      stepoverMm: 0.28,
+      stepoverDeg: 5,
       camMode: "rotaryWrap",
       rotaryOutputAxis: "Y",
       rotaryWrapPerRevolutionMm: 100,
@@ -120,6 +122,8 @@ try {
   assert(envelopeReport.rotaryEnvelope?.cutterEnvelopeLiftMaxMm > 0, "envelope report should expose cutter envelope lift");
   assert(envelopeReport.sampling?.quality?.schema === "hediao3d.opencamlib-heightfield-sampling-quality.v1", "envelope report should include sampling quality schema");
   assert(envelopeReport.sampling.quality.level === "coarse", `7x33 preview sampling should remain coarse, got ${envelopeReport.sampling.quality.level}`);
+  assert(envelopeReport.sampling.quality.adaptiveSampling === false, "env override sampling should not be marked adaptive");
+  assert(envelopeReport.sampling.quality.samplingSource === "env-override", `env override sampling source expected, got ${envelopeReport.sampling.quality.samplingSource}`);
   assert(envelopeReport.sampling.quality.blockers?.includes("sampling-step-larger-than-quarter-cutter-diameter"), "sampling quality should block overly large stepover");
   assert(envelopeReport.quality?.productionCandidate === false, "rotary preview envelope must not be production candidate");
   assert(envelopeReport.quality?.samplingReadyForUpgrade === false, "coarse preview sampling must not be marked ready for cutter-contact upgrade");
@@ -156,6 +160,10 @@ try {
   assert(adaptiveNeutral.points.length > neutral.points.length, "adaptive run should create denser samples than explicit coarse grid");
   const adaptiveEnvelope = JSON.parse(readFileSync(adaptiveHeightfield.cutterEnvelopeReport, "utf8"));
   assert(adaptiveEnvelope.sampling?.quality?.level !== "coarse", `adaptive sampling should remove coarse blockers, got ${adaptiveEnvelope.sampling?.quality?.level}`);
+  assert(adaptiveEnvelope.sampling?.quality?.adaptiveSampling === true, "adaptive sampling quality should expose adaptiveSampling");
+  assert(/^adaptive/.test(adaptiveEnvelope.sampling?.quality?.samplingSource ?? ""), `adaptive sampling quality source expected, got ${adaptiveEnvelope.sampling?.quality?.samplingSource}`);
+  assert(adaptiveEnvelope.sampling?.quality?.targetStepoverMm === 0.28, `adaptive target stepover should come from settings, got ${adaptiveEnvelope.sampling?.quality?.targetStepoverMm}`);
+  assert(adaptiveEnvelope.sampling?.quality?.targetStepoverDeg === 5, `adaptive target angular stepover should come from settings, got ${adaptiveEnvelope.sampling?.quality?.targetStepoverDeg}`);
   assert(!adaptiveEnvelope.sampling?.quality?.blockers?.includes("sampling-step-larger-than-quarter-cutter-diameter"), "adaptive sampling should not exceed quarter-cutter blocker");
 
   console.log(JSON.stringify({

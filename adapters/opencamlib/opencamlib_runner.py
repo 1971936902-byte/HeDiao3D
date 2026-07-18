@@ -888,6 +888,14 @@ def compute_heightfield_sampling_quality(heightfield: Dict[str, Any], point_coun
     linear_steps = [step for step in (x_step, effective_cross_step) if step is not None]
     max_linear_step = max(linear_steps) if linear_steps else None
     step_to_cutter_ratio = max_linear_step / cutter_diameter if max_linear_step is not None and cutter_diameter > 0 else None
+    adaptive_sampling = bool(heightfield.get("adaptiveSampling"))
+    sampling_source = heightfield.get("samplingSource")
+    target_stepover_mm = heightfield.get("targetStepoverMm")
+    target_stepover_deg = heightfield.get("targetStepoverDeg")
+    max_rows = heightfield.get("maxRows")
+    max_cols = heightfield.get("maxCols")
+    row_cap_hit = bool(max_rows and rows >= int(max_rows) and adaptive_sampling)
+    col_cap_hit = bool(max_cols and cols >= int(max_cols) and adaptive_sampling)
 
     blockers: List[str] = []
     warnings: List[str] = []
@@ -903,6 +911,8 @@ def compute_heightfield_sampling_quality(heightfield: Dict[str, Any], point_coun
         warnings.append("rotary-angle-step-above-3deg")
     if rows < 2 or cols < 2:
         blockers.append("sampling-grid-too-small")
+    if row_cap_hit or col_cap_hit:
+        warnings.append("adaptive-sampling-grid-capped")
 
     if blockers:
         level = "coarse"
@@ -923,6 +933,14 @@ def compute_heightfield_sampling_quality(heightfield: Dict[str, Any], point_coun
         "maxLinearStepMm": round(max_linear_step, 6) if max_linear_step is not None else None,
         "cutterDiameterMm": round(cutter_diameter, 6) if cutter_diameter > 0 else None,
         "stepToCutterRatio": round(step_to_cutter_ratio, 6) if step_to_cutter_ratio is not None else None,
+        "adaptiveSampling": adaptive_sampling,
+        "samplingSource": str(sampling_source) if sampling_source else None,
+        "targetStepoverMm": round(float(target_stepover_mm), 6) if is_number(target_stepover_mm) else None,
+        "targetStepoverDeg": round(float(target_stepover_deg), 6) if is_number(target_stepover_deg) else None,
+        "maxRows": int(max_rows) if is_number(max_rows) else None,
+        "maxCols": int(max_cols) if is_number(max_cols) else None,
+        "rowCapHit": row_cap_hit,
+        "colCapHit": col_cap_hit,
         "blockers": blockers,
         "warnings": warnings,
         "summary": "Preview sampling is dense enough to be considered for a real OpenCAMLib cutter-contact upgrade." if level == "production-sampling-candidate" else "Preview sampling is useful for visualization/air-run review, but should be refined or replaced before real cutter-contact production.",

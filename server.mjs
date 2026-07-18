@@ -7390,6 +7390,14 @@ function normalizeCamHandoffSamplingQuality(value) {
     maxLinearStepMm: Number.isFinite(Number(value.maxLinearStepMm)) ? Number(value.maxLinearStepMm) : null,
     cutterDiameterMm: Number.isFinite(Number(value.cutterDiameterMm)) ? Number(value.cutterDiameterMm) : null,
     stepToCutterRatio: Number.isFinite(Number(value.stepToCutterRatio)) ? Number(value.stepToCutterRatio) : null,
+    adaptiveSampling: Boolean(value.adaptiveSampling),
+    samplingSource: value.samplingSource ?? null,
+    targetStepoverMm: Number.isFinite(Number(value.targetStepoverMm)) ? Number(value.targetStepoverMm) : null,
+    targetStepoverDeg: Number.isFinite(Number(value.targetStepoverDeg)) ? Number(value.targetStepoverDeg) : null,
+    maxRows: Number.isFinite(Number(value.maxRows)) ? Number(value.maxRows) : null,
+    maxCols: Number.isFinite(Number(value.maxCols)) ? Number(value.maxCols) : null,
+    rowCapHit: Boolean(value.rowCapHit),
+    colCapHit: Boolean(value.colCapHit),
     blockers: Array.isArray(value.blockers) ? value.blockers.slice(0, 8) : [],
     warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 8) : [],
     summary: value.summary ?? null
@@ -7632,6 +7640,7 @@ Summary: ${report.summary}
 - Depth range: ${formatRange(metrics.depthRangeMm)}
 - Expected rotary axis: ${metrics.expectedRotaryAxis ?? "n/a"}
 - Sampling quality: ${samplingQuality ? `${samplingQuality.level} / step-cutter=${samplingQuality.stepToCutterRatio ?? "n/a"} / hit=${samplingQuality.hitRate ?? "n/a"}` : "n/a"}
+- Sampling source: ${samplingQuality ? `${samplingQuality.adaptiveSampling ? "adaptive" : "manual/env"} / ${samplingQuality.samplingSource ?? "unknown"} / rows=${samplingQuality.rows ?? "n/a"} cols=${samplingQuality.cols ?? "n/a"} / target=${samplingQuality.targetStepoverMm ?? "n/a"}mm ${samplingQuality.targetStepoverDeg ?? "n/a"}deg / cap=${samplingQuality.rowCapHit || samplingQuality.colCapHit ? "hit" : "no"}` : "n/a"}
 - Sampling blockers: ${samplingQuality?.blockers?.length ? samplingQuality.blockers.join(", ") : "none"}
 
 ## 4. Issues

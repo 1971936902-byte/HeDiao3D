@@ -138,6 +138,8 @@ async function main() {
 
   const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
   assert(camHandoffQuality.metrics?.samplingQuality?.level === "coarse", "CAM handoff quality should expose coarse sampling quality");
+  assert(camHandoffQuality.metrics?.samplingQuality?.adaptiveSampling === false, "CAM handoff quality should expose env/manual sampling mode");
+  assert(camHandoffQuality.metrics?.samplingQuality?.samplingSource === "env-override", "CAM handoff quality should expose sampling source");
   assert(camHandoffQuality.warningIssues?.some((item) => /采样质量为 coarse/.test(item)), "CAM handoff quality should warn about coarse sampling");
   assert(camHandoffQuality.requiredActions?.some((item) => /采样密度|cutter-contact/.test(item)), "CAM handoff quality should require denser sampling or real cutter-contact output");
 
@@ -164,6 +166,7 @@ async function main() {
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "toolpath-sequencing-report.json"), "package index should include sequencing report in read-first files");
   assert(packageIndex.camHandoffQuality?.samplingQuality?.level === "coarse", "package index should expose OpenCAMLib sampling quality");
+  assert(packageIndex.camHandoffQuality?.samplingQuality?.samplingSource === "env-override", "package index should preserve sampling source");
 
   console.log(JSON.stringify({
     ok: true,

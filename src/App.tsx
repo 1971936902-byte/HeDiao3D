@@ -565,6 +565,12 @@ type V3OrchestratorJob = {
             cols?: number | null;
             stepToCutterRatio?: number | null;
             maxLinearStepMm?: number | null;
+            adaptiveSampling?: boolean;
+            samplingSource?: string | null;
+            targetStepoverMm?: number | null;
+            targetStepoverDeg?: number | null;
+            rowCapHit?: boolean;
+            colCapHit?: boolean;
             blockers?: string[];
             warnings?: string[];
           } | null;
@@ -6796,8 +6802,14 @@ export function App() {
                   {v3Job.result.summary.camHandoffQuality.metrics.samplingQuality
                     ? ` · 采样 ${v3Job.result.summary.camHandoffQuality.metrics.samplingQuality.level ?? "-"}`
                     : ""}
+                  {v3Job.result.summary.camHandoffQuality.metrics.samplingQuality
+                    ? ` · ${v3Job.result.summary.camHandoffQuality.metrics.samplingQuality.adaptiveSampling ? "自适应" : "手动"}`
+                    : ""}
                   {v3Job.result.summary.camHandoffQuality.metrics.samplingQuality?.stepToCutterRatio !== null && v3Job.result.summary.camHandoffQuality.metrics.samplingQuality?.stepToCutterRatio !== undefined
                     ? ` · step/cutter ${v3Job.result.summary.camHandoffQuality.metrics.samplingQuality.stepToCutterRatio.toFixed(3)}`
+                    : ""}
+                  {v3Job.result.summary.camHandoffQuality.metrics.samplingQuality?.rowCapHit || v3Job.result.summary.camHandoffQuality.metrics.samplingQuality?.colCapHit
+                    ? " · 已触达采样上限"
                     : ""}
                 </small>
               )}
