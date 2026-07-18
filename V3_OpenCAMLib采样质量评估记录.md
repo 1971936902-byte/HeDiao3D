@@ -59,3 +59,16 @@ npm run test:v3:rotary-heightfield: 通过
 npm run test:v3:rotary-neutral-handoff: 通过
 git status --short: clean
 ```
+
+## 主流程上浮
+
+采样质量已进入以下主流程输出:
+
+```text
+cam-handoff-quality.json: metrics.samplingQuality
+cam-handoff-evidence.md: Sampling quality / blockers
+machining-package-index.json: camHandoffQuality.samplingQuality
+前端 V3 CAM 交接质量: 显示采样 level 与 step/cutter 比例
+```
+
+当采样质量为 `coarse` 时，`cam-handoff-quality.json` 会追加复核项和 required action，继续阻止 trial/production 解锁。

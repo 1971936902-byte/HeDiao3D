@@ -7255,6 +7255,7 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
   const warningIssues = [];
   const requiredActions = [];
   const adapterHandoffEvidence = normalizeAdapterHandoffEvidence(adapterReport);
+  const samplingQuality = normalizeCamHandoffSamplingQuality(adapterReport?.metrics?.neutralToolpath?.cutterContactReport?.samplingQuality);
   const adapterSynthetic = Boolean(adapterReport?.synthetic || adapterReport?.metrics?.neutralToolpath?.synthetic || adapterHandoffEvidence.synthetic);
   const adapterImportedFixture = Boolean(adapterReport?.imported || adapterReport?.metrics?.neutralToolpath?.imported || adapterHandoffEvidence.fixture);
   const externalCommandGenerated = Boolean(adapterReport?.externalCommand || adapterReport?.metrics?.neutralToolpath?.generatedByExternalCommand || adapterHandoffEvidence.generatedByExternalCommand);
@@ -7313,6 +7314,13 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
     warningIssues.push(`外部 adapter handoff 分类为 ${adapterHandoffEvidence.classification}，不能作为生产级 CAM 输出。`);
     requiredActions.push("在 CAM 服务端运行真实 FreeCAD/BlenderCAM/OpenCAMLib 命令，让 handoffEvidence.productionCandidate=true 后再进入生产验收。");
   }
+  if (samplingQuality?.level === "coarse") {
+    warningIssues.push(`OpenCAMLib 采样质量为 coarse：${(samplingQuality.blockers ?? [])[0] ?? "采样密度不足"}。`);
+    requiredActions.push("提高 X/旋转方向采样密度，或替换为真实 OpenCAMLib drop-cutter/cutter-contact 输出后再评估精加工候选。");
+  } else if (samplingQuality?.level === "fine") {
+    warningIssues.push(`OpenCAMLib 采样质量为 fine：${(samplingQuality.warnings ?? [])[0] ?? "仍需复核精加工步距"}。`);
+    requiredActions.push("复核 step/cutter 比例、旋转表面步距和材料去除仿真后，再进入真实试雕候选。");
+  }
   if (externalToolpathUsed && adapterHandoffEvidence.classification === "production-candidate" && !adapterHandoffEvidence.productionCandidate) {
     warningIssues.push("adapter handoff 分类看似生产候选，但 productionCandidate 未通过。");
     requiredActions.push("复核 adapter-report.json 的 handoffEvidence 字段，确认输出不是 fixture/synthetic/preview。");
@@ -7354,7 +7362,8 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
       xCoverage,
       rotaryCoverage,
       expectedRotaryAxis: expectedRotary ? rotaryAxis : null,
-      expectedRotarySpanDeg: expectedRotary ? expectedRotarySpan : null
+      expectedRotarySpanDeg: expectedRotary ? expectedRotarySpan : null,
+      samplingQuality
     },
     criticalIssues,
     warningIssues,
@@ -7364,6 +7373,26 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
       : warningIssues.length > 0
         ? `CAM handoff 有 ${warningIssues.length} 个复核项。`
         : "CAM handoff 质量检查通过。"
+  };
+}
+
+function normalizeCamHandoffSamplingQuality(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    schema: value.schema ?? "hediao3d.opencamlib-heightfield-sampling-quality.v1",
+    level: value.level ?? "unknown",
+    hitRate: Number.isFinite(Number(value.hitRate)) ? Number(value.hitRate) : null,
+    rows: Number.isFinite(Number(value.rows)) ? Number(value.rows) : null,
+    cols: Number.isFinite(Number(value.cols)) ? Number(value.cols) : null,
+    xStepMm: Number.isFinite(Number(value.xStepMm)) ? Number(value.xStepMm) : null,
+    rotaryAngleStepDeg: Number.isFinite(Number(value.rotaryAngleStepDeg)) ? Number(value.rotaryAngleStepDeg) : null,
+    rotarySurfaceStepMm: Number.isFinite(Number(value.rotarySurfaceStepMm)) ? Number(value.rotarySurfaceStepMm) : null,
+    maxLinearStepMm: Number.isFinite(Number(value.maxLinearStepMm)) ? Number(value.maxLinearStepMm) : null,
+    cutterDiameterMm: Number.isFinite(Number(value.cutterDiameterMm)) ? Number(value.cutterDiameterMm) : null,
+    stepToCutterRatio: Number.isFinite(Number(value.stepToCutterRatio)) ? Number(value.stepToCutterRatio) : null,
+    blockers: Array.isArray(value.blockers) ? value.blockers.slice(0, 8) : [],
+    warnings: Array.isArray(value.warnings) ? value.warnings.slice(0, 8) : [],
+    summary: value.summary ?? null
   };
 }
 
@@ -7559,6 +7588,7 @@ function createCamHandoffEvidenceMarkdown(report) {
     : "missing source sha256";
   const metrics = report.metrics ?? {};
   const adapterEvidence = report.adapterHandoffEvidence ?? {};
+  const samplingQuality = metrics.samplingQuality ?? null;
   return `# HeDiao3D V3 CAM Handoff Evidence
 
 Job: ${report.jobId}
@@ -7601,6 +7631,8 @@ Summary: ${report.summary}
 - Z range: ${formatRange(metrics.zRangeMm)}
 - Depth range: ${formatRange(metrics.depthRangeMm)}
 - Expected rotary axis: ${metrics.expectedRotaryAxis ?? "n/a"}
+- Sampling quality: ${samplingQuality ? `${samplingQuality.level} / step-cutter=${samplingQuality.stepToCutterRatio ?? "n/a"} / hit=${samplingQuality.hitRate ?? "n/a"}` : "n/a"}
+- Sampling blockers: ${samplingQuality?.blockers?.length ? samplingQuality.blockers.join(", ") : "none"}
 
 ## 4. Issues
 
@@ -10374,6 +10406,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       pointCount: camHandoffQuality.metrics?.pointCount ?? 0,
       xCoverage: camHandoffQuality.metrics?.xCoverage ?? null,
       rotaryCoverage: camHandoffQuality.metrics?.rotaryCoverage ?? null,
+      samplingQuality: camHandoffQuality.metrics?.samplingQuality ?? null,
       summary: camHandoffQuality.summary,
       criticalIssues: camHandoffQuality.criticalIssues ?? [],
       warningIssues: camHandoffQuality.warningIssues ?? []

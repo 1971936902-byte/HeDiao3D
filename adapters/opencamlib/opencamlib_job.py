@@ -670,6 +670,7 @@ def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str],
         "productionCandidate": production_candidate,
         "postprocessEligible": bool(quality.get("postprocessEligible")),
         "previewScaffold": preview_scaffold,
+        "samplingQuality": (report.get("contactSampling") or {}).get("samplingQuality") if isinstance(report.get("contactSampling"), dict) else None,
         "inputIdentityBinding": identity_binding,
         "summary": quality.get("summary") or report.get("summary") or "OpenCAMLib cutter-contact report evaluated.",
     }

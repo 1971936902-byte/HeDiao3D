@@ -136,6 +136,11 @@ async function main() {
   assert(toolpathSummary.sequencingReport === "toolpath-sequencing-report.json", "toolpath summary should reference sequencing report");
   assert(toolpathSummary.externalSourceSnapshot?.neutral?.runner?.heightfieldMode === true, "source snapshot should classify heightfield");
 
+  const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
+  assert(camHandoffQuality.metrics?.samplingQuality?.level === "coarse", "CAM handoff quality should expose coarse sampling quality");
+  assert(camHandoffQuality.warningIssues?.some((item) => /采样质量为 coarse/.test(item)), "CAM handoff quality should warn about coarse sampling");
+  assert(camHandoffQuality.requiredActions?.some((item) => /采样密度|cutter-contact/.test(item)), "CAM handoff quality should require denser sampling or real cutter-contact output");
+
   const sequencing = await getArtifactJson(job.id, "toolpath-sequencing-report.json");
   assert(sequencing.mode === "rotary-wrap-boustrophedon", "rotary neutral should be sequenced by row");
   assert(sequencing.output?.rowCount === 32, `expected 32 rotary rows after 0/360 seam merge, got ${sequencing.output?.rowCount}`);
@@ -158,6 +163,7 @@ async function main() {
 
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "toolpath-sequencing-report.json"), "package index should include sequencing report in read-first files");
+  assert(packageIndex.camHandoffQuality?.samplingQuality?.level === "coarse", "package index should expose OpenCAMLib sampling quality");
 
   console.log(JSON.stringify({
     ok: true,

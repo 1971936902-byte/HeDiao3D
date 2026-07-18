@@ -558,6 +558,16 @@ type V3OrchestratorJob = {
           pointCount: number;
           xCoverage: number;
           rotaryCoverage: number | null;
+          samplingQuality?: {
+            level?: string;
+            hitRate?: number | null;
+            rows?: number | null;
+            cols?: number | null;
+            stepToCutterRatio?: number | null;
+            maxLinearStepMm?: number | null;
+            blockers?: string[];
+            warnings?: string[];
+          } | null;
         };
       };
       neutralToolpathImportValidation?: {
@@ -6782,6 +6792,12 @@ export function App() {
                   X覆盖 {(v3Job.result.summary.camHandoffQuality.metrics.xCoverage * 100).toFixed(1)}%
                   {v3Job.result.summary.camHandoffQuality.metrics.rotaryCoverage !== null
                     ? ` · 旋转覆盖 ${(v3Job.result.summary.camHandoffQuality.metrics.rotaryCoverage * 100).toFixed(1)}%`
+                    : ""}
+                  {v3Job.result.summary.camHandoffQuality.metrics.samplingQuality
+                    ? ` · 采样 ${v3Job.result.summary.camHandoffQuality.metrics.samplingQuality.level ?? "-"}`
+                    : ""}
+                  {v3Job.result.summary.camHandoffQuality.metrics.samplingQuality?.stepToCutterRatio !== null && v3Job.result.summary.camHandoffQuality.metrics.samplingQuality?.stepToCutterRatio !== undefined
+                    ? ` · step/cutter ${v3Job.result.summary.camHandoffQuality.metrics.samplingQuality.stepToCutterRatio.toFixed(3)}`
                     : ""}
                 </small>
               )}
