@@ -5358,41 +5358,58 @@ export function App() {
           {V3_TRIAL_FOCUSED_UI && (
             <p className="panel-note">这些参数供 V3 小闭环生成安全试雕包使用；旧版本地生成、精加工和反向预览入口已暂时隐藏，避免误下载未验收 NC。</p>
           )}
-          <label className="select-row">
-            <span>CAM模式</span>
-            <select value={settings.camMode} onChange={(event) => handleCamModeChange(event.target.value as ModelSettings["camMode"])}>
-              <option value="rotaryWrap">旋转包裹 X/Z + 夹具轴</option>
-              <option value="3axis">三轴平面浮雕 X/Y/Z</option>
-              <option value="4axis">真实四轴 X/A/Z</option>
-            </select>
-          </label>
+          {V3_TRIAL_FOCUSED_UI ? (
+            <div className="v3-operator-param-card">
+              <div>
+                <strong>已锁定目标工艺</strong>
+                <small>三轴控制器 + Y轴旋转夹具，后处理固定走 wrapY 证据链；其他 CAM 模式放到工程模式。</small>
+              </div>
+              <div className="v3-operator-param-grid">
+                <span>运动 <strong>X长度 / Y旋转 / Z刀深</strong></span>
+                <span>刀具 <strong>{selectedTool.diameterMm.toFixed(1)}mm / {selectedTool.angleDeg?.toFixed(0) ?? 25}° / 平底尖刀</strong></span>
+                <span>后处理 <strong>{settings.postProcessor}</strong></span>
+                <span>生产 NC <strong>门禁锁定</strong></span>
+              </div>
+            </div>
+          ) : (
+            <label className="select-row">
+              <span>CAM模式</span>
+              <select value={settings.camMode} onChange={(event) => handleCamModeChange(event.target.value as ModelSettings["camMode"])}>
+                <option value="rotaryWrap">旋转包裹 X/Z + 夹具轴</option>
+                <option value="3axis">三轴平面浮雕 X/Y/Z</option>
+                <option value="4axis">真实四轴 X/A/Z</option>
+              </select>
+            </label>
+          )}
           {settings.camMode === "rotaryWrap" && (
             <>
-              <label className="select-row">
-                <span>夹具接入轴</span>
-                <select
-                  value={settings.rotaryOutputAxis}
-                  onChange={(event) => {
-                    const axis = event.target.value as ModelSettings["rotaryOutputAxis"];
-                    setSettings((current) => normalizeSettings({
-                      ...current,
-                      rotaryOutputAxis: axis,
-                      postProcessor: axis === "X" ? "wrapX" : axis === "Y" ? "wrapY" : "generic"
-                    }));
-                    setToolpath(null);
-                    setIsSimulationMode(false);
-                    setWorkbenchView("model");
-                  }}
-                >
-                  <option value="Y">Y轴代替旋转</option>
-                  <option value="X">X轴代替旋转</option>
-                  <option value="A">真实A轴</option>
-                </select>
-              </label>
+              {!V3_TRIAL_FOCUSED_UI && (
+                <label className="select-row">
+                  <span>夹具接入轴</span>
+                  <select
+                    value={settings.rotaryOutputAxis}
+                    onChange={(event) => {
+                      const axis = event.target.value as ModelSettings["rotaryOutputAxis"];
+                      setSettings((current) => normalizeSettings({
+                        ...current,
+                        rotaryOutputAxis: axis,
+                        postProcessor: axis === "X" ? "wrapX" : axis === "Y" ? "wrapY" : "generic"
+                      }));
+                      setToolpath(null);
+                      setIsSimulationMode(false);
+                      setWorkbenchView("model");
+                    }}
+                  >
+                    <option value="Y">Y轴代替旋转</option>
+                    <option value="X">X轴代替旋转</option>
+                    <option value="A">真实A轴</option>
+                  </select>
+                </label>
+              )}
               <Control label="每圈距离" value={settings.rotaryWrapPerRevolutionMm} min={1} max={1000} step={1} suffix="mm/圈" onChange={(v) => updateSetting("rotaryWrapPerRevolutionMm", v)} />
             </>
           )}
-          <Control label="刀具直径" value={settings.toolDiameter} min={0.2} max={6} step={0.05} suffix="mm" onChange={(v) => updateSetting("toolDiameter", v)} />
+          {!V3_TRIAL_FOCUSED_UI && <Control label="刀具直径" value={settings.toolDiameter} min={0.2} max={6} step={0.05} suffix="mm" onChange={(v) => updateSetting("toolDiameter", v)} />}
           {settings.camMode !== "3axis" && (
             <>
               <Control label="左端夹持" value={settings.leftHoldMm} min={0} max={8} step={0.1} suffix="mm" onChange={(v) => updateSetting("leftHoldMm", v)} />
@@ -5403,28 +5420,32 @@ export function App() {
           <Control label="X步距" value={settings.stepoverMm} min={0.03} max={0.8} step={0.01} suffix="mm" onChange={(v) => updateSetting("stepoverMm", v)} />
           {settings.camMode !== "3axis" && <Control label="A步距" value={settings.stepoverDeg} min={0.2} max={5} step={0.1} suffix="°" onChange={(v) => updateSetting("stepoverDeg", v)} />}
           <Control label="最大单层切深" value={settings.maxCutDepth} min={0.02} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("maxCutDepth", v)} />
-          <Control label="粗加工余量" value={settings.stockAllowance} min={0} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("stockAllowance", v)} />
+          {!V3_TRIAL_FOCUSED_UI && <Control label="粗加工余量" value={settings.stockAllowance} min={0} max={0.5} step={0.01} suffix="mm" onChange={(v) => updateSetting("stockAllowance", v)} />}
           <Control label="进给" value={settings.feedRate} min={30} max={600} step={10} suffix="mm/min" onChange={(v) => updateSetting("feedRate", v)} />
           <Control label="主轴" value={settings.spindleRpm} min={3000} max={24000} step={500} suffix="rpm" onChange={(v) => updateSetting("spindleRpm", v)} />
-          <label className="select-row">
-            <span>精修策略</span>
-            <select value={settings.finishingStrategy} onChange={(event) => updateSetting("finishingStrategy", event.target.value as ModelSettings["finishingStrategy"])}>
-              <option value="x-scan">沿 X 扫描</option>
-              <option value="a-scan">{settings.camMode === "3axis" ? "沿 Y 扫描" : "沿 A 轴环扫"}</option>
-              <option value="cross">交叉精修</option>
-            </select>
-          </label>
-          <label className="select-row">
-            <span>后处理</span>
-            <select value={settings.postProcessor} onChange={(event) => updateSetting("postProcessor", event.target.value as ModelSettings["postProcessor"])}>
-              <option value="generic">通用四轴</option>
-              <option value="weihong">维宏风格</option>
-              <option value="syntec">新代风格</option>
-              <option value="generic3">通用三轴</option>
-              <option value="wrapY">Y轴旋转包裹</option>
-              <option value="wrapX">X轴旋转包裹</option>
-            </select>
-          </label>
+          {!V3_TRIAL_FOCUSED_UI && (
+            <>
+              <label className="select-row">
+                <span>精修策略</span>
+                <select value={settings.finishingStrategy} onChange={(event) => updateSetting("finishingStrategy", event.target.value as ModelSettings["finishingStrategy"])}>
+                  <option value="x-scan">沿 X 扫描</option>
+                  <option value="a-scan">{settings.camMode === "3axis" ? "沿 Y 扫描" : "沿 A 轴环扫"}</option>
+                  <option value="cross">交叉精修</option>
+                </select>
+              </label>
+              <label className="select-row">
+                <span>后处理</span>
+                <select value={settings.postProcessor} onChange={(event) => updateSetting("postProcessor", event.target.value as ModelSettings["postProcessor"])}>
+                  <option value="generic">通用四轴</option>
+                  <option value="weihong">维宏风格</option>
+                  <option value="syntec">新代风格</option>
+                  <option value="generic3">通用三轴</option>
+                  <option value="wrapY">Y轴旋转包裹</option>
+                  <option value="wrapX">X轴旋转包裹</option>
+                </select>
+              </label>
+            </>
+          )}
           {!V3_TRIAL_FOCUSED_UI && <button className="primary-action" onClick={handleGenerateToolpath} disabled={isToolpathGenerating}>
             <Hammer size={18} />
             {isToolpathGenerating ? "刀路生成中..." : "生成刀路"}
@@ -5509,7 +5530,7 @@ export function App() {
           </section>
         )}
 
-        {activeStage === "cam" && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
               <ClipboardCheck size={18} />
@@ -5555,7 +5576,7 @@ export function App() {
           </section>
         )}
 
-        {activeStage === "cam" && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
               <BadgeInfo size={18} />
@@ -5579,7 +5600,7 @@ export function App() {
           </section>
         )}
 
-        {activeStage === "cam" && envelopeQuality && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && envelopeQuality && (
           <section className="panel">
             <div className="panel-title">
               <ShieldCheck size={18} />
@@ -5606,7 +5627,7 @@ export function App() {
           </section>
         )}
 
-        {activeStage === "cam" && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
               <Layers3 size={18} />
@@ -5641,7 +5662,7 @@ export function App() {
           </section>
         )}
 
-        {activeStage === "cam" && (
+        {!V3_TRIAL_FOCUSED_UI && activeStage === "cam" && (
           <section className="panel">
             <div className="panel-title">
               <Calculator size={18} />

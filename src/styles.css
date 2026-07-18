@@ -2591,6 +2591,56 @@ button:disabled {
   gap: 7px;
 }
 
+.v3-operator-param-card {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid rgba(25, 199, 180, 0.24);
+  border-left: 3px solid var(--teal);
+  border-radius: 8px;
+  background: rgba(25, 199, 180, 0.055);
+}
+
+.v3-operator-param-card > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.v3-operator-param-card strong {
+  color: #f2f8f5;
+}
+
+.v3-operator-param-card small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.v3-operator-param-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.v3-operator-param-grid span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.v3-operator-param-grid strong {
+  overflow: hidden;
+  color: #eef4f1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
 .v3-machine-preset-grid span {
   display: grid;
   gap: 3px;
