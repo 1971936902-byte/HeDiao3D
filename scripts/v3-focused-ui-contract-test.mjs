@@ -63,6 +63,11 @@ const checks = [
     summary: "Focused readiness UI should expose CAMotics upstream binding to OpenCAMLib candidate package validation and bundle evidence."
   },
   {
+    id: "locked-production-guidance-visible",
+    ok: source.includes("formatLockedProductionPackageGuidance") && source.includes("operatorGuidance") && source.includes("先下载安全试雕包") && source.includes("禁止上机") && source.includes("证据缺口"),
+    summary: "Focused UI should turn locked production-package responses into actionable safe-trial guidance."
+  },
+  {
     id: "opencamlib-input-package-download",
     ok: source.includes("handleDownloadV3OpenCamLibCandidateInputs") && source.includes("opencamlib-candidate-inputs.zip") && source.includes("下载OCL输入包"),
     summary: "Focused operator UI should expose an OpenCAMLib Linux real-candidate input package download."

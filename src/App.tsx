@@ -3932,7 +3932,23 @@ export function App() {
       const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/production-package`);
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.summary ?? data.error ?? `V3 正式生产包未解锁：${response.status}`);
+        if (response.status === 423) {
+          const detail = formatLockedProductionPackageGuidance(data);
+          setV3Status(data.error ?? "V3 正式生产包未解锁");
+          setV3UserNotice({
+            level: "warning",
+            title: "正式生产包未解锁",
+            detail
+          });
+          recordTask({
+            category: "cam",
+            status: "warning",
+            title: "V3 正式生产包未解锁",
+            detail
+          });
+          return;
+        }
+        throw new Error(data.summary ?? data.error ?? `V3 正式生产包下载失败：${response.status}`);
       }
       const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -8738,6 +8754,21 @@ function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<N
   const candidateBundle = evidence?.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
   const mismatches = evidence?.mismatchCount ? `不匹配 ${evidence.mismatchCount}` : "";
   return [statusText, `哈希 ${matched}`, candidateValidation, candidateBundle, mismatches].filter(Boolean).join(" · ");
+}
+
+function formatLockedProductionPackageGuidance(data: any) {
+  const guidance = data?.operatorGuidance;
+  const safeTrial = guidance?.safeTrialPackageUrl ? "先下载安全试雕包" : "先生成并下载安全试雕包";
+  const readFirst = Array.isArray(guidance?.readFirstFiles) && guidance.readFirstFiles.length
+    ? `必读 ${guidance.readFirstFiles.slice(0, 4).join("、")}`
+    : "必读 operator-download-checklist.md、machining-package-index.json、production-evidence-dossier.json";
+  const neverRun = Array.isArray(guidance?.neverRunOnMachine) && guidance.neverRunOnMachine.length
+    ? `禁止上机 ${guidance.neverRunOnMachine.slice(0, 4).map((file: any) => file.filename).filter(Boolean).join("、")}`
+    : "禁止把 camotics-preview.nc 或报告文件上机";
+  const gap = Array.isArray(guidance?.evidenceGaps) && guidance.evidenceGaps[0]
+    ? `证据缺口 ${guidance.evidenceGaps[0].label ?? guidance.evidenceGaps[0].id}: ${guidance.evidenceGaps[0].summary ?? guidance.evidenceGaps[0].status}`
+    : data?.summary ?? data?.error ?? "生产证据尚未闭环";
+  return [safeTrial, readFirst, neverRun, gap].filter(Boolean).join("；");
 }
 
 function formatLinuxEvidenceStepStatus(status?: string) {
