@@ -84,6 +84,8 @@ try {
   assert(/preview/i.test(envelopeReport.quality?.level ?? ""), "cutter envelope report should remain preview-scaffold");
 
   const noFixtureOutput = join(workDir, "neutral-no-fixture.json");
+  const readinessPath = join(workDir, "opencamlib-runner-readiness.json");
+  const spikePrecheckPath = join(workDir, "opencamlib-real-contact-spike.json");
   const noFixtureRun = spawnSync(python, [runnerPath, jobPath, planPath, noFixtureOutput], {
     cwd: process.cwd(),
     env: {
@@ -95,6 +97,15 @@ try {
     timeout: 30000
   });
   assert(noFixtureRun.status !== 0, "runner should fail closed without fixture mode or validated real OpenCAMLib implementation");
+  assert(existsSync(readinessPath), "fail-closed runner should write opencamlib-runner-readiness.json");
+  assert(existsSync(spikePrecheckPath), "fail-closed runner should write contact spike precheck report");
+  const readiness = JSON.parse(readFileSync(readinessPath, "utf8"));
+  assert(readiness.schema === "hediao3d.opencamlib-runner-readiness-report.v1", "runner readiness schema mismatch");
+  assert(readiness.canEmitProductionCandidate === false, "runner readiness must not unlock production candidate output");
+  assert(readiness.checks?.some((check) => check.id === "real-contact-spike"), "runner readiness should include contact spike check");
+  assert(readiness.geometry?.triangleCount === 2, "runner readiness should preserve parsed model geometry");
+  assert(readiness.target?.machineProfileId === "desktop-3axis-rotary-y", "runner readiness should preserve target machine profile");
+  assert(Array.isArray(readiness.blockers) && readiness.blockers.length > 0, "runner readiness should explain fail-closed blockers");
 
   console.log(JSON.stringify({
     ok: true,
@@ -102,7 +113,8 @@ try {
     fixturePoints: neutral.points.length,
     heightfieldPoints: heightfield.points.length,
     fixtureMode: neutral.runner?.mode,
-    failClosedExit: noFixtureRun.status
+    failClosedExit: noFixtureRun.status,
+    readinessLevel: readiness.level
   }, null, 2));
 } finally {
   rmSync(workDir, { recursive: true, force: true });

@@ -289,8 +289,7 @@ async function createChromePage(port, url) {
 
 async function waitForPageReady(page) {
   await waitForCondition(page, () => location.href.startsWith("http://127.0.0.1:")
-    && Boolean(document.querySelector("#root"))
-    && document.querySelectorAll("button").length > 0, 30000, "page ready");
+    && Boolean(document.querySelector("#root")), 60000, "page shell ready");
 }
 
 async function installDownloadProbe(page) {
@@ -315,6 +314,8 @@ async function installDownloadProbe(page) {
 }
 
 async function clickButton(page, text) {
+  await waitForCondition(page, (label) => [...document.querySelectorAll("button")]
+    .some((item) => item.textContent?.replace(/\s+/g, " ").includes(label) && !item.disabled), 60000, `button ready: ${text}`, text);
   const result = await page.evaluate((label) => {
     const button = [...document.querySelectorAll("button")].find((item) => item.textContent?.replace(/\s+/g, " ").includes(label) && !item.disabled);
     if (!button) {
@@ -347,12 +348,12 @@ async function clickButtonIfPresent(page, text) {
   return Boolean(result);
 }
 
-async function waitForCondition(page, fn, limitMs, label) {
+async function waitForCondition(page, fn, limitMs, label, arg) {
   const startedAt = Date.now();
   let lastError = null;
   while (Date.now() - startedAt < limitMs) {
     try {
-      if (await page.evaluate(fn)) return;
+      if (arg === undefined ? await page.evaluate(fn) : await page.evaluate(fn, arg)) return;
     } catch (error) {
       lastError = error;
     }

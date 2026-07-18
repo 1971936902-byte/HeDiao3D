@@ -92,6 +92,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-opencamlib-probe-test.mjs")]
   },
   {
+    id: "opencamlib-adapter-readiness",
+    label: "OpenCAMLib fail-closed runner readiness handoff",
+    command: [process.execPath, join("scripts", "v3-opencamlib-adapter-readiness-test.mjs")]
+  },
+  {
     id: "opencamlib-contact-spike",
     label: "OpenCAMLib real contact spike gate",
     command: [process.execPath, join("scripts", "v3-opencamlib-contact-spike-test.mjs")]

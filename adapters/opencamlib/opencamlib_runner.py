@@ -27,6 +27,7 @@ import os
 import re
 import struct
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -57,6 +58,7 @@ def main() -> int:
 
     detection = detect_opencamlib()
     geometry = analyze_model_geometry(plan)
+    readiness_path = output_path.with_name("opencamlib-runner-readiness.json")
     if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT")):
         if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT")):
             neutral = create_rotary_heightfield_neutral_toolpath(job, plan, detection, geometry)
@@ -104,13 +106,15 @@ def main() -> int:
         }, ensure_ascii=False))
         return 0
 
+    readiness = create_runner_readiness_report(job, plan, detection, geometry, readiness_path)
+    write_json(readiness_path, readiness)
     if not detection["available"]:
-        print("OpenCAMLib/ocl Python module is not available. Install it or use fixture mode only for contract tests.", file=sys.stderr)
+        print(f"OpenCAMLib/ocl Python module is not available. Readiness report: {readiness_path}", file=sys.stderr)
         return 3
 
     print(
         "OpenCAMLib module detected, but real drop-cutter generation is not implemented in this runner yet. "
-        "Keep production NC locked until this runner writes validated cutter-contact neutral output.",
+        f"Keep production NC locked until this runner writes validated cutter-contact neutral output. Readiness report: {readiness_path}",
         file=sys.stderr,
     )
     return 4
@@ -121,6 +125,11 @@ def read_json(path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"{path} is not a JSON object")
     return data
+
+
+def write_json(path: Path, value: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def validate_inputs(job: Dict[str, Any], plan: Dict[str, Any]) -> List[str]:
@@ -164,6 +173,140 @@ def detect_opencamlib() -> Dict[str, Any]:
         "module": selected["module"] if selected else None,
         "origin": selected["origin"] if selected else None,
         "modules": modules,
+    }
+
+
+def create_runner_readiness_report(job: Dict[str, Any], plan: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], readiness_path: Path) -> Dict[str, Any]:
+    probe = load_runtime_probe_report()
+    spike_report = run_contact_spike_precheck(readiness_path.with_name("opencamlib-real-contact-spike.json"))
+    model_ready = bool(geometry.get("exists")) and bool(geometry.get("supportedParser")) and int(geometry.get("triangleCount") or 0) > 0
+    tool = plan.get("tool") if isinstance(plan.get("tool"), dict) else {}
+    sampling = plan.get("sampling") if isinstance(plan.get("sampling"), dict) else {}
+    axis_mapping = sampling.get("axisMapping") if isinstance(sampling.get("axisMapping"), dict) else {}
+    tool_ready = (
+        str(tool.get("toolProfileId") or "") in {"vflat-4mm-25deg", "vbit-flat-4mm-25deg"}
+        and is_positive_number(tool.get("diameterMm"))
+        and is_positive_number(tool.get("angleDeg"))
+        and tool.get("flatTipMm") is not None
+    )
+    rotary_ready = axis_mapping.get("lengthAxis") == "X" and axis_mapping.get("depthAxis") == "Z" and axis_mapping.get("rotaryAxis") == "Y"
+    probe_ready = bool(((probe or {}).get("runnerReadiness") or {}).get("canAttemptRealContactSpike"))
+    spike_ready = bool((spike_report or {}).get("ok"))
+    blockers: List[str] = []
+    if not detection.get("available"):
+        blockers.append("opencamlib-module-missing")
+    if not probe_ready:
+        blockers.append("runtime-probe-not-ready-for-contact-spike")
+    if not spike_ready:
+        blockers.append("real-contact-spike-not-ready")
+    if not model_ready:
+        blockers.append("source-model-not-ready")
+    if not tool_ready:
+        blockers.append("target-tool-not-ready")
+    if not rotary_ready:
+        blockers.append("rotary-y-axis-mapping-not-ready")
+
+    can_attempt_candidate = not blockers
+    return {
+        "schema": "hediao3d.opencamlib-runner-readiness-report.v1",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "jobId": job.get("jobId"),
+        "level": "ready-for-real-contact-runner" if can_attempt_candidate else "blocked",
+        "canAttemptRealContactRunner": can_attempt_candidate,
+        "canEmitProductionCandidate": False,
+        "checks": [
+            {"id": "opencamlib-module", "status": "pass" if detection.get("available") else "fail", "summary": detection.get("module") or "missing"},
+            {"id": "runtime-probe", "status": "pass" if probe_ready else "fail", "summary": ((probe or {}).get("runnerReadiness") or {}).get("level") or "missing"},
+            {"id": "real-contact-spike", "status": "pass" if spike_ready else "fail", "summary": (spike_report or {}).get("level") or "missing"},
+            {"id": "source-model", "status": "pass" if model_ready else "fail", "summary": f"{geometry.get('format') or 'unknown'} triangles={geometry.get('triangleCount') or 0}"},
+            {"id": "target-tool", "status": "pass" if tool_ready else "fail", "summary": f"{tool.get('toolProfileId')} diameter={tool.get('diameterMm')} angle={tool.get('angleDeg')} flatTip={tool.get('flatTipMm')}"},
+            {"id": "rotary-y-axis-mapping", "status": "pass" if rotary_ready else "fail", "summary": json.dumps(axis_mapping, ensure_ascii=False)},
+        ],
+        "blockers": blockers,
+        "probe": summarize_probe_for_readiness(probe),
+        "contactSpike": summarize_spike_for_readiness(spike_report),
+        "geometry": {
+            "path": geometry.get("path"),
+            "format": geometry.get("format"),
+            "parser": geometry.get("parser"),
+            "triangleCount": geometry.get("triangleCount"),
+            "dimensions": geometry.get("dimensions"),
+            "warnings": geometry.get("warnings") or [],
+        },
+        "target": {
+            "machineProfileId": "desktop-3axis-rotary-y",
+            "toolProfileId": tool.get("toolProfileId"),
+            "axisMapping": axis_mapping,
+            "recommendedPrimary": sampling.get("recommendedPrimary"),
+        },
+        "nextActions": [
+            "Install or map OpenCAMLib/ocl Python bindings until runtime probe and real contact spike both pass.",
+            "Implement the real model drop-cutter/cutter-contact loop in opencamlib_runner.py using the proven binding sequence.",
+            "Emit neutral-toolpath.json plus opencamlib-cutter-contact-report.json and run opencamlib-contact-output-validate.mjs.",
+            "Keep HeDiao3D production NC locked until CAMotics/material-removal, air-run, trial feedback and machine acceptance evidence are bound.",
+        ],
+        "productionBoundary": "This readiness report is diagnostic evidence only. It does not generate machine NC and must not unlock trial or production output.",
+    }
+
+
+def load_runtime_probe_report() -> Optional[Dict[str, Any]]:
+    try:
+        from opencamlib_probe import create_probe_report  # type: ignore
+        report = create_probe_report()
+        return report if isinstance(report, dict) else None
+    except Exception:
+        return None
+
+
+def run_contact_spike_precheck(out_path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        from opencamlib_contact_spike import run_spike  # type: ignore
+        report = run_spike(neutral_path=out_path.with_name("neutral-toolpath-spike.json"), force=False)
+        write_json(out_path, report)
+        return report if isinstance(report, dict) else None
+    except Exception as exc:  # noqa: BLE001 - readiness must capture deployment mismatch.
+        report = {
+            "schema": "hediao3d.opencamlib-real-contact-spike.v1",
+            "ok": False,
+            "level": "precheck-error",
+            "summary": f"contact spike precheck failed inside runner readiness: {type(exc).__name__}: {exc}",
+            "productionLocked": True,
+        }
+        write_json(out_path, report)
+        return report
+
+
+def summarize_probe_for_readiness(probe: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not probe:
+        return {
+            "schema": "hediao3d.opencamlib-runtime-probe-summary.v1",
+            "status": "missing",
+            "selectedModule": None,
+            "canAttemptRealContactSpike": False,
+        }
+    return {
+        "schema": "hediao3d.opencamlib-runtime-probe-summary.v1",
+        "status": probe.get("level"),
+        "selectedModule": probe.get("selectedModule"),
+        "canAttemptRealContactSpike": bool(((probe.get("runnerReadiness") or {}).get("canAttemptRealContactSpike"))),
+        "recommendedBindingsStatus": (probe.get("recommendedBindings") or {}).get("status"),
+    }
+
+
+def summarize_spike_for_readiness(spike_report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not spike_report:
+        return {
+            "schema": "hediao3d.opencamlib-real-contact-spike-summary.v1",
+            "status": "missing",
+            "ok": False,
+        }
+    return {
+        "schema": "hediao3d.opencamlib-real-contact-spike-summary.v1",
+        "status": spike_report.get("level"),
+        "ok": bool(spike_report.get("ok")),
+        "selectedModule": spike_report.get("selectedModule"),
+        "checkCount": len(spike_report.get("checks") or []),
+        "productionLocked": spike_report.get("productionLocked") is not False,
     }
 
 

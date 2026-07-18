@@ -32,6 +32,7 @@
     "test:v3:blendercam-external-handoff": "node scripts/v3-blendercam-external-handoff-test.mjs",
     "test:v3:repair-artifact-handoff": "node scripts/v3-repair-artifact-handoff-test.mjs",
     "test:v3:opencamlib-runner": "node scripts/v3-opencamlib-runner-contract-test.mjs",
+    "test:v3:opencamlib-adapter-readiness": "node scripts/v3-opencamlib-adapter-readiness-test.mjs",
     "test:v3:opencamlib-probe": "node scripts/v3-opencamlib-probe-test.mjs",
     "test:v3:opencamlib-contact-spike": "node scripts/v3-opencamlib-contact-spike-test.mjs",
     "test:v3:opencamlib-contact-validate": "node scripts/v3-opencamlib-contact-output-validate-test.mjs",

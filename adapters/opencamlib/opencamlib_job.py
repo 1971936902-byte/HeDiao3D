@@ -459,9 +459,11 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
             "error": f"OpenCAMLib external command failed to start: {exc}",
         }
     if run.returncode != 0:
+        runner_readiness = read_json_if_exists(neutral_path.with_name("opencamlib-runner-readiness.json"))
         return {
             "status": "adapter_not_ready",
             "error": f"OpenCAMLib external command exited {run.returncode}: {(run.stderr or run.stdout or '').strip()[:1200]}",
+            "runnerReadiness": summarize_runner_readiness(runner_readiness, neutral_path.with_name("opencamlib-runner-readiness.json")),
             "externalCommand": {
                 "command": " ".join(command_parts),
                 "commandParts": command_parts,
@@ -548,6 +550,38 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
             "stdoutTail": run.stdout[-1200:],
             "stderrTail": run.stderr[-1200:],
         },
+    }
+
+
+def read_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def summarize_runner_readiness(report: Optional[Dict[str, Any]], path: Path) -> Dict[str, Any]:
+    if not report:
+        return {
+            "schema": "hediao3d.opencamlib-runner-readiness-summary.v1",
+            "status": "missing",
+            "path": str(path),
+            "canAttemptRealContactRunner": False,
+            "summary": "OpenCAMLib runner did not write a readiness report.",
+        }
+    return {
+        "schema": "hediao3d.opencamlib-runner-readiness-summary.v1",
+        "status": report.get("level") or "unknown",
+        "path": str(path),
+        "canAttemptRealContactRunner": bool(report.get("canAttemptRealContactRunner")),
+        "canEmitProductionCandidate": bool(report.get("canEmitProductionCandidate")),
+        "blockers": report.get("blockers") or [],
+        "contactSpikeStatus": (report.get("contactSpike") or {}).get("status"),
+        "probeStatus": (report.get("probe") or {}).get("status"),
+        "productionBoundary": report.get("productionBoundary"),
     }
 
 
@@ -1018,6 +1052,7 @@ def main() -> int:
                     "schema": "hediao3d.neutral-toolpath.v1" if attempt.get("neutralToolpathPath") else None,
                 },
                 "handoffEvidence": attempt.get("handoffEvidence") or create_missing_handoff_evidence(ENGINE, "neutral-toolpath", attempt),
+                "opencamlibRunnerReadiness": attempt.get("runnerReadiness"),
                 "externalCommand": attempt.get("externalCommand"),
             },
         )
