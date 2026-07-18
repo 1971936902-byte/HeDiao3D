@@ -1318,6 +1318,7 @@ type V3AdapterValidationSummary = {
     json?: string;
     markdown?: string;
     runbook?: string;
+    linuxEvidence?: string;
   };
 };
 
@@ -1582,6 +1583,16 @@ type V3ReadinessSummary = {
     blockingFailedCount?: number;
     productionSafe?: boolean;
     identityValid?: boolean;
+    linuxEvidence?: {
+      status?: string;
+      foundCount?: number;
+      requiredFoundCount?: number;
+      missingRequired?: string[];
+      files?: Array<{
+        filename?: string;
+        status?: string;
+      }>;
+    };
     failedSteps: Array<{
       id: string;
       title: string;
@@ -1694,6 +1705,7 @@ type V3ReadinessSummary = {
     markdown?: string;
     runbook?: string;
     camServerConfig?: string;
+    linuxEvidence?: string;
   };
 };
 
@@ -5911,6 +5923,15 @@ export function App() {
                     {v3Readiness.runbookResult ? ` · 阻断 ${v3Readiness.runbookResult.blockingFailedCount ?? "-"} · 身份 ${v3Readiness.runbookResult.identityValid ? "已绑定" : "待复核"} · safe ${v3Readiness.runbookResult.productionSafe ? "yes" : "no"}` : ""}
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
                   </small>
+                  {v3Readiness.runbookResult?.linuxEvidence && (
+                    <small className={v3Readiness.runbookResult.linuxEvidence.status === "ready-for-review" ? "v3-inline-ok" : "v3-inline-critical"}>
+                      Linux证据：{formatRunbookLinuxEvidenceStatus(v3Readiness.runbookResult.linuxEvidence.status)}
+                      {` · 必需 ${v3Readiness.runbookResult.linuxEvidence.requiredFoundCount ?? 0}/2`}
+                      {v3Readiness.runbookResult.linuxEvidence.missingRequired?.length
+                        ? ` · 缺 ${v3Readiness.runbookResult.linuxEvidence.missingRequired.join(", ")}`
+                        : ""}
+                    </small>
+                  )}
                   {!V3_TRIAL_FOCUSED_UI && v3Readiness.acceptancePlan && (
                     <>
                       <small>
@@ -5951,6 +5972,11 @@ export function App() {
                     {v3Readiness.apiArtifacts?.runbook && (
                       <a href={v3Readiness.apiArtifacts.runbook} download>
                         下载验收脚本
+                      </a>
+                    )}
+                    {v3Readiness.apiArtifacts?.linuxEvidence && (
+                      <a href={v3Readiness.apiArtifacts.linuxEvidence} download>
+                        下载Linux证据JSON
                       </a>
                     )}
                     {v3Readiness.apiArtifacts?.camServerConfig && (
@@ -8335,6 +8361,13 @@ function formatReadinessCamoticsSource(source: string) {
   if (source === "camotics-import-contract") return "全局导入契约";
   if (source === "missing") return "缺失";
   return source;
+}
+
+function formatRunbookLinuxEvidenceStatus(status?: string) {
+  if (status === "ready-for-review") return "已随ZIP回填";
+  if (status === "missing-zip") return "缺少结果ZIP";
+  if (status === "incomplete") return "证据不完整";
+  return status ?? "未生成";
 }
 
 function findV3DeliveryFile(job: V3OrchestratorJob | null, filename: string) {
