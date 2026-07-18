@@ -2203,6 +2203,7 @@ export function App() {
   const [v3RunbookResultFile, setV3RunbookResultFile] = useState<File | null>(null);
   const [v3RunbookResultZipFile, setV3RunbookResultZipFile] = useState<File | null>(null);
   const [v3Status, setV3Status] = useState("等待引擎探测");
+  const [v3UserNotice, setV3UserNotice] = useState<{ level: "ok" | "warning" | "error" | "info"; title: string; detail: string } | null>(null);
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
   const [taskJobs, setTaskJobs] = useState<TaskJob[]>([]);
   const [selectedTaskJobId, setSelectedTaskJobId] = useState<string | null>(null);
@@ -2321,29 +2322,31 @@ export function App() {
     [v3Job]
   );
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
+  const isOriginalModelSource = Boolean(originalModelFileName);
+  const isOriginalModelLocalPreview = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
+  const isModelReadyForCam = Boolean(aiMeshStlUrl && !isOriginalModelLocalPreview);
   const v3EvidenceLoopSummary = useMemo(
     () => createV3EvidenceLoopSummary(v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance),
     [v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
   );
   const v3TrialWorkflow = useMemo(
     () => createV3TrialWorkflowSummary({
-      hasModel: Boolean(aiMeshStlUrl || v3Job?.result),
+      hasModel: Boolean(isModelReadyForCam || v3Job?.result),
       job: v3Job,
       checklist: v3DownloadChecklistSummary,
       acceptance: selectedMachineAcceptance
     }),
-    [aiMeshStlUrl, v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
+    [isModelReadyForCam, v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
   );
   const v3FocusedNextAction = useMemo(
-    () => createV3FocusedNextAction(v3TrialWorkflow.activeStep.id, Boolean(aiMeshStlUrl), Boolean(v3Job?.result?.summary.deliveryManifest), isV3JobRunning),
-    [aiMeshStlUrl, isV3JobRunning, v3Job, v3TrialWorkflow.activeStep.id]
+    () => createV3FocusedNextAction(v3TrialWorkflow.activeStep.id, isModelReadyForCam, Boolean(v3Job?.result?.summary.deliveryManifest), isV3JobRunning),
+    [isModelReadyForCam, isV3JobRunning, v3Job, v3TrialWorkflow.activeStep.id]
   );
   const v3CamoticsPackageAcceptanceStep = useMemo(
     () => v3Readiness?.acceptancePlan?.steps.find((step) => step.id === "camotics-cli-package") ?? null,
     [v3Readiness]
   );
   const selectedToolpathPoints = selectedToolpathProgram?.points ?? toolpath?.points ?? [];
-  const isOriginalModelImported = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const viewingSimulation = workbenchView === "simulation" && Boolean(toolpath);
   const workbenchTitle =
     workbenchView === "simulation" && toolpath
@@ -3503,6 +3506,11 @@ export function App() {
       setAiMeshUrl(data.modelUrl);
       setAiMeshStlUrl(data.camModelUrl);
       setAiMeshStatus(`已导入原始3D模型：${file.name}，可直接生成 Mesh 刀路${toolpath ? "，当前 NC/G-code 已叠加显示" : ""}`);
+      setV3UserNotice({
+        level: "ok",
+        title: "原始3D模型已缓存",
+        detail: "模型已上传到后端 CAM 缓存，可以生成试雕刀路与安全包。"
+      });
       recordTask({
         category: "model",
         status: "ok",
@@ -3511,6 +3519,11 @@ export function App() {
       });
     } catch (error) {
       setAiMeshStatus(error instanceof Error ? error.message : "模型上传到本地 CAM 缓存失败；当前只能预览，不能生成刀路");
+      setV3UserNotice({
+        level: "error",
+        title: "原始3D模型缓存失败",
+        detail: error instanceof Error ? error.message : "当前只能在右侧预览，后端 CAM 暂时不能读取该模型。"
+      });
       recordTask({
         category: "model",
         status: "error",
@@ -3706,16 +3719,29 @@ export function App() {
   };
 
   const handleRunV3OrchestratorLoop = async () => {
-    if (!aiMeshStlUrl) {
-      setV3Status("请先导入或生成一个 GLB/STL 模型，再运行 V3 小闭环。");
+    if (!isModelReadyForCam) {
+      const message = isOriginalModelLocalPreview
+        ? "原始3D模型仍在本地预览状态，等待上传到后端 CAM 缓存后才能生成试雕刀路。"
+        : "请先导入或生成一个 GLB/STL 模型，再生成试雕刀路与安全包。";
+      setV3Status(message);
+      setV3UserNotice({
+        level: "warning",
+        title: "模型还不能生成刀路",
+        detail: message
+      });
       return;
     }
 
     setIsV3JobRunning(true);
-    setV3Status("正在提交 V3 Orchestrator 小闭环任务");
+    setV3UserNotice({
+      level: "info",
+      title: "正在生成试雕刀路与安全包",
+      detail: "后端会生成候选 NC、空跑、标定、报告和下载核验清单。"
+    });
+    setV3Status("正在提交 V3 Orchestrator 试雕刀路任务");
     const jobId = startTaskJob({
       category: "cam",
-      title: "V3 Orchestrator 小闭环",
+      title: "生成试雕刀路与安全包",
       detail: "正在探测外部 CAM 引擎，并用当前模型验证 Orchestrator -> CAM -> 后处理 -> 预览闭环。",
       retryAction: "generate-toolpath"
     });
@@ -3745,19 +3771,34 @@ export function App() {
       } else if (finalJob.result?.toolpath) {
         setToolpath(finalJob.result.toolpath);
         setToolpathKind("rough");
-        setWorkbenchView("model");
-        setIsSimulationMode(false);
+        setWorkbenchView("simulation");
+        setIsSimulationMode(true);
         await refreshV3JobHistory();
         appendTaskJobLog(jobId, `返回刀路：${finalJob.result.summary.points} 点。`, 86);
         finishTaskJob(jobId, "done", `完成：${finalJob.result.engine}，${finalJob.result.summary.points} 点。`);
-        setV3Status(`闭环完成：${finalJob.result.engine}${finalJob.result.fallbackFrom !== finalJob.result.engine ? `（从 ${finalJob.result.fallbackFrom} fallback）` : ""}`);
+        setV3Status(`试雕刀路与安全包已生成：${finalJob.result.engine}${finalJob.result.fallbackFrom !== finalJob.result.engine ? `（从 ${finalJob.result.fallbackFrom} fallback）` : ""}`);
+        setV3UserNotice({
+          level: "ok",
+          title: "试雕刀路已生成",
+          detail: `已生成 ${finalJob.result.summary.points} 个刀路点；右侧已切到“模拟雕刻”，可先检查方向、包覆范围和深浅。`
+        });
       } else {
         finishTaskJob(jobId, "error", finalJob.error ?? "Orchestrator 未返回刀路");
         setV3Status(finalJob.error ?? "Orchestrator 未返回刀路");
+        setV3UserNotice({
+          level: "error",
+          title: "未生成刀路",
+          detail: finalJob.error ?? "Orchestrator 未返回刀路"
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "V3 Orchestrator 小闭环失败";
       setV3Status(message);
+      setV3UserNotice({
+        level: "error",
+        title: "生成试雕刀路失败",
+        detail: message
+      });
       finishTaskJob(jobId, "error", message);
       recordTask({
         category: "cam",
@@ -3796,11 +3837,22 @@ export function App() {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`模型文件下载失败：${response.status}`);
       const blob = await response.blob();
-      downloadBlob(extractDownloadFilename(url, fallbackName), blob);
+      const filename = extractDownloadFilename(url, fallbackName);
+      downloadBlob(filename, blob);
+      setV3UserNotice({
+        level: "ok",
+        title: "模型文件已开始下载",
+        detail: filename
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "模型文件下载失败";
       setAiMeshStatus(message);
       setV3Status(message);
+      setV3UserNotice({
+        level: "error",
+        title: "模型文件下载失败",
+        detail: message
+      });
       recordTask({
         category: "model",
         status: "error",
@@ -3827,8 +3879,14 @@ export function App() {
       }
       const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-production-${stamp}.zip`, blob);
+      const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-production-${stamp}.zip`;
+      downloadBlob(filename, blob);
       setV3Status("V3 正式生产包已由 Orchestrator 打包");
+      setV3UserNotice({
+        level: "ok",
+        title: "正式生产包已开始下载",
+        detail: filename
+      });
       recordTask({
         category: "cam",
         status: "ok",
@@ -3838,6 +3896,11 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "V3 正式生产包下载失败";
       setV3Status(message);
+      setV3UserNotice({
+        level: "warning",
+        title: "正式生产包未解锁",
+        detail: message
+      });
       recordTask({
         category: "cam",
         status: "warning",
@@ -3866,8 +3929,14 @@ export function App() {
       }
       const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-safe-trial-${stamp}.zip`, blob);
+      const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-safe-trial-${stamp}.zip`;
+      downloadBlob(filename, blob);
       setV3Status("V3 安全试雕包已由 Orchestrator 打包");
+      setV3UserNotice({
+        level: manifest.allowTrialNc ? "ok" : "warning",
+        title: "安全试雕包已开始下载",
+        detail: manifest.allowTrialNc ? filename : `${filename}；当前未放行试雕 NC，请只按包内说明做空跑/标定。`
+      });
       recordTask({
         category: "cam",
         status: manifest.allowTrialNc ? "ok" : "warning",
@@ -3877,6 +3946,11 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "V3 安全试雕包下载失败";
       setV3Status(message);
+      setV3UserNotice({
+        level: "error",
+        title: "安全试雕包下载失败",
+        detail: message
+      });
       recordTask({
         category: "cam",
         status: "error",
@@ -3904,8 +3978,14 @@ export function App() {
       }
       const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-camotics-linux-${stamp}.zip`, blob);
+      const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-camotics-linux-${stamp}.zip`;
+      downloadBlob(filename, blob);
       setV3Status("CAMotics Linux 仿真包已由 Orchestrator 打包");
+      setV3UserNotice({
+        level: "ok",
+        title: "Linux 仿真包已开始下载",
+        detail: filename
+      });
       recordTask({
         category: "cam",
         status: "ok",
@@ -4132,7 +4212,7 @@ export function App() {
 
   const generateToolpathForSettings = async (baseSettings: ModelSettings, finishing: boolean) => {
     if (aiMeshUrl) {
-      if (isOriginalModelImported) {
+      if (isOriginalModelLocalPreview) {
         setAiMeshStatus("原始3D模型仍在本地预览状态，后端 CAM 还不能读取；请等待上传到本地 CAM 缓存完成后再生成刀路。");
         recordTask({
           category: "cam",
@@ -4932,24 +5012,34 @@ export function App() {
                   <FileImage size={17} />
                   载入测试结果
                 </button>}
-                <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing || isOriginalModelImported}>
+                <button className="demo-action repair-action" onClick={handleRepairMesh} type="button" disabled={!aiMeshStlUrl || isMeshRepairing || isOriginalModelSource}>
                   <Sparkles size={17} />
                   {isMeshRepairing ? "修复中..." : "修复缺损"}
                 </button>
-                <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing || isOriginalModelImported}>
+                <button className="demo-action repair-action ai-tool-wide" onClick={handleRemesh} type="button" disabled={!aiMeshUrl || isMeshRepairing || isOriginalModelSource}>
                   <Layers3 size={17} />
                   重建可雕刻网格
                 </button>
               </div>
               <div className="ai-status">{aiMeshStatus}</div>
               {aiMeshUrl && (
+                <div className={`model-cam-readiness ${isModelReadyForCam ? "ready" : "pending"}`}>
+                  <strong>{isModelReadyForCam ? "后端 CAM 可读取" : "仅本地预览"}</strong>
+                  <span>
+                    {isModelReadyForCam
+                      ? "模型已缓存为后端可访问文件，可以进入 V3 试雕刀路生成。"
+                      : "右侧可以先查看模型；上传缓存完成前不能生成刀路。"}
+                  </span>
+                </div>
+              )}
+              {aiMeshUrl && (
                 <div className="ai-links">
-                  <button type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")}>
-                    {isOriginalModelImported ? "下载原始模型" : "下载 GLB"}
+                  <button type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelSource ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")}>
+                    {isOriginalModelSource ? "下载原始模型" : "下载 GLB"}
                   </button>
                   {aiMeshStlUrl && (
-                    <button type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")}>
-                      {isOriginalModelImported ? "下载 STL" : "下载 AI STL"}
+                    <button type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelSource ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")}>
+                      {isOriginalModelSource ? "下载 STL" : "下载 AI STL"}
                     </button>
                   )}
                 </div>
@@ -5605,6 +5695,12 @@ export function App() {
             <h2>V3 Orchestrator 小闭环</h2>
           </div>
           <p className="panel-note">当前主线是三轴控制器 + Y轴旋转夹具：先跑 V3 小闭环，再下载安全试雕包做标定、空跑和低风险试雕。</p>
+            {V3_TRIAL_FOCUSED_UI && v3UserNotice && (
+              <div className={`v3-user-notice ${v3UserNotice.level}`}>
+                <strong>{v3UserNotice.title}</strong>
+                <span>{v3UserNotice.detail}</span>
+              </div>
+            )}
             {V3_TRIAL_FOCUSED_UI && (
               <div className="v3-focused-mainline">
                 <div>
@@ -5619,12 +5715,12 @@ export function App() {
               <button
                 className="primary-action package-action"
                 onClick={handleRunV3OrchestratorLoop}
-                disabled={isV3JobRunning || !aiMeshStlUrl}
+                disabled={isV3JobRunning || !isModelReadyForCam}
                 type="button"
-                title={aiMeshStlUrl ? "提交当前 GLB/STL 到后端 Orchestrator，生成旋转夹具空跑、候选试雕 NC、报告和清单" : "请先导入 GLB/STL 或用 Meshy 生成模型"}
+                title={isModelReadyForCam ? "提交当前 GLB/STL 到后端 Orchestrator，生成旋转夹具空跑、候选试雕 NC、报告和清单" : "请先导入 GLB/STL 或等待原始模型上传到后端缓存"}
               >
                 <Cloud size={17} />
-                {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
+                {isV3JobRunning ? "生成中..." : "生成试雕刀路与安全包"}
                   </button>
                   <button
                     className="primary-action package-action"
@@ -5733,12 +5829,12 @@ export function App() {
                     <button
                       className="primary-action package-action"
                       onClick={handleRunV3OrchestratorLoop}
-                      disabled={isV3JobRunning || !aiMeshStlUrl}
+                      disabled={isV3JobRunning || !isModelReadyForCam}
                       type="button"
-                      title={aiMeshStlUrl ? "生成三轴控制器 + Y轴旋转夹具专用试雕数据" : "请先导入 GLB/STL 或用 Meshy 生成模型"}
+                      title={isModelReadyForCam ? "生成三轴控制器 + Y轴旋转夹具专用试雕数据" : "请先导入 GLB/STL 或等待原始模型上传到后端缓存"}
                     >
                       <Cloud size={17} />
-                      {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
+                      {isV3JobRunning ? "生成中..." : "生成试雕刀路与安全包"}
                     </button>
                   )}
                   {v3TrialWorkflow.activeStep.id === "download" && (
@@ -5747,7 +5843,7 @@ export function App() {
                       onClick={handleDownloadV3TrialPackage}
                       disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
                       type="button"
-                      title={v3Job?.result?.summary.deliveryManifest ? "下载安全试雕包，正式生产 NC 仍受门禁控制" : "请先生成安全试雕数据"}
+                      title={v3Job?.result?.summary.deliveryManifest ? "下载安全试雕包，正式生产 NC 仍受门禁控制" : "请先生成试雕刀路与安全包"}
                     >
                       <Download size={17} />
                       {isV3PackageDownloading ? "打包中..." : "下载安全试雕包"}
@@ -7213,9 +7309,9 @@ export function App() {
               </div>
             )}
             {!V3_TRIAL_FOCUSED_UI && (
-              <button className="primary-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!aiMeshStlUrl || isV3JobRunning} type="button">
+              <button className="primary-action package-action" onClick={handleRunV3OrchestratorLoop} disabled={!isModelReadyForCam || isV3JobRunning} type="button">
                 <Cloud size={17} />
-                {isV3JobRunning ? "闭环运行中..." : "生成安全试雕数据"}
+                {isV3JobRunning ? "闭环运行中..." : "生成试雕刀路与安全包"}
               </button>
             )}
             {v3Job && (v3Job.status === "queued" || v3Job.status === "running") && (
@@ -7655,7 +7751,7 @@ export function App() {
           </div>
           <div className="status-pill">
             <BadgeInfo size={16} />
-            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "heatmap" && toolpath ? "正在查看包络误差热力图" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : isOriginalModelImported ? "已加载原始3D模型" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
+            <span>{viewingSimulation ? "正在查看刀路模拟结果" : workbenchView === "heatmap" && toolpath ? "正在查看包络误差热力图" : workbenchView === "gcode" && toolpath ? "正在查看合并 G-code" : workbenchView === "report" && toolpath ? "正在查看加工报告摘要" : isOriginalModelSource ? "已加载原始3D模型" : aiMeshUrl ? "已加载 Meshy AI 3D Mesh" : generatedDepth ? (isMultiviewGenerated ? "已生成本地360°环绕浮雕" : "已生成3D浮雕") : images.length > 0 ? "等待点击3D生成" : "未上传图片，显示内置示例"}</span>
           </div>
         </header>
 
@@ -7713,11 +7809,11 @@ export function App() {
             <>
               <div className="metric">
                 <span>模式</span>
-                <strong>{isOriginalModelImported ? "原始3D模型" : "Meshy AI Mesh"}</strong>
+                <strong>{isOriginalModelSource ? "原始3D模型" : "Meshy AI Mesh"}</strong>
               </div>
               <div className="metric wide">
                 <span>模型</span>
-                <strong>{isOriginalModelImported ? originalModelFileName : "GLB/STL真实网格"}</strong>
+                <strong>{isOriginalModelSource ? originalModelFileName : "GLB/STL真实网格"}</strong>
               </div>
               {toolpath && (
                 <div className="metric wide">
@@ -7726,15 +7822,15 @@ export function App() {
                 </div>
               )}
               {!V3_TRIAL_FOCUSED_UI && (
-                <button className="download" type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")} title="下载当前 GLB 模型文件">
+                <button className="download" type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelSource ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")} title="下载当前 GLB 模型文件">
                   <Download size={17} />
-                  {isOriginalModelImported ? "下载原始模型" : "下载 GLB"}
+                  {isOriginalModelSource ? "下载原始模型" : "下载 GLB"}
                 </button>
               )}
               {!V3_TRIAL_FOCUSED_UI && aiMeshStlUrl && (
-                <button className="download secondary" type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")} title="下载当前 STL 模型文件">
+                <button className="download secondary" type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelSource ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")} title="下载当前 STL 模型文件">
                   <Download size={17} />
-                  {isOriginalModelImported ? "下载 STL" : "下载 AI STL"}
+                  {isOriginalModelSource ? "下载 STL" : "下载 AI STL"}
                 </button>
               )}
             </>
@@ -7896,13 +7992,13 @@ export function App() {
                   {!v3Job?.result?.summary.deliveryManifest && (
                     <button
                       className="download"
-                      onClick={aiMeshStlUrl ? handleRunV3OrchestratorLoop : () => setActiveStage("model")}
+                      onClick={isModelReadyForCam ? handleRunV3OrchestratorLoop : () => setActiveStage("model")}
                       disabled={isV3JobRunning}
                       type="button"
-                      title={aiMeshStlUrl ? "直接提交 V3 小闭环，生成旋转夹具刀路和安全试雕包" : "先去导入 GLB/STL 或用 Meshy 生成模型"}
+                      title={isModelReadyForCam ? "直接提交 V3 小闭环，生成旋转夹具刀路和安全试雕包" : "先去导入 GLB/STL，或等待模型上传到后端缓存"}
                     >
-                      {aiMeshStlUrl ? <Cloud size={17} /> : <Box size={17} />}
-                      {isV3JobRunning ? "生成中..." : aiMeshStlUrl ? "生成安全试雕数据" : "导入3D模型"}
+                      {isModelReadyForCam ? <Cloud size={17} /> : <Box size={17} />}
+                      {isV3JobRunning ? "生成中..." : isModelReadyForCam ? "生成试雕刀路与安全包" : "导入3D模型"}
                     </button>
                   )}
                   {v3Job?.result?.summary.deliveryManifest && (
@@ -7980,7 +8076,7 @@ export function App() {
                 : images.length > 0 && !generatedDepth
                   ? "先点击左侧“3D生成”"
                   : V3_TRIAL_FOCUSED_UI
-                    ? "导入3D模型后在 CAM 面板生成安全试雕数据"
+                    ? "导入3D模型后在 CAM 面板生成试雕刀路与安全包"
                     : "调好模型后点击左侧“生成刀路”"}
             </div>
           )}
@@ -8531,11 +8627,11 @@ function createV3TrialWorkflowSummary({
       id: "model",
       title: "1. 导入 3D 佛头模型",
       status: hasModel ? "done" : "active",
-      detail: hasModel ? "已加载 GLB/STL，可进入 Orchestrator 小闭环。" : "先用 Meshy 生成或直接导入 GLB/STL，避免继续使用二维浮雕代替真实 3D。"
+      detail: hasModel ? "模型已缓存为后端可读取文件，可进入 Orchestrator 小闭环。" : "先用 Meshy 生成或直接导入 GLB/STL，避免继续使用二维浮雕代替真实 3D。"
     },
     {
       id: "orchestrator",
-      title: "2. 生成安全试雕数据",
+      title: "2. 生成试雕刀路与安全包",
       status: !hasModel ? "locked" : jobCompleted ? "done" : "active",
       detail: jobCompleted
         ? `任务 ${job?.id.slice(0, 8)} 已完成，包级别 ${job?.result?.summary.productionGate?.level ?? "trial-only"}。`
@@ -8590,8 +8686,8 @@ function createV3FocusedNextAction(
   if (isRunning) {
     return {
       level: "running",
-      title: "正在生成安全试雕数据",
-      detail: "完成后这里会切换为下载安全试雕包。"
+      title: "正在生成试雕刀路与安全包",
+      detail: "完成后右侧会自动切到模拟雕刻，并可下载安全试雕包。"
     };
   }
   if (!hasModel || activeStepId === "model") {
