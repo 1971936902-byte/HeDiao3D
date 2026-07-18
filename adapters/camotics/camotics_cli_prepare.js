@@ -505,11 +505,14 @@ function inspectFile(path) {
 }
 
 function createResultBundle({ resultPath, localValidationPath, artifactEvidence }) {
+  const resultContent = readFileSync(resultPath);
+  const localValidationContent = readFileSync(localValidationPath);
   const files = [
-    { name: "camotics-result.json", content: readFileSync(resultPath) },
-    { name: "camotics-result-local-validation.json", content: readFileSync(localValidationPath) },
+    { name: "camotics-result.json", role: "material-removal-result", content: resultContent },
+    { name: "camotics-result-local-validation.json", role: "local-validation", content: localValidationContent },
     {
       name: "README-CAMOTICS-RESULT.md",
+      role: "operator-readme",
       content: Buffer.from([
         "# HeDiao3D CAMotics Result Bundle",
         "",
@@ -518,6 +521,7 @@ function createResultBundle({ resultPath, localValidationPath, artifactEvidence 
         "Included files:",
         "- camotics-result.json",
         "- camotics-result-local-validation.json",
+        "- camotics-result-bundle-manifest.json",
         "- camotics-preview.png and/or camotics-material-removal.stl when available",
         "",
         "This bundle is material-removal evidence for readiness gates only. It does not unlock production NC by itself.",
@@ -526,12 +530,65 @@ function createResultBundle({ resultPath, localValidationPath, artifactEvidence 
     }
   ];
   if (artifactEvidence?.hasScreenshot && artifactEvidence.screenshot?.path) {
-    files.push({ name: "camotics-preview.png", content: readFileSync(artifactEvidence.screenshot.path) });
+    files.push({ name: "camotics-preview.png", role: "visual-evidence", content: readFileSync(artifactEvidence.screenshot.path) });
   }
   if (artifactEvidence?.hasMaterialMesh && artifactEvidence.materialMesh?.path) {
-    files.push({ name: "camotics-material-removal.stl", content: readFileSync(artifactEvidence.materialMesh.path) });
+    files.push({ name: "camotics-material-removal.stl", role: "material-removal-mesh", content: readFileSync(artifactEvidence.materialMesh.path) });
   }
+  const manifest = createResultBundleManifest(files, resultContent, localValidationContent);
+  files.splice(2, 0, {
+    name: "camotics-result-bundle-manifest.json",
+    role: "bundle-manifest",
+    content: Buffer.from(JSON.stringify(manifest, null, 2), "utf8")
+  });
   return createZip(files);
+}
+
+function createResultBundleManifest(files, resultContent, localValidationContent) {
+  let result = null;
+  let localValidation = null;
+  try {
+    result = JSON.parse(resultContent.toString("utf8"));
+  } catch {}
+  try {
+    localValidation = JSON.parse(localValidationContent.toString("utf8"));
+  } catch {}
+  return {
+    schema: "hediao3d.camotics-result-bundle-manifest.v1",
+    createdAt: new Date().toISOString(),
+    generator: "camotics-result-validate.js",
+    purpose: "Uploadable CAMotics/equivalent material-removal evidence bundle for one HeDiao3D V3 job.",
+    jobId: result?.jobId ?? null,
+    result: {
+      schema: result?.schema ?? null,
+      synthetic: result?.synthetic ?? null,
+      riskLevel: result?.riskLevel ?? null,
+      preferredGcodeSha256: result?.inputs?.preferredGcodeSha256 ?? null,
+      camoticsCliRunPackageSha256: result?.inputs?.camoticsCliRunPackageSha256 ?? null,
+      machineContext: result?.inputs?.machineContext ?? null
+    },
+    localValidation: {
+      schema: localValidation?.schema ?? null,
+      ok: Boolean(localValidation?.ok),
+      productionEvidenceEligible: Boolean(localValidation?.productionEvidenceEligible),
+      missing: Array.isArray(localValidation?.missing) ? localValidation.missing : []
+    },
+    files: files.map((file) => {
+      const data = Buffer.isBuffer(file.content) ? file.content : Buffer.from(String(file.content), "utf8");
+      return {
+        filename: file.name,
+        role: file.role ?? "artifact",
+        sizeBytes: data.length,
+        sha256: createHash("sha256").update(data).digest("hex")
+      };
+    }),
+    safetyLocks: {
+      productionUnlockFromBundle: false,
+      requiresServerImportAudit: true,
+      requiresReadinessRegeneration: true,
+      note: "This bundle can provide material-removal evidence only after HeDiao3D verifies hashes, local validation, motion profile and machine context."
+    }
+  };
 }
 
 function createZip(files) {

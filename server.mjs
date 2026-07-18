@@ -12725,6 +12725,7 @@ function createCamoticsResultImportAudit({ workDir, input, result, localValidati
     importRoute: "/api/orchestrator/jobs/:id/camotics-result",
     zipBundle: zipBundleFilename,
     zipEntries: Array.isArray(zipBundle?.entries) ? zipBundle.entries.slice(0, 80) : [],
+    zipManifest: summarizeCamoticsResultBundleManifest(zipBundle?.manifest),
     result: {
       schema: result?.schema ?? null,
       jobId: result?.jobId ?? null,
@@ -12781,6 +12782,7 @@ function extractCamoticsResultZipBundle(value) {
   const resultEntry = findEntry((name) => /(^|\/)camotics-result\.json$/.test(name) && !/template/.test(name));
   if (!resultEntry) throw new Error("ZIP 中找不到 camotics-result.json。");
   const localValidationEntry = findEntry((name) => /(^|\/)camotics-result-local-validation\.json$/.test(name));
+  const manifestEntry = findEntry((name) => /(^|\/)camotics-result-bundle-manifest\.json$/.test(name));
   const screenshotEntry = findEntry((name) => /\.(png|jpg|jpeg|webp)$/.test(name) && /camotics|preview|screenshot/.test(name));
   const materialMeshEntry = findEntry((name) => /\.stl$/.test(name) && /material|removal|camotics/.test(name));
   return {
@@ -12791,8 +12793,46 @@ function extractCamoticsResultZipBundle(value) {
     })),
     result: parseJsonBuffer(resultEntry.content, "camotics-result.json"),
     localValidation: localValidationEntry ? parseJsonBuffer(localValidationEntry.content, "camotics-result-local-validation.json") : null,
+    manifest: manifestEntry ? parseJsonBuffer(manifestEntry.content, "camotics-result-bundle-manifest.json") : null,
     screenshot: screenshotEntry ? { name: screenshotEntry.name, content: screenshotEntry.content } : null,
     materialMesh: materialMeshEntry ? { name: materialMeshEntry.name, content: materialMeshEntry.content } : null
+  };
+}
+
+function summarizeCamoticsResultBundleManifest(manifest) {
+  if (!manifest || typeof manifest !== "object") return null;
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  return {
+    schema: manifest.schema ?? null,
+    createdAt: manifest.createdAt ?? null,
+    generator: manifest.generator ?? null,
+    purpose: manifest.purpose ?? null,
+    jobId: manifest.jobId ?? null,
+    fileCount: files.length,
+    files: files.slice(0, 40).map((file) => ({
+      filename: String(file?.filename ?? "").slice(0, 200),
+      role: String(file?.role ?? "artifact").slice(0, 80),
+      sizeBytes: Number.isFinite(Number(file?.sizeBytes)) ? Number(file.sizeBytes) : null,
+      sha256: typeof file?.sha256 === "string" ? file.sha256.toLowerCase().slice(0, 128) : null
+    })),
+    localValidation: {
+      ok: manifest.localValidation?.ok === true,
+      productionEvidenceEligible: manifest.localValidation?.productionEvidenceEligible === true,
+      missing: Array.isArray(manifest.localValidation?.missing) ? manifest.localValidation.missing.slice(0, 20).map(String) : []
+    },
+    result: {
+      synthetic: manifest.result?.synthetic ?? null,
+      riskLevel: manifest.result?.riskLevel ?? null,
+      preferredGcodeSha256: typeof manifest.result?.preferredGcodeSha256 === "string" ? manifest.result.preferredGcodeSha256.toLowerCase() : null,
+      camoticsCliRunPackageSha256: typeof manifest.result?.camoticsCliRunPackageSha256 === "string" ? manifest.result.camoticsCliRunPackageSha256.toLowerCase() : null,
+      machineContext: manifest.result?.machineContext ?? null
+    },
+    safetyLocks: {
+      productionUnlockFromBundle: manifest.safetyLocks?.productionUnlockFromBundle === true,
+      requiresServerImportAudit: manifest.safetyLocks?.requiresServerImportAudit === true,
+      requiresReadinessRegeneration: manifest.safetyLocks?.requiresReadinessRegeneration === true,
+      note: typeof manifest.safetyLocks?.note === "string" ? manifest.safetyLocks.note.slice(0, 500) : null
+    }
   };
 }
 

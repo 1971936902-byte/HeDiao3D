@@ -248,6 +248,7 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     const bundleNames = listZipFilenames(readFileSync(bundlePath));
     assert(bundleNames.includes("camotics-result.json"), "CAMotics result bundle missing result JSON");
     assert(bundleNames.includes("camotics-result-local-validation.json"), "CAMotics result bundle missing local validation");
+    assert(bundleNames.includes("camotics-result-bundle-manifest.json"), "CAMotics result bundle missing bundle manifest");
     assert(bundleNames.includes("camotics-preview.png"), "CAMotics result bundle missing screenshot");
     assert(bundleNames.includes("camotics-material-removal.stl"), "CAMotics result bundle missing material mesh");
     assert(bundleNames.includes("README-CAMOTICS-RESULT.md"), "CAMotics result bundle missing README");

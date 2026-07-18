@@ -123,6 +123,7 @@ async function main() {
     resultZipDataUrl: toZipDataUrl({
       "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2),
       "camotics-result-local-validation.json": JSON.stringify(createLocalValidation(true), null, 2),
+      "camotics-result-bundle-manifest.json": JSON.stringify(createBundleManifest(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2),
       "camotics-preview.png": "zip-fixture-camotics-png",
       "camotics-material-removal.stl": "solid zip_material\nendsolid zip_material\n"
     })
@@ -139,6 +140,9 @@ async function main() {
   const zipImportAuditArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
   assert(zipImportAuditArtifact.zipBundle === "imported-camotics-result-bundle.zip", "zip import audit should record source bundle");
   assert(zipImportAuditArtifact.zipEntries?.some((entry) => /camotics-result\.json$/.test(entry.name)), "zip import audit should record result entry");
+  assert(zipImportAuditArtifact.zipManifest?.schema === "hediao3d.camotics-result-bundle-manifest.v1", "zip import audit should record result bundle manifest");
+  assert(zipImportAuditArtifact.zipManifest?.jobId === job.id, "zip import audit should expose manifest job id");
+  assert(zipImportAuditArtifact.zipManifest?.safetyLocks?.productionUnlockFromBundle === false, "zip manifest should keep production unlock locked");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256),
@@ -239,6 +243,40 @@ function createLocalValidation(ok) {
     ],
     missing: ok ? [] : ["run-package-hash"],
     summary: ok ? "CAMotics local validation passed: result is eligible to be imported as material-removal evidence." : "CAMotics local validation failed: run-package-hash"
+  };
+}
+
+function createBundleManifest(jobId, preferredGcodeSha256, motionProfile, runPackageSha256) {
+  return {
+    schema: "hediao3d.camotics-result-bundle-manifest.v1",
+    createdAt: new Date().toISOString(),
+    generator: "v3-camotics-result-api-test",
+    purpose: "Uploadable CAMotics fixture bundle for API import test.",
+    jobId,
+    result: {
+      schema: "hediao3d.camotics-result.v1",
+      synthetic: false,
+      riskLevel: "ready",
+      preferredGcodeSha256,
+      camoticsCliRunPackageSha256: runPackageSha256,
+      machineContext: motionProfile.machineContext
+    },
+    localValidation: {
+      schema: "hediao3d.camotics-result-local-validation.v1",
+      ok: true,
+      productionEvidenceEligible: true,
+      missing: []
+    },
+    files: [
+      { filename: "camotics-result.json", role: "material-removal-result", sizeBytes: 1, sha256: "0".repeat(64) },
+      { filename: "camotics-result-local-validation.json", role: "local-validation", sizeBytes: 1, sha256: "1".repeat(64) }
+    ],
+    safetyLocks: {
+      productionUnlockFromBundle: false,
+      requiresServerImportAudit: true,
+      requiresReadinessRegeneration: true,
+      note: "Fixture bundle does not unlock production by itself."
+    }
   };
 }
 
