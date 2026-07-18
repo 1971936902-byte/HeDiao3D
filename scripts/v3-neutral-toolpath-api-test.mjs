@@ -180,7 +180,7 @@ async function main() {
   candidateNeutral.cutterContactReport = {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     inputIdentity: {
-      sourceNeutralToolpathSha256: candidateHash
+      neutralToolpathWithoutContactReportSha256: candidateHash
     },
     quality: {
       level: "ready",

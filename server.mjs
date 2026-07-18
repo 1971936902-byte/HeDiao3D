@@ -4159,7 +4159,11 @@ function createNeutralImportContactIdentityBinding(identity, expectedIdentity = 
     expectedIdentity.neutralToolpathWithoutContactReportSha256
   ].filter(Boolean).map(String);
   const reported = identity && typeof identity === "object"
-    ? identity.sourceNeutralToolpathSha256 ?? identity.neutralToolpathSha256 ?? identity.externalNeutralToolpathSha256 ?? null
+    ? identity.sourceNeutralToolpathSha256
+      ?? identity.neutralToolpathSha256
+      ?? identity.externalNeutralToolpathSha256
+      ?? identity.neutralToolpathWithoutContactReportSha256
+      ?? null
     : null;
   const status = acceptable.length > 0 && reported && acceptable.includes(String(reported))
     ? "bound"
