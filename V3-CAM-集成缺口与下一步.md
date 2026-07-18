@@ -106,6 +106,23 @@ stepToCutterRatio 达标
 同一模型重复生成结果稳定
 ```
 
+当前已固化的候选门槛：
+
+```text
+npm run test:v3:opencamlib-contact-validate
+```
+
+该验证器现在要求真实 OpenCAMLib contact report 同时满足：
+
+- `contactSampling.algorithm` 属于 `drop-cutter` / `cutter-contact` / `waterline`，且不含 `preview` / `heightfield` / `scaffold`。
+- `tool.diameterMm`、`tool.angleDeg`、`tool.flatTipMm` 完整绑定当前 4mm 25度平底尖刀。
+- `contactSampling.hitRate >= 0.995`。
+- `contactSampling.stepToCutterRatio <= 0.25`。
+- `residualMaterial.maxGougeMm <= tolerances.maxGougeMm`，默认 0.03mm。
+- `residualMaterial.maxUndercutMm <= tolerances.maxUndercutMm`，默认 0.08mm。
+
+这一步不是完成真实 CAM，而是防止后续 runner 只写 `productionCandidate=true` 就绕过门禁。
+
 ### P0-3 真实材料去除仿真
 
 当前缺口：
@@ -368,6 +385,7 @@ Y = 旋转角度 / 360 * rotaryWrapPerRevolutionMm
 - 从 STL/OBJ 输入开始，暂时不要把 GLB 转换复杂性放进 P0。
 - 输出非 preview neutral toolpath。
 - 输出 hash-bound cutter contact report。
+- contact report 必须通过 `npm run test:v3:opencamlib-contact-validate` 的真实算法、刀具、采样和残料指标门槛。
 - 进入 HeDiao3D wrapY 后处理。
 
 ### 第三步：真实仿真结果回填

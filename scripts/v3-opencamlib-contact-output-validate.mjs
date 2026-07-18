@@ -49,6 +49,7 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
     check(checks, "quality-postprocessEligible", quality.postprocessEligible === true, "contact quality.postprocessEligible must be true", expectProductionCandidate ? errors : warnings);
     check(checks, "quality-productionCandidate", quality.productionCandidate === true, "contact quality.productionCandidate must be true", expectProductionCandidate ? errors : warnings);
     check(checks, "quality-not-preview", quality.previewScaffold !== true && !/preview|scaffold/i.test(String(quality.level ?? "")), "contact report must not be preview/scaffold", expectProductionCandidate ? errors : warnings);
+    checkProductionContactEvidence(checks, contact, expectProductionCandidate ? errors : warnings);
 
     const identity = contact.inputIdentity && typeof contact.inputIdentity === "object" ? contact.inputIdentity : {};
     const reportedNeutral = [
@@ -121,6 +122,39 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
   };
 }
 
+function checkProductionContactEvidence(checks, contact, target) {
+  const algorithm = String(contact?.contactSampling?.algorithm ?? contact?.mode ?? "");
+  const tool = contact?.tool && typeof contact.tool === "object" ? contact.tool : {};
+  const sampling = contact?.contactSampling && typeof contact.contactSampling === "object" ? contact.contactSampling : {};
+  const residual = contact?.residualMaterial && typeof contact.residualMaterial === "object" ? contact.residualMaterial : {};
+  const tolerance = contact?.tolerances && typeof contact.tolerances === "object" ? contact.tolerances : {};
+  const maxGougeMm = numberOrNull(residual.maxGougeMm);
+  const maxUndercutMm = numberOrNull(residual.maxUndercutMm);
+  const gougeToleranceMm = numberOrNull(tolerance.maxGougeMm) ?? 0.03;
+  const undercutToleranceMm = numberOrNull(tolerance.maxUndercutMm) ?? 0.08;
+  const hitRate = numberOrNull(sampling.hitRate);
+  const pointCount = numberOrNull(sampling.pointCount);
+  const contactPointCount = numberOrNull(sampling.contactPointCount ?? sampling.pointCount);
+  const stepToCutterRatio = numberOrNull(sampling.stepToCutterRatio ?? sampling.samplingQuality?.stepToCutterRatio);
+
+  check(
+    checks,
+    "contact-algorithm-real",
+    /(drop-cutter|cutter-contact|waterline)/i.test(algorithm) && !/(preview|heightfield|scaffold|fixture|synthetic)/i.test(algorithm),
+    "contactSampling.algorithm must be a real OpenCAMLib drop-cutter/cutter-contact/waterline algorithm, not preview/heightfield/scaffold",
+    target,
+    { reported: algorithm || null }
+  );
+  check(checks, "contact-tool-diameter", numberOrNull(tool.diameterMm) > 0, "contact report tool.diameterMm must be positive", target, { reported: tool.diameterMm ?? null });
+  check(checks, "contact-tool-angle", numberOrNull(tool.angleDeg) > 0, "contact report tool.angleDeg must be positive", target, { reported: tool.angleDeg ?? null });
+  check(checks, "contact-tool-flat-tip", numberOrNull(tool.flatTipMm) >= 0, "contact report tool.flatTipMm must be present and non-negative", target, { reported: tool.flatTipMm ?? null });
+  check(checks, "contact-sampling-hit-rate", hitRate !== null && hitRate >= 0.995, "contactSampling.hitRate must be at least 99.5%", target, { reported: hitRate });
+  check(checks, "contact-sampling-point-count", pointCount !== null && pointCount > 0 && contactPointCount !== null && contactPointCount > 0, "contactSampling point/contact counts must be positive", target, { pointCount, contactPointCount });
+  check(checks, "contact-sampling-step-ratio", stepToCutterRatio !== null && stepToCutterRatio <= 0.25, "contact sampling step-to-cutter ratio must be <= 0.25", target, { reported: stepToCutterRatio });
+  check(checks, "contact-residual-gouge", maxGougeMm !== null && maxGougeMm <= gougeToleranceMm, "residualMaterial.maxGougeMm must be present and within tolerance", target, { reported: maxGougeMm, tolerance: gougeToleranceMm });
+  check(checks, "contact-residual-undercut", maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm, "residualMaterial.maxUndercutMm must be present and within tolerance", target, { reported: maxUndercutMm, tolerance: undercutToleranceMm });
+}
+
 function resolveContactPath(neutralPath, neutral) {
   const candidates = [
     neutral.cutterContactReportPath,
@@ -187,6 +221,12 @@ function optionalPath(value) {
 
 function parseBool(value) {
   return /^(1|true|yes|on)$/i.test(String(value ?? ""));
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function parseArgs(argv) {

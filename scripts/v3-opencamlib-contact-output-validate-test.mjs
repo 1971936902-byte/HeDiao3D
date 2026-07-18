@@ -42,6 +42,8 @@ try {
   assert(readyReport.level === "ready", `expected ready, got ${readyReport.level}`);
   assert(readyReport.productionCandidateEligible === true, "ready report should be production candidate eligible");
   assert(readyReport.checks.some((check) => check.id === "identity-neutral" && check.status === "pass"), "neutral identity should pass");
+  assert(readyReport.checks.some((check) => check.id === "contact-algorithm-real" && check.status === "pass"), "real contact algorithm evidence should pass");
+  assert(readyReport.checks.some((check) => check.id === "contact-residual-gouge" && check.status === "pass"), "residual gouge evidence should pass");
 
   const previewNeutralPath = join(workDir, "preview-neutral-toolpath.json");
   const previewContactPath = join(workDir, "preview-contact-report.json");
@@ -70,6 +72,31 @@ try {
   const blockedReport = JSON.parse(blocked.stdout);
   assert(blockedReport.level === "critical", "preview output should be critical when production candidate is expected");
   assert(blockedReport.errors.some((error) => /preview/i.test(error)), "preview error should be reported");
+  assert(blockedReport.errors.some((error) => /drop-cutter|cutter-contact|heightfield/i.test(error)), "preview output should fail real algorithm evidence");
+
+  const weakContactPath = join(workDir, "weak-contact-report.json");
+  const weakNeutralPath = join(workDir, "weak-neutral-toolpath.json");
+  const weakNeutral = createNeutral(weakContactPath);
+  const weakSha = sha256Json(weakNeutral);
+  const weakContact = createContact({
+    modelSha: sha256File(modelPath),
+    planSha: sha256File(planPath),
+    neutralSha: weakSha,
+    productionCandidate: true,
+    previewScaffold: false,
+    weakEvidence: true
+  });
+  weakNeutral.cutterContactReport = weakContact;
+  writeFileSync(weakNeutralPath, JSON.stringify(weakNeutral, null, 2), "utf8");
+  writeFileSync(weakContactPath, JSON.stringify(weakContact, null, 2), "utf8");
+  const weak = spawnSync(node, [validator, "--neutral", weakNeutralPath, "--plan", planPath, "--model", modelPath, "--contact", weakContactPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(weak.status === 3, `weak contact evidence should fail strict mode, got ${weak.status}: ${weak.stdout}`);
+  const weakReport = JSON.parse(weak.stdout);
+  assert(weakReport.errors.some((error) => /hitRate|过切|gouge|maxGouge|step-to-cutter/i.test(error)), "weak contact evidence should report quality metric failures");
 
   console.log(JSON.stringify({
     ok: true,
@@ -114,7 +141,7 @@ function createNeutral(contactPath) {
   };
 }
 
-function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold }) {
+function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false }) {
   return {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     jobId: "contact-output-validate-test",
@@ -125,6 +152,28 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
       planSha256: planSha,
       neutralToolpathWithoutContactReportSha256: neutralSha,
       sourceNeutralToolpathSha256: neutralSha
+    },
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      flatTipMm: 0.4,
+      angleDeg: 25
+    },
+    contactSampling: {
+      algorithm: previewScaffold ? "rotary-ray-heightfield-envelope-preview" : "opencamlib-drop-cutter-contact",
+      pointCount: 3,
+      contactPointCount: 3,
+      hitRate: weakEvidence ? 0.91 : 1,
+      stepToCutterRatio: weakEvidence ? 0.42 : 0.18
+    },
+    residualMaterial: {
+      maxGougeMm: weakEvidence ? 0.12 : 0.01,
+      maxUndercutMm: weakEvidence ? 0.18 : 0.03,
+      residualVolumeMm3: weakEvidence ? 6.5 : 0.4
+    },
+    tolerances: {
+      maxGougeMm: 0.03,
+      maxUndercutMm: 0.08
     },
     quality: {
       level: previewScaffold ? "preview-scaffold" : "validated-contact",
