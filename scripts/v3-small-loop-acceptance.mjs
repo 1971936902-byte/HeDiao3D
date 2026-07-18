@@ -12,6 +12,11 @@ const steps = [
     command: [process.execPath, join("node_modules", "vite", "bin", "vite.js"), "build"]
   },
   {
+    id: "buddha-fixture",
+    label: "Fixed Buddha 3D regression fixture",
+    command: [process.execPath, join("scripts", "v3-buddha-fixture-baseline-test.mjs")]
+  },
+  {
     id: "v3-smoke",
     label: "V3 orchestrator smoke loop",
     command: [process.execPath, join("scripts", "v3-smoke-test.mjs")]

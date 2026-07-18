@@ -4473,8 +4473,8 @@ export function App() {
 
   const handleLoadLocalMeshyResult = () => {
     releaseImportedModelObjectUrl();
-    setAiMeshUrl("/meshy-results/material01-meshy.glb");
-    setAiMeshStlUrl("/meshy-results/material01-meshy.stl");
+    setAiMeshUrl("/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb");
+    setAiMeshStlUrl("/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl");
     setOriginalModelFileName(null);
     setModelSubStage("inspection");
     setMeshQuality(null);

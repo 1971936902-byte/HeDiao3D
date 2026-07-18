@@ -1,0 +1,94 @@
+{
+  "schema": "hediao3d.v3-buddha-fixture-baseline.v1",
+  "id": "buddha-material01-multiview-meshy-2026-07-16",
+  "label": "V3 Buddha regression fixture from material01 multi-view Meshy result",
+  "createdAt": "2026-07-16T08:26:07.000Z",
+  "purpose": "Stable regression input for HeDiao3D V3 rotary-wrap CAM, simulation, postprocess and field-evidence loops.",
+  "model": {
+    "glbUrl": "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb",
+    "stlUrl": "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl",
+    "glbSha256": "4ac7c450eac8be2d1742648ac476799faab91742d0bfbaf80ec2efd52cdf43ff",
+    "stlSha256": "d8ab4829b573c2edd3f4cb27fe72d51365f42321166616d6b57cfb955fe42163",
+    "glbBytes": 15691788,
+    "stlBytes": 22576884,
+    "stlTriangles": 451536,
+    "stlBoundsRaw": {
+      "min": [-494.4590148925781, -433.2739562988281, -950.4439697265625],
+      "max": [493.7610168457031, 433.7640075683594, 947.7940063476562],
+      "span": [988.2200317382812, 867.0379638671875, 1898.2379760742188],
+      "longAxis": "Z"
+    },
+    "preferredCamInput": "stl",
+    "meshQualityFromReport": {
+      "status": "ready",
+      "score": 100,
+      "triangles": 451536,
+      "boundaryEdges": 0,
+      "nonManifoldEdges": 0,
+      "degenerateFaces": 0,
+      "longAxis": "Z"
+    },
+    "legacyFallbackUrl": "/meshy-results/material01-meshy.glb"
+  },
+  "sourceImages": {
+    "directory": "/test-assets/01",
+    "count": 6,
+    "qualityNote": "Original photos were usable but low-scoring; Meshy output is still better than the earlier material01-meshy baseline for CAM envelope tests.",
+    "files": [
+      { "filename": "0.png", "bytes": 2323062, "sha256": "7ff482073ee5445362b411f32e2b90280754a18ebda55443bae8ab8b0b614cc1" },
+      { "filename": "1.png", "bytes": 3119727, "sha256": "4f0832a4a1aede326ec242b7fd00e82dde4caf2a43eb7ae5d15a492f84df6292" },
+      { "filename": "2.png", "bytes": 2614252, "sha256": "2d400fcde75b3b84961393d159941502170377055b0b7c978728bed4feffd2e4" },
+      { "filename": "3.png", "bytes": 2533580, "sha256": "a2625e438ae858ff179015df316b56addc5223718d7f3b1a6d07bf3219034c47" },
+      { "filename": "4.png", "bytes": 2689802, "sha256": "162d6d836345dd8a794c85d65697abcb880b6db2cb44eb1d951a48219fcd2ac7" },
+      { "filename": "5.png", "bytes": 2359862, "sha256": "7c566cc9b2e92480ffbe49205fdb24ef73d01348d6419122e0f178dcce178861" }
+    ]
+  },
+  "reportedCamEnvelope": {
+    "toolpathPoints": 85785,
+    "missedSamples": 602,
+    "fitRate": 0.993,
+    "continuousFitRate": 0.999,
+    "riskCells": 4,
+    "criticalRiskCells": 0,
+    "worstRegion": {
+      "xMm": -1.4,
+      "angleDeg": 320,
+      "fitRate": 0.887,
+      "missed": 176,
+      "total": 1560
+    }
+  },
+  "targetMachine": {
+    "machineProfileId": "desktop-3axis-rotary-y",
+    "controllerClass": "3axis-controller-with-rotary-fixture",
+    "lengthAxis": "X",
+    "rotaryOutputAxis": "Y",
+    "depthAxis": "Z",
+    "rotaryWrapPerRevolutionMm": 100,
+    "toolProfileId": "vflat-4mm-25deg",
+    "toolDiameterMm": 4,
+    "toolAngleDeg": 25,
+    "flatTipMm": 0.4,
+    "stock": {
+      "lengthMm": 38,
+      "diameterMm": 15,
+      "leftHoldMm": 2,
+      "rightHoldMm": 2,
+      "endTransitionMm": 1.2
+    },
+    "process": {
+      "safeZMm": 22,
+      "depthMm": 1.25,
+      "feedRateMmMin": 180,
+      "spindleRpm": 12000,
+      "stepoverMm": 0.28,
+      "stepoverDeg": 5,
+      "maxCutDepthMm": 0.45,
+      "stockAllowanceMm": 0.08
+    }
+  },
+  "productionBoundary": {
+    "allowProductionNc": false,
+    "reason": "This fixture proves repeatable V3 regression input only. Production still requires real CAM candidate, real material-removal simulation, air-run, trial feedback and machine acceptance bound to the same package hash."
+  }
+}

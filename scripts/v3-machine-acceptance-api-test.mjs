@@ -1,5 +1,5 @@
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {

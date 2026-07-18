@@ -352,7 +352,11 @@ Y = 旋转角度 / 360 * rotaryWrapPerRevolutionMm
 
 ### 第一步：固定样件和机床 profile
 
-- 选定一个佛头 STL/GLB 作为 V3 回归样件。
+- 已选定一个佛头 STL/GLB 作为 V3 回归样件：
+  - `public/v3-fixtures/buddha-baseline.json`
+  - `/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb`
+  - `/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl`
+  - 校验：`npm run test:v3:buddha-fixture`
 - 固化用户机床 profile：
   - `desktop-3axis-rotary-y`
   - 4mm 25 度平底尖刀
