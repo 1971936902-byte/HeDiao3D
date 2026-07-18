@@ -8786,6 +8786,27 @@ function createProductionEvidenceDossierPublicSummary(dossier) {
     blockedCount: dossier.blockedCount,
     summary: dossier.summary,
     crossChecks: dossier.crossChecks ?? null,
+    missingEvidenceCount: Array.isArray(dossier.missingEvidence) ? dossier.missingEvidence.length : 0,
+    missingEvidenceTop: Array.isArray(dossier.missingEvidence)
+      ? dossier.missingEvidence.slice(0, 6).map((item) => ({
+        id: item.id,
+        label: item.label,
+        status: item.status,
+        summary: item.summary,
+        evidence: item.evidence
+      }))
+      : [],
+    fieldEvidenceGaps: Array.isArray(dossier.missingEvidence)
+      ? dossier.missingEvidence
+        .filter((item) => ["air-run-evidence", "rotary-calibration-evidence", "machine-acceptance", "trial-feedback"].includes(item.id))
+        .map((item) => ({
+          id: item.id,
+          label: item.label,
+          status: item.status,
+          summary: item.summary,
+          evidence: item.evidence
+        }))
+      : [],
     evidenceItems: Array.isArray(dossier.evidenceItems)
       ? dossier.evidenceItems.map((item) => ({
         id: item.id,
@@ -10455,6 +10476,27 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       reviewCount: productionEvidenceDossier.reviewCount,
       blockedCount: productionEvidenceDossier.blockedCount,
       summary: productionEvidenceDossier.summary,
+      missingEvidenceCount: Array.isArray(productionEvidenceDossier.missingEvidence) ? productionEvidenceDossier.missingEvidence.length : 0,
+      missingEvidenceTop: Array.isArray(productionEvidenceDossier.missingEvidence)
+        ? productionEvidenceDossier.missingEvidence.slice(0, 6).map((item) => ({
+          id: item.id,
+          label: item.label,
+          status: item.status,
+          summary: item.summary,
+          evidence: item.evidence
+        }))
+        : [],
+      fieldEvidenceGaps: Array.isArray(productionEvidenceDossier.missingEvidence)
+        ? productionEvidenceDossier.missingEvidence
+          .filter((item) => ["air-run-evidence", "rotary-calibration-evidence", "machine-acceptance", "trial-feedback"].includes(item.id))
+          .map((item) => ({
+            id: item.id,
+            label: item.label,
+            status: item.status,
+            summary: item.summary,
+            evidence: item.evidence
+          }))
+        : [],
       crossChecks: productionEvidenceDossier.crossChecks ?? null,
       artifact: "production-evidence-dossier.json"
     } : null,

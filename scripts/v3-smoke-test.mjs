@@ -203,6 +203,9 @@ async function main() {
   assert(packageIndex.camServerConfig?.artifact === "cam-server-config.json", "package index missing CAM server config artifact");
   assert(packageIndex.camServerConfig?.prepChecklist === "cam-server-prep-checklist.md", "package index missing CAM server prep checklist artifact");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
+  assert(packageIndex.productionEvidenceDossier?.missingEvidenceCount > 0, "package index should expose missing production evidence count");
+  assert(packageIndex.productionEvidenceDossier?.missingEvidenceTop?.some((item) => item.id === "material-removal-simulation" || item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose top missing production evidence items");
+  assert(packageIndex.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose field evidence gaps separately");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "next-action-checklist.md"), "readFirst missing next action checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "readFirst missing Linux CAM closed-loop handoff");

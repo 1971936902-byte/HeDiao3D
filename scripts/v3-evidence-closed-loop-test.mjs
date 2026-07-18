@@ -107,6 +107,8 @@ async function main() {
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "package index should expose refreshed CAMotics cross-checks");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "package index should expose refreshed CAMotics machine context");
   assert(packageIndex.productionEvidenceDossier.crossChecks.productionReadinessAudit?.allowProductionPackage === false, "package index must keep production package locked");
+  assert(packageIndex.productionEvidenceDossier?.missingEvidenceCount > 0, "package index should expose remaining production evidence gaps");
+  assert(packageIndex.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose remaining field evidence gaps");
 
   const lockedProductionPackage = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
   assert(["V3 正式生产包未解锁", "V3 正式生产包证据档案未闭环"].includes(lockedProductionPackage.error), "production package endpoint should remain locked");
