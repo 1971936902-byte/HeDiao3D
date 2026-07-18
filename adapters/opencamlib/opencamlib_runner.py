@@ -814,6 +814,7 @@ def create_path_dropcutter_neutral_toolpath(job: Dict[str, Any], plan: Dict[str,
                 "pathSegments": result.get("pathSegments"),
                 "inputPointCount": result.get("inputPointCount"),
                 "pointCount": len(points),
+                "pathGrid": result.get("pathGrid"),
                 "modelBounds": geometry.get("bounds"),
                 "outputLengthMm": output_length,
             },
@@ -842,7 +843,7 @@ def run_path_dropcutter_api(module: Any, triangles: List[List[List[float]]], job
     for tri in triangles[:triangle_limit]:
         add_opencamlib_triangle(surface, triangle_cls, point_cls, tri)
     cutter = instantiate_opencamlib_cutter(cutter_cls, plan, job)
-    path, input_points, row_count, segment_count = create_opencamlib_path(module, point_cls, line_cls, path_cls, job, plan, geometry)
+    path, input_points, row_count, segment_count, path_grid = create_opencamlib_path(module, point_cls, line_cls, path_cls, job, plan, geometry)
     dropper = dropper_cls()
     call_first_method(dropper, ["setSTL", "setSTLSurf", "setSurface"], surface)
     call_first_method(dropper, ["setCutter"], cutter)
@@ -858,6 +859,7 @@ def run_path_dropcutter_api(module: Any, triangles: List[List[List[float]]], job
         "inputPointCount": len(input_points),
         "pathRows": row_count,
         "pathSegments": segment_count,
+        "pathGrid": path_grid,
     }
 
 
@@ -866,12 +868,13 @@ def create_opencamlib_path(module: Any, point_cls: Any, line_cls: Any, path_cls:
     min_bounds = bounds.get("min") or {}
     max_bounds = bounds.get("max") or {}
     settings = job.get("settings") or {}
-    rows = read_positive_env_int("HEDIAO3D_OPENCAMLIB_PATH_DROPCUTTER_ROWS") or 8
     z_clear = float(settings.get("safeZ") or 22)
     x_min = float(min_bounds.get("x") or 0)
     x_max = float(max_bounds.get("x") or 1)
     y_min = float(min_bounds.get("y") or 0)
     y_max = float(max_bounds.get("y") or 1)
+    path_grid = resolve_path_dropcutter_grid(job, plan, geometry)
+    rows = int(path_grid["rows"])
     path = path_cls()
     input_points: List[List[float]] = []
     segment_count = 0
@@ -885,7 +888,48 @@ def create_opencamlib_path(module: Any, point_cls: Any, line_cls: Any, path_cls:
         append_path_segment(path, line)
         input_points.extend([[start_x, y, z_clear], [end_x, y, z_clear]])
         segment_count += 1
-    return [path, input_points, rows, segment_count]
+    return [path, input_points, rows, segment_count, path_grid]
+
+
+def resolve_path_dropcutter_grid(job: Dict[str, Any], plan: Dict[str, Any], geometry: Dict[str, Any]) -> Dict[str, Any]:
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    tool = plan.get("tool") if isinstance(plan.get("tool"), dict) else {}
+    dimensions = geometry.get("dimensions") if isinstance(geometry.get("dimensions"), dict) else {}
+    bounds = geometry.get("bounds") if isinstance(geometry.get("bounds"), dict) else {}
+    env_rows = read_positive_env_int("HEDIAO3D_OPENCAMLIB_PATH_DROPCUTTER_ROWS")
+    max_rows = read_positive_env_int("HEDIAO3D_OPENCAMLIB_PATH_DROPCUTTER_MAX_ROWS") or 181
+    cutter_diameter = read_positive_number(tool.get("diameterMm"), settings.get("toolDiameter"), 4.0)
+    target_stepover = read_positive_number(
+        settings.get("stepoverMm"),
+        find_operation_positive_number(plan, "stepoverMm"),
+        (plan.get("sampling") or {}).get("stepoverMm"),
+        cutter_diameter * 0.12,
+    )
+    y_span = read_positive_number(dimensions.get("y"), axis_span(bounds, "y"), 1.0)
+    adaptive_rows = math.ceil(y_span / target_stepover) + 1
+    requested_rows = env_rows if env_rows is not None else adaptive_rows
+    rows = clamp_int(requested_rows, 2, max_rows)
+    capped = rows < requested_rows
+    if env_rows is not None:
+        source = "env-override"
+    elif capped:
+        source = "adaptive-capped:settings-stepover-mm-yspan"
+    else:
+        source = "adaptive:settings-stepover-mm-yspan"
+    cross_step = y_span / max(1, rows - 1)
+    return {
+        "schema": "hediao3d.opencamlib-path-dropcutter-grid.v1",
+        "rows": rows,
+        "adaptiveSampling": env_rows is None,
+        "samplingSource": source,
+        "targetStepoverMm": round(target_stepover, 6),
+        "maxRows": max_rows,
+        "rowCapHit": capped,
+        "modelCrossSpanMm": round(y_span, 6),
+        "crossStepMm": round(cross_step, 6),
+        "cutterDiameterMm": round(cutter_diameter, 6),
+        "stepToCutterRatio": round(cross_step / cutter_diameter, 6) if cutter_diameter > 0 else None,
+    }
 
 
 def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
@@ -922,11 +966,15 @@ def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, A
             "pathRows": path_report.get("pathRows"),
             "pathSegments": path_report.get("pathSegments"),
             "inputPointCount": path_report.get("inputPointCount"),
+            "samplingSource": (path_report.get("pathGrid") or {}).get("samplingSource"),
+            "targetStepoverMm": (path_report.get("pathGrid") or {}).get("targetStepoverMm"),
+            "rowCapHit": (path_report.get("pathGrid") or {}).get("rowCapHit"),
             "hitRate": metrics["hitRate"],
             "xStepMm": metrics["xStepMm"],
             "crossStepMm": metrics["crossStepMm"],
             "maxLinearStepMm": metrics["maxLinearStepMm"],
             "stepToCutterRatio": metrics["stepToCutterRatio"],
+            "pathCoverage": metrics["pathCoverage"],
             "samplingQuality": {
                 "level": "experimental-real-api",
                 "blockers": metrics["blockers"],
@@ -970,11 +1018,13 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
     x_span = read_positive_number(dimensions.get("x"), axis_span(bounds, "x"), (job.get("settings") or {}).get("lengthMm"), 1.0)
     y_span = read_positive_number(dimensions.get("y"), axis_span(bounds, "y"), 1.0)
     x_step = x_span / max(1.0, points_per_row - 1.0) if points_per_row > 1 else None
-    cross_step = y_span / max(1, row_count - 1) if row_count > 1 else None
+    path_grid = path_report.get("pathGrid") if isinstance(path_report.get("pathGrid"), dict) else {}
+    cross_step = read_positive_number(path_grid.get("crossStepMm"), y_span / max(1, row_count - 1) if row_count > 1 else None, 0)
     linear_steps = [value for value in (x_step, cross_step) if value is not None]
     max_linear_step = max(linear_steps) if linear_steps else None
     step_to_cutter_ratio = max_linear_step / cutter_diameter if max_linear_step is not None and cutter_diameter > 0 else None
     hit_rate = 1.0 if points else 0.0
+    path_coverage = compute_path_dropcutter_coverage(points, bounds)
     max_gouge_tolerance = 0.03
     max_undercut_tolerance = 0.08
     conservative_residual = max_linear_step * 0.5 if max_linear_step is not None else None
@@ -986,6 +1036,10 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
         blockers.append("path-dropcutter-hit-rate-below-99.5-percent")
     if point_count <= 0:
         blockers.append("path-dropcutter-no-contact-points")
+    if path_coverage["xCoverageRatio"] < 0.98:
+        blockers.append("path-dropcutter-x-coverage-below-98-percent")
+    if path_coverage["crossCoverageRatio"] < 0.98:
+        blockers.append("path-dropcutter-cross-coverage-below-98-percent")
     if step_to_cutter_ratio is None:
         blockers.append("path-dropcutter-step-ratio-unavailable")
     elif step_to_cutter_ratio > 0.25:
@@ -1006,6 +1060,7 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
         "crossStepMm": round(cross_step, 6) if cross_step is not None else None,
         "maxLinearStepMm": round(max_linear_step, 6) if max_linear_step is not None else None,
         "stepToCutterRatio": round(step_to_cutter_ratio, 6) if step_to_cutter_ratio is not None else None,
+        "pathCoverage": path_coverage,
         "tolerances": {
             "maxGougeMm": max_gouge_tolerance,
             "maxUndercutMm": max_undercut_tolerance,
@@ -1021,6 +1076,27 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
         },
         "blockers": blockers,
         "warnings": warnings,
+    }
+
+
+def compute_path_dropcutter_coverage(points: List[Dict[str, Any]], bounds: Dict[str, Any]) -> Dict[str, Any]:
+    model_x_values = [float(point.get("modelX")) for point in points if is_number(point.get("modelX"))]
+    model_y_values = [float(point.get("modelY")) for point in points if is_number(point.get("modelY"))]
+    x_span = axis_span(bounds, "x") or 0
+    y_span = axis_span(bounds, "y") or 0
+    sampled_x_span = max(model_x_values) - min(model_x_values) if model_x_values else 0
+    sampled_y_span = max(model_y_values) - min(model_y_values) if model_y_values else 0
+    x_ratio = sampled_x_span / x_span if x_span > 0 else 0
+    y_ratio = sampled_y_span / y_span if y_span > 0 else 0
+    return {
+        "schema": "hediao3d.opencamlib-path-dropcutter-coverage.v1",
+        "xCoverageRatio": round(max(0.0, min(1.0, x_ratio)), 6),
+        "crossCoverageRatio": round(max(0.0, min(1.0, y_ratio)), 6),
+        "sampledXSpanMm": round(sampled_x_span, 6),
+        "sampledCrossSpanMm": round(sampled_y_span, 6),
+        "modelXSpanMm": round(x_span, 6),
+        "modelCrossSpanMm": round(y_span, 6),
+        "crossAxisSource": "modelY-to-rotary-angle-experimental",
     }
 
 

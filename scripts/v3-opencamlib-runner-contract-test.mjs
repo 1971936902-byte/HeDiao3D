@@ -109,6 +109,9 @@ try {
   assert(pathDrop.runner?.opencamlibModule === "opencamlib.ocl", "PathDropCutter runner should select official opencamlib.ocl binding");
   assert(pathDrop.runner?.pathDropCutter?.algorithm === "opencamlib-path-drop-cutter", "PathDropCutter algorithm summary mismatch");
   assert(pathDrop.runner?.pathDropCutter?.pathRows === 3, "PathDropCutter row count should honor env override");
+  assert(pathDrop.runner?.pathDropCutter?.pathGrid?.schema === "hediao3d.opencamlib-path-dropcutter-grid.v1", "PathDropCutter should expose adaptive grid schema");
+  assert(pathDrop.runner?.pathDropCutter?.pathGrid?.samplingSource === "env-override", "PathDropCutter env row override should be recorded");
+  assert(pathDrop.runner?.pathDropCutter?.pathGrid?.targetStepoverMm > 0, "PathDropCutter should expose target stepover");
   assert(Array.isArray(pathDrop.points) && pathDrop.points.length >= 6, "PathDropCutter runner should emit neutral points");
   assert(pathDrop.points.every((point) => point.source === "opencamlib-path-drop-cutter-experimental"), "PathDropCutter point source mismatch");
   assert(existsSync(pathDrop.cutterContactReportPath), "PathDropCutter contact report should be written");
@@ -116,6 +119,9 @@ try {
   assert(pathDropContact.schema === "hediao3d.opencamlib-cutter-contact-report.v1", "PathDropCutter contact report schema mismatch");
   assert(pathDropContact.contactSampling?.algorithm === "opencamlib-path-drop-cutter", "PathDropCutter contact algorithm mismatch");
   assert(pathDropContact.contactSampling?.contactPointCount === pathDrop.points.length, "PathDropCutter contact point count should match neutral points");
+  assert(pathDropContact.contactSampling?.samplingSource === "env-override", "PathDropCutter contact report should expose sampling source");
+  assert(pathDropContact.contactSampling?.pathCoverage?.xCoverageRatio === 1, "PathDropCutter contact report should expose full X path coverage");
+  assert(pathDropContact.contactSampling?.pathCoverage?.crossCoverageRatio === 1, "PathDropCutter contact report should expose full cross path coverage");
   assert(Number.isFinite(pathDropContact.contactSampling?.stepToCutterRatio), "PathDropCutter contact report should expose step-to-cutter ratio");
   assert(pathDropContact.residualMaterial?.evidenceClass === "engineering-estimate", "PathDropCutter contact report should expose conservative residual estimate");
   assert(Number.isFinite(pathDropContact.residualMaterial?.maxGougeMm), "PathDropCutter contact report should expose max gouge estimate");
