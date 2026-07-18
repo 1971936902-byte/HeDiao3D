@@ -60,7 +60,8 @@ async function main() {
     acceptanceZipDataUrl: toZipDataUrl({
       "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256), null, 2),
       "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2),
-      "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2)
+      "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2),
+      "opencamlib-real-candidate-run.json": JSON.stringify(createOpenCamLibRealCandidateFixture(), null, 2)
     })
   });
   assert(nativeCamImport.level === "ready", `native CAM acceptance should be ready, got ${nativeCamImport.level}`);
@@ -105,10 +106,18 @@ async function main() {
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next-action checklist should show verified CAMotics evidence");
   assert(nextActionChecklist.includes("Native CAM机型边界: matched"), "next-action checklist should show matched native CAM machine boundary");
+  assert(nextActionChecklist.includes("Linux OpenCAMLib:"), "next-action checklist should show Linux OpenCAMLib offline evidence");
+  assert(nextActionChecklist.includes("覆盖率 ready"), "next-action checklist should show ready OpenCAMLib path coverage");
+  assert(nextActionChecklist.includes("候选包 ready"), "next-action checklist should show OpenCAMLib candidate package level");
   assert(nextActionChecklist.includes("生产门禁"), "next-action checklist should keep production gate visible");
 
   const packageIndex = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/machining-package-index.json`);
   assert(packageIndex.nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus?.status === "matched", "package index should expose matched native CAM target machine boundary");
+  assert(packageIndex.linuxOpenCamLibEvidence?.schema === "hediao3d.linux-opencamlib-evidence-offline-summary.v1", "package index should expose Linux OpenCAMLib offline evidence");
+  assert(packageIndex.linuxOpenCamLibEvidence.contactPathCoverage?.status === "ready", "package index should expose OpenCAMLib path coverage status");
+  assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageLevel === "ready", "package index should expose OpenCAMLib candidate package level");
+  assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageReadyForImport === true, "package index should expose OpenCAMLib candidate import readiness");
+  assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageBlockedReason === null, "package index should preserve OpenCAMLib candidate blocker reason");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "package index should expose refreshed CAMotics cross-checks");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "package index should expose refreshed CAMotics machine context");
   assert(packageIndex.productionEvidenceDossier.crossChecks.productionReadinessAudit?.allowProductionPackage === false, "package index must keep production package locked");
@@ -269,6 +278,32 @@ function createTargetMachineBoundaryFixture() {
       tip: "flat"
     },
     requiredPostprocessOwner: "HeDiao3D"
+  };
+}
+
+function createOpenCamLibRealCandidateFixture() {
+  return {
+    schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
+    level: "production-candidate-ready-for-import",
+    ok: true,
+    productionLocked: true,
+    contactValidationLevel: "ready",
+    contactEvidenceClass: "production-candidate",
+    contactValidationPathCoverage: createContactValidationFixture().pathCoverage ?? {
+      schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+      required: true,
+      status: "ready",
+      ready: true,
+      x: { id: "contact-path-coverage-x", status: "pass", summary: "x coverage pass" },
+      cross: { id: "contact-path-coverage-cross", status: "pass", summary: "cross coverage pass" },
+      summary: "OpenCAMLib 刀路覆盖率达标：X 向和旋转/横向覆盖均通过。"
+    },
+    candidatePackageLevel: "ready",
+    candidatePackageBlockedReason: null,
+    candidateReadyForImport: true,
+    blockingCount: 0,
+    firstBlocking: null,
+    sha256: "evidence-closed-loop-opencamlib-real-candidate"
   };
 }
 

@@ -2199,6 +2199,89 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   };
 }
 
+function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRealOutputAcceptance) {
+  const chainOpenCamLib = runbookResult?.linuxEvidence?.evidenceChain?.openCamLib ?? null;
+  const nativeCandidateStatus = nativeCamRealOutputAcceptance?.openCamLibRealCandidateStatus ?? null;
+  const nativeCandidate = nativeCamRealOutputAcceptance?.openCamLibRealCandidate ?? null;
+  const nativePathCoverage = nativeCamRealOutputAcceptance?.contactValidationStatus?.pathCoverage
+    ?? nativeCamRealOutputAcceptance?.contactValidation?.pathCoverage
+    ?? null;
+  const chainPathCoverage = chainOpenCamLib?.contactPathCoverage ?? null;
+  const firstUsefulPathCoverage = (...items) => items.find((item) => item && typeof item === "object" && item.status !== "missing") ?? null;
+  const contactPathCoverage = firstUsefulPathCoverage(
+    nativeCandidateStatus?.contactValidationPathCoverage,
+    nativeCandidate?.contactValidationPathCoverage,
+    nativePathCoverage,
+    chainPathCoverage
+  ) ?? {
+      schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+      required: true,
+      status: "missing",
+      ready: false,
+      x: null,
+      cross: null,
+      summary: "未回填 OpenCAMLib strict contact 覆盖率证据。"
+    };
+  const realCandidateKnown = Boolean(chainOpenCamLib?.realCandidateKnown)
+    || Boolean(nativeCandidateStatus && nativeCandidateStatus.status !== "missing")
+    || Boolean(nativeCandidate);
+  const realCandidateReady = Boolean(chainOpenCamLib?.realCandidateReady)
+    || Boolean(nativeCandidateStatus?.ready)
+    || Boolean(nativeCandidate?.candidateReadyForImport);
+  const candidatePackageLevel = nativeCandidateStatus?.candidatePackageLevel
+    ?? nativeCandidate?.candidatePackageLevel
+    ?? chainOpenCamLib?.candidatePackageLevel
+    ?? "missing";
+  const candidatePackageReadyForImport = Boolean(nativeCandidateStatus?.candidateReadyForImport)
+    || Boolean(nativeCandidate?.candidateReadyForImport)
+    || Boolean(chainOpenCamLib?.candidatePackageReadyForImport);
+  const candidatePackageBlockedReason = nativeCandidateStatus?.candidatePackageBlockedReason
+    ?? nativeCandidate?.candidatePackageBlockedReason
+    ?? chainOpenCamLib?.candidatePackageBlockedReason
+    ?? null;
+  const status = realCandidateReady && contactPathCoverage?.ready && candidatePackageReadyForImport
+    ? "ready-for-review"
+    : realCandidateKnown || contactPathCoverage?.status !== "missing" || candidatePackageLevel !== "missing"
+      ? "review"
+      : "missing";
+  const blocker = candidatePackageBlockedReason
+    ?? chainOpenCamLib?.firstBlocking
+    ?? nativeCandidateStatus?.summary
+    ?? nativeCandidate?.firstBlocking
+    ?? null;
+  return {
+    schema: "hediao3d.linux-opencamlib-evidence-offline-summary.v1",
+    status,
+    source: nativeCamRealOutputAcceptance?.id
+      ? "native-cam-real-output-acceptance"
+      : runbookResult?.linuxEvidence?.evidenceChain
+        ? "runbook-linux-evidence-chain"
+        : "missing",
+    realCandidateKnown,
+    realCandidateReady,
+    productionLocked: nativeCandidate?.productionLocked ?? chainOpenCamLib?.productionLocked ?? true,
+    contactPathCoverage,
+    candidatePackageLevel,
+    candidatePackageReadyForImport,
+    candidatePackageBlockedReason,
+    firstBlocking: blocker,
+    summary: status === "ready-for-review"
+      ? "Linux OpenCAMLib 真实候选链路已具备可回填复核证据；仍需同 job 的材料去除、空跑和试雕证据后才可生产解锁。"
+      : status === "review"
+        ? `Linux OpenCAMLib 真实候选链路需复核：coverage=${contactPathCoverage?.status ?? "missing"}，candidate=${candidatePackageLevel}，blocked=${blocker ?? "无明确阻断原因"}。`
+        : "Linux OpenCAMLib 真实候选链路未回填；离线加工包不能证明真实 drop-cutter/cutter-contact 输出。"
+  };
+}
+
+function formatLinuxOpenCamLibEvidenceOfflineLine(summary) {
+  if (!summary) return "missing / 未生成 Linux OpenCAMLib 离线证据摘要。";
+  const coverageStatus = summary.contactPathCoverage?.status ?? "missing";
+  const coverageText = summary.contactPathCoverage?.summary ?? "无覆盖率摘要";
+  const candidateText = `${summary.candidatePackageLevel ?? "missing"} / ${summary.candidatePackageReadyForImport ? "可导入复核" : "不可导入"}`;
+  const blockerText = summary.candidatePackageBlockedReason ?? summary.firstBlocking ?? "无明确阻断原因";
+  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
+}
+
 function createOpenCamLibContactPathCoverageSummary(contact) {
   if (contact?.pathCoverage && typeof contact.pathCoverage === "object") {
     return {
@@ -9655,6 +9738,8 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
 function createNextActionChecklistMarkdown({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, safeTrialExecutionPlan, postprocessProfile, machineControllerProfile }) {
   const axisInstruction = createOperatorAxisInstruction(postprocessProfile);
   const nativeCamRealOutputAcceptance = readLatestNativeCamRealOutputAcceptanceSummary();
+  const runbookResult = readLatestV3RunbookResultSummary();
+  const linuxOpenCamLibEvidence = createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRealOutputAcceptance);
   const nativeCamBoundaryStatus = nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus ?? null;
   const blockedRows = Array.isArray(productionUnlockMatrix?.rows)
     ? productionUnlockMatrix.rows.filter((row) => row.status === "block" || row.blocksProduction)
@@ -9686,6 +9771,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
     `- 生产门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
     `- 仿真证据: ${productionGate?.simulationEvidence?.level ?? "missing"} / ${productionGate?.simulationEvidence?.summary ?? "未生成"}`,
     `- Native CAM机型边界: ${nativeCamBoundaryStatus?.status ?? "missing"} / ${nativeCamBoundaryStatus?.summary ?? "未回填 native-cam-real-output-bundle.zip，尚未证明真实 CAM 输出适配当前三轴控制器 + Y轴旋转夹具。"}`,
+    `- Linux OpenCAMLib: ${formatLinuxOpenCamLibEvidenceOfflineLine(linuxOpenCamLibEvidence)}`,
     `- 解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
     `- 证据档案: ${productionEvidenceDossier?.status ?? "missing"} / ${productionEvidenceDossier?.summary ?? "未生成"}`,
     "",
@@ -9720,6 +9806,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
         ...(blockedRows.slice(0, 8).map((row) => `- 矩阵阻断: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
         ...(reviewRows.slice(0, 6).map((row) => `- 矩阵复核: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
         ...(dossierItems.slice(0, 8).map((item) => `- 证据缺口: ${item.label ?? item.id} / ${item.summary ?? item.status}`)),
+        ...(linuxOpenCamLibEvidence.status === "ready-for-review" ? [] : [`- 证据缺口: Linux OpenCAMLib真实候选 / ${linuxOpenCamLibEvidence.summary}`]),
         ...(nativeCamBoundaryStatus?.status === "matched" ? [] : [`- 证据缺口: Native CAM 机型边界 / ${nativeCamBoundaryStatus?.summary ?? "缺少 target-machine-boundary.json 绑定。"}`])
       ]),
     "",
@@ -11030,6 +11117,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
   const opencamlibCandidatePackageValidation = readJsonFile(join(job.workDir, "opencamlib-candidate-package-validation.json"));
   const nativeCamRealOutputAcceptance = readLatestNativeCamRealOutputAcceptanceSummary();
+  const runbookResult = readLatestV3RunbookResultSummary();
+  const linuxOpenCamLibEvidence = createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRealOutputAcceptance);
   const machineAcceptanceLog = readJsonFile(join(job.workDir, "machine-acceptance-log.json"));
   const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
   const airRunEvidence = createAirRunEvidence(latestMachineAcceptanceRecord);
@@ -11305,6 +11394,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       targetMachineBoundary: null,
       summary: "missing"
     },
+    linuxOpenCamLibEvidence,
     camServerConfig: camServerConfig ? {
       status: camServerConfig.status,
       selectedEngine: camServerConfig.selectedEngine,
