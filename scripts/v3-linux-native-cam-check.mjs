@@ -180,7 +180,7 @@ function checkCamotics() {
     },
     ready: Boolean(command.command),
     missing: [
-      ...(!command.command ? ["camotics-cli/camotics 命令不可用"] : [])
+      ...(!command.command ? [command.failed?.length ? `camotics-cli/camotics 探测失败：${summarizeCommandFailures(command.failed)}` : "camotics-cli/camotics 命令不可用"] : [])
     ],
     installHints: [
       "安装 CAMotics，并确认 camotics-cli --version 或 camotics --version 可执行",
@@ -197,6 +197,7 @@ function createCheck(input) {
     command: input.command.command,
     version: input.command.version,
     attemptedCommands: input.command.attempted,
+    failedCommandProbes: input.command.failed,
     missing: [...new Set(input.missing)]
   };
 }
@@ -1011,6 +1012,7 @@ Do not enable production NC downloads merely because this checklist exists. Prod
 
 function findWorkingCommand(commands, args) {
   const attempted = [];
+  const failed = [];
   for (const command of commands) {
     attempted.push(command);
     const result = spawn(command, args);
@@ -1018,15 +1020,31 @@ function findWorkingCommand(commands, args) {
       return {
         command,
         version: firstLine(result.stdout || result.stderr),
-        attempted
+        attempted,
+        failed
       };
     }
+    failed.push({
+      command,
+      exitCode: result.exitCode,
+      error: result.error,
+      output: firstLine(result.stderr || result.stdout)
+    });
   }
   return {
     command: null,
     version: null,
-    attempted
+    attempted,
+    failed
   };
+}
+
+function summarizeCommandFailures(failed = []) {
+  return failed
+    .filter((item) => item.output || item.error)
+    .slice(0, 2)
+    .map((item) => `${item.command}: ${item.output || item.error}`)
+    .join("; ") || "命令未找到或无输出";
 }
 
 function spawn(command, args) {

@@ -14153,6 +14153,7 @@ function detectOpenCamLibEngine() {
 }
 
 function detectCommandEngine({ id, name, commands, role, adapterReady }) {
+  const failed = [];
   for (const command of commands) {
     const probe = spawnSync(command, ["--version"], { encoding: "utf8", windowsHide: true, timeout: 2500 });
     if (!probe.error && probe.status === 0) {
@@ -14167,6 +14168,12 @@ function detectCommandEngine({ id, name, commands, role, adapterReady }) {
         notes: adapterReady ? "adapter ready" : "已检测到命令，但 V3 仍需补齐脚本化 adapter。"
       };
     }
+    failed.push({
+      command,
+      exitCode: probe.status,
+      error: probe.error?.message ?? null,
+      output: firstLine(`${probe.stderr ?? ""}${probe.stdout ?? ""}`)
+    });
   }
 
   return {
@@ -14177,8 +14184,16 @@ function detectCommandEngine({ id, name, commands, role, adapterReady }) {
     adapterReady,
     command: null,
     version: null,
-    notes: "本机未检测到该引擎命令；可在服务器安装后由 Orchestrator 调用。"
+    notes: summarizeCommandProbeFailures(failed)
   };
+}
+
+function summarizeCommandProbeFailures(failed = []) {
+  const details = failed
+    .filter((item) => item.output || item.error)
+    .slice(0, 2)
+    .map((item) => `${item.command}: ${item.output || item.error}`);
+  return details.length ? `命令探测失败：${details.join("; ")}` : "本机未检测到该引擎命令；可在服务器安装后由 Orchestrator 调用。";
 }
 
 function selectCamEngine(engines, requestedEngine, settings = {}) {
