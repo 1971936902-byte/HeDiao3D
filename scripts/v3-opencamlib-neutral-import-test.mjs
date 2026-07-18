@@ -163,7 +163,16 @@ writeFileSync(candidateContactReportPath, JSON.stringify({
     pointCount: 3,
     contactPointCount: 3,
     hitRate: 1,
-    stepToCutterRatio: 0.18
+    stepToCutterRatio: 0.18,
+    pathCoverage: {
+      schema: "hediao3d.opencamlib-path-dropcutter-coverage.v1",
+      xCoverageRatio: 1,
+      crossCoverageRatio: 1,
+      sampledXSpanMm: 24,
+      sampledCrossSpanMm: 180,
+      modelXSpanMm: 24,
+      modelCrossSpanMm: 180
+    }
   },
   residualMaterial: {
     maxGougeMm: 0.01,

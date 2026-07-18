@@ -4524,6 +4524,7 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   const tool = report?.tool && typeof report.tool === "object" ? report.tool : {};
   const sampling = report?.contactSampling && typeof report.contactSampling === "object" ? report.contactSampling : {};
   const samplingQuality = sampling.samplingQuality && typeof sampling.samplingQuality === "object" ? sampling.samplingQuality : {};
+  const pathCoverage = sampling.pathCoverage && typeof sampling.pathCoverage === "object" ? sampling.pathCoverage : {};
   const residual = report?.residualMaterial && typeof report.residualMaterial === "object" ? report.residualMaterial : {};
   const tolerances = report?.tolerances && typeof report.tolerances === "object" ? report.tolerances : {};
   const algorithm = String(sampling.algorithm ?? report?.mode ?? "");
@@ -4531,6 +4532,8 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   const pointCount = finiteNumberOrNull(sampling.pointCount);
   const contactPointCount = finiteNumberOrNull(sampling.contactPointCount ?? sampling.pointCount);
   const stepRatio = finiteNumberOrNull(sampling.stepToCutterRatio ?? samplingQuality.stepToCutterRatio);
+  const xCoverageRatio = finiteNumberOrNull(pathCoverage.xCoverageRatio);
+  const crossCoverageRatio = finiteNumberOrNull(pathCoverage.crossCoverageRatio);
   const maxGouge = finiteNumberOrNull(residual.maxGougeMm);
   const maxUndercut = finiteNumberOrNull(residual.maxUndercutMm);
   const maxGougeTolerance = finiteNumberOrNull(tolerances.maxGougeMm) ?? 0.03;
@@ -4543,6 +4546,8 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   addNeutralImportStrictCheck(checks, "contact-sampling-hit-rate", hitRate !== null && hitRate >= 0.995, `hitRate=${hitRate ?? "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-sampling-point-count", pointCount !== null && pointCount > 0 && contactPointCount !== null && contactPointCount > 0, `pointCount=${pointCount ?? "missing"}, contactPointCount=${contactPointCount ?? "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-sampling-step-ratio", stepRatio !== null && stepRatio <= 0.25, `stepToCutterRatio=${stepRatio ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-path-coverage-x", xCoverageRatio !== null && xCoverageRatio >= 0.98, `xCoverageRatio=${xCoverageRatio ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "contact-path-coverage-cross", crossCoverageRatio !== null && crossCoverageRatio >= 0.98, `crossCoverageRatio=${crossCoverageRatio ?? "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-residual-gouge", maxGouge !== null && maxGouge <= maxGougeTolerance, `maxGougeMm=${maxGouge ?? "missing"}, tolerance=${maxGougeTolerance}`);
   addNeutralImportStrictCheck(checks, "contact-residual-undercut", maxUndercut !== null && maxUndercut <= maxUndercutTolerance, `maxUndercutMm=${maxUndercut ?? "missing"}, tolerance=${maxUndercutTolerance}`);
   const failed = checks.filter((check) => check.status !== "pass");

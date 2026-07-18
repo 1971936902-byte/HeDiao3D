@@ -221,6 +221,8 @@ function createContactValidationFixture(overrides = {}) {
     "contact-sampling-hit-rate",
     "contact-sampling-point-count",
     "contact-sampling-step-ratio",
+    "contact-path-coverage-x",
+    "contact-path-coverage-cross",
     "contact-residual-gouge",
     "contact-residual-undercut",
     "identity-neutral",

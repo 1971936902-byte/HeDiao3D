@@ -199,7 +199,16 @@ function createCandidateNeutral() {
       pointCount: neutral.points.length,
       contactPointCount: neutral.points.length,
       hitRate: 1,
-      stepToCutterRatio: 0.18
+      stepToCutterRatio: 0.18,
+      pathCoverage: {
+        schema: "hediao3d.opencamlib-path-dropcutter-coverage.v1",
+        xCoverageRatio: 1,
+        crossCoverageRatio: 1,
+        sampledXSpanMm: 24,
+        sampledCrossSpanMm: 360,
+        modelXSpanMm: 24,
+        modelCrossSpanMm: 360
+      }
     },
     residualMaterial: {
       maxGougeMm: 0.01,

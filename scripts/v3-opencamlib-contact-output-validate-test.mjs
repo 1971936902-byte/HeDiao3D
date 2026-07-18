@@ -44,6 +44,8 @@ try {
   assert(readyReport.checks.some((check) => check.id === "identity-neutral" && check.status === "pass"), "neutral identity should pass");
   assert(readyReport.checks.some((check) => check.id === "contact-algorithm-real" && check.status === "pass"), "real contact algorithm evidence should pass");
   assert(readyReport.checks.some((check) => check.id === "contact-residual-gouge" && check.status === "pass"), "residual gouge evidence should pass");
+  assert(readyReport.checks.some((check) => check.id === "contact-path-coverage-x" && check.status === "pass"), "X path coverage evidence should pass");
+  assert(readyReport.checks.some((check) => check.id === "contact-path-coverage-cross" && check.status === "pass"), "cross path coverage evidence should pass");
 
   const previewNeutralPath = join(workDir, "preview-neutral-toolpath.json");
   const previewContactPath = join(workDir, "preview-contact-report.json");
@@ -96,7 +98,7 @@ try {
   });
   assert(weak.status === 3, `weak contact evidence should fail strict mode, got ${weak.status}: ${weak.stdout}`);
   const weakReport = JSON.parse(weak.stdout);
-  assert(weakReport.errors.some((error) => /hitRate|过切|gouge|maxGouge|step-to-cutter/i.test(error)), "weak contact evidence should report quality metric failures");
+  assert(weakReport.errors.some((error) => /hitRate|过切|gouge|maxGouge|step-to-cutter|pathCoverage|coverage/i.test(error)), "weak contact evidence should report quality metric failures");
 
   const experimentalContactPath = join(workDir, "experimental-contact-report.json");
   const experimentalNeutralPath = join(workDir, "experimental-neutral-toolpath.json");
@@ -203,7 +205,18 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
       pointCount: 3,
       contactPointCount: 3,
       hitRate: weakEvidence ? 0.91 : experimental ? undefined : 1,
-      stepToCutterRatio: weakEvidence ? 0.42 : experimental ? undefined : 0.18
+      stepToCutterRatio: weakEvidence ? 0.42 : experimental ? undefined : 0.18,
+      ...(experimental ? {} : {
+        pathCoverage: {
+          schema: "hediao3d.opencamlib-path-dropcutter-coverage.v1",
+          xCoverageRatio: weakEvidence ? 0.72 : 1,
+          crossCoverageRatio: weakEvidence ? 0.64 : 1,
+          sampledXSpanMm: weakEvidence ? 14.4 : 20,
+          sampledCrossSpanMm: weakEvidence ? 115.2 : 180,
+          modelXSpanMm: 20,
+          modelCrossSpanMm: 180
+        }
+      })
     },
     ...(experimental ? {} : {
       residualMaterial: {

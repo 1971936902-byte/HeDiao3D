@@ -156,6 +156,9 @@ function checkProductionContactEvidence(checks, contact, target) {
   const pointCount = numberOrNull(sampling.pointCount);
   const contactPointCount = numberOrNull(sampling.contactPointCount ?? sampling.pointCount);
   const stepToCutterRatio = numberOrNull(sampling.stepToCutterRatio ?? sampling.samplingQuality?.stepToCutterRatio);
+  const pathCoverage = sampling.pathCoverage && typeof sampling.pathCoverage === "object" ? sampling.pathCoverage : {};
+  const xCoverageRatio = numberOrNull(pathCoverage.xCoverageRatio);
+  const crossCoverageRatio = numberOrNull(pathCoverage.crossCoverageRatio);
 
   check(
     checks,
@@ -171,6 +174,8 @@ function checkProductionContactEvidence(checks, contact, target) {
   check(checks, "contact-sampling-hit-rate", hitRate !== null && hitRate >= 0.995, "contactSampling.hitRate must be at least 99.5%", target, { reported: hitRate });
   check(checks, "contact-sampling-point-count", pointCount !== null && pointCount > 0 && contactPointCount !== null && contactPointCount > 0, "contactSampling point/contact counts must be positive", target, { pointCount, contactPointCount });
   check(checks, "contact-sampling-step-ratio", stepToCutterRatio !== null && stepToCutterRatio <= 0.25, "contact sampling step-to-cutter ratio must be <= 0.25", target, { reported: stepToCutterRatio });
+  check(checks, "contact-path-coverage-x", xCoverageRatio !== null && xCoverageRatio >= 0.98, "contactSampling.pathCoverage.xCoverageRatio must be at least 98%", target, { reported: xCoverageRatio });
+  check(checks, "contact-path-coverage-cross", crossCoverageRatio !== null && crossCoverageRatio >= 0.98, "contactSampling.pathCoverage.crossCoverageRatio must be at least 98%", target, { reported: crossCoverageRatio });
   check(checks, "contact-residual-gouge", maxGougeMm !== null && maxGougeMm <= gougeToleranceMm, "residualMaterial.maxGougeMm must be present and within tolerance", target, { reported: maxGougeMm, tolerance: gougeToleranceMm });
   check(checks, "contact-residual-undercut", maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm, "residualMaterial.maxUndercutMm must be present and within tolerance", target, { reported: maxUndercutMm, tolerance: undercutToleranceMm });
 }

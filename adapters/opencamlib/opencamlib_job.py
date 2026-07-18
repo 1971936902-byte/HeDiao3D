@@ -167,7 +167,7 @@ def build_kernel_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[st
             "cutter contact report quality.productionCandidate and quality.postprocessEligible must both be true.",
             "cutter contact report quality.previewScaffold must be false.",
             "cutter contact report inputIdentity must bind modelSha256, planSha256 and neutralToolpathSha256 or neutralToolpathWithoutContactReportSha256.",
-            "cutter contact report must include strict tool/contact/residual evidence: real algorithm, 4mm/25deg/flat-tip tool geometry, hitRate >= 0.995, stepToCutterRatio <= 0.25, gouge <= 0.03mm and undercut <= 0.08mm.",
+            "cutter contact report must include strict tool/contact/residual evidence: real algorithm, 4mm/25deg/flat-tip tool geometry, hitRate >= 0.995, stepToCutterRatio <= 0.25, X/cross pathCoverage >= 0.98, gouge <= 0.03mm and undercut <= 0.08mm.",
             "HeDiao3D still requires postprocess checks, material removal simulation, air-run, trial feedback and machine acceptance before production NC unlock.",
         ],
         "opencamlib": detection,
@@ -771,7 +771,10 @@ def evaluate_contact_report_strict_evidence(report: Dict[str, Any]) -> Dict[str,
     max_undercut = number_or_none(residual.get("maxUndercutMm"))
     hit_rate = number_or_none(sampling.get("hitRate"))
     sampling_quality = sampling.get("samplingQuality") if isinstance(sampling.get("samplingQuality"), dict) else {}
+    path_coverage = sampling.get("pathCoverage") if isinstance(sampling.get("pathCoverage"), dict) else {}
     step_ratio = number_or_none(sampling.get("stepToCutterRatio") if sampling.get("stepToCutterRatio") is not None else sampling_quality.get("stepToCutterRatio"))
+    x_coverage_ratio = number_or_none(path_coverage.get("xCoverageRatio"))
+    cross_coverage_ratio = number_or_none(path_coverage.get("crossCoverageRatio"))
     point_count = number_or_none(sampling.get("pointCount"))
     contact_point_count = number_or_none(sampling.get("contactPointCount") or sampling.get("pointCount"))
 
@@ -787,6 +790,8 @@ def evaluate_contact_report_strict_evidence(report: Dict[str, Any]) -> Dict[str,
     add_strict_check(checks, "contact-sampling-hit-rate", hit_rate is not None and hit_rate >= 0.995, f"hitRate={hit_rate}")
     add_strict_check(checks, "contact-sampling-point-count", point_count is not None and point_count > 0 and contact_point_count is not None and contact_point_count > 0, f"pointCount={point_count}, contactPointCount={contact_point_count}")
     add_strict_check(checks, "contact-sampling-step-ratio", step_ratio is not None and step_ratio <= 0.25, f"stepToCutterRatio={step_ratio}")
+    add_strict_check(checks, "contact-path-coverage-x", x_coverage_ratio is not None and x_coverage_ratio >= 0.98, f"xCoverageRatio={x_coverage_ratio}")
+    add_strict_check(checks, "contact-path-coverage-cross", cross_coverage_ratio is not None and cross_coverage_ratio >= 0.98, f"crossCoverageRatio={cross_coverage_ratio}")
     add_strict_check(checks, "contact-residual-gouge", max_gouge is not None and max_gouge <= max_gouge_tolerance, f"maxGougeMm={max_gouge}, tolerance={max_gouge_tolerance}")
     add_strict_check(checks, "contact-residual-undercut", max_undercut is not None and max_undercut <= max_undercut_tolerance, f"maxUndercutMm={max_undercut}, tolerance={max_undercut_tolerance}")
 
