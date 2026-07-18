@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:v3:buddha-fixture": "node scripts/v3-buddha-fixture-baseline-test.mjs",
+    "test:v3:buddha-e2e": "node scripts/v3-buddha-e2e-api-test.mjs",
     "test:v3:small-loop-acceptance": "node scripts/v3-small-loop-acceptance.mjs",
     "test:v3": "node scripts/v3-smoke-test.mjs",
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",

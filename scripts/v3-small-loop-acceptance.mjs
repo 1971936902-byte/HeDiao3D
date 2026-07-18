@@ -17,6 +17,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-buddha-fixture-baseline-test.mjs")]
   },
   {
+    id: "buddha-e2e",
+    label: "Buddha 3D model to rotary-Y safe trial package E2E",
+    command: [process.execPath, join("scripts", "v3-buddha-e2e-api-test.mjs")]
+  },
+  {
     id: "v3-smoke",
     label: "V3 orchestrator smoke loop",
     command: [process.execPath, join("scripts", "v3-smoke-test.mjs")]
