@@ -56,6 +56,7 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "command:opencamlib-real-candidate" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate command");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-real-candidate-schema" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate schema");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-real-candidate-fail-closed" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate production lock");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-validator-residual-evidence-gate" && check.status === "pass"), "self-check should verify OpenCAMLib validator requires measured or validated residual evidence");
   assert(readyReport.checks?.some((check) => check.id === "real-output-runner-readiness" && check.status === "pass"), "self-check should verify real-output bundle carries OpenCAMLib runner readiness");
   assert(readyReport.checks?.some((check) => check.id === "real-output-real-candidate" && check.status === "pass"), "self-check should verify real-output bundle carries OpenCAMLib real candidate evidence");
   assert(readyReport.checks?.some((check) => check.id === "real-output-contact-path-coverage" && check.status === "pass"), "self-check should verify real-output bundle preserves contact pathCoverage diagnostics");
