@@ -26,6 +26,7 @@ async function main() {
   assert(run.apiArtifacts?.closedLoopHandoff?.endsWith("linux-cam-closed-loop-handoff.md"), "native CAM summary should expose closed-loop handoff artifact");
   assert(run.apiArtifacts?.realOutputCheck?.endsWith("native-cam-real-output-check.sh"), "native CAM summary should expose real output check artifact");
   assert(run.apiArtifacts?.packageSelfCheck?.endsWith("native-cam-server-package-self-check.mjs"), "native CAM summary should expose package self-check artifact");
+  assert(run.apiArtifacts?.closedLoopCheck?.endsWith("native-cam-closed-loop-check.mjs"), "native CAM summary should expose closed-loop check artifact");
   assert(run.apiArtifacts?.packageZip?.endsWith("server-package.zip"), "native CAM summary should expose server package zip artifact");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-acceptance-checklist.md"), "native CAM summary should expose server package files");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM summary should expose real output check package file");
@@ -111,6 +112,9 @@ async function main() {
   assert(selfCheck.includes("desktop-3axis-rotary-y"), "package self-check should validate target machine profile");
   assert(selfCheck.includes("camotics-result-bundle.zip"), "package self-check should validate CAMotics result bundle support");
   assert(selfCheck.includes("native-cam-closed-loop-check.mjs"), "package self-check should validate closed-loop check support");
+  const closedLoopCheck = await fetchText(latest.latest.apiArtifacts.closedLoopCheck);
+  assert(closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop check should emit schema");
+  assert(closedLoopCheck.includes("productionLocked: true"), "closed-loop check should preserve production lock");
   const packageManifest = await getJson(latest.latest.apiArtifacts.packageManifest);
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM package manifest missing real output check");

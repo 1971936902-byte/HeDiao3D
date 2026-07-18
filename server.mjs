@@ -1297,6 +1297,26 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !nativeCam?.apiArtifacts?.packageSelfCheck
     }),
     createAcceptanceStep({
+      order: 2.75,
+      id: "native-cam-closed-loop-check",
+      title: "Native CAM Linux 闭环检查",
+      status: nativeCam?.apiArtifacts?.closedLoopCheck && nativeCam.packageArtifacts?.files?.some((file) => file.filename === "native-cam-closed-loop-check.mjs")
+        ? "done"
+        : "pending",
+      command: "node native-cam-closed-loop-check.mjs",
+      evidence: [
+        "native-cam-closed-loop-check.mjs",
+        "native-cam-closed-loop-check.json",
+        "native-cam-server-package-self-check.json",
+        "native-cam-real-output-acceptance.json",
+        "camotics-result-local-validation.json"
+      ],
+      detail: nativeCam?.apiArtifacts?.closedLoopCheck
+        ? `Linux 闭环检查脚本已公开: ${nativeCam.apiArtifacts.closedLoopCheck}；该脚本只汇总证据并保持生产锁。`
+        : "尚未生成 Native CAM Linux 闭环检查脚本直链；请重新运行 Native CAM 环境验收。",
+      blocksProduction: !nativeCam?.apiArtifacts?.closedLoopCheck
+    }),
+    createAcceptanceStep({
       order: 3,
       id: "cam-server-config",
       title: "CAM 服务器配置矩阵",
@@ -3287,6 +3307,7 @@ function createNativeCamReadinessArtifactLinks(checkId) {
     closedLoopHandoff: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/linux-cam-closed-loop-handoff.md`,
     realOutputCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-real-output-check.sh`,
     packageSelfCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package-self-check.mjs`,
+    closedLoopCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-closed-loop-check.mjs`,
     packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`,
     packageZip: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/server-package.zip`
   };
@@ -3313,6 +3334,7 @@ function getNativeCamServerPackage(checkId, res) {
     "linux-cam-closed-loop-handoff.md",
     "native-cam-real-output-check.sh",
     "native-cam-server-package-self-check.mjs",
+    "native-cam-closed-loop-check.mjs",
     "opencamlib-contact-output-validate.mjs",
     "camotics-material-removal-validate.mjs",
     "native-cam-server-package.json"
@@ -3362,6 +3384,7 @@ function createNativeCamServerPackageReadme(checkId, manifest) {
     "- Copy native-cam-env.template to your server environment file and keep synthetic CAMotics disabled.",
     "- Run native-cam-server-bootstrap.sh in dry-run mode first.",
     "- Run native-cam-server-package-self-check.mjs after unpacking this ZIP.",
+    "- Run native-cam-closed-loop-check.mjs to summarize Linux-side CAM/CAMotics evidence before uploading result bundles.",
     "- Read linux-cam-closed-loop-handoff.md before moving between Native CAM, CAMotics and V3 upload panels.",
     "- Run native-cam-real-output-check.sh only after external CAM commands are configured.",
     "",

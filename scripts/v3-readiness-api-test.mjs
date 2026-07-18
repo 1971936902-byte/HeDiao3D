@@ -130,6 +130,8 @@ async function main() {
   assert(runbook.includes("native-cam-acceptance-checklist.md"), "readiness runbook missing native CAM checklist evidence");
   assert(runbook.includes("node native-cam-server-package-self-check.mjs"), "readiness runbook missing native CAM package self-check command");
   assert(runbook.includes("native-cam-server-package-self-check.json"), "readiness runbook missing native CAM package self-check evidence");
+  assert(runbook.includes("node native-cam-closed-loop-check.mjs"), "readiness runbook missing native CAM closed-loop check command");
+  assert(runbook.includes("native-cam-closed-loop-check.json"), "readiness runbook missing native CAM closed-loop check evidence");
   assert(runbook.includes("native-cam-real-output-acceptance.json"), "readiness runbook missing native CAM real output acceptance evidence");
   assert(runbook.includes("bash native-cam-real-output-check.sh"), "readiness runbook missing native CAM real output acceptance command");
   assert(runbook.includes("cam-server-config.json"), "readiness runbook missing CAM server config evidence");
@@ -158,6 +160,7 @@ async function main() {
   assert(runbook.includes("blockingFailedCount"), "readiness runbook missing blocking failure result field");
   assert(runbook.includes("productionSafe"), "readiness runbook missing production safety result field");
   assert(report.acceptancePlan.steps.some((step) => step.id === "native-cam-package-self-check" && step.command === "node native-cam-server-package-self-check.mjs"), "acceptance plan missing Native CAM package self-check step");
+  assert(report.acceptancePlan.steps.some((step) => step.id === "native-cam-closed-loop-check" && step.command === "node native-cam-closed-loop-check.mjs"), "acceptance plan missing Native CAM closed-loop check step");
   assert(report.acceptancePlan.steps.some((step) => step.id === "camotics-material-removal-validate" && step.command.includes("camotics-material-removal-validate.mjs")), "acceptance plan missing CAMotics material-removal validator step");
 
   console.log(JSON.stringify({
