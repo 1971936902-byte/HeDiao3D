@@ -38,6 +38,11 @@ const checks = [
     summary: "Operator download path should emphasize the safe trial package."
   },
   {
+    id: "buddha-fixture-load-visible",
+    ok: source.includes("载入佛头测试模型") && source.includes("handleLoadLocalMeshyResult"),
+    summary: "Focused UI should keep a visible fixed Buddha model loader for operator/browser E2E and demos."
+  },
+  {
     id: "production-download-hidden-in-focused-mode",
     ok: /!\s*V3_TRIAL_FOCUSED_UI\s*&&\s*activeStage\s*===\s*"cam"[\s\S]{0,2600}handleDownloadZipPackage/.test(source),
     summary: "Legacy direct production download controls must remain hidden in focused V3 flow."

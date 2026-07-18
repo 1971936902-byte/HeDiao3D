@@ -5011,6 +5011,10 @@ export function App() {
                   accept=".stl,.obj,.glb,.gltf,model/stl,model/obj,model/gltf-binary,model/gltf+json"
                   onChange={handleImportOriginalModelFile}
                 />
+                {V3_TRIAL_FOCUSED_UI && <button className="demo-action material-action ai-tool-wide" onClick={handleLoadLocalMeshyResult} type="button">
+                  <FileImage size={17} />
+                  载入佛头测试模型
+                </button>}
                 {!V3_TRIAL_FOCUSED_UI && <button className="demo-action material-action" onClick={handleLoadLocalMeshyResult} type="button">
                   <FileImage size={17} />
                   载入测试结果
