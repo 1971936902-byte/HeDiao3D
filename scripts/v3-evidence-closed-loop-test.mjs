@@ -69,6 +69,7 @@ async function main() {
   assert(nativeCamImport.targetMachineBoundaryStatus?.status === "matched", "native CAM acceptance should bind target machine boundary");
   assert(nativeCamImport.contactValidationStatus?.status === "ready", "native CAM acceptance should bind strict contact validation");
   assert(nativeCamImport.contactValidationStatus?.pathCoverage?.status === "ready", "native CAM acceptance should expose ready contact path coverage");
+  assert(nativeCamImport.contactValidationStatus?.protectedZones?.status === "ready", "native CAM acceptance should expose ready protected-zone evidence");
   assert(nativeCamImport.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "native CAM import should preserve source ZIP");
 
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
@@ -108,6 +109,7 @@ async function main() {
   assert(nextActionChecklist.includes("Native CAM机型边界: matched"), "next-action checklist should show matched native CAM machine boundary");
   assert(nextActionChecklist.includes("Linux OpenCAMLib:"), "next-action checklist should show Linux OpenCAMLib offline evidence");
   assert(nextActionChecklist.includes("覆盖率 ready"), "next-action checklist should show ready OpenCAMLib path coverage");
+  assert(nextActionChecklist.includes("端部保护 ready"), "next-action checklist should show ready OpenCAMLib protected zones");
   assert(nextActionChecklist.includes("候选包 ready"), "next-action checklist should show OpenCAMLib candidate package level");
   assert(nextActionChecklist.includes("生产门禁"), "next-action checklist should keep production gate visible");
 
@@ -115,6 +117,7 @@ async function main() {
   assert(packageIndex.nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus?.status === "matched", "package index should expose matched native CAM target machine boundary");
   assert(packageIndex.linuxOpenCamLibEvidence?.schema === "hediao3d.linux-opencamlib-evidence-offline-summary.v1", "package index should expose Linux OpenCAMLib offline evidence");
   assert(packageIndex.linuxOpenCamLibEvidence.contactPathCoverage?.status === "ready", "package index should expose OpenCAMLib path coverage status");
+  assert(packageIndex.linuxOpenCamLibEvidence.protectedZones?.status === "ready", "package index should expose OpenCAMLib protected-zone status");
   assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageLevel === "ready", "package index should expose OpenCAMLib candidate package level");
   assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageReadyForImport === true, "package index should expose OpenCAMLib candidate import readiness");
   assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageBlockedReason === null, "package index should preserve OpenCAMLib candidate blocker reason");
@@ -133,6 +136,7 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose native CAM source binding");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose strict contact validation");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.pathCoverage?.status === "ready", "readiness should expose strict contact path coverage");
+  assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.protectedZones?.status === "ready", "readiness should expose strict protected-zone evidence");
   const adapterStep = readiness.acceptancePlan?.steps?.find((step) => step.id === "adapter-validation");
   assert(adapterStep?.status === "done", `bound native CAM source report should satisfy adapter validation step, got ${adapterStep?.status}`);
   assert(adapterStep?.blocksProduction === false, "bound native CAM source report should prevent stale adapter fixture audit from blocking production");
@@ -236,6 +240,9 @@ function createContactValidationFixture() {
     "contact-sampling-step-ratio",
     "contact-path-coverage-x",
     "contact-path-coverage-cross",
+    "protected-zones-present",
+    "protected-zones-no-violations",
+    "protected-zones-sampled-bounds",
     "contact-residual-gouge",
     "contact-residual-undercut",
     "identity-neutral",
@@ -250,8 +257,28 @@ function createContactValidationFixture() {
     expectProductionCandidate: true,
     productionCandidateEligible: true,
     checks,
+    protectedZones: createProtectedZonesFixture(),
     errors: [],
     warnings: []
+  };
+}
+
+function createProtectedZonesFixture() {
+  return {
+    schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+    required: true,
+    status: "ready",
+    ready: true,
+    enabled: true,
+    leftHoldMm: 2,
+    rightHoldMm: 2,
+    endTransitionMm: 1.2,
+    safeMinX: -16.8,
+    safeMaxX: 16.8,
+    sampledMinX: -16.8,
+    sampledMaxX: 16.8,
+    violationCount: 0,
+    summary: "OpenCAMLib protected end-zone checks passed."
   };
 }
 
@@ -298,6 +325,7 @@ function createOpenCamLibRealCandidateFixture() {
       cross: { id: "contact-path-coverage-cross", status: "pass", summary: "cross coverage pass" },
       summary: "OpenCAMLib 刀路覆盖率达标：X 向和旋转/横向覆盖均通过。"
     },
+    protectedZones: createProtectedZonesFixture(),
     candidatePackageLevel: "ready",
     candidatePackageBlockedReason: null,
     candidateReadyForImport: true,

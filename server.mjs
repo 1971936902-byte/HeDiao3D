@@ -2079,6 +2079,7 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       warningCount: Number(report.contactValidation.warningCount ?? contactValidationWarnings?.length ?? 0),
       firstError: report.contactValidation.firstError ?? contactValidationErrors?.[0] ?? null,
       pathCoverage: report.contactValidation.pathCoverage ?? createOpenCamLibContactPathCoverageSummary(report.contactValidation),
+      protectedZones: report.contactValidation.protectedZones ?? createOpenCamLibProtectedZonesSummary(report.contactValidation),
       sha256: report.contactValidation.sha256 ?? null
     } : null,
     runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(report.runnerReadiness),
@@ -2103,6 +2104,7 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       contactValidationLevel: report.openCamLibRealCandidate.contactValidationLevel ?? null,
       contactEvidenceClass: report.openCamLibRealCandidate.contactEvidenceClass ?? null,
       contactValidationPathCoverage: report.openCamLibRealCandidate.contactValidationPathCoverage ?? null,
+      protectedZones: report.openCamLibRealCandidate.protectedZones ?? null,
       candidatePackageLevel: report.openCamLibRealCandidate.candidatePackageLevel ?? null,
       candidatePackageBlockedReason: report.openCamLibRealCandidate.candidatePackageBlockedReason ?? null,
       candidateReadyForImport: Boolean(report.openCamLibRealCandidate.candidateReadyForImport),
@@ -2179,6 +2181,7 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   const ready = report.ok === true || report.level === "production-candidate-ready-for-import";
   const blockingCount = Number(report.blockingCount ?? (Array.isArray(report.blocking) ? report.blocking.length : 0));
   const contactValidationPathCoverage = report.contactValidationPathCoverage ?? null;
+  const protectedZones = report.protectedZones ?? null;
   return {
     schema: "hediao3d.opencamlib-real-candidate-status.v1",
     status: ready ? "ready" : report.level === "blocked" ? "blocked" : "review",
@@ -2189,6 +2192,7 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     contactValidationLevel: report.contactValidationLevel ?? null,
     contactEvidenceClass: report.contactEvidenceClass ?? null,
     contactValidationPathCoverage,
+    protectedZones,
     candidatePackageLevel: report.candidatePackageLevel ?? null,
     candidatePackageBlockedReason: report.candidatePackageBlockedReason ?? null,
     candidateReadyForImport: Boolean(report.candidateReadyForImport),
@@ -2222,6 +2226,19 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
       cross: null,
       summary: "未回填 OpenCAMLib strict contact 覆盖率证据。"
     };
+  const firstUsefulProtectedZones = (...items) => items.find((item) => item && typeof item === "object" && item.status !== "missing") ?? null;
+  const protectedZones = firstUsefulProtectedZones(
+    nativeCandidateStatus?.protectedZones,
+    nativeCandidate?.protectedZones,
+    nativeCamRealOutputAcceptance?.contactValidation?.protectedZones,
+    chainOpenCamLib?.protectedZones
+  ) ?? {
+    schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+    required: true,
+    status: "missing",
+    ready: false,
+    summary: "未回填 OpenCAMLib 端部保护区证据。"
+  };
   const realCandidateKnown = Boolean(chainOpenCamLib?.realCandidateKnown)
     || Boolean(nativeCandidateStatus && nativeCandidateStatus.status !== "missing")
     || Boolean(nativeCandidate);
@@ -2239,7 +2256,7 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     ?? nativeCandidate?.candidatePackageBlockedReason
     ?? chainOpenCamLib?.candidatePackageBlockedReason
     ?? null;
-  const status = realCandidateReady && contactPathCoverage?.ready && candidatePackageReadyForImport
+  const status = realCandidateReady && contactPathCoverage?.ready && protectedZones?.ready && candidatePackageReadyForImport
     ? "ready-for-review"
     : realCandidateKnown || contactPathCoverage?.status !== "missing" || candidatePackageLevel !== "missing"
       ? "review"
@@ -2261,6 +2278,7 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     realCandidateReady,
     productionLocked: nativeCandidate?.productionLocked ?? chainOpenCamLib?.productionLocked ?? true,
     contactPathCoverage,
+    protectedZones,
     candidatePackageLevel,
     candidatePackageReadyForImport,
     candidatePackageBlockedReason,
@@ -2268,7 +2286,7 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     summary: status === "ready-for-review"
       ? "Linux OpenCAMLib 真实候选链路已具备可回填复核证据；仍需同 job 的材料去除、空跑和试雕证据后才可生产解锁。"
       : status === "review"
-        ? `Linux OpenCAMLib 真实候选链路需复核：coverage=${contactPathCoverage?.status ?? "missing"}，candidate=${candidatePackageLevel}，blocked=${blocker ?? "无明确阻断原因"}。`
+        ? `Linux OpenCAMLib 真实候选链路需复核：coverage=${contactPathCoverage?.status ?? "missing"}，protectedZones=${protectedZones?.status ?? "missing"}，candidate=${candidatePackageLevel}，blocked=${blocker ?? "无明确阻断原因"}。`
         : "Linux OpenCAMLib 真实候选链路未回填；离线加工包不能证明真实 drop-cutter/cutter-contact 输出。"
   };
 }
@@ -2277,9 +2295,10 @@ function formatLinuxOpenCamLibEvidenceOfflineLine(summary) {
   if (!summary) return "missing / 未生成 Linux OpenCAMLib 离线证据摘要。";
   const coverageStatus = summary.contactPathCoverage?.status ?? "missing";
   const coverageText = summary.contactPathCoverage?.summary ?? "无覆盖率摘要";
+  const protectedZonesStatus = summary.protectedZones?.status ?? "missing";
   const candidateText = `${summary.candidatePackageLevel ?? "missing"} / ${summary.candidatePackageReadyForImport ? "可导入复核" : "不可导入"}`;
   const blockerText = summary.candidatePackageBlockedReason ?? summary.firstBlocking ?? "无明确阻断原因";
-  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
+  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 端部保护 ${protectedZonesStatus} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
 }
 
 function createOpenCamLibContactPathCoverageSummary(contact) {
@@ -2326,6 +2345,59 @@ function createOpenCamLibContactPathCoverageSummary(contact) {
   };
 }
 
+function createOpenCamLibProtectedZonesSummary(report) {
+  if (report?.protectedZones && typeof report.protectedZones === "object") {
+    return {
+      schema: report.protectedZones.schema ?? "hediao3d.opencamlib-protected-zones-summary.v1",
+      required: report.protectedZones.required !== false,
+      status: report.protectedZones.status ?? (report.protectedZones.ready === true || report.protectedZones.violationCount === 0 ? "ready" : "review"),
+      ready: Boolean(report.protectedZones.ready ?? (report.protectedZones.enabled === true && report.protectedZones.violationCount === 0)),
+      enabled: report.protectedZones.enabled ?? null,
+      leftHoldMm: report.protectedZones.leftHoldMm ?? null,
+      rightHoldMm: report.protectedZones.rightHoldMm ?? null,
+      endTransitionMm: report.protectedZones.endTransitionMm ?? null,
+      safeMinX: report.protectedZones.safeMinX ?? null,
+      safeMaxX: report.protectedZones.safeMaxX ?? null,
+      sampledMinX: report.protectedZones.sampledMinX ?? null,
+      sampledMaxX: report.protectedZones.sampledMaxX ?? null,
+      violationCount: Number(report.protectedZones.violationCount ?? 0),
+      summary: report.protectedZones.summary ?? "OpenCAMLib 端部保护区摘要已由上游 contact validation 提供。"
+    };
+  }
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const findCheck = (id) => checks.find((check) => check?.id === id) ?? null;
+  const present = findCheck("protected-zones-present");
+  const noViolations = findCheck("protected-zones-no-violations");
+  const sampledBounds = findCheck("protected-zones-sampled-bounds");
+  const summarizeCheck = (check) => check ? {
+    id: check.id ?? null,
+    status: check.status ?? "unknown",
+    summary: check.summary ?? null,
+    reported: check.reported ?? null,
+    safeMinX: check.safeMinX ?? null,
+    safeMaxX: check.safeMaxX ?? null,
+    sampledMinX: check.sampledMinX ?? null,
+    sampledMaxX: check.sampledMaxX ?? null
+  } : null;
+  const missing = !present || !noViolations || !sampledBounds;
+  const ready = !missing && present.status === "pass" && noViolations.status === "pass" && sampledBounds.status === "pass";
+  const failed = [present, noViolations, sampledBounds].filter((item) => item && item.status !== "pass");
+  return {
+    schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+    required: true,
+    status: ready ? "ready" : missing ? "missing" : "review",
+    ready,
+    present: summarizeCheck(present),
+    noViolations: summarizeCheck(noViolations),
+    sampledBounds: summarizeCheck(sampledBounds),
+    summary: ready
+      ? "OpenCAMLib 端部保护区达标：左右夹持/过渡区已启用且采样未越界。"
+      : missing
+        ? "OpenCAMLib strict contact 验证缺少端部保护区检查。"
+        : `OpenCAMLib 端部保护区未达标：${failed[0]?.id ?? "unknown"} ${failed[0]?.summary ?? ""}`.trim()
+  };
+}
+
 function createNativeCamContactValidationStatus(report) {
   const candidates = Number(report?.productionCandidateCount ?? 0);
   const opencamlibCandidate = Array.isArray(report?.adapters)
@@ -2347,6 +2419,13 @@ function createNativeCamContactValidationStatus(report) {
         cross: null,
         summary: "当前验收未声明生产候选输出，刀路覆盖率检查暂不作为硬门。"
       },
+      protectedZones: {
+        schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+        required: false,
+        status: "not-required",
+        ready: true,
+        summary: "当前验收未声明生产候选输出，端部保护区检查暂不作为硬门。"
+      },
       summary: "当前验收未声明生产候选输出，strict contact 验证暂不作为本项硬门。"
     };
   }
@@ -2365,14 +2444,23 @@ function createNativeCamContactValidationStatus(report) {
         cross: null,
         summary: "缺少 OpenCAMLib strict contact 验证，无法判断刀路覆盖率。"
       },
+      protectedZones: {
+        schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+        required: true,
+        status: "missing",
+        ready: false,
+        summary: "缺少 OpenCAMLib strict contact 验证，无法判断端部保护区。"
+      },
       summary: "Native CAM 真实输出缺少 OpenCAMLib strict contact 验证，不能作为生产候选证据。"
     };
   }
   const pathCoverage = createOpenCamLibContactPathCoverageSummary(contact);
+  const protectedZones = createOpenCamLibProtectedZonesSummary(contact);
   const ready = contact.schema === "hediao3d.opencamlib-contact-output-validation.v1"
     && contact.level === "ready"
     && contact.strict === true
     && contact.productionCandidateEligible === true
+    && protectedZones.ready === true
     && Number(contact.failedCheckCount ?? (Array.isArray(contact.checks) ? contact.checks.filter((check) => check?.status === "fail").length : 0)) === 0
     && Number(contact.errorCount ?? (Array.isArray(contact.errors) ? contact.errors.length : 0)) === 0;
   const checkCount = Number(contact.checkCount ?? (Array.isArray(contact.checks) ? contact.checks.length : 0));
@@ -2390,6 +2478,7 @@ function createNativeCamContactValidationStatus(report) {
     errorCount,
     warningCount,
     pathCoverage,
+    protectedZones,
     summary: ready
       ? `OpenCAMLib strict contact 验证 ready：${checkCount} checks。`
       : `OpenCAMLib strict contact 验证未达到生产候选门槛：level=${contact.level ?? "missing"}，failed=${failedCheckCount}，errors=${errorCount}。`
@@ -2436,6 +2525,15 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
       cross: null,
       summary: "OpenCAMLib one-command real candidate 缺少 contact validation，无法判断刀路覆盖率。"
     };
+  const protectedZones = contactValidation
+    ? createOpenCamLibProtectedZonesSummary(contactValidation)
+    : {
+      schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+      required: true,
+      status: "missing",
+      ready: false,
+      summary: "OpenCAMLib one-command real candidate 缺少 contact validation，无法判断端部保护区。"
+    };
   return {
     schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
     sourceSchema: report?.schema ?? null,
@@ -2446,6 +2544,7 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     contactValidationLevel: contactValidation?.level ?? null,
     contactEvidenceClass: contactValidation?.evidenceClass ?? null,
     contactValidationPathCoverage,
+    protectedZones,
     candidatePackageLevel: candidatePackage?.level ?? null,
     candidatePackageBlockedReason: candidatePackage?.blockedReason ?? null,
     candidateReadyForImport: Boolean(candidatePackage?.readyForImport),
@@ -2460,6 +2559,7 @@ function createNativeCamContactValidationSummary(report, rawBytes = null) {
   const errors = Array.isArray(report?.errors) ? report.errors : [];
   const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
   const pathCoverage = createOpenCamLibContactPathCoverageSummary({ ...report, checks });
+  const protectedZones = createOpenCamLibProtectedZonesSummary({ ...report, checks });
   return {
     schema: report?.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
     createdAt: report?.createdAt ?? null,
@@ -2473,6 +2573,7 @@ function createNativeCamContactValidationSummary(report, rawBytes = null) {
     warningCount: warnings.length,
     firstError: errors[0] ?? null,
     pathCoverage,
+    protectedZones,
     sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
   };
 }
@@ -2695,6 +2796,8 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       productionLocked: chain.openCamLib?.productionLocked !== false,
       firstBlocking: chain.openCamLib?.firstBlocking ?? null,
       contactPathCoverage: chain.openCamLib?.contactPathCoverage ?? null,
+      protectedZones: chain.openCamLib?.protectedZones ?? null,
+      protectedZonesReady: Boolean(chain.openCamLib?.protectedZonesReady),
       candidatePackageLevel: chain.openCamLib?.candidatePackageLevel ?? "missing",
       candidatePackageReadyForImport: Boolean(chain.openCamLib?.candidatePackageReadyForImport),
       candidatePackageBlockedReason: chain.openCamLib?.candidatePackageBlockedReason ?? null

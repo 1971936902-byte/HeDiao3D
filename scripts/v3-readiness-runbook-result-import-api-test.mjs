@@ -76,6 +76,8 @@ async function main() {
   assert(linuxEvidenceArtifact.evidenceChain?.schema === "hediao3d.native-cam-linux-evidence-chain.v1", "Linux evidence should expose closed-loop evidence chain");
   assert(linuxEvidenceArtifact.evidenceChain?.crossChecks?.materialRemovalBoundToUpstreamCam === true, "Linux evidence chain should preserve CAMotics upstream binding");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "Linux evidence chain should preserve OpenCAMLib path coverage summary");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.protectedZones?.status === "ready", "Linux evidence chain should preserve OpenCAMLib protected-zone summary");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.protectedZonesReady === true, "Linux evidence chain should expose ready protected-zone flag");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackageBlockedReason === null, "Linux evidence chain should preserve candidate package blocked reason");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "native-cam-closed-loop-check.json" && file.status === "imported"), "Linux evidence should preserve closed-loop check");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.status === "imported"), "Linux evidence should preserve CAMotics validation");
@@ -87,6 +89,7 @@ async function main() {
   assert(latest.latest.linuxEvidence?.status === "ready-for-review", "latest runbook result should preserve Linux evidence summary");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidenceStatus === "matched", "latest runbook result should summarize CAMotics upstream evidence status");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "latest runbook result should summarize OpenCAMLib path coverage");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.protectedZones?.status === "ready", "latest runbook result should summarize OpenCAMLib protected zones");
 
   const readinessAfterImport = await postJson("/api/orchestrator/readiness", {});
   assert(readinessAfterImport.runbookResult?.readinessReportId === readiness.id, "readiness should include latest imported runbook result");
@@ -130,6 +133,23 @@ function createClosedLoopEvidenceChainFixture() {
         cross: { id: "contact-path-coverage-cross", status: "pass", summary: "crossCoverageRatio=1" },
         summary: "OpenCAMLib path coverage checks passed."
       },
+      protectedZones: {
+        schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+        required: true,
+        status: "ready",
+        ready: true,
+        enabled: true,
+        leftHoldMm: 2,
+        rightHoldMm: 2,
+        endTransitionMm: 1.2,
+        safeMinX: -16.8,
+        safeMaxX: 16.8,
+        sampledMinX: -16.8,
+        sampledMaxX: 16.8,
+        violationCount: 0,
+        summary: "OpenCAMLib protected end-zone checks passed."
+      },
+      protectedZonesReady: true,
       candidatePackageLevel: "ready",
       candidatePackageReadyForImport: true,
       candidatePackageBlockedReason: null

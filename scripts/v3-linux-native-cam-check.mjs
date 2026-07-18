@@ -786,10 +786,12 @@ check("real-output-target-boundary", realOutputCheck.includes("target-machine-bo
 check("real-output-runner-readiness", realOutputCheck.includes("opencamlib-runner-readiness.json") && realOutputCheck.includes("runnerReadiness"), "real output checker must carry OpenCAMLib runner readiness evidence into the upload bundle.");
 check("real-output-real-candidate", realOutputCheck.includes("opencamlib-real-candidate-run.json") && realOutputCheck.includes("openCamLibRealCandidate"), "real output checker must carry OpenCAMLib one-command real candidate evidence into the upload bundle.");
 check("real-candidate-path-coverage", openCamRealCandidate.includes("pathCoverage") && openCamRealCandidate.includes("createContactPathCoverageSummary"), "OpenCAMLib real candidate runner must summarize contact pathCoverage diagnostics.");
+check("real-candidate-protected-zones", openCamRealCandidate.includes("protectedZones") && openCamRealCandidate.includes("createProtectedZonesSummary"), "OpenCAMLib real candidate runner must summarize protected end-zone diagnostics.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
 check("closed-loop-check-evidence-chain", closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1") && closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop checker must summarize Native CAM/OpenCAMLib/CAMotics evidence chain and upstream binding.");
 check("closed-loop-check-opencamlib-coverage", closedLoopCheck.includes("contactPathCoverage") && closedLoopCheck.includes("candidatePackageBlockedReason"), "closed-loop checker must summarize OpenCAMLib path coverage and candidate package blockers.");
+check("closed-loop-check-opencamlib-protected-zones", closedLoopCheck.includes("protectedZones") && closedLoopCheck.includes("protectedZonesReady"), "closed-loop checker must summarize OpenCAMLib protected end-zone status.");
 check("diagnostics-bundle-schema", diagnosticsBundle.includes("hediao3d.native-cam-diagnostics-bundle.v1"), "diagnostics bundle must emit the diagnostics schema.");
 check("diagnostics-bundle-zip", diagnosticsBundle.includes("native-cam-diagnostics-bundle.zip"), "diagnostics bundle must generate native-cam-diagnostics-bundle.zip.");
 
@@ -962,6 +964,13 @@ function createEvidenceChain(root, steps) {
     ?? nativeAcceptance?.contactValidationStatus?.pathCoverage
     ?? contactValidation?.pathCoverage
     ?? null;
+  const protectedZones = realCandidate?.contactValidation?.protectedZones
+    ?? realCandidate?.protectedZones
+    ?? nativeAcceptance?.openCamLibRealCandidate?.protectedZones
+    ?? nativeAcceptance?.contactValidation?.protectedZones
+    ?? contactValidation?.protectedZones
+    ?? null;
+  const protectedZonesReady = protectedZones?.ready === true || protectedZones?.status === "ready";
   const candidatePackageLevel = realCandidate?.candidatePackage?.level
     ?? realCandidate?.candidatePackageLevel
     ?? nativeAcceptance?.openCamLibRealCandidate?.candidatePackageLevel
@@ -1008,6 +1017,8 @@ function createEvidenceChain(root, steps) {
       productionLocked: realCandidate?.productionLocked !== false,
       firstBlocking: realCandidate?.firstBlocking ?? (Array.isArray(realCandidate?.blocking) ? realCandidate.blocking[0] : null),
       contactPathCoverage,
+      protectedZones,
+      protectedZonesReady,
       candidatePackageLevel,
       candidatePackageReadyForImport,
       candidatePackageBlockedReason,
@@ -1366,6 +1377,7 @@ try {
     contactValidationLevel: parsed.contactValidation?.level || null,
     contactEvidenceClass: parsed.contactValidation?.evidenceClass || null,
     contactValidationPathCoverage: parsed.contactValidation?.pathCoverage || null,
+    protectedZones: parsed.contactValidation?.protectedZones || null,
     candidatePackageLevel: parsed.candidatePackage?.level || null,
     candidatePackageBlockedReason: parsed.candidatePackage?.blockedReason || null,
     candidateReadyForImport: Boolean(parsed.candidatePackage?.readyForImport),
@@ -1383,6 +1395,7 @@ try {
     contactValidationLevel: null,
     contactEvidenceClass: null,
     contactValidationPathCoverage: null,
+    protectedZones: null,
     candidatePackageLevel: null,
     candidatePackageBlockedReason: null,
     candidateReadyForImport: false,
@@ -1733,7 +1746,8 @@ const report = {
     evidenceClass: contactValidation.evidenceClass,
     productionCandidateEligible: Boolean(contactValidation.productionCandidateEligible),
     failedCheckCount: Array.isArray(contactValidation.checks) ? contactValidation.checks.filter((check) => check.status === "fail").length : null,
-    pathCoverage: createContactPathCoverageSummary(contactValidation)
+    pathCoverage: createContactPathCoverageSummary(contactValidation),
+    protectedZones: createProtectedZonesSummary(contactValidation)
   } : null,
   candidatePackage: candidatePackage ? {
     level: candidatePackage.level,
@@ -1828,6 +1842,43 @@ function createContactPathCoverageSummary(report) {
     summary: ready
       ? "OpenCAMLib path coverage checks passed."
       : "OpenCAMLib path coverage checks are missing or below threshold."
+  };
+}
+
+function createProtectedZonesSummary(report) {
+  if (report?.protectedZones && typeof report.protectedZones === "object") {
+    return report.protectedZones;
+  }
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const present = checks.find((check) => check.id === "protected-zones-present") ?? null;
+  const violations = checks.find((check) => check.id === "protected-zones-no-violations") ?? null;
+  const bounds = checks.find((check) => check.id === "protected-zones-sampled-bounds") ?? null;
+  const ready = Boolean(
+    present && present.status === "pass" &&
+    violations && violations.status === "pass" &&
+    bounds && bounds.status === "pass"
+  );
+  const summarize = (check) => check ? {
+    id: check.id,
+    status: check.status || "unknown",
+    summary: check.summary || null,
+    reported: check.reported ?? null,
+    safeMinX: check.safeMinX ?? null,
+    safeMaxX: check.safeMaxX ?? null,
+    sampledMinX: check.sampledMinX ?? null,
+    sampledMaxX: check.sampledMaxX ?? null
+  } : null;
+  return {
+    schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+    required: true,
+    status: ready ? "ready" : (!present || !violations || !bounds) ? "missing" : "review",
+    ready,
+    present: summarize(present),
+    noViolations: summarize(violations),
+    sampledBounds: summarize(bounds),
+    summary: ready
+      ? "OpenCAMLib protected end-zone checks passed."
+      : "OpenCAMLib protected end-zone checks are missing or failed."
   };
 }
 

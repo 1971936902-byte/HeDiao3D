@@ -45,8 +45,10 @@ async function main() {
   assert(imported.sourceReportHandoffAudit?.unsafeCount === 0, "imported acceptance should expose source report unsafe audit");
   assert(imported.contactValidationStatus?.status === "ready", "imported acceptance should expose ready strict contact validation");
   assert(imported.contactValidationStatus?.pathCoverage?.status === "ready", "imported acceptance should expose ready path coverage status");
+  assert(imported.contactValidationStatus?.protectedZones?.status === "ready", "imported acceptance should expose ready protected-zone status");
   assert(imported.contactValidation?.checkCount >= 9, "imported acceptance should expose contact validation check count");
   assert(imported.contactValidation?.pathCoverage?.status === "ready", "imported acceptance should expose contact validation path coverage summary");
+  assert(imported.contactValidation?.protectedZones?.status === "ready", "imported acceptance should expose contact validation protected-zone summary");
   assert(imported.apiArtifacts?.json?.includes("native-cam-real-output-acceptance.json"), "imported acceptance should expose JSON artifact");
 
   const artifact = await getJson(imported.apiArtifacts.json);
@@ -56,6 +58,7 @@ async function main() {
   assert(artifact.targetMachineBoundaryStatus?.status === "matched", "artifact should preserve target machine boundary status");
   assert(artifact.contactValidationStatus?.status === "ready", "artifact should preserve strict contact validation status");
   assert(artifact.contactValidationStatus?.pathCoverage?.status === "ready", "artifact should preserve path coverage status");
+  assert(artifact.contactValidationStatus?.protectedZones?.status === "ready", "artifact should preserve protected-zone status");
   assert(artifact.sourceReportSnapshot?.handoffClassificationAudit?.productionCandidateCount === 1, "artifact should preserve source report handoff audit snapshot");
 
   const lowCoverageContactValidation = createContactValidationFixture({
@@ -110,21 +113,26 @@ async function main() {
   assert(zipImported.targetMachineBoundaryStatus?.status === "matched", "zip import should preserve matched target boundary");
   assert(zipImported.contactValidationStatus?.status === "ready", "zip import should preserve ready contact validation");
   assert(zipImported.contactValidationStatus?.pathCoverage?.status === "ready", "zip import should preserve ready path coverage");
+  assert(zipImported.contactValidationStatus?.protectedZones?.status === "ready", "zip import should preserve ready protected zones");
   assert(zipImported.runnerReadinessStatus?.status === "blocked", "zip import should expose blocked runner readiness status");
   assert(zipImported.runnerReadiness?.firstBlocker === "real-drop-cutter-not-implemented", "zip import should preserve runner readiness blocker summary");
   assert(zipImported.openCamLibRealCandidateStatus?.status === "blocked", "zip import should expose blocked OpenCAMLib real candidate status");
   assert(zipImported.openCamLibRealCandidateStatus?.contactValidationPathCoverage?.status === "ready", "zip import should expose real candidate contact path coverage status");
+  assert(zipImported.openCamLibRealCandidateStatus?.protectedZones?.status === "ready", "zip import should expose real candidate protected-zone status");
   assert(zipImported.openCamLibRealCandidate?.firstBlocking === "opencamlib-production-candidate-not-proven", "zip import should preserve real candidate blocker summary");
   assert(zipImported.openCamLibRealCandidate?.contactValidationPathCoverage?.status === "ready", "zip import should preserve real candidate path coverage summary");
+  assert(zipImported.openCamLibRealCandidate?.protectedZones?.status === "ready", "zip import should preserve real candidate protected-zone summary");
   assert(zipImported.openCamLibRealCandidate?.candidatePackageBlockedReason === "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.", "zip import should preserve candidate package blocked reason");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
   assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
   assert(zipArtifact.contactValidation?.pathCoverage?.status === "ready", "zip import artifact should preserve contact path coverage summary");
+  assert(zipArtifact.contactValidation?.protectedZones?.status === "ready", "zip import artifact should preserve protected-zone summary");
   assert(zipArtifact.runnerReadiness?.sha256, "zip import artifact should preserve runner readiness sha256");
   assert(zipArtifact.runnerReadinessStatus?.summary?.includes("OpenCAMLib runner readiness"), "zip import artifact should preserve runner readiness status summary");
   assert(zipArtifact.openCamLibRealCandidate?.sha256, "zip import artifact should preserve OpenCAMLib real candidate sha256");
   assert(zipArtifact.openCamLibRealCandidate?.contactValidationPathCoverage?.status === "ready", "zip import artifact should preserve OpenCAMLib real candidate path coverage summary");
+  assert(zipArtifact.openCamLibRealCandidate?.protectedZones?.status === "ready", "zip import artifact should preserve OpenCAMLib real candidate protected-zone summary");
   assert(zipArtifact.openCamLibRealCandidateStatus?.summary?.includes("OpenCAMLib one-command real candidate"), "zip import artifact should preserve OpenCAMLib real candidate status summary");
   const zipImportReport = await getJson(zipImported.apiArtifacts.importJson);
   assert(zipImportReport.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import report should preserve source bundle filename");
@@ -139,10 +147,12 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus?.status === "matched", "readiness should expose matched target machine boundary");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose ready strict contact validation");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.pathCoverage?.status === "ready", "readiness should expose ready path coverage status");
+  assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.protectedZones?.status === "ready", "readiness should expose ready protected-zone status");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadinessStatus?.status === "blocked", "readiness should expose imported OpenCAMLib runner readiness status");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadiness?.blockerCount === 1, "readiness should expose imported OpenCAMLib runner readiness summary");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.status === "blocked", "readiness should expose imported OpenCAMLib real candidate status");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.contactValidationPathCoverage?.status === "ready", "readiness should expose imported real candidate path coverage");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.protectedZones?.status === "ready", "readiness should expose imported real candidate protected zones");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidate?.blockingCount === 1, "readiness should expose imported OpenCAMLib real candidate summary");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
@@ -245,6 +255,7 @@ function createContactValidationFixture(overrides = {}) {
     expectProductionCandidate: true,
     productionCandidateEligible: true,
     checks,
+    protectedZones: createProtectedZonesFixture(),
     errors: [],
     warnings: [],
     ...overrides
@@ -271,12 +282,34 @@ function createContactValidationChecks() {
     "contact-sampling-step-ratio",
     "contact-path-coverage-x",
     "contact-path-coverage-cross",
+    "protected-zones-present",
+    "protected-zones-no-violations",
+    "protected-zones-sampled-bounds",
     "contact-residual-gouge",
     "contact-residual-undercut",
     "identity-neutral",
     "identity-plan",
     "identity-model"
   ].map((id) => ({ id, status: "pass", summary: `${id} pass` }));
+}
+
+function createProtectedZonesFixture() {
+  return {
+    schema: "hediao3d.opencamlib-protected-zones-summary.v1",
+    required: true,
+    status: "ready",
+    ready: true,
+    enabled: true,
+    leftHoldMm: 2,
+    rightHoldMm: 2,
+    endTransitionMm: 1.2,
+    safeMinX: -16.8,
+    safeMaxX: 16.8,
+    sampledMinX: -16.8,
+    sampledMaxX: 16.8,
+    violationCount: 0,
+    summary: "OpenCAMLib protected end-zone checks passed."
+  };
 }
 
 function createRunnerReadinessFixture() {
@@ -318,7 +351,8 @@ function createRealCandidateFixture() {
         x: { id: "contact-path-coverage-x", status: "pass", summary: "xCoverageRatio=1" },
         cross: { id: "contact-path-coverage-cross", status: "pass", summary: "crossCoverageRatio=1" },
         summary: "OpenCAMLib path coverage checks passed."
-      }
+      },
+      protectedZones: createProtectedZonesFixture()
     },
     candidatePackage: {
       level: "critical",
