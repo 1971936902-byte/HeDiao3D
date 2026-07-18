@@ -153,6 +153,10 @@ async function main() {
   assert(runbook.includes("RESULT_BUNDLE_ZIP"), "readiness runbook missing uploadable result bundle path");
   assert(runbook.includes("v3-acceptance-runbook-result-bundle.zip"), "readiness runbook missing result bundle filename");
   assert(runbook.includes("README-RUNBOOK-RESULT.md"), "readiness runbook bundle missing README");
+  assert(runbook.includes("optionalEvidenceFiles"), "readiness runbook missing optional evidence file bundling");
+  assert(runbook.includes("native-cam-closed-loop-check.json"), "readiness runbook bundle should include Native CAM closed-loop evidence when present");
+  assert(runbook.includes("camotics-result-local-validation.json"), "readiness runbook bundle should include CAMotics local validation evidence when present");
+  assert(runbook.includes("Optional Linux CAM evidence files are included only when they exist"), "readiness runbook README should explain optional Linux evidence files");
   assert(runbook.includes("Upload this ZIP in the HeDiao3D V3 readiness runbook-result import panel."), "readiness runbook missing result upload instruction");
   assert(runbook.includes("hediao3d.v3-acceptance-runbook-result.v1"), "readiness runbook missing result schema");
   assert(runbook.includes("RESULT_READINESS_ID"), "readiness runbook missing readiness identity binding");
