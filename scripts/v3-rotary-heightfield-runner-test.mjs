@@ -73,7 +73,7 @@ try {
       ...process.env,
       HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT: "true",
       HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT: "true",
-      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS: "9",
+      HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS: "33",
       HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS: "7"
     },
     encoding: "utf8"
@@ -87,8 +87,12 @@ try {
   assert(neutral.runner?.mode === "stl-rotary-heightfield-preview", "runner mode mismatch");
   assert(neutral.coordinate?.rotaryAxis === "Y", "rotary axis should remain Y");
   assert(neutral.runner?.heightfield?.rotaryEnvelope === true, "heightfield should mark rotary envelope");
+  assert(neutral.runner?.heightfield?.cutterEnvelope === true, "rotary heightfield should apply cutter envelope");
+  assert(neutral.runner?.heightfield?.cutterRadiusMm === 2, `4mm cutter should use 2mm envelope radius, got ${neutral.runner?.heightfield?.cutterRadiusMm}`);
+  assert(neutral.runner?.heightfield?.rotaryCutterAngularToleranceDeg > 0, "rotary cutter angular tolerance should be reported");
+  assert(neutral.runner?.heightfield?.cutterEnvelopeSampleCount > neutral.points?.length, "rotary cutter envelope should sample neighboring X/angle points");
   assert(neutral.runner?.heightfield?.missCount === 0, `closed rotary STL should have no misses, got ${neutral.runner?.heightfield?.missCount}`);
-  assert(Array.isArray(neutral.points) && neutral.points.length === 63, `expected 63 rotary samples, got ${neutral.points?.length}`);
+  assert(Array.isArray(neutral.points) && neutral.points.length === 231, `expected 231 rotary samples, got ${neutral.points?.length}`);
 
   const angles = new Set(neutral.points.map((point) => Number(point.a)));
   assert(angles.has(0) && angles.has(180) && angles.has(360), "rotary samples should cover 0/180/360 degrees");
@@ -97,6 +101,19 @@ try {
   const maxDepth = Math.max(...depthValues);
   assert(maxDepth > minDepth + 0.2, `rotary relief should produce a meaningful depth range, got ${minDepth}..${maxDepth}`);
   assert(neutral.points.every((point) => point.rotarySample === true), "all points should be marked as rotary samples");
+  assert(neutral.points.every((point) => point.cutterRadiusMm === 2), "all rotary points should echo 4mm cutter radius");
+  assert(neutral.points.some((point) => point.envelopeSampleCount > 1), "rotary points should include multi-sample cutter envelope");
+  assert(neutral.points.some((point) => point.cutterEnvelopeLiftMm > 0), "rotary cutter envelope should lift at least one valley sample");
+  assert(existsSync(neutral.runner.heightfield.cutterEnvelopeReport), "rotary cutter envelope report should be written");
+  const envelopeReport = JSON.parse(readFileSync(neutral.runner.heightfield.cutterEnvelopeReport, "utf8"));
+  assert(envelopeReport.mode === "stl-rotary-heightfield-preview", "envelope report should echo rotary heightfield mode");
+  assert(envelopeReport.sampling?.rotaryEnvelope === true, "envelope report should mark rotary envelope");
+  assert(envelopeReport.rotaryEnvelope?.enabled === true, "envelope report rotary section should be enabled");
+  assert(envelopeReport.tool?.previewCutterRadiusMm === 2, "envelope report should bind 4mm cutter radius");
+  assert(envelopeReport.tool?.angleDeg === 25, "envelope report should include 25 degree tool angle");
+  assert(envelopeReport.tool?.flatTipMm === 0.4, "envelope report should include flat tip");
+  assert(envelopeReport.rotaryEnvelope?.cutterEnvelopeLiftMaxMm > 0, "envelope report should expose cutter envelope lift");
+  assert(envelopeReport.quality?.productionCandidate === false, "rotary preview envelope must not be production candidate");
 
   console.log(JSON.stringify({
     ok: true,
@@ -104,6 +121,8 @@ try {
     points: neutral.points.length,
     missCount: neutral.runner.heightfield.missCount,
     angleCount: angles.size,
+    cutterRadiusMm: neutral.runner.heightfield.cutterRadiusMm,
+    cutterEnvelopeLiftMaxMm: neutral.runner.heightfield.cutterEnvelopeLiftMaxMm,
     depthRange: {
       min: minDepth,
       max: maxDepth

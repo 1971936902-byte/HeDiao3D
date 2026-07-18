@@ -396,11 +396,13 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
     stock = plan.get("stock") or {}
     sampling = plan.get("sampling") or {}
     axis_mapping = sampling.get("axisMapping") or {}
+    tool = plan.get("tool") or {}
     safe_z = float(settings.get("safeZ") or 22)
     output_length = float(stock.get("lengthMm") or settings.get("lengthMm") or max(0.001, float(geometry.get("dimensions", {}).get("x") or 1)))
     output_depth = max(0.001, float(settings.get("depthMm") or settings.get("maxCutDepth") or max(0.001, float(geometry.get("dimensions", {}).get("z") or 1))))
     stock_radius = max(0.001, float(stock.get("diameterMm") or settings.get("diameterMm") or 15) / 2)
     rotary_axis = axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y"
+    cutter_radius = compute_preview_cutter_radius(tool, settings)
     cols = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS") or 8)))
     rows = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS") or 12)))
 
@@ -416,6 +418,7 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
         0.001,
         max(abs(y_min - center_y), abs(y_max - center_y), abs(z_min - center_z), abs(z_max - center_z)),
     )
+    angular_tolerance_deg = math.degrees(math.asin(min(0.95, cutter_radius / model_radius))) if cutter_radius > 0 else 0.0
     ray_start_radius = model_radius * 3 + stock_radius
     radial_samples: List[Dict[str, Any]] = []
     miss_count = 0
@@ -451,9 +454,20 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
     if not radial_samples:
         return None
 
+    for sample in radial_samples:
+        enveloped = apply_rotary_cutter_envelope(sample, radial_samples, cutter_radius, angular_tolerance_deg)
+        sample["rawRadius"] = sample["radius"]
+        sample["radius"] = enveloped["radius"]
+        sample["envelopeSampleCount"] = enveloped["sampleCount"]
+        sample["envelopeLiftMm"] = max(0.0, float(sample["radius"]) - float(sample["rawRadius"]))
+
     radii = [float(sample["radius"]) for sample in radial_samples]
+    raw_radii = [float(sample["rawRadius"]) for sample in radial_samples]
+    envelope_lifts = [float(sample["envelopeLiftMm"]) for sample in radial_samples]
     min_radius = min(radii)
     max_radius = max(radii)
+    raw_min_radius = min(raw_radii)
+    raw_max_radius = max(raw_radii)
     radius_span = max(1e-9, max_radius - min_radius)
     points: List[Dict[str, Any]] = []
     for sample in radial_samples:
@@ -467,6 +481,10 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
             "z": round(safe_z - depth, 4),
             "depth": round(depth, 4),
             "surfaceRadius": round(float(sample["radius"]), 6),
+            "rawSurfaceRadius": round(float(sample["rawRadius"]), 6),
+            "cutterEnvelopeLiftMm": round(float(sample["envelopeLiftMm"]), 6),
+            "envelopeSampleCount": int(sample["envelopeSampleCount"]),
+            "cutterRadiusMm": round(cutter_radius, 6),
             "surfaceY": round(float(sample["point"][1]), 6),
             "surfaceZ": round(float(sample["point"][2]), 6),
             "modelX": round(float(sample["modelX"]), 6),
@@ -504,8 +522,16 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
                 "missCount": miss_count,
                 "fallbackCount": 0,
                 "rotaryEnvelope": True,
+                "cutterEnvelope": cutter_radius > 0,
+                "cutterRadiusMm": round(cutter_radius, 6),
+                "rotaryCutterAngularToleranceDeg": round(angular_tolerance_deg, 6),
+                "cutterEnvelopeSampleCount": sum(int(sample["envelopeSampleCount"]) for sample in radial_samples),
+                "cutterEnvelopeLiftMaxMm": round(max(envelope_lifts) if envelope_lifts else 0, 6),
+                "cutterEnvelopeLiftAvgMm": round(sum(envelope_lifts) / len(envelope_lifts), 6) if envelope_lifts else 0,
                 "center": {"xAxis": "X", "y": center_y, "z": center_z},
                 "stockRadiusMm": stock_radius,
+                "rawSurfaceRadiusMin": round(raw_min_radius, 6),
+                "rawSurfaceRadiusMax": round(raw_max_radius, 6),
                 "surfaceRadiusMin": round(min_radius, 6),
                 "surfaceRadiusMax": round(max_radius, 6),
                 "outputLengthMm": output_length,
@@ -521,10 +547,35 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
     }
 
 
+def apply_rotary_cutter_envelope(sample: Dict[str, Any], samples: List[Dict[str, Any]], cutter_radius: float, angular_tolerance_deg: float) -> Dict[str, Any]:
+    if cutter_radius <= 1e-9:
+        return {"radius": float(sample["radius"]), "sampleCount": 1}
+    x = float(sample["modelX"])
+    angle = float(sample["angle"])
+    best_radius = float(sample["radius"])
+    sample_count = 0
+    for candidate in samples:
+        if abs(float(candidate["modelX"]) - x) > cutter_radius:
+            continue
+        if circular_angle_distance_deg(float(candidate["angle"]), angle) > angular_tolerance_deg:
+            continue
+        sample_count += 1
+        best_radius = max(best_radius, float(candidate["radius"]))
+    return {
+        "radius": best_radius,
+        "sampleCount": max(1, sample_count),
+    }
+
+
+def circular_angle_distance_deg(a: float, b: float) -> float:
+    distance = abs((a - b) % 360.0)
+    return min(distance, 360.0 - distance)
+
+
 def compute_preview_cutter_radius(tool: Dict[str, Any], settings: Dict[str, Any]) -> float:
     diameter = float(tool.get("diameterMm") or settings.get("toolDiameter") or 0)
     flat_tip = float(tool.get("flatTipMm") or 0)
-    scale = float(os.environ.get("HEDIAO3D_OPENCAMLIB_CUTTER_RADIUS_SCALE") or 0.5)
+    scale = float(os.environ.get("HEDIAO3D_OPENCAMLIB_CUTTER_RADIUS_SCALE") or 1.0)
     radius = max(flat_tip / 2, diameter / 2 * max(0.0, scale))
     return max(0.0, radius)
 
@@ -533,7 +584,7 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
     points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
     heightfield = ((neutral.get("runner") or {}).get("heightfield") or {})
     depths = [float(point.get("depth")) for point in points if is_number(point.get("depth"))]
-    contact_samples = [int(point.get("contactSamples") or 0) for point in points]
+    contact_samples = [int(point.get("contactSamples") or point.get("envelopeSampleCount") or 0) for point in points]
     fallback_count = int(heightfield.get("fallbackCount") or 0)
     miss_count = int(heightfield.get("missCount") or 0)
     point_count = len(points)
@@ -541,11 +592,16 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
     hit_rate = point_count / total_sites if total_sites else 0
     fallback_rate = fallback_count / point_count if point_count else 0
     model_path = Path(str((plan.get("model") or {}).get("path") or ""))
+    mode = str(((neutral.get("runner") or {}).get("mode") or "stl-heightfield-preview"))
+    rotary_envelope = bool(heightfield.get("rotaryEnvelope"))
+    envelope_lifts = [float(point.get("cutterEnvelopeLiftMm")) for point in points if is_number(point.get("cutterEnvelopeLiftMm"))]
+    surface_radii = [float(point.get("surfaceRadius")) for point in points if is_number(point.get("surfaceRadius"))]
+    raw_surface_radii = [float(point.get("rawSurfaceRadius")) for point in points if is_number(point.get("rawSurfaceRadius"))]
     return {
         "schema": "hediao3d.opencamlib-cutter-envelope-report.v1",
         "jobId": job.get("jobId"),
         "engine": "opencamlib",
-        "mode": "stl-heightfield-preview",
+        "mode": mode,
         "createdBy": "adapters/opencamlib/opencamlib_runner.py",
         "inputIdentity": {
             "modelSha256": sha256_file(model_path),
@@ -564,7 +620,8 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
             "flatTipMm": (plan.get("tool") or {}).get("flatTipMm"),
             "angleDeg": (plan.get("tool") or {}).get("angleDeg"),
             "previewCutterRadiusMm": heightfield.get("cutterRadiusMm"),
-            "envelopeSamplePattern": "center + 8 offsets at 0.5R + 8 offsets at 1.0R",
+            "rotaryCutterAngularToleranceDeg": heightfield.get("rotaryCutterAngularToleranceDeg"),
+            "envelopeSamplePattern": "X/angle neighbor max-radius envelope" if rotary_envelope else "center + 8 offsets at 0.5R + 8 offsets at 1.0R",
         },
         "sampling": {
             "rows": heightfield.get("rows"),
@@ -572,13 +629,24 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
             "pointCount": point_count,
             "missCount": miss_count,
             "hitRate": round(hit_rate, 6),
+            "rotaryEnvelope": rotary_envelope,
             "fallbackCount": fallback_count,
             "fallbackRate": round(fallback_rate, 6),
             "fallbackRadius": heightfield.get("fallbackRadius"),
-            "cutterSampleCount": heightfield.get("cutterSampleCount"),
+            "cutterSampleCount": heightfield.get("cutterSampleCount") or heightfield.get("cutterEnvelopeSampleCount"),
             "contactSamplesMin": min(contact_samples) if contact_samples else 0,
             "contactSamplesMax": max(contact_samples) if contact_samples else 0,
             "contactSamplesAvg": round(sum(contact_samples) / len(contact_samples), 6) if contact_samples else 0,
+        },
+        "rotaryEnvelope": {
+            "enabled": rotary_envelope,
+            "stockRadiusMm": heightfield.get("stockRadiusMm"),
+            "surfaceRadiusMin": min(surface_radii) if surface_radii else None,
+            "surfaceRadiusMax": max(surface_radii) if surface_radii else None,
+            "rawSurfaceRadiusMin": min(raw_surface_radii) if raw_surface_radii else None,
+            "rawSurfaceRadiusMax": max(raw_surface_radii) if raw_surface_radii else None,
+            "cutterEnvelopeLiftMaxMm": max(envelope_lifts) if envelope_lifts else 0,
+            "cutterEnvelopeLiftAvgMm": round(sum(envelope_lifts) / len(envelope_lifts), 6) if envelope_lifts else 0,
         },
         "depth": {
             "zMin": min((float(point.get("z")) for point in points if is_number(point.get("z"))), default=None),
@@ -591,8 +659,8 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
             "level": "preview-scaffold",
             "postprocessEligible": False,
             "productionCandidate": False,
-            "summary": "Geometry-derived STL heightfield envelope was generated for trial visualization, but it is not validated OpenCAMLib drop-cutter output.",
-            "requiredUpgrade": "Replace heightfield preview with real OpenCAMLib/ocl cutter-contact or drop-cutter sampling before production unlock.",
+            "summary": "Geometry-derived STL rotary envelope was generated for trial visualization, but it is not validated OpenCAMLib drop-cutter output." if rotary_envelope else "Geometry-derived STL heightfield envelope was generated for trial visualization, but it is not validated OpenCAMLib drop-cutter output.",
+            "requiredUpgrade": "Replace rotary heightfield preview with real OpenCAMLib/ocl cutter-contact or drop-cutter sampling before production unlock." if rotary_envelope else "Replace heightfield preview with real OpenCAMLib/ocl cutter-contact or drop-cutter sampling before production unlock.",
         },
         "productionBoundary": [
             "This report audits preview cutter-envelope sampling only.",
