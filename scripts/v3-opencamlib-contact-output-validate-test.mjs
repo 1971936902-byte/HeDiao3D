@@ -246,6 +246,8 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
     },
     ...(experimental ? {} : {
       residualMaterial: {
+        measured: true,
+        validationBasis: "swept-volume-validated-fixture",
         maxGougeMm: weakEvidence ? 0.12 : 0.01,
         maxUndercutMm: weakEvidence ? 0.18 : 0.03,
         residualVolumeMm3: weakEvidence ? 6.5 : 0.4

@@ -151,6 +151,8 @@ function checkProductionContactEvidence(checks, contact, target) {
   const protectedZones = contact?.protectedZones && typeof contact.protectedZones === "object" ? contact.protectedZones : {};
   const maxGougeMm = numberOrNull(residual.maxGougeMm);
   const maxUndercutMm = numberOrNull(residual.maxUndercutMm);
+  const residualValidationBasis = String(residual.validationBasis ?? residual.estimationMethod ?? residual.evidenceClass ?? "");
+  const residualMeasuredOrValidated = residual.measured === true || /(swept-volume|material-removal|validated|measured)/i.test(residualValidationBasis);
   const gougeToleranceMm = numberOrNull(tolerance.maxGougeMm) ?? 0.03;
   const undercutToleranceMm = numberOrNull(tolerance.maxUndercutMm) ?? 0.08;
   const hitRate = numberOrNull(sampling.hitRate);
@@ -186,6 +188,7 @@ function checkProductionContactEvidence(checks, contact, target) {
   check(checks, "contact-path-coverage-cross", crossCoverageRatio !== null && crossCoverageRatio >= 0.98, "contactSampling.pathCoverage.crossCoverageRatio must be at least 98%", target, { reported: crossCoverageRatio });
   check(checks, "contact-residual-gouge", maxGougeMm !== null && maxGougeMm <= gougeToleranceMm, "residualMaterial.maxGougeMm must be present and within tolerance", target, { reported: maxGougeMm, tolerance: gougeToleranceMm });
   check(checks, "contact-residual-undercut", maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm, "residualMaterial.maxUndercutMm must be present and within tolerance", target, { reported: maxUndercutMm, tolerance: undercutToleranceMm });
+  check(checks, "contact-residual-measured-or-validated", residualMeasuredOrValidated, "residualMaterial must be measured or backed by swept-volume/material-removal/validated evidence, not only an engineering estimate", target, { measured: residual.measured === true, validationBasis: residualValidationBasis || null });
   check(checks, "protected-zones-present", protectedEnabled, "contact report must declare enabled protectedZones for rotary fixture hold/end transition areas", target, { reported: protectedZones.enabled ?? null });
   check(checks, "protected-zones-no-violations", protectedViolationCount !== null && protectedViolationCount === 0, "protectedZones.violationCount must be 0", target, { reported: protectedViolationCount });
   check(checks, "protected-zones-sampled-bounds", protectedBoundsReady, "protectedZones sampledMinX/sampledMaxX must stay inside safeMinX/safeMaxX", target, { safeMinX, safeMaxX, sampledMinX, sampledMaxX });

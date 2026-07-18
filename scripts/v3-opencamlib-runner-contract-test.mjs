@@ -125,6 +125,8 @@ try {
   assert(pathDropContact.contactSampling?.pathCoverage?.xCoverageDomain === "protected-machinable-span", "PathDropCutter contact report should measure X coverage against protected machinable span");
   assert(Number.isFinite(pathDropContact.contactSampling?.stepToCutterRatio), "PathDropCutter contact report should expose step-to-cutter ratio");
   assert(pathDropContact.residualMaterial?.evidenceClass === "engineering-estimate", "PathDropCutter contact report should expose conservative residual estimate");
+  assert(pathDropContact.residualMaterial?.validationBasis === "engineering-estimate-only", "PathDropCutter residual evidence should be explicitly marked as estimate-only");
+  assert(pathDropContact.residualMaterial?.productionUse === "blocked-until-measured-or-swept-volume-validated", "PathDropCutter residual estimate should remain blocked for production use");
   assert(Number.isFinite(pathDropContact.residualMaterial?.maxGougeMm), "PathDropCutter contact report should expose max gouge estimate");
   assert(Number.isFinite(pathDropContact.residualMaterial?.maxUndercutMm), "PathDropCutter contact report should expose max undercut estimate");
   assert(pathDropContact.protectedZones?.enabled === true, "PathDropCutter contact report should declare protected end zones");

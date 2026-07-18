@@ -206,6 +206,8 @@ async function main() {
       }
     },
     residualMaterial: {
+      measured: true,
+      validationBasis: "swept-volume-validated-fixture",
       maxGougeMm: 0.01,
       maxUndercutMm: 0.03,
       residualVolumeMm3: 0.4
