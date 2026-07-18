@@ -315,7 +315,7 @@ function createOpenSourceCamExecutionPlan(checks) {
       priority: "P0",
       input: "camotics-preview.nc + camotics-project-template.json + 当前 NC SHA-256",
       output: "hediao3d.camotics-result.v1 + screenshot/material-removal mesh",
-      acceptance: "npm run test:v3:camotics-import && npm run test:v3:camotics-cli-package-api",
+      acceptance: "npm run test:v3:camotics-cli-package-api && npm run test:v3:camotics-material-validate && npm run test:v3:camotics-import",
       handoff: "仿真结果回填 Orchestrator，进入 production-gate 和 evidence dossier。",
       productionBoundary: "CAMotics 不生成刀路；synthetic 结果永远不能解锁生产。"
     },
@@ -512,6 +512,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
       },
       {
+        filename: "camotics-material-removal-validate.mjs",
+        role: "camotics-material-removal-validator",
+        description: "验证真实 CAMotics/等效材料去除结果与 camotics-cli-run-package.json 的哈希、运动画像、机床上下文和截图/STL 证据绑定。"
+      },
+      {
         filename: "linux-cam-closed-loop-handoff.md",
         role: "closed-loop-operator-handoff",
         description: "一页式 Linux CAM 闭环交接说明：Native CAM 验收、真实输出 ZIP、CAMotics 结果 ZIP、V3 回填和 readiness 复核顺序。"
@@ -525,6 +530,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
+      "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
       "bash native-cam-real-output-check.sh",
       "npm run test:v3:readiness-api"
     ],
@@ -536,6 +542,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
   return artifacts;
@@ -552,6 +559,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "bash native-cam-real-output-check.sh",
     "上传 native-cam-real-output-bundle.zip 到 HeDiao3D V3 Native CAM 回填面板",
     "在当前 V3 job 下载 CAMotics Linux 仿真包并在 Linux 服务器执行",
+    "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
     "上传 camotics-result-bundle.zip 到当前 V3 job 的 CAMotics 结果回填面板",
     "npm run test:v3:readiness-api",
     "完成离料空跑、软料试雕、trial feedback 和 machine acceptance 回填"
@@ -985,6 +993,7 @@ ${rows.join("\n")}
 - [ ] \`npm run test:v3:freecad-proof-handoff\`
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
 - [ ] OpenCAMLib 真实输出后运行 \`node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json\`
+- [ ] CAMotics 材料去除结果回填前运行 \`node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json\`
 - [ ] \`bash native-cam-real-output-check.sh\`
 - [ ] \`npm run test:v3:freecad-external-handoff\` for 3-axis/regular-solid route
 - [ ] \`npm run test:v3:closed-neutral-handoff\` for OpenCAMLib neutral route

@@ -29,6 +29,7 @@ async function main() {
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-acceptance-checklist.md"), "native CAM summary should expose server package files");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM summary should expose real output check package file");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "opencamlib-contact-output-validate.mjs"), "native CAM summary should expose OpenCAMLib contact validator package file");
+  assert(run.packageArtifacts?.files?.some((file) => file.filename === "camotics-material-removal-validate.mjs"), "native CAM summary should expose CAMotics material-removal validator package file");
   assert(run.packageArtifacts?.files?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "native CAM summary should expose closed-loop handoff package file");
   assert(run.checks.some((check) => check.id === "freecad" && check.capabilities?.outputFormats?.includes("gcode")), "FreeCAD public check should expose G-code capability");
   assert(run.checks.some((check) => check.id === "opencamlib" && check.capabilities?.outputFormats?.includes("neutral-toolpath")), "OpenCAMLib public check should expose neutral toolpath capability");
@@ -54,6 +55,7 @@ async function main() {
   assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-server-bootstrap.sh"), "full artifact should include bootstrap package entry");
   assert(artifact.artifacts.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "full artifact should include real output check package entry");
   assert(artifact.artifacts.files?.some((file) => file.filename === "opencamlib-contact-output-validate.mjs"), "full artifact should include OpenCAMLib contact validator package entry");
+  assert(artifact.artifacts.files?.some((file) => file.filename === "camotics-material-removal-validate.mjs"), "full artifact should include CAMotics material-removal validator package entry");
   assert(artifact.artifacts.files?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "full artifact should include closed-loop handoff package entry");
   assert(artifact.checks.some((check) => check.id === "camotics" && check.capabilities?.notEnoughFor?.includes("刀路生成")), "full artifact should state CAMotics does not generate toolpaths");
 
@@ -76,10 +78,12 @@ async function main() {
   assert(checklist.includes("OpenCAMLib 曲面接触"), "native CAM checklist should include OpenCAMLib execution stage");
   assert(checklist.includes("native-cam-real-output-check.sh"), "native CAM checklist should include real output check command");
   assert(checklist.includes("npm run test:v3:freecad-proof-handoff"), "native CAM checklist should include proof-backed FreeCAD handoff command");
+  assert(checklist.includes("camotics-material-removal-validate.mjs"), "native CAM checklist should include CAMotics material-removal validator command");
   const closedLoopHandoff = await fetchText(latest.latest.apiArtifacts.closedLoopHandoff);
   assert(closedLoopHandoff.includes("Linux CAM 闭环交接说明"), "closed-loop handoff should have Chinese heading");
   assert(closedLoopHandoff.includes("native-cam-real-output-bundle.zip"), "closed-loop handoff should include Native CAM upload bundle");
   assert(closedLoopHandoff.includes("camotics-result-bundle.zip"), "closed-loop handoff should include CAMotics result bundle");
+  assert(closedLoopHandoff.includes("camotics-material-removal-validate.mjs"), "closed-loop handoff should include CAMotics material-removal validator");
   assert(closedLoopHandoff.includes("readinessCamoticsEvidence"), "closed-loop handoff should mention readiness CAMotics evidence");
   assert(closedLoopHandoff.includes("三轴控制器 + Y轴旋转夹具"), "closed-loop handoff should preserve target machine boundary");
   const realOutputCheck = await fetchText(latest.latest.apiArtifacts.realOutputCheck);
@@ -97,7 +101,9 @@ async function main() {
   assert(packageManifest.schema === "hediao3d.native-cam-server-package.v1", "native CAM package manifest schema mismatch");
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM package manifest missing real output check");
   assert(packageManifest.files?.some((file) => file.filename === "opencamlib-contact-output-validate.mjs"), "native CAM package manifest missing OpenCAMLib contact validator");
+  assert(packageManifest.files?.some((file) => file.filename === "camotics-material-removal-validate.mjs"), "native CAM package manifest missing CAMotics material-removal validator");
   assert(packageManifest.commands?.some((command) => command.includes("opencamlib-contact-output-validate.mjs")), "native CAM package manifest should include contact validator command");
+  assert(packageManifest.commands?.some((command) => command.includes("camotics-material-removal-validate.mjs")), "native CAM package manifest should include CAMotics material-removal validator command");
   assert(packageManifest.files?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "native CAM package manifest missing closed-loop handoff");
   assert(packageManifest.targetMachineBoundary?.machineProfileId === "desktop-3axis-rotary-y", "native CAM package manifest missing target machine boundary");
   const packageZip = await getBinary(latest.latest.apiArtifacts.packageZip);
@@ -110,6 +116,7 @@ async function main() {
   assert(zipNames.includes("hediao3d-native-cam-server/linux-cam-closed-loop-handoff.md"), "native CAM zip missing closed-loop handoff");
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-real-output-check.sh"), "native CAM zip missing real output check");
   assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-contact-output-validate.mjs"), "native CAM zip missing OpenCAMLib contact validator");
+  assert(zipNames.includes("hediao3d-native-cam-server/camotics-material-removal-validate.mjs"), "native CAM zip missing CAMotics material-removal validator");
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-server-package.json"), "native CAM zip missing package manifest");
   assert(zipNames.includes("hediao3d-native-cam-server/README-NATIVE-CAM.md"), "native CAM zip missing README");
 
