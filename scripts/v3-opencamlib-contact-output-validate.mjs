@@ -39,7 +39,15 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
   check(checks, "neutral-not-synthetic", neutral.synthetic !== true, "neutral must not be synthetic", errors);
   check(checks, "neutral-not-fixture", neutral.fixture !== true, "neutral must not be fixture output", errors);
   const neutralPreview = hasPreviewMarker(neutral);
+  const experimentalRealApi = hasExperimentalRealApi(neutral, contact);
   check(checks, "neutral-not-preview", !neutralPreview, "neutral must not be preview/scaffold output", expectProductionCandidate ? errors : warnings);
+  check(
+    checks,
+    "experimental-real-api-boundary",
+    !experimentalRealApi || !expectProductionCandidate,
+    "experimental OpenCAMLib real API output is not production-candidate evidence until residual/material-removal/machine evidence is complete",
+    expectProductionCandidate ? errors : warnings
+  );
 
   if (!contact) {
     errors.push("OpenCAMLib cutter contact report is missing.");
@@ -79,10 +87,18 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
   }
 
   const level = errors.length ? "critical" : warnings.length ? "review" : "ready";
+  const evidenceClass = neutralPreview
+    ? "preview-scaffold"
+    : experimentalRealApi
+      ? "experimental-real-api"
+      : level === "ready" && expectProductionCandidate
+        ? "production-candidate"
+        : "contact-report-review";
   return {
     schema: "hediao3d.opencamlib-contact-output-validation.v1",
     createdAt: new Date().toISOString(),
     level,
+    evidenceClass,
     strict,
     expectProductionCandidate,
     productionCandidateEligible: level === "ready" && expectProductionCandidate,
@@ -116,7 +132,11 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
         "Keep production locked until this validator reports ready and CAMotics/material-removal evidence is imported."
       ]
       : warnings.length
-        ? ["Review non-critical warnings before importing this output into HeDiao3D."]
+        ? [
+          ...(evidenceClass === "experimental-real-api"
+            ? ["Treat this OpenCAMLib PathDropCutter output as engineering evidence only; add residual metrics, CAMotics/material-removal, air-run and machine acceptance before production."]
+            : ["Review non-critical warnings before importing this output into HeDiao3D."])
+        ]
         : ["Import neutral-toolpath.json through the OpenCAMLib neutral handoff and continue CAMotics/material-removal validation."],
     productionBoundary: "This validator only checks OpenCAMLib neutral/contact handoff identity. HeDiao3D still requires postprocess checks, material-removal simulation, air-run, trial feedback and machine acceptance before production NC unlock."
   };
@@ -180,6 +200,17 @@ function hasPreviewMarker(neutral) {
     neutral.experimentalRotaryHeightfield ||
     /preview|scaffold/i.test(String(runner.mode ?? "")) ||
     /preview|scaffold/i.test(String(runner.warning ?? ""))
+  );
+}
+
+function hasExperimentalRealApi(neutral, contact) {
+  const runner = neutral.runner && typeof neutral.runner === "object" ? neutral.runner : {};
+  const quality = contact?.quality && typeof contact.quality === "object" ? contact.quality : {};
+  return Boolean(
+    neutral.experimentalOpenCamLibPathDropCutter ||
+    /experimental-real-api/i.test(String(runner.mode ?? "")) ||
+    /experimental-real-api/i.test(String(contact?.mode ?? "")) ||
+    /experimental-real-api/i.test(String(quality.level ?? ""))
   );
 }
 

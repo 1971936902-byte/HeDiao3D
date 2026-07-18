@@ -98,6 +98,45 @@ try {
   const weakReport = JSON.parse(weak.stdout);
   assert(weakReport.errors.some((error) => /hitRate|过切|gouge|maxGouge|step-to-cutter/i.test(error)), "weak contact evidence should report quality metric failures");
 
+  const experimentalContactPath = join(workDir, "experimental-contact-report.json");
+  const experimentalNeutralPath = join(workDir, "experimental-neutral-toolpath.json");
+  const experimentalNeutral = {
+    ...createNeutral(experimentalContactPath),
+    experimentalOpenCamLibPathDropCutter: true,
+    runner: { mode: "opencamlib-path-drop-cutter-experimental" }
+  };
+  const experimentalSha = sha256Json(experimentalNeutral);
+  const experimentalContact = createContact({
+    modelSha: sha256File(modelPath),
+    planSha: sha256File(planPath),
+    neutralSha: experimentalSha,
+    productionCandidate: false,
+    previewScaffold: false,
+    experimental: true
+  });
+  experimentalNeutral.cutterContactReport = experimentalContact;
+  writeFileSync(experimentalNeutralPath, JSON.stringify(experimentalNeutral, null, 2), "utf8");
+  writeFileSync(experimentalContactPath, JSON.stringify(experimentalContact, null, 2), "utf8");
+  const experimental = spawnSync(node, [
+    validator,
+    "--neutral", experimentalNeutralPath,
+    "--plan", planPath,
+    "--model", modelPath,
+    "--contact", experimentalContactPath,
+    "--expectProductionCandidate", "false"
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(experimental.status === 0, `experimental real API evidence should be review-only, got ${experimental.status}: ${experimental.stdout}`);
+  const experimentalReport = JSON.parse(experimental.stdout);
+  assert(experimentalReport.level === "review", `experimental real API should be review, got ${experimentalReport.level}`);
+  assert(experimentalReport.evidenceClass === "experimental-real-api", "experimental real API evidence class mismatch");
+  assert(experimentalReport.productionCandidateEligible === false, "experimental real API must not be production eligible");
+  assert(experimentalReport.checks.some((check) => check.id === "experimental-real-api-boundary" && check.status === "pass"), "experimental real API boundary check should pass when production is not expected");
+  assert(experimentalReport.warnings.some((warning) => /postprocessEligible|productionCandidate|hitRate|residual|experimental/i.test(warning)), "experimental real API should carry review warnings");
+
   console.log(JSON.stringify({
     ok: true,
     readyLevel: readyReport.level,
@@ -141,12 +180,12 @@ function createNeutral(contactPath) {
   };
 }
 
-function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false }) {
+function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false, experimental = false }) {
   return {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     jobId: "contact-output-validate-test",
     engine: "opencamlib",
-    mode: previewScaffold ? "stl-heightfield-preview" : "opencamlib-drop-cutter-contact",
+    mode: previewScaffold ? "stl-heightfield-preview" : experimental ? "opencamlib-path-drop-cutter-experimental" : "opencamlib-drop-cutter-contact",
     inputIdentity: {
       modelSha256: modelSha,
       planSha256: planSha,
@@ -160,23 +199,25 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
       angleDeg: 25
     },
     contactSampling: {
-      algorithm: previewScaffold ? "rotary-ray-heightfield-envelope-preview" : "opencamlib-drop-cutter-contact",
+      algorithm: previewScaffold ? "rotary-ray-heightfield-envelope-preview" : experimental ? "opencamlib-path-drop-cutter" : "opencamlib-drop-cutter-contact",
       pointCount: 3,
       contactPointCount: 3,
-      hitRate: weakEvidence ? 0.91 : 1,
-      stepToCutterRatio: weakEvidence ? 0.42 : 0.18
+      hitRate: weakEvidence ? 0.91 : experimental ? undefined : 1,
+      stepToCutterRatio: weakEvidence ? 0.42 : experimental ? undefined : 0.18
     },
-    residualMaterial: {
-      maxGougeMm: weakEvidence ? 0.12 : 0.01,
-      maxUndercutMm: weakEvidence ? 0.18 : 0.03,
-      residualVolumeMm3: weakEvidence ? 6.5 : 0.4
-    },
+    ...(experimental ? {} : {
+      residualMaterial: {
+        maxGougeMm: weakEvidence ? 0.12 : 0.01,
+        maxUndercutMm: weakEvidence ? 0.18 : 0.03,
+        residualVolumeMm3: weakEvidence ? 6.5 : 0.4
+      }
+    }),
     tolerances: {
       maxGougeMm: 0.03,
       maxUndercutMm: 0.08
     },
     quality: {
-      level: previewScaffold ? "preview-scaffold" : "validated-contact",
+      level: previewScaffold ? "preview-scaffold" : experimental ? "experimental-real-api" : "validated-contact",
       previewScaffold,
       postprocessEligible: productionCandidate,
       productionCandidate,
