@@ -115,8 +115,15 @@ try {
   const pathDropContact = JSON.parse(readFileSync(pathDrop.cutterContactReportPath, "utf8"));
   assert(pathDropContact.schema === "hediao3d.opencamlib-cutter-contact-report.v1", "PathDropCutter contact report schema mismatch");
   assert(pathDropContact.contactSampling?.algorithm === "opencamlib-path-drop-cutter", "PathDropCutter contact algorithm mismatch");
+  assert(pathDropContact.contactSampling?.contactPointCount === pathDrop.points.length, "PathDropCutter contact point count should match neutral points");
+  assert(Number.isFinite(pathDropContact.contactSampling?.stepToCutterRatio), "PathDropCutter contact report should expose step-to-cutter ratio");
+  assert(pathDropContact.residualMaterial?.evidenceClass === "engineering-estimate", "PathDropCutter contact report should expose conservative residual estimate");
+  assert(Number.isFinite(pathDropContact.residualMaterial?.maxGougeMm), "PathDropCutter contact report should expose max gouge estimate");
+  assert(Number.isFinite(pathDropContact.residualMaterial?.maxUndercutMm), "PathDropCutter contact report should expose max undercut estimate");
+  assert(pathDropContact.tolerances?.maxGougeMm === 0.03, "PathDropCutter contact report should expose gouge tolerance");
   assert(pathDropContact.quality?.productionCandidate === false, "PathDropCutter contact report must not be production candidate yet");
   assert(pathDropContact.quality?.level === "experimental-real-api", "PathDropCutter contact report level mismatch");
+  assert(pathDropContact.quality?.productionCandidateBlockers?.includes("experimental-real-api-boundary"), "PathDropCutter contact report should explain experimental boundary");
 
   const noFixtureOutput = join(workDir, "neutral-no-fixture.json");
   const readinessPath = join(workDir, "opencamlib-runner-readiness.json");

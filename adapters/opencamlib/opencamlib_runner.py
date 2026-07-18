@@ -891,6 +891,7 @@ def create_opencamlib_path(module: Any, point_cls: Any, line_cls: Any, path_cls:
 def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
     points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
     path_report = ((neutral.get("runner") or {}).get("pathDropCutter") or {})
+    metrics = create_path_dropcutter_quality_metrics(job, plan, neutral, geometry, path_report)
     return {
         "schema": "hediao3d.opencamlib-cutter-contact-report.v1",
         "jobId": job.get("jobId"),
@@ -917,20 +918,35 @@ def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, A
         "contactSampling": {
             "algorithm": "opencamlib-path-drop-cutter",
             "pointCount": len(points),
+            "contactPointCount": len(points),
             "pathRows": path_report.get("pathRows"),
             "pathSegments": path_report.get("pathSegments"),
             "inputPointCount": path_report.get("inputPointCount"),
-            "hitRate": 1.0 if points else 0.0,
+            "hitRate": metrics["hitRate"],
+            "xStepMm": metrics["xStepMm"],
+            "crossStepMm": metrics["crossStepMm"],
+            "maxLinearStepMm": metrics["maxLinearStepMm"],
+            "stepToCutterRatio": metrics["stepToCutterRatio"],
             "samplingQuality": {
                 "level": "experimental-real-api",
+                "blockers": metrics["blockers"],
+                "warnings": metrics["warnings"],
+                "stepToCutterRatio": metrics["stepToCutterRatio"],
                 "summary": "Real OpenCAMLib PathDropCutter-style API returned cutter-location points, but rotary wrap production quality is not yet proven.",
             },
         },
+        "residualMaterial": metrics["residualMaterial"],
+        "tolerances": metrics["tolerances"],
         "quality": {
             "level": "experimental-real-api",
             "previewScaffold": False,
             "postprocessEligible": False,
             "productionCandidate": False,
+            "productionCandidateBlockers": metrics["blockers"] + [
+                "experimental-real-api-boundary",
+                "rotary-fixture-residual-not-validated",
+                "material-removal-simulation-not-bound",
+            ],
             "summary": "OpenCAMLib PathDropCutter API executed against the source STL and returned neutral points. This is stronger than heightfield preview, but remains non-production until strict residual metrics, CAMotics material removal, air-run and machine acceptance are bound.",
             "requiredUpgrade": "Bind residual gouge/undercut metrics and target rotary fixture sampling before declaring production-candidate output.",
         },
@@ -939,6 +955,83 @@ def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, A
             "It is not yet a production candidate because rotary fixture residual metrics and material-removal evidence are missing.",
         ],
     }
+
+
+def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], geometry: Dict[str, Any], path_report: Dict[str, Any]) -> Dict[str, Any]:
+    points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
+    bounds = geometry.get("bounds") if isinstance(geometry.get("bounds"), dict) else {}
+    dimensions = geometry.get("dimensions") if isinstance(geometry.get("dimensions"), dict) else {}
+    tool = plan.get("tool") if isinstance(plan.get("tool"), dict) else {}
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    cutter_diameter = read_positive_number(tool.get("diameterMm"), settings.get("toolDiameter"), 4.0)
+    row_count = int(path_report.get("pathRows") or 0)
+    point_count = len(points)
+    points_per_row = point_count / row_count if row_count > 0 else 0
+    x_span = read_positive_number(dimensions.get("x"), axis_span(bounds, "x"), (job.get("settings") or {}).get("lengthMm"), 1.0)
+    y_span = read_positive_number(dimensions.get("y"), axis_span(bounds, "y"), 1.0)
+    x_step = x_span / max(1.0, points_per_row - 1.0) if points_per_row > 1 else None
+    cross_step = y_span / max(1, row_count - 1) if row_count > 1 else None
+    linear_steps = [value for value in (x_step, cross_step) if value is not None]
+    max_linear_step = max(linear_steps) if linear_steps else None
+    step_to_cutter_ratio = max_linear_step / cutter_diameter if max_linear_step is not None and cutter_diameter > 0 else None
+    hit_rate = 1.0 if points else 0.0
+    max_gouge_tolerance = 0.03
+    max_undercut_tolerance = 0.08
+    conservative_residual = max_linear_step * 0.5 if max_linear_step is not None else None
+    max_gouge = conservative_residual
+    max_undercut = conservative_residual
+    blockers: List[str] = []
+    warnings: List[str] = []
+    if hit_rate < 0.995:
+        blockers.append("path-dropcutter-hit-rate-below-99.5-percent")
+    if point_count <= 0:
+        blockers.append("path-dropcutter-no-contact-points")
+    if step_to_cutter_ratio is None:
+        blockers.append("path-dropcutter-step-ratio-unavailable")
+    elif step_to_cutter_ratio > 0.25:
+        blockers.append("path-dropcutter-step-ratio-above-production-threshold")
+    elif step_to_cutter_ratio > 0.12:
+        warnings.append("path-dropcutter-step-ratio-above-fine-finishing-target")
+    if max_gouge is None:
+        blockers.append("residual-gouge-not-estimated")
+    elif max_gouge > max_gouge_tolerance:
+        blockers.append("estimated-gouge-above-production-tolerance")
+    if max_undercut is None:
+        blockers.append("residual-undercut-not-estimated")
+    elif max_undercut > max_undercut_tolerance:
+        blockers.append("estimated-undercut-above-production-tolerance")
+    return {
+        "hitRate": round(hit_rate, 6),
+        "xStepMm": round(x_step, 6) if x_step is not None else None,
+        "crossStepMm": round(cross_step, 6) if cross_step is not None else None,
+        "maxLinearStepMm": round(max_linear_step, 6) if max_linear_step is not None else None,
+        "stepToCutterRatio": round(step_to_cutter_ratio, 6) if step_to_cutter_ratio is not None else None,
+        "tolerances": {
+            "maxGougeMm": max_gouge_tolerance,
+            "maxUndercutMm": max_undercut_tolerance,
+            "source": "HeDiao3D strict OpenCAMLib candidate defaults",
+        },
+        "residualMaterial": {
+            "measured": False,
+            "estimationMethod": "conservative-half-of-max-sampling-step",
+            "evidenceClass": "engineering-estimate",
+            "maxGougeMm": round(max_gouge, 6) if max_gouge is not None else None,
+            "maxUndercutMm": round(max_undercut, 6) if max_undercut is not None else None,
+            "requiresMaterialRemovalSimulation": True,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def axis_span(bounds: Dict[str, Any], axis: str) -> Optional[float]:
+    try:
+        lower = float((bounds.get("min") or {}).get(axis))
+        upper = float((bounds.get("max") or {}).get(axis))
+    except (TypeError, ValueError):
+        return None
+    span = upper - lower
+    return span if span > 0 else None
 
 
 def apply_rotary_cutter_envelope(sample: Dict[str, Any], samples: List[Dict[str, Any]], cutter_radius: float, angular_tolerance_deg: float) -> Dict[str, Any]:
