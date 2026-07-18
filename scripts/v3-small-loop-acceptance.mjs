@@ -22,6 +22,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-smoke-test.mjs")]
   },
   {
+    id: "obj-model-import",
+    label: "OBJ model import to CAM loop",
+    command: [process.execPath, join("scripts", "v3-obj-model-import-api-test.mjs")]
+  },
+  {
     id: "postprocess-regression",
     label: "3-axis rotary-Y postprocess regression",
     command: [process.execPath, join("scripts", "v3-postprocess-regression-test.mjs")]

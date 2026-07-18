@@ -15198,8 +15198,8 @@ async function importLocalMesh(req, res) {
   const filename = String(input.filename ?? "imported-model").replace(/[\\/:*?"<>|]/g, "_");
   const dataUrl = String(input.dataUrl ?? "");
   const extension = filename.split(".").pop()?.toLowerCase();
-  if (!extension || !["stl", "glb", "gltf"].includes(extension)) {
-    return json(res, 400, { error: "当前后端 CAM 支持导入 .stl/.glb/.gltf 模型" });
+  if (!extension || !["stl", "obj", "glb", "gltf"].includes(extension)) {
+    return json(res, 400, { error: "当前后端 CAM 支持导入 .stl/.obj/.glb/.gltf 模型" });
   }
   const base64 = dataUrl.includes(",") ? dataUrl.split(",").pop() : dataUrl;
   if (!base64) return json(res, 400, { error: "模型文件内容为空" });
@@ -15246,8 +15246,63 @@ async function loadModelGeometry(modelPath) {
   const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
   const lower = modelPath.toLowerCase();
   if (lower.endsWith(".stl")) return new STLLoader().parse(buffer);
+  if (lower.endsWith(".obj")) return parseObjGeometry(readFileSync(modelPath, "utf8"));
   if (lower.endsWith(".glb") || lower.endsWith(".gltf")) return loadGltfGeometry(buffer);
-  throw new Error("不支持的 Mesh 格式，当前支持 STL/GLB/GLTF");
+  throw new Error("不支持的 Mesh 格式，当前支持 STL/OBJ/GLB/GLTF");
+}
+
+function parseObjGeometry(text) {
+  const vertices = [];
+  const positions = [];
+  const warnings = [];
+  const lines = String(text ?? "").split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const parts = line.split(/\s+/);
+    if (parts[0] === "v") {
+      const x = Number(parts[1]);
+      const y = Number(parts[2]);
+      const z = Number(parts[3]);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        vertices.push([x, y, z]);
+      }
+      continue;
+    }
+    if (parts[0] !== "f" || parts.length < 4) continue;
+    const face = parts.slice(1)
+      .map((token) => parseObjVertexIndex(token, vertices.length))
+      .filter((index) => index >= 0 && index < vertices.length);
+    if (face.length < 3) {
+      warnings.push(`忽略 OBJ 面：${line.slice(0, 120)}`);
+      continue;
+    }
+    for (let i = 1; i < face.length - 1; i += 1) {
+      for (const index of [face[0], face[i], face[i + 1]]) {
+        positions.push(...vertices[index]);
+      }
+    }
+  }
+  if (positions.length < 9) {
+    throw new Error("OBJ 中没有可用于 CAM 的三角面。");
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  geometry.userData = {
+    ...(geometry.userData ?? {}),
+    sourceFormat: "obj",
+    parser: "server-simple-obj-triangulator",
+    warnings: warnings.slice(0, 20)
+  };
+  return geometry;
+}
+
+function parseObjVertexIndex(token, vertexCount) {
+  const raw = String(token ?? "").split("/")[0];
+  const index = Number(raw);
+  if (!Number.isInteger(index) || index === 0) return -1;
+  return index > 0 ? index - 1 : vertexCount + index;
 }
 
 function getCamStlMaxTriangles() {

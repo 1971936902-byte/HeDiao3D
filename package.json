@@ -21,6 +21,7 @@
     "test:v3:real-neutral-handoff": "node scripts/v3-real-neutral-handoff-test.mjs",
     "test:v3:closed-neutral-handoff": "node scripts/v3-closed-neutral-handoff-test.mjs",
     "test:v3:glb-cam-input": "node scripts/v3-glb-cam-input-conversion-test.mjs",
+    "test:v3:obj-model-import": "node scripts/v3-obj-model-import-api-test.mjs",
     "test:v3:freecad-external-handoff": "node scripts/v3-freecad-external-handoff-test.mjs",
     "test:v3:freecad-proof-handoff": "node scripts/v3-freecad-proof-handoff-test.mjs",
     "test:v3:blendercam-external-handoff": "node scripts/v3-blendercam-external-handoff-test.mjs",
