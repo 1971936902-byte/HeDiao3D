@@ -50,6 +50,7 @@ async function main() {
       schema: "hediao3d.native-cam-closed-loop-check.v1",
       ok: true,
       productionLocked: true,
+      evidenceChain: createClosedLoopEvidenceChainFixture(),
       steps: []
     }, null, 2) },
     { name: "camotics-result-local-validation.json", content: JSON.stringify({
@@ -72,6 +73,8 @@ async function main() {
   assert(zipImported.apiArtifacts?.zipBundle?.endsWith("imported-v3-acceptance-runbook-result-bundle.zip"), "zip import should expose preserved source bundle");
   const linuxEvidenceArtifact = await getJson(zipImported.apiArtifacts.linuxEvidence);
   assert(linuxEvidenceArtifact.schema === "hediao3d.v3-runbook-linux-evidence.v1", "Linux evidence artifact schema mismatch");
+  assert(linuxEvidenceArtifact.evidenceChain?.schema === "hediao3d.native-cam-linux-evidence-chain.v1", "Linux evidence should expose closed-loop evidence chain");
+  assert(linuxEvidenceArtifact.evidenceChain?.crossChecks?.materialRemovalBoundToUpstreamCam === true, "Linux evidence chain should preserve CAMotics upstream binding");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "native-cam-closed-loop-check.json" && file.status === "imported"), "Linux evidence should preserve closed-loop check");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.status === "imported"), "Linux evidence should preserve CAMotics validation");
 
@@ -80,6 +83,7 @@ async function main() {
   assert(latest.latest.identityValid === true, "latest runbook result should remain identity-valid");
   assert(latest.latest.ok === true, "latest runbook result should be the zip all-pass import");
   assert(latest.latest.linuxEvidence?.status === "ready-for-review", "latest runbook result should preserve Linux evidence summary");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidenceStatus === "matched", "latest runbook result should summarize CAMotics upstream evidence status");
 
   const readinessAfterImport = await postJson("/api/orchestrator/readiness", {});
   assert(readinessAfterImport.runbookResult?.readinessReportId === readiness.id, "readiness should include latest imported runbook result");
@@ -96,6 +100,38 @@ async function main() {
     readinessLevel: readinessAfterImport.level,
     production: readinessAfterImport.gates.allowProductionNc
   }, null, 2));
+}
+
+function createClosedLoopEvidenceChainFixture() {
+  return {
+    schema: "hediao3d.native-cam-linux-evidence-chain.v1",
+    status: "ready-or-awaiting-inputs",
+    nativeCam: {
+      level: "ready",
+      productionCandidateCount: 1,
+      sourceReportBindingStatus: "matched",
+      targetMachineBoundaryStatus: "matched",
+      contactValidationStatus: "ready"
+    },
+    openCamLib: {
+      realCandidateKnown: true,
+      realCandidateReady: true,
+      productionLocked: true,
+      firstBlocking: null
+    },
+    camotics: {
+      productionEvidenceEligible: true,
+      upstreamEvidenceRequired: true,
+      upstreamEvidenceStatus: "matched"
+    },
+    crossChecks: {
+      nativeRealOutputStep: "pass",
+      camoticsValidationStep: "pass",
+      camoticsUpstreamEvidenceMatched: true,
+      materialRemovalBoundToUpstreamCam: true
+    },
+    blocking: []
+  };
 }
 
 function createRunbookResultFixture(readiness, passing) {

@@ -2489,13 +2489,55 @@ function extractV3RunbookLinuxEvidence(zipBundle) {
   const missingRequired = files
     .filter((file) => file.required && file.status !== "imported")
     .map((file) => file.filename);
+  const closedLoop = files.find((file) => file.filename === "native-cam-closed-loop-check.json")?.json ?? null;
+  const evidenceChain = createV3RunbookLinuxEvidenceChainSummary(closedLoop?.evidenceChain);
   return {
     schema: "hediao3d.v3-runbook-linux-evidence.v1",
-    status: missingRequired.length ? "incomplete" : "ready-for-review",
+    status: missingRequired.length
+      ? "incomplete"
+      : evidenceChain?.status === "blocked"
+        ? "blocked-evidence-chain"
+        : "ready-for-review",
     foundCount: found.length,
     requiredFoundCount: files.filter((file) => file.required && file.status === "imported").length,
     missingRequired,
+    evidenceChain,
     files
+  };
+}
+
+function createV3RunbookLinuxEvidenceChainSummary(chain) {
+  if (!chain || typeof chain !== "object") return null;
+  const blocking = Array.isArray(chain.blocking) ? chain.blocking : [];
+  return {
+    schema: chain.schema ?? "hediao3d.native-cam-linux-evidence-chain.v1",
+    status: chain.status ?? "unknown",
+    blockingCount: blocking.length,
+    firstBlocking: blocking[0]?.summary ?? blocking[0]?.id ?? null,
+    nativeCam: {
+      level: chain.nativeCam?.level ?? "missing",
+      productionCandidateCount: Number(chain.nativeCam?.productionCandidateCount ?? 0),
+      sourceReportBindingStatus: chain.nativeCam?.sourceReportBindingStatus ?? "missing",
+      targetMachineBoundaryStatus: chain.nativeCam?.targetMachineBoundaryStatus ?? "missing",
+      contactValidationStatus: chain.nativeCam?.contactValidationStatus ?? "missing"
+    },
+    openCamLib: {
+      realCandidateKnown: Boolean(chain.openCamLib?.realCandidateKnown),
+      realCandidateReady: Boolean(chain.openCamLib?.realCandidateReady),
+      productionLocked: chain.openCamLib?.productionLocked !== false,
+      firstBlocking: chain.openCamLib?.firstBlocking ?? null
+    },
+    camotics: {
+      productionEvidenceEligible: Boolean(chain.camotics?.productionEvidenceEligible),
+      upstreamEvidenceRequired: Boolean(chain.camotics?.upstreamEvidenceRequired),
+      upstreamEvidenceStatus: chain.camotics?.upstreamEvidenceStatus ?? "missing"
+    },
+    crossChecks: {
+      nativeRealOutputStep: chain.crossChecks?.nativeRealOutputStep ?? "missing",
+      camoticsValidationStep: chain.crossChecks?.camoticsValidationStep ?? "missing",
+      camoticsUpstreamEvidenceMatched: Boolean(chain.crossChecks?.camoticsUpstreamEvidenceMatched),
+      materialRemovalBoundToUpstreamCam: Boolean(chain.crossChecks?.materialRemovalBoundToUpstreamCam)
+    }
   };
 }
 
@@ -2570,6 +2612,7 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     && new Date(result.runbookGeneratedAt).getTime() <= new Date(result.createdAt).getTime();
   const identityValid = Boolean(readinessReportId && result.readinessCreatedAt && result.runbookGeneratedAt && linkedReadinessReportExists && timeOrderValid);
   const linuxEvidenceReady = result.linuxEvidence?.status === "ready-for-review";
+  const linuxEvidenceChainReady = !result.linuxEvidence?.evidenceChain || result.linuxEvidence.evidenceChain.status !== "blocked";
   return {
     schema: result.schema ?? "unknown",
     readinessReportId,
@@ -2589,7 +2632,7 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     stepCount: steps.length,
     commandCount,
     blockingStepCountAtReport: Number.isFinite(Number(result.blockingStepCountAtReport)) ? Number(result.blockingStepCountAtReport) : null,
-    productionSafe: Boolean(result.productionSafe) && identityValid && blockingFailedCount === 0 && linuxEvidenceReady,
+    productionSafe: Boolean(result.productionSafe) && identityValid && blockingFailedCount === 0 && linuxEvidenceReady && linuxEvidenceChainReady,
     identityValid,
     linkedReadinessReportExists,
     environment: result.environment && typeof result.environment === "object" ? {
@@ -2604,6 +2647,7 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
       foundCount: Number(result.linuxEvidence.foundCount ?? 0),
       requiredFoundCount: Number(result.linuxEvidence.requiredFoundCount ?? 0),
       missingRequired: Array.isArray(result.linuxEvidence.missingRequired) ? result.linuxEvidence.missingRequired.slice(0, 8) : [],
+      evidenceChain: result.linuxEvidence.evidenceChain ? createV3RunbookLinuxEvidenceChainSummary(result.linuxEvidence.evidenceChain) : null,
       files: Array.isArray(result.linuxEvidence.files)
         ? result.linuxEvidence.files.slice(0, 12).map((file) => ({
           filename: file.filename,
