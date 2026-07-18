@@ -2102,7 +2102,9 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       productionLocked: report.openCamLibRealCandidate.productionLocked !== false,
       contactValidationLevel: report.openCamLibRealCandidate.contactValidationLevel ?? null,
       contactEvidenceClass: report.openCamLibRealCandidate.contactEvidenceClass ?? null,
+      contactValidationPathCoverage: report.openCamLibRealCandidate.contactValidationPathCoverage ?? null,
       candidatePackageLevel: report.openCamLibRealCandidate.candidatePackageLevel ?? null,
+      candidatePackageBlockedReason: report.openCamLibRealCandidate.candidatePackageBlockedReason ?? null,
       candidateReadyForImport: Boolean(report.openCamLibRealCandidate.candidateReadyForImport),
       blockingCount: Number(report.openCamLibRealCandidate.blockingCount ?? 0),
       firstBlocking: report.openCamLibRealCandidate.firstBlocking ?? null,
@@ -2176,6 +2178,7 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   }
   const ready = report.ok === true || report.level === "production-candidate-ready-for-import";
   const blockingCount = Number(report.blockingCount ?? (Array.isArray(report.blocking) ? report.blocking.length : 0));
+  const contactValidationPathCoverage = report.contactValidationPathCoverage ?? null;
   return {
     schema: "hediao3d.opencamlib-real-candidate-status.v1",
     status: ready ? "ready" : report.level === "blocked" ? "blocked" : "review",
@@ -2185,7 +2188,9 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     productionLocked: report.productionLocked !== false,
     contactValidationLevel: report.contactValidationLevel ?? null,
     contactEvidenceClass: report.contactEvidenceClass ?? null,
+    contactValidationPathCoverage,
     candidatePackageLevel: report.candidatePackageLevel ?? null,
+    candidatePackageBlockedReason: report.candidatePackageBlockedReason ?? null,
     candidateReadyForImport: Boolean(report.candidateReadyForImport),
     blockingCount,
     summary: ready
@@ -2337,6 +2342,17 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
   const blocking = Array.isArray(report?.blocking) ? report.blocking : [];
   const contactValidation = report?.contactValidation && typeof report.contactValidation === "object" ? report.contactValidation : null;
   const candidatePackage = report?.candidatePackage && typeof report.candidatePackage === "object" ? report.candidatePackage : null;
+  const contactValidationPathCoverage = contactValidation
+    ? createOpenCamLibContactPathCoverageSummary(contactValidation)
+    : {
+      schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+      required: true,
+      status: "missing",
+      ready: false,
+      x: null,
+      cross: null,
+      summary: "OpenCAMLib one-command real candidate 缺少 contact validation，无法判断刀路覆盖率。"
+    };
   return {
     schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
     sourceSchema: report?.schema ?? null,
@@ -2346,7 +2362,9 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     productionLocked: report?.productionLocked !== false,
     contactValidationLevel: contactValidation?.level ?? null,
     contactEvidenceClass: contactValidation?.evidenceClass ?? null,
+    contactValidationPathCoverage,
     candidatePackageLevel: candidatePackage?.level ?? null,
+    candidatePackageBlockedReason: candidatePackage?.blockedReason ?? null,
     candidateReadyForImport: Boolean(candidatePackage?.readyForImport),
     blockingCount: blocking.length,
     firstBlocking: blocking[0] ?? null,

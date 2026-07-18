@@ -781,9 +781,11 @@ check("camotics-validator-bundle", camoticsValidator.includes("camotics-result-b
 check("real-output-production-candidate", realOutputCheck.includes("production-candidate"), "real output checker must require production-candidate evidence.");
 check("real-output-contact-validation", realOutputCheck.includes("opencamlib-contact-output-validation.json"), "real output checker must bind OpenCAMLib strict contact validation.");
 check("real-output-contact-ready-gate", realOutputCheck.includes("strict contact validation"), "real output checker must block production candidates without ready strict contact validation.");
+check("real-output-contact-path-coverage", realOutputCheck.includes("contactValidation") && realOutputCheck.includes("pathCoverage"), "real output checker must preserve OpenCAMLib contact pathCoverage diagnostics.");
 check("real-output-target-boundary", realOutputCheck.includes("target-machine-boundary.json"), "real output checker must write target-machine-boundary.json.");
 check("real-output-runner-readiness", realOutputCheck.includes("opencamlib-runner-readiness.json") && realOutputCheck.includes("runnerReadiness"), "real output checker must carry OpenCAMLib runner readiness evidence into the upload bundle.");
 check("real-output-real-candidate", realOutputCheck.includes("opencamlib-real-candidate-run.json") && realOutputCheck.includes("openCamLibRealCandidate"), "real output checker must carry OpenCAMLib one-command real candidate evidence into the upload bundle.");
+check("real-candidate-path-coverage", openCamRealCandidate.includes("pathCoverage") && openCamRealCandidate.includes("createContactPathCoverageSummary"), "OpenCAMLib real candidate runner must summarize contact pathCoverage diagnostics.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
 check("closed-loop-check-evidence-chain", closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1") && closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop checker must summarize Native CAM/OpenCAMLib/CAMotics evidence chain and upstream binding.");
@@ -1255,7 +1257,8 @@ try {
     failedCheckCount: Array.isArray(parsed.checks) ? parsed.checks.filter((check) => check.status === "fail").length : 0,
     errorCount: Array.isArray(parsed.errors) ? parsed.errors.length : 0,
     warningCount: Array.isArray(parsed.warnings) ? parsed.warnings.length : 0,
-    firstError: Array.isArray(parsed.errors) ? parsed.errors[0] || null : null
+    firstError: Array.isArray(parsed.errors) ? parsed.errors[0] || null : null,
+    pathCoverage: createContactPathCoverageSummary(parsed)
   };
 } catch {
   contactValidation = {
@@ -1270,7 +1273,16 @@ try {
     failedCheckCount: 0,
     errorCount: 1,
     warningCount: 0,
-    firstError: "opencamlib-contact-output-validation.json missing"
+    firstError: "opencamlib-contact-output-validation.json missing",
+    pathCoverage: {
+      schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+      required: true,
+      status: "missing",
+      ready: false,
+      x: null,
+      cross: null,
+      summary: "opencamlib-contact-output-validation.json missing; path coverage cannot be evaluated."
+    }
   };
 }
 let runnerReadiness = null;
@@ -1328,7 +1340,9 @@ try {
     productionLocked: parsed.productionLocked !== false,
     contactValidationLevel: parsed.contactValidation?.level || null,
     contactEvidenceClass: parsed.contactValidation?.evidenceClass || null,
+    contactValidationPathCoverage: parsed.contactValidation?.pathCoverage || null,
     candidatePackageLevel: parsed.candidatePackage?.level || null,
+    candidatePackageBlockedReason: parsed.candidatePackage?.blockedReason || null,
     candidateReadyForImport: Boolean(parsed.candidatePackage?.readyForImport),
     blockingCount: blocking.length,
     firstBlocking: blocking[0] || null,
@@ -1343,7 +1357,9 @@ try {
     productionLocked: true,
     contactValidationLevel: null,
     contactEvidenceClass: null,
+    contactValidationPathCoverage: null,
     candidatePackageLevel: null,
+    candidatePackageBlockedReason: null,
     candidateReadyForImport: false,
     blockingCount: 0,
     firstBlocking: "opencamlib-real-candidate-run.json missing",
@@ -1434,6 +1450,34 @@ if (missing.length) {
 
 if (strict && (unsafe.length || (expectProductionCandidate && candidates.length === 0))) {
   process.exit(3);
+}
+
+function createContactPathCoverageSummary(report) {
+  if (report?.pathCoverage && typeof report.pathCoverage === "object") {
+    return report.pathCoverage;
+  }
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const x = checks.find((check) => check.id === "contact-path-coverage-x") ?? null;
+  const cross = checks.find((check) => check.id === "contact-path-coverage-cross") ?? null;
+  const ready = Boolean(x && cross && x.status === "pass" && cross.status === "pass");
+  const summarize = (check) => check ? {
+    id: check.id,
+    status: check.status || "unknown",
+    summary: check.summary || null,
+    reported: check.reported ?? null,
+    expected: check.expected ?? null
+  } : null;
+  return {
+    schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+    required: true,
+    status: ready ? "ready" : (!x || !cross) ? "missing" : "review",
+    ready,
+    x: summarize(x),
+    cross: summarize(cross),
+    summary: ready
+      ? "OpenCAMLib path coverage checks passed."
+      : "OpenCAMLib path coverage checks are missing or below threshold."
+  };
 }
 NODE
 
@@ -1663,12 +1707,14 @@ const report = {
     level: contactValidation.level,
     evidenceClass: contactValidation.evidenceClass,
     productionCandidateEligible: Boolean(contactValidation.productionCandidateEligible),
-    failedCheckCount: Array.isArray(contactValidation.checks) ? contactValidation.checks.filter((check) => check.status === "fail").length : null
+    failedCheckCount: Array.isArray(contactValidation.checks) ? contactValidation.checks.filter((check) => check.status === "fail").length : null,
+    pathCoverage: createContactPathCoverageSummary(contactValidation)
   } : null,
   candidatePackage: candidatePackage ? {
     level: candidatePackage.level,
     evidenceClass: candidatePackage.contactValidation?.evidenceClass ?? candidatePackage.artifactManifest?.evidenceClass ?? null,
     readyForImport: candidatePackage.handoffContract?.status === "ready-for-hediao3d-import",
+    blockedReason: candidatePackage.blockedReason ?? null,
     bundle: candidatePackage.bundlePath ?? "opencamlib-candidate-package-bundle.zip"
   } : null,
   steps,
@@ -1730,6 +1776,34 @@ function readJsonIfExists(path) {
   } catch {
     return null;
   }
+}
+
+function createContactPathCoverageSummary(report) {
+  if (report?.pathCoverage && typeof report.pathCoverage === "object") {
+    return report.pathCoverage;
+  }
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const x = checks.find((check) => check.id === "contact-path-coverage-x") ?? null;
+  const cross = checks.find((check) => check.id === "contact-path-coverage-cross") ?? null;
+  const ready = Boolean(x && cross && x.status === "pass" && cross.status === "pass");
+  const summarize = (check) => check ? {
+    id: check.id,
+    status: check.status || "unknown",
+    summary: check.summary || null,
+    reported: check.reported ?? null,
+    expected: check.expected ?? null
+  } : null;
+  return {
+    schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+    required: true,
+    status: ready ? "ready" : (!x || !cross) ? "missing" : "review",
+    ready,
+    x: summarize(x),
+    cross: summarize(cross),
+    summary: ready
+      ? "OpenCAMLib path coverage checks passed."
+      : "OpenCAMLib path coverage checks are missing or below threshold."
+  };
 }
 
 function tail(value) {

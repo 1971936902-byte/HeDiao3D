@@ -113,7 +113,10 @@ async function main() {
   assert(zipImported.runnerReadinessStatus?.status === "blocked", "zip import should expose blocked runner readiness status");
   assert(zipImported.runnerReadiness?.firstBlocker === "real-drop-cutter-not-implemented", "zip import should preserve runner readiness blocker summary");
   assert(zipImported.openCamLibRealCandidateStatus?.status === "blocked", "zip import should expose blocked OpenCAMLib real candidate status");
+  assert(zipImported.openCamLibRealCandidateStatus?.contactValidationPathCoverage?.status === "ready", "zip import should expose real candidate contact path coverage status");
   assert(zipImported.openCamLibRealCandidate?.firstBlocking === "opencamlib-production-candidate-not-proven", "zip import should preserve real candidate blocker summary");
+  assert(zipImported.openCamLibRealCandidate?.contactValidationPathCoverage?.status === "ready", "zip import should preserve real candidate path coverage summary");
+  assert(zipImported.openCamLibRealCandidate?.candidatePackageBlockedReason === "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.", "zip import should preserve candidate package blocked reason");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
   assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
@@ -121,6 +124,7 @@ async function main() {
   assert(zipArtifact.runnerReadiness?.sha256, "zip import artifact should preserve runner readiness sha256");
   assert(zipArtifact.runnerReadinessStatus?.summary?.includes("OpenCAMLib runner readiness"), "zip import artifact should preserve runner readiness status summary");
   assert(zipArtifact.openCamLibRealCandidate?.sha256, "zip import artifact should preserve OpenCAMLib real candidate sha256");
+  assert(zipArtifact.openCamLibRealCandidate?.contactValidationPathCoverage?.status === "ready", "zip import artifact should preserve OpenCAMLib real candidate path coverage summary");
   assert(zipArtifact.openCamLibRealCandidateStatus?.summary?.includes("OpenCAMLib one-command real candidate"), "zip import artifact should preserve OpenCAMLib real candidate status summary");
   const zipImportReport = await getJson(zipImported.apiArtifacts.importJson);
   assert(zipImportReport.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import report should preserve source bundle filename");
@@ -138,6 +142,7 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadinessStatus?.status === "blocked", "readiness should expose imported OpenCAMLib runner readiness status");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadiness?.blockerCount === 1, "readiness should expose imported OpenCAMLib runner readiness summary");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.status === "blocked", "readiness should expose imported OpenCAMLib real candidate status");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.contactValidationPathCoverage?.status === "ready", "readiness should expose imported real candidate path coverage");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidate?.blockingCount === 1, "readiness should expose imported OpenCAMLib real candidate summary");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
@@ -304,11 +309,21 @@ function createRealCandidateFixture() {
     contactValidation: {
       level: "ready",
       evidenceClass: "production-candidate",
-      productionCandidateEligible: true
+      productionCandidateEligible: true,
+      pathCoverage: {
+        schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+        required: true,
+        status: "ready",
+        ready: true,
+        x: { id: "contact-path-coverage-x", status: "pass", summary: "xCoverageRatio=1" },
+        cross: { id: "contact-path-coverage-cross", status: "pass", summary: "crossCoverageRatio=1" },
+        summary: "OpenCAMLib path coverage checks passed."
+      }
     },
     candidatePackage: {
       level: "critical",
-      readyForImport: false
+      readyForImport: false,
+      blockedReason: "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence."
     },
     blocking: ["opencamlib-production-candidate-not-proven"]
   };
