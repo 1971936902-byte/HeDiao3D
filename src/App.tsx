@@ -1943,7 +1943,7 @@ const workflowStages: Array<{ id: WorkflowStage; label: string; hint: string }> 
   { id: "source", label: "素材", hint: "上传/载入" },
   { id: "model", label: "建模", hint: "3D/Meshy" },
   { id: "process", label: "工艺", hint: "刀具/机床" },
-  { id: "cam", label: "CAM", hint: "刀路/导出" }
+  { id: "cam", label: "刀路", hint: "生成/下载" }
 ];
 
 const CUSTOM_PROCESS_TEMPLATE_STORAGE_KEY = "hediao3d.customProcessTemplates.v1";
@@ -4996,6 +4996,9 @@ export function App() {
                 <Sparkles size={18} />
                 {isAiGenerating ? "AI生成中..." : `${selectedAiProvider.name}生成3D Mesh`}
               </button>
+              {images.length === 0 && (
+                <p className="panel-hint">Meshy 多图生成需要先在“素材”页上传图片；如果已经有佛头 GLB/STL/OBJ，可直接点下面“导入原始3D模型”。</p>
+              )}
               <div className="ai-tool-grid">
                 <button className="demo-action original-model-action ai-tool-wide" onClick={() => originalModelImportRef.current?.click()} type="button">
                   <UploadCloud size={17} />
@@ -5030,6 +5033,12 @@ export function App() {
                       ? "模型已缓存为后端可访问文件，可以进入 V3 试雕刀路生成。"
                       : "右侧可以先查看模型；上传缓存完成前不能生成刀路。"}
                   </span>
+                  {isModelReadyForCam && (
+                    <button className="demo-action package-action" type="button" onClick={() => setActiveStage("cam")}>
+                      <Hammer size={17} />
+                      去生成试雕刀路
+                    </button>
+                  )}
                 </div>
               )}
               {aiMeshUrl && (

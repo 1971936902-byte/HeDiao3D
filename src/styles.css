@@ -478,6 +478,13 @@ button:disabled {
   line-height: 1.55;
 }
 
+.panel-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .thumb-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -703,6 +710,11 @@ button:disabled {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.model-cam-readiness .package-action {
+  justify-content: center;
+  margin-top: 6px;
 }
 
 .profile-summary,

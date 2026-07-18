@@ -57,6 +57,7 @@
 - FreeCAD/BlenderCAM 的生产候选输出仍依赖外部 runner 和 `cam-proof`，还没有形成稳定真实刀路。
 - OpenCAMLib 已能做旋转 heightfield 预览和 neutral handoff，但明确标记为 preview scaffold。
 - 内置 Mesh CAM fallback 只能验证流程，不能承担复杂佛头曲面的生产精度。
+- `native-cam-real-output-acceptance.json` 只能证明某个回填包通过验收契约；如果同一服务器最近的 `native-cam-readiness.json` 仍显示 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 未就绪，不能把该回填包视为“当前 Linux 真实执行链路已落地”。生产候选必须同时满足当前服务器 Native readiness、同源 adapter 验收报告、真实输出包、CAMotics 材料去除、同 job/package 哈希绑定。
 
 必须补齐：
 

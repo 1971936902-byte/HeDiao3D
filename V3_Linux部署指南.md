@@ -70,7 +70,9 @@ curl http://127.0.0.1:8787/api/orchestrator/engines
 如果服务器已经有测试模型 `/meshy-results/material01-meshy.glb`，可执行完整 V3 小闭环 smoke test：
 
 ```bash
+npm run build
 npm run test:v3
+npm run test:v3:small-loop-acceptance
 ```
 
 如需指定模型：
@@ -83,6 +85,7 @@ V3_SMOKE_MODEL_URL=/imported-models/example.glb npm run test:v3
 
 ```bash
 npm run test:v3:native-cam
+npm run test:v3:obj-model-import
 npm run test:v3:external-adapters
 npm run test:v3:neutral-adapter
 npm run test:v3:neutral-import
@@ -161,6 +164,8 @@ native 模式会尝试 `FreeCADCmd/freecadcmd`、`blender`、Python `opencamlib/
 - `simulation-summary.json`、`machining-package-index.json` 和 NC 静态分析能识别这条链路。
 
 该测试是“协议/交接链路”验证，不代表真实 CAM 精度，也不会解锁生产 NC。
+
+`test:v3:obj-model-import` 会验证后端 `/api/mesh/import` 能接收 `.obj`，完成基础三角化并进入 Orchestrator CAM 链路，最后输出三轴控制器 + Y 轴旋转夹具的 `wrapY` NC。该测试用于确认服务器上的后端模型导入不只支持前端预览。
 
 `test:v3:neutral-import` 会验证 OpenCAMLib adapter 可以导入一份 `hediao3d.neutral-toolpath.v1` 的非 synthetic 中立刀路，并交给 HeDiao3D 后处理。它用于把真实 OpenCAMLib/包装脚本输出接入统一刀路链路。
 
@@ -339,8 +344,9 @@ server {
 - [ ] `systemctl status hediao3d-api` 正常。
 - [ ] `/api/orchestrator/diagnostics` 无 critical。
 - [ ] `npm run test:v3` 成功，或已使用 `V3_SMOKE_MODEL_URL` 指定服务器上的测试模型。
+- [ ] `npm run test:v3:small-loop-acceptance` 成功，当前应为 20/20。
 - [ ] 前端 V3 面板环境自检可见。
-- [ ] 可导入 GLB/STL。
+- [ ] 可导入 GLB/STL/OBJ。
 - [ ] 可运行 V3 小闭环。
 - [ ] 可下载 V3 ZIP 加工包。
 - [ ] 生产 NC 只在 `production-gate.json` 明确允许后开放。
