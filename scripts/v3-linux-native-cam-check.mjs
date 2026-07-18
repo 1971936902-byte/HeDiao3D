@@ -507,6 +507,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "在 Linux CAM 服务端执行真实 adapter 输出验收，解析 handoffEvidence 并阻止 fixture/synthetic/preview 误入生产证据。"
       },
       {
+        filename: "native-cam-server-package-self-check.mjs",
+        role: "server-package-self-check",
+        description: "服务端包离线自检脚本，确认包内 manifest、目标机型边界、真实输出验收器和 CAMotics/OpenCAMLib 验收器齐全。"
+      },
+      {
         filename: "opencamlib-contact-output-validate.mjs",
         role: "opencamlib-contact-output-validator",
         description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
@@ -520,12 +525,18 @@ function writeNativeCamServerPackageArtifacts(report) {
         filename: "linux-cam-closed-loop-handoff.md",
         role: "closed-loop-operator-handoff",
         description: "一页式 Linux CAM 闭环交接说明：Native CAM 验收、真实输出 ZIP、CAMotics 结果 ZIP、V3 回填和 readiness 复核顺序。"
+      },
+      {
+        filename: "native-cam-server-package.json",
+        role: "server-package-manifest",
+        description: "Native CAM 服务端包清单，列出包内工具、命令和目标机型边界。"
       }
     ],
     commands: [
       "bash native-cam-server-bootstrap.sh",
       "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
       "cp native-cam-env.template .env.cam",
+      "node native-cam-server-package-self-check.mjs",
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
@@ -541,6 +552,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-env.template"), createNativeCamEnvTemplate(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "native-cam-server-package-self-check.mjs"), createNativeCamServerPackageSelfCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
@@ -553,6 +565,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "bash native-cam-server-bootstrap.sh",
     "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
     "cp native-cam-env.template .env.cam",
+    "node native-cam-server-package-self-check.mjs",
     "npm run test:v3:native-cam",
     "npm run test:v3:freecad-proof-handoff",
     "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
@@ -573,6 +586,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "camotics-result.json",
     "camotics-result-local-validation.json",
     "camotics-result-bundle.zip",
+    "native-cam-server-package-self-check.json",
     "production-evidence-dossier.json",
     "next-action-checklist.md",
     "package-integrity.json",
@@ -622,6 +636,96 @@ ${report.summary.executionPlan.productionLocks.map((item) => `- ${item}`).join("
 - 出现 fixture/synthetic/preview：关闭对应环境变量，重新跑真实外部命令。
 - CAMotics 不被 readiness 接受：看 \`camotics-result-local-validation.json\`、输入 G-code SHA-256、motion profile 和截图/STL 证据。
 - 生产包仍 423：这是预期安全行为，查看 \`production-evidence-dossier.json\` 和 \`next-action-checklist.md\` 的缺口。
+`;
+}
+
+function createNativeCamServerPackageSelfCheckScript() {
+  return `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const root = resolve(process.argv[2] ?? process.cwd());
+const manifestPath = join(root, "native-cam-server-package.json");
+const checks = [];
+const manifest = readJsonIfExists(manifestPath);
+
+check("manifest-exists", Boolean(manifest), "native-cam-server-package.json must exist and be valid JSON.");
+check("manifest-schema", manifest?.schema === "hediao3d.native-cam-server-package.v1", "manifest schema must be hediao3d.native-cam-server-package.v1.");
+
+const requiredFiles = [
+  "native-cam-server-bootstrap.sh",
+  "native-cam-env.template",
+  "native-cam-acceptance-checklist.md",
+  "native-cam-real-output-check.sh",
+  "native-cam-server-package-self-check.mjs",
+  "opencamlib-contact-output-validate.mjs",
+  "camotics-material-removal-validate.mjs",
+  "linux-cam-closed-loop-handoff.md",
+  "native-cam-server-package.json"
+];
+
+for (const filename of requiredFiles) {
+  check("file:" + filename, existsSync(join(root, filename)), filename + " must exist in the unpacked server package.");
+}
+
+const listedFiles = Array.isArray(manifest?.files) ? manifest.files.map((file) => file.filename) : [];
+for (const filename of requiredFiles) {
+  check("manifest-file:" + filename, listedFiles.includes(filename), filename + " must be listed in manifest.files.");
+}
+
+const commands = Array.isArray(manifest?.commands) ? manifest.commands.join("\\n") : "";
+check("command:self-check", commands.includes("native-cam-server-package-self-check.mjs"), "manifest.commands must include the self-check command.");
+check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
+check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
+
+const target = manifest?.targetMachineBoundary ?? {};
+check("target-machine-profile", target.machineProfileId === "desktop-3axis-rotary-y", "target machine profile must be desktop-3axis-rotary-y.");
+check("target-controller", target.controllerClass === "3axis-controller-with-rotary-fixture", "target controller must be 3-axis controller with rotary fixture.");
+check("target-rotary-output-axis", target.rotaryOutputAxis === "Y", "target rotary output axis must be Y.");
+check("target-postprocessor", target.postProcessor === "wrapY", "target postprocessor must be wrapY.");
+check("target-tool", target.tool?.toolProfileId === "vflat-4mm-25deg", "target tool must be 4mm 25deg flat-tip V cutter.");
+
+const openCamValidator = readTextIfExists(join(root, "opencamlib-contact-output-validate.mjs"));
+const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
+const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
+check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
+check("camotics-validator-schema", camoticsValidator.includes("hediao3d.camotics-result-local-validation.v1"), "CAMotics validator must emit local validation schema.");
+check("camotics-validator-bundle", camoticsValidator.includes("camotics-result-bundle.zip"), "CAMotics validator must generate camotics-result-bundle.zip when passing.");
+check("real-output-production-candidate", realOutputCheck.includes("production-candidate"), "real output checker must require production-candidate evidence.");
+check("real-output-target-boundary", realOutputCheck.includes("target-machine-boundary.json"), "real output checker must write target-machine-boundary.json.");
+
+const failed = checks.filter((item) => !item.ok);
+const report = {
+  schema: "hediao3d.native-cam-server-package-self-check.v1",
+  createdAt: new Date().toISOString(),
+  root,
+  ok: failed.length === 0,
+  level: failed.length ? "critical" : "ready",
+  checks,
+  missing: failed.map((item) => item.id),
+  productionBoundary: "This self-check only validates the downloaded Linux server package contents. It does not prove Native CAM engines are installed, does not run CAMotics, and does not unlock production NC."
+};
+writeFileSync(join(root, "native-cam-server-package-self-check.json"), JSON.stringify(report, null, 2), "utf8");
+console.log(JSON.stringify(report, null, 2));
+if (!report.ok) process.exitCode = 3;
+
+function check(id, ok, summary) {
+  checks.push({ id, ok: Boolean(ok), status: ok ? "pass" : "fail", severity: ok ? "info" : "critical", summary });
+}
+
+function readJsonIfExists(path) {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readTextIfExists(path) {
+  if (!existsSync(path)) return "";
+  return readFileSync(path, "utf8");
+}
 `;
 }
 
@@ -990,6 +1094,7 @@ ${rows.join("\n")}
 ## 2. Required Commands
 
 - [ ] \`npm run test:v3:native-cam\`
+- [ ] \`node native-cam-server-package-self-check.mjs\`
 - [ ] \`npm run test:v3:freecad-proof-handoff\`
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
 - [ ] OpenCAMLib 真实输出后运行 \`node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json\`

@@ -3261,6 +3261,7 @@ function getNativeCamServerPackage(checkId, res) {
     "native-cam-acceptance-checklist.md",
     "linux-cam-closed-loop-handoff.md",
     "native-cam-real-output-check.sh",
+    "native-cam-server-package-self-check.mjs",
     "opencamlib-contact-output-validate.mjs",
     "camotics-material-removal-validate.mjs",
     "native-cam-server-package.json"
