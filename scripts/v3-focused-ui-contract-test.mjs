@@ -51,6 +51,11 @@ const checks = [
     id: "view-tabs-operator-facing",
     ok: source.includes(">3D模型</button>") && source.includes(">模拟雕刻</button>") && source.includes(">报告</button>"),
     summary: "Workbench should expose the three operator-facing views."
+  },
+  {
+    id: "linux-opencamlib-evidence-visible",
+    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage"),
+    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage and candidate package blocker diagnostics."
   }
 ];
 

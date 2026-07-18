@@ -1619,6 +1619,23 @@ type V3ReadinessSummary = {
       foundCount?: number;
       requiredFoundCount?: number;
       missingRequired?: string[];
+      evidenceChain?: {
+        status?: string;
+        openCamLib?: {
+          realCandidateKnown?: boolean;
+          realCandidateReady?: boolean;
+          productionLocked?: boolean;
+          firstBlocking?: string | null;
+          contactPathCoverage?: {
+            status?: string;
+            ready?: boolean;
+            summary?: string | null;
+          } | null;
+          candidatePackageLevel?: string;
+          candidatePackageReadyForImport?: boolean;
+          candidatePackageBlockedReason?: string | null;
+        };
+      } | null;
       files?: Array<{
         filename?: string;
         status?: string;
@@ -6092,13 +6109,20 @@ export function App() {
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
                   </small>
                   {v3Readiness.runbookResult?.linuxEvidence && (
-                    <small className={v3Readiness.runbookResult.linuxEvidence.status === "ready-for-review" ? "v3-inline-ok" : "v3-inline-critical"}>
-                      Linux证据：{formatRunbookLinuxEvidenceStatus(v3Readiness.runbookResult.linuxEvidence.status)}
-                      {` · 必需 ${v3Readiness.runbookResult.linuxEvidence.requiredFoundCount ?? 0}/2`}
-                      {v3Readiness.runbookResult.linuxEvidence.missingRequired?.length
-                        ? ` · 缺 ${v3Readiness.runbookResult.linuxEvidence.missingRequired.join(", ")}`
-                        : ""}
-                    </small>
+                    <>
+                      <small className={v3Readiness.runbookResult.linuxEvidence.status === "ready-for-review" ? "v3-inline-ok" : "v3-inline-critical"}>
+                        Linux证据：{formatRunbookLinuxEvidenceStatus(v3Readiness.runbookResult.linuxEvidence.status)}
+                        {` · 必需 ${v3Readiness.runbookResult.linuxEvidence.requiredFoundCount ?? 0}/2`}
+                        {v3Readiness.runbookResult.linuxEvidence.missingRequired?.length
+                          ? ` · 缺 ${v3Readiness.runbookResult.linuxEvidence.missingRequired.join(", ")}`
+                          : ""}
+                      </small>
+                      {v3Readiness.runbookResult.linuxEvidence.evidenceChain?.openCamLib && (
+                        <small className={v3Readiness.runbookResult.linuxEvidence.evidenceChain.openCamLib.realCandidateReady ? "v3-inline-ok" : "v3-inline-warning"}>
+                          Linux OpenCAMLib：{formatLinuxOpenCamLibEvidence(v3Readiness.runbookResult.linuxEvidence.evidenceChain.openCamLib)}
+                        </small>
+                      )}
+                    </>
                   )}
                   {!V3_TRIAL_FOCUSED_UI && v3Readiness.acceptancePlan && (
                     <>
@@ -8574,6 +8598,24 @@ function formatRunbookLinuxEvidenceStatus(status?: string) {
   if (status === "missing-zip") return "缺少结果ZIP";
   if (status === "incomplete") return "证据不完整";
   return status ?? "未生成";
+}
+
+function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["openCamLib"]) {
+  const candidate = openCamLib?.realCandidateReady ? "真实候选 ready" : openCamLib?.realCandidateKnown ? "真实候选待复核" : "真实候选缺失";
+  const coverageStatus = openCamLib?.contactPathCoverage?.status ?? "missing";
+  const coverage = `覆盖率 ${formatOpenCamLibCoverageStatus(coverageStatus)}`;
+  const packageLevel = openCamLib?.candidatePackageLevel ?? "missing";
+  const packageStatus = `候选包 ${packageLevel}${openCamLib?.candidatePackageReadyForImport ? "/可导入" : ""}`;
+  const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
+  return [candidate, coverage, packageStatus, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+}
+
+function formatOpenCamLibCoverageStatus(status?: string) {
+  if (status === "ready") return "达标";
+  if (status === "review") return "待复核";
+  if (status === "missing") return "缺失";
+  if (status === "not-required") return "暂不要求";
+  return status ?? "未知";
 }
 
 function findV3DeliveryFile(job: V3OrchestratorJob | null, filename: string) {
