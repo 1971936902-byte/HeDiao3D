@@ -2307,6 +2307,7 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     && new Date(result.readinessCreatedAt).getTime() <= new Date(result.runbookGeneratedAt).getTime()
     && new Date(result.runbookGeneratedAt).getTime() <= new Date(result.createdAt).getTime();
   const identityValid = Boolean(readinessReportId && result.readinessCreatedAt && result.runbookGeneratedAt && linkedReadinessReportExists && timeOrderValid);
+  const linuxEvidenceReady = result.linuxEvidence?.status === "ready-for-review";
   return {
     schema: result.schema ?? "unknown",
     readinessReportId,
@@ -2326,7 +2327,7 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     stepCount: steps.length,
     commandCount,
     blockingStepCountAtReport: Number.isFinite(Number(result.blockingStepCountAtReport)) ? Number(result.blockingStepCountAtReport) : null,
-    productionSafe: Boolean(result.productionSafe) && identityValid && blockingFailedCount === 0,
+    productionSafe: Boolean(result.productionSafe) && identityValid && blockingFailedCount === 0 && linuxEvidenceReady,
     identityValid,
     linkedReadinessReportExists,
     environment: result.environment && typeof result.environment === "object" ? {

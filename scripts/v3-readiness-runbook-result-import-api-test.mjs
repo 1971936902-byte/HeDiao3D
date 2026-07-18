@@ -36,6 +36,14 @@ async function main() {
   assert(importArtifact.blockingFailedCount === 1, "import artifact should preserve blocking failure count");
 
   const zipResult = createRunbookResultFixture(readiness, true);
+  const rawPassingImported = await postJson("/api/orchestrator/readiness/runbook-result", {
+    sourceName: "v3-acceptance-runbook-result.json",
+    result: zipResult
+  });
+  assert(rawPassingImported.ok === true, "raw all-pass runbook result should be ok");
+  assert(rawPassingImported.linuxEvidence?.status === "missing-zip", "raw all-pass runbook result should report missing Linux evidence ZIP");
+  assert(rawPassingImported.productionSafe === false, "raw all-pass runbook result without Linux evidence must not be production-safe");
+
   const zipBytes = createZip([
     { name: "v3-acceptance-runbook-result.json", content: JSON.stringify(zipResult, null, 2) },
     { name: "native-cam-closed-loop-check.json", content: JSON.stringify({
