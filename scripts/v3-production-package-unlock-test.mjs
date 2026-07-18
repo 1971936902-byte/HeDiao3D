@@ -53,6 +53,9 @@ async function main() {
 
   const lockedBeforeEvidence = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
   assert(lockedBeforeEvidence.allowProductionNc === false, "production package must start locked");
+  assert(lockedBeforeEvidence.operatorGuidance?.safeTrialPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/safe-trial-package`), "locked package should expose safe trial package URL before evidence is complete");
+  assert(lockedBeforeEvidence.operatorGuidance?.evidenceReviewPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/evidence-review-package`), "locked package should expose evidence review package URL before evidence is complete");
+  assert(lockedBeforeEvidence.operatorGuidance?.productionPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/production-package`), "locked package should expose production package recheck URL before evidence is complete");
 
   const candidateNeutral = createCandidateNeutral();
   const imported = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {

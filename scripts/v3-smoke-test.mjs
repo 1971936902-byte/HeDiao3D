@@ -272,6 +272,8 @@ async function main() {
   assert(lockedProductionPackage.allowProductionNc === false, "locked production package response should keep allowProductionNc=false");
   assert(lockedProductionPackage.summary, "locked production package response should explain gate summary");
   assert(lockedProductionPackage.operatorGuidance?.safeTrialPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/safe-trial-package`), "locked production package should point to safe trial package");
+  assert(lockedProductionPackage.operatorGuidance?.evidenceReviewPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/evidence-review-package`), "locked production package should point to evidence review package");
+  assert(lockedProductionPackage.operatorGuidance?.productionPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/production-package`), "locked production package should expose its production gate recheck URL");
   assert(lockedProductionPackage.operatorGuidance?.readFirstFiles?.includes("operator-download-checklist.md"), "locked production package should tell operator to read download checklist");
   assert(lockedProductionPackage.operatorGuidance?.neverRunOnMachine?.some((file) => file.filename === "camotics-preview.nc"), "locked production package should list CAMotics preview as never-machine");
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");

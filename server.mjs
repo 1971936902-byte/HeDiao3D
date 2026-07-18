@@ -15607,6 +15607,7 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
     status: "locked",
     safeTrialPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/safe-trial-package`,
     evidenceReviewPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/evidence-review-package`,
+    productionPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/production-package`,
     readFirstFiles: [
       "operator-download-checklist.md",
       "machining-package-index.json",

@@ -87,6 +87,7 @@ type TaskEvent = {
   status: "ok" | "warning" | "error";
   category: "source" | "model" | "process" | "cam" | "feedback";
   timestamp: string;
+  actionLinks?: Array<{ label: string; href: string; tone?: "primary" | "warning" }>;
 };
 
 type TaskJob = {
@@ -3944,7 +3945,8 @@ export function App() {
             category: "cam",
             status: "warning",
             title: "V3 正式生产包未解锁",
-            detail
+            detail,
+            actionLinks: createLockedProductionPackageTaskLinks(data)
           });
           return;
         }
@@ -7700,11 +7702,20 @@ export function App() {
                 <div className="task-timeline">
                   {taskEvents.map((event) => (
                     <div className={`task-event ${event.status}`} key={event.id}>
-                      <div>
+                      <div className="task-event-heading">
                         <strong>{event.title}</strong>
                         <span>{event.timestamp}</span>
                       </div>
                       <p>{event.detail}</p>
+                      {event.actionLinks?.length ? (
+                        <div className="task-event-actions">
+                          {event.actionLinks.map((link) => (
+                            <a className={`task-event-action ${link.tone ?? "primary"}`} href={link.href} key={`${event.id}-${link.href}`}>
+                              {link.label}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
                       <small>{event.category.toUpperCase()}</small>
                     </div>
                   ))}
@@ -8759,6 +8770,7 @@ function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<N
 function formatLockedProductionPackageGuidance(data: any) {
   const guidance = data?.operatorGuidance;
   const safeTrial = guidance?.safeTrialPackageUrl ? "先下载安全试雕包" : "先生成并下载安全试雕包";
+  const evidenceReview = guidance?.evidenceReviewPackageUrl ? "可下载证据审查包复核缺口" : "";
   const readFirst = Array.isArray(guidance?.readFirstFiles) && guidance.readFirstFiles.length
     ? `必读 ${guidance.readFirstFiles.slice(0, 4).join("、")}`
     : "必读 operator-download-checklist.md、machining-package-index.json、production-evidence-dossier.json";
@@ -8768,7 +8780,22 @@ function formatLockedProductionPackageGuidance(data: any) {
   const gap = Array.isArray(guidance?.evidenceGaps) && guidance.evidenceGaps[0]
     ? `证据缺口 ${guidance.evidenceGaps[0].label ?? guidance.evidenceGaps[0].id}: ${guidance.evidenceGaps[0].summary ?? guidance.evidenceGaps[0].status}`
     : data?.summary ?? data?.error ?? "生产证据尚未闭环";
-  return [safeTrial, readFirst, neverRun, gap].filter(Boolean).join("；");
+  return [safeTrial, evidenceReview, readFirst, neverRun, gap].filter(Boolean).join("；");
+}
+
+function createLockedProductionPackageTaskLinks(data: any) {
+  const guidance = data?.operatorGuidance;
+  const links: Array<{ label: string; href: string; tone?: "primary" | "warning" }> = [];
+  if (guidance?.safeTrialPackageUrl) {
+    links.push({ label: "下载安全试雕包", href: guidance.safeTrialPackageUrl, tone: "primary" });
+  }
+  if (guidance?.evidenceReviewPackageUrl) {
+    links.push({ label: "下载证据审查包", href: guidance.evidenceReviewPackageUrl, tone: "primary" });
+  }
+  if (guidance?.productionPackageUrl) {
+    links.push({ label: "重新检查生产包门禁", href: guidance.productionPackageUrl, tone: "warning" });
+  }
+  return links;
 }
 
 function formatLinuxEvidenceStepStatus(status?: string) {
