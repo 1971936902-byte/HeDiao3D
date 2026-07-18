@@ -2334,6 +2334,10 @@ export function App() {
     }),
     [aiMeshStlUrl, v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
   );
+  const v3FocusedNextAction = useMemo(
+    () => createV3FocusedNextAction(v3TrialWorkflow.activeStep.id, Boolean(aiMeshStlUrl), Boolean(v3Job?.result?.summary.deliveryManifest), isV3JobRunning),
+    [aiMeshStlUrl, isV3JobRunning, v3Job, v3TrialWorkflow.activeStep.id]
+  );
   const v3CamoticsPackageAcceptanceStep = useMemo(
     () => v3Readiness?.acceptancePlan?.steps.find((step) => step.id === "camotics-cli-package") ?? null,
     [v3Readiness]
@@ -3796,6 +3800,7 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "模型文件下载失败";
       setAiMeshStatus(message);
+      setV3Status(message);
       recordTask({
         category: "model",
         status: "error",
@@ -5611,15 +5616,15 @@ export function App() {
                     <Box size={17} />
                     导入/生成3D模型
                   </button>
-                  <button
-                    className="primary-action package-action"
-                    onClick={handleRunV3OrchestratorLoop}
-                    disabled={isV3JobRunning || !aiMeshStlUrl}
-                    type="button"
-                    title={aiMeshStlUrl ? "提交当前 GLB/STL 到后端 Orchestrator" : "请先导入 GLB/STL 或用 Meshy 生成模型"}
-                  >
-                    <Cloud size={17} />
-                    {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
+              <button
+                className="primary-action package-action"
+                onClick={handleRunV3OrchestratorLoop}
+                disabled={isV3JobRunning || !aiMeshStlUrl}
+                type="button"
+                title={aiMeshStlUrl ? "提交当前 GLB/STL 到后端 Orchestrator，生成旋转夹具空跑、候选试雕 NC、报告和清单" : "请先导入 GLB/STL 或用 Meshy 生成模型"}
+              >
+                <Cloud size={17} />
+                {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
                   </button>
                   <button
                     className="primary-action package-action"
@@ -5730,6 +5735,7 @@ export function App() {
                       onClick={handleRunV3OrchestratorLoop}
                       disabled={isV3JobRunning || !aiMeshStlUrl}
                       type="button"
+                      title={aiMeshStlUrl ? "生成三轴控制器 + Y轴旋转夹具专用试雕数据" : "请先导入 GLB/STL 或用 Meshy 生成模型"}
                     >
                       <Cloud size={17} />
                       {isV3JobRunning ? "生成中..." : "生成安全试雕数据"}
@@ -5741,6 +5747,7 @@ export function App() {
                       onClick={handleDownloadV3TrialPackage}
                       disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
                       type="button"
+                      title={v3Job?.result?.summary.deliveryManifest ? "下载安全试雕包，正式生产 NC 仍受门禁控制" : "请先生成安全试雕数据"}
                     >
                       <Download size={17} />
                       {isV3PackageDownloading ? "打包中..." : "下载安全试雕包"}
@@ -7718,11 +7725,13 @@ export function App() {
                   <strong>{getToolpathKindLabel(toolpathKind)}</strong>
                 </div>
               )}
-              <button className="download" type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")} title="下载当前 GLB 模型文件">
-                <Download size={17} />
-                {isOriginalModelImported ? "下载原始模型" : "下载 GLB"}
-              </button>
-              {aiMeshStlUrl && (
+              {!V3_TRIAL_FOCUSED_UI && (
+                <button className="download" type="button" onClick={() => handleDownloadModelAsset(aiMeshUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.glb" : "ai-mesh.glb")} title="下载当前 GLB 模型文件">
+                  <Download size={17} />
+                  {isOriginalModelImported ? "下载原始模型" : "下载 GLB"}
+                </button>
+              )}
+              {!V3_TRIAL_FOCUSED_UI && aiMeshStlUrl && (
                 <button className="download secondary" type="button" onClick={() => handleDownloadModelAsset(aiMeshStlUrl, isOriginalModelImported ? originalModelFileName ?? "original-model.stl" : "ai-mesh.stl")} title="下载当前 STL 模型文件">
                   <Download size={17} />
                   {isOriginalModelImported ? "下载 STL" : "下载 AI STL"}
@@ -7879,15 +7888,27 @@ export function App() {
               </button>
               {V3_TRIAL_FOCUSED_UI ? (
                 <>
-                  {v3Job?.result?.summary.deliveryManifest ? (
+                  <div className={`v3-output-next ${v3FocusedNextAction.level}`}>
+                    <span>下一步</span>
+                    <strong>{v3FocusedNextAction.title}</strong>
+                    <small>{v3FocusedNextAction.detail}</small>
+                  </div>
+                  {!v3Job?.result?.summary.deliveryManifest && (
+                    <button
+                      className="download"
+                      onClick={aiMeshStlUrl ? handleRunV3OrchestratorLoop : () => setActiveStage("model")}
+                      disabled={isV3JobRunning}
+                      type="button"
+                      title={aiMeshStlUrl ? "直接提交 V3 小闭环，生成旋转夹具刀路和安全试雕包" : "先去导入 GLB/STL 或用 Meshy 生成模型"}
+                    >
+                      {aiMeshStlUrl ? <Cloud size={17} /> : <Box size={17} />}
+                      {isV3JobRunning ? "生成中..." : aiMeshStlUrl ? "生成安全试雕数据" : "导入3D模型"}
+                    </button>
+                  )}
+                  {v3Job?.result?.summary.deliveryManifest && (
                     <button className="download" onClick={handleDownloadV3TrialPackage} disabled={isV3PackageDownloading} type="button" title="下载只允许空跑和低风险试雕的安全交付包">
                       <Download size={17} />
                       {isV3PackageDownloading ? "打包中..." : "安全试雕包"}
-                    </button>
-                  ) : (
-                    <button className="download" onClick={() => setActiveStage("cam")} type="button" title="进入 CAM 面板运行 V3 小闭环">
-                      <Cloud size={17} />
-                      生成试雕数据
                     </button>
                   )}
                   {v3SafeTrialPlanFile?.url && (
@@ -8557,6 +8578,47 @@ function createV3TrialWorkflowSummary({
       ? "安全试雕闭环已完成，生产 NC 仍需真实 CAM/CAMotics/机床验收总门禁放行。"
       : activeStep.detail,
     steps
+  };
+}
+
+function createV3FocusedNextAction(
+  activeStepId: V3TrialWorkflowStep["id"],
+  hasModel: boolean,
+  hasDeliveryManifest: boolean,
+  isRunning: boolean
+) {
+  if (isRunning) {
+    return {
+      level: "running",
+      title: "正在生成安全试雕数据",
+      detail: "完成后这里会切换为下载安全试雕包。"
+    };
+  }
+  if (!hasModel || activeStepId === "model") {
+    return {
+      level: "critical",
+      title: "先导入真实3D模型",
+      detail: "支持 GLB/STL/OBJ，或用 Meshy 多图生成 Mesh。"
+    };
+  }
+  if (!hasDeliveryManifest || activeStepId === "orchestrator") {
+    return {
+      level: "warning",
+      title: "生成旋转夹具试雕数据",
+      detail: "输出标定空跑、整条空跑、候选试雕 NC、报告和核验清单。"
+    };
+  }
+  if (activeStepId === "download") {
+    return {
+      level: "ok",
+      title: "下载安全试雕包",
+      detail: "先按清单核验哈希，再做旋转标定和离料空跑。"
+    };
+  }
+  return {
+    level: "ok",
+    title: "记录空跑/试雕反馈",
+    detail: "把真实机床结果回填到证据链，后续才能逐步解锁生产。"
   };
 }
 
