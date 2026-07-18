@@ -1434,6 +1434,37 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       blocksProduction: !neutralImport || !neutralImport.ok || !neutralImport.postprocessEligible
     }),
     createAcceptanceStep({
+      order: 10.5,
+      id: "camotics-material-removal-validate",
+      title: "CAMotics 材料去除本地验收",
+      status: !camoticsEvidence || camoticsEvidence.source === "missing"
+        ? "pending"
+        : camoticsEvidence.productionEvidenceEligible
+          && camoticsEvidence.inputIdentityStatus === "matched"
+          && camoticsEvidence.cliRunPackageBindingStatus === "matched"
+          && camoticsEvidence.motionConsistencyStatus === "matched"
+          && camoticsEvidence.machineContextStatus === "matched"
+          ? "done"
+          : "blocked",
+      command: "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
+      evidence: [
+        "camotics-material-removal-validate.mjs",
+        "camotics-result.json",
+        "camotics-cli-run-package.json",
+        "camotics-result-local-validation.json",
+        "camotics-result-bundle.zip"
+      ],
+      detail: camoticsEvidence && camoticsEvidence.source !== "missing"
+        ? `eligible=${camoticsEvidence.productionEvidenceEligible} / input=${camoticsEvidence.inputIdentityStatus ?? "missing"} / cli=${camoticsEvidence.cliRunPackageBindingStatus ?? "missing"} / motion=${camoticsEvidence.motionConsistencyStatus ?? "missing"} / machine=${camoticsEvidence.machineContextStatus ?? "missing"}`
+        : "尚未运行 CAMotics 材料去除本地验收器，或尚未回填 camotics-result-bundle.zip。",
+      blocksProduction: !camoticsEvidence
+        || !camoticsEvidence.productionEvidenceEligible
+        || camoticsEvidence.inputIdentityStatus !== "matched"
+        || camoticsEvidence.cliRunPackageBindingStatus !== "matched"
+        || camoticsEvidence.motionConsistencyStatus !== "matched"
+        || camoticsEvidence.machineContextStatus !== "matched"
+    }),
+    createAcceptanceStep({
       order: 11,
       id: "camotics-result-import",
       title: "CAMotics 真实结果导入契约",

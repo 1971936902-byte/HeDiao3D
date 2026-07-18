@@ -140,6 +140,8 @@ async function main() {
   assert(runbook.includes("npm run test:v3:blendercam-external-handoff"), "readiness runbook missing BlenderCAM external handoff command");
   assert(runbook.includes("npm run test:v3:closed-neutral-handoff"), "readiness runbook missing OpenCAMLib external handoff command");
   assert(runbook.includes("npm run test:v3:neutral-import"), "readiness runbook missing neutral import command");
+  assert(runbook.includes("node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json"), "readiness runbook missing CAMotics material-removal validator command");
+  assert(runbook.includes("camotics-result-local-validation.json"), "readiness runbook missing CAMotics local validation evidence");
   assert(runbook.includes("npm run test:v3:camotics-import"), "readiness runbook missing CAMotics import command");
   assert(runbook.includes("npm run test:v3:camotics-cli-package-api"), "readiness runbook missing CAMotics CLI package command");
   assert(runbook.includes("production-evidence-dossier"), "readiness runbook missing evidence dossier step");
@@ -156,6 +158,7 @@ async function main() {
   assert(runbook.includes("blockingFailedCount"), "readiness runbook missing blocking failure result field");
   assert(runbook.includes("productionSafe"), "readiness runbook missing production safety result field");
   assert(report.acceptancePlan.steps.some((step) => step.id === "native-cam-package-self-check" && step.command === "node native-cam-server-package-self-check.mjs"), "acceptance plan missing Native CAM package self-check step");
+  assert(report.acceptancePlan.steps.some((step) => step.id === "camotics-material-removal-validate" && step.command.includes("camotics-material-removal-validate.mjs")), "acceptance plan missing CAMotics material-removal validator step");
 
   console.log(JSON.stringify({
     ok: true,
