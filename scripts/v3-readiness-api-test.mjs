@@ -75,9 +75,18 @@ async function main() {
   assert(full.adapterValidation?.handoffClassificationAudit?.schema === "hediao3d.adapter-handoff-classification-audit.v1", "full readiness artifact missing adapter handoff audit");
   assert(full.adapterValidation.handoffClassificationAudit.unsafeCount >= 1, "readiness should preserve unsafe handoff audit count");
   const adapterStep = full.acceptancePlan.steps.find((step) => step.id === "adapter-validation");
-  assert(adapterStep?.status === "blocked", `adapter validation step should be blocked when handoff audit is unsafe, got ${adapterStep?.status}`);
-  assert(/unsafe=/.test(adapterStep.detail), "adapter validation step detail should include unsafe handoff count");
-  assert(/contactBound=/.test(adapterStep.detail), "adapter validation step detail should include contact binding count");
+  const hasBoundNativeCleanHandoff = full.nativeCamRealOutputAcceptance?.sourceReportBindingStatus === "matched"
+    && full.nativeCamRealOutputAcceptance?.sourceReportHandoffAudit?.productionCandidateCount > 0
+    && full.nativeCamRealOutputAcceptance?.sourceReportHandoffAudit?.unsafeCount === 0
+    && (full.nativeCamRealOutputAcceptance?.sourceReportHandoffAudit?.unboundProductionCandidateCount ?? 0) === 0;
+  assert(adapterStep?.status === (hasBoundNativeCleanHandoff ? "done" : "blocked"), `adapter validation step status mismatch with effective handoff, got ${adapterStep?.status}`);
+  if (hasBoundNativeCleanHandoff) {
+    assert(adapterStep.detail.includes("同源 Native CAM 真实输出"), "adapter validation step should explain bound native source report coverage");
+    assert(adapterStep.evidence?.includes("native-cam-real-output-acceptance.json"), "adapter validation step should cite native real output evidence");
+  } else {
+    assert(/unsafe=/.test(adapterStep.detail), "adapter validation step detail should include unsafe handoff count");
+    assert(/contactBound=/.test(adapterStep.detail), "adapter validation step detail should include contact binding count");
+  }
   const camoticsStep = full.acceptancePlan.steps.find((step) => step.id === "camotics-result-import");
   assert(camoticsStep?.detail && /input=/.test(camoticsStep.detail), "camotics import step detail should include input identity status");
   assert(camoticsStep?.detail && /motion=/.test(camoticsStep.detail), "camotics import step detail should include motion consistency status");

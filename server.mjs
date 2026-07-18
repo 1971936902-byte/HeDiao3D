@@ -867,6 +867,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
   const blockers = [];
   const warnings = [];
   const nextActions = [];
+  const effectiveHandoff = createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutputAcceptance });
+  const effectiveHandoffAudit = effectiveHandoff?.audit ?? null;
+  const boundNativeHandoffClean = effectiveHandoff?.source === "bound-native-source-report" && isCamHandoffAuditProductionClean(effectiveHandoffAudit);
 
   if (diagnostics.level === "critical") {
     blockers.push(`Orchestrator 自检 critical：${diagnostics.summary}`);
@@ -904,12 +907,19 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
       warnings.push("Adapter 验证缺少 handoff 分类审计，无法判断外部输出是否为生产候选。");
       nextActions.push("重新运行 npm run test:v3:external-adapters，生成 handoffClassificationAudit。");
     } else {
-      if (handoffAudit.unsafeCount > 0) blockers.push(`Adapter handoff 分类存在 ${handoffAudit.unsafeCount} 个 unsafe 输出：${handoffAudit.summary}`);
-      if (handoffAudit.unboundProductionCandidateCount > 0) {
+      if (handoffAudit.unsafeCount > 0 && !boundNativeHandoffClean) {
+        blockers.push(`Adapter handoff 分类存在 ${handoffAudit.unsafeCount} 个 unsafe 输出：${handoffAudit.summary}`);
+      } else if (handoffAudit.unsafeCount > 0) {
+        warnings.push(`最新 Adapter 验证仍有 ${handoffAudit.unsafeCount} 个 unsafe 输出，但已由同源绑定的 Native CAM 真实输出验收覆盖；生产证据以 bound-native-source-report 为准。`);
+      }
+      if (handoffAudit.unboundProductionCandidateCount > 0 && !boundNativeHandoffClean) {
         blockers.push(`Adapter handoff 存在 ${handoffAudit.unboundProductionCandidateCount} 个未绑定输入哈希的 production-candidate contact report。`);
         nextActions.push("查看 v3-external-adapter-validation.json 的 contactReport.inputBindingStatus，确认真实 OpenCAMLib 接触报告绑定当前模型/计划/neutral 输出哈希。");
+      } else if (handoffAudit.unboundProductionCandidateCount > 0) {
+        warnings.push(`最新 Adapter 验证仍有 ${handoffAudit.unboundProductionCandidateCount} 个未绑定 production-candidate；当前仅采用同源绑定的 Native CAM 真实输出证据。`);
       }
-      if (handoffAudit.productionCandidateCount === 0) warnings.push("Adapter handoff 尚无 production-candidate 输出，不能作为真实 CAM 生产证据。");
+      if (handoffAudit.productionCandidateCount === 0 && !boundNativeHandoffClean) warnings.push("Adapter handoff 尚无 production-candidate 输出，不能作为真实 CAM 生产证据。");
+      if (boundNativeHandoffClean) warnings.push("Adapter 验证矩阵保留为覆盖率信息；真实 CAM 生产候选采用 native-cam-real-output-acceptance.json 绑定的 sourceReportHandoffAudit。");
       nextActions.push(...(handoffAudit.nextActions ?? []));
     }
     if (adapterValidation.overall.completedAdapters === 0) {
@@ -933,8 +943,7 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     warnings.push(`Native CAM 真实输出验收需要复核：${nativeCamRealOutputAcceptance.summary}`);
     nextActions.push(...(nativeCamRealOutputAcceptance.nextActions ?? []));
   } else {
-    const effectiveHandoff = createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutputAcceptance });
-    const handoffAudit = effectiveHandoff?.audit ?? null;
+    const handoffAudit = effectiveHandoffAudit;
     if (handoffAudit && (Number(handoffAudit.unsafeCount ?? 0) > 0 || Number(handoffAudit.productionCandidateCount ?? 0) === 0 || Number(handoffAudit.unboundProductionCandidateCount ?? 0) > 0)) {
       blockers.push(`Native CAM 真实输出验收为 ready，但${effectiveHandoff?.source === "bound-native-source-report" ? "绑定源报告" : "最新 Adapter"} handoff 审计仍不一致：productionCandidate=${handoffAudit.productionCandidateCount}，unsafe=${handoffAudit.unsafeCount}，unboundContact=${handoffAudit.unboundProductionCandidateCount ?? 0}。`);
       nextActions.push("重新运行 V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters 和 bash native-cam-real-output-check.sh，确保两份报告来自同一次真实 CAM 输出。");
@@ -1128,6 +1137,15 @@ function createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutput
   return null;
 }
 
+function isCamHandoffAuditProductionClean(audit) {
+  return Boolean(
+    audit
+    && Number(audit.unsafeCount ?? 0) === 0
+    && Number(audit.productionCandidateCount ?? 0) > 0
+    && Number(audit.unboundProductionCandidateCount ?? 0) === 0
+  );
+}
+
 function normalizeCamHandoffAudit(audit) {
   if (!audit || typeof audit !== "object") return null;
   return {
@@ -1239,6 +1257,9 @@ function createV3PostprocessHandoffReadiness({ adapterValidation, nativeCamRealO
 
 function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier }) {
   const camoticsEvidence = readinessCamoticsEvidence ?? createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier });
+  const effectiveHandoff = createEffectiveCamHandoffAudit({ adapterValidation, nativeCamRealOutputAcceptance });
+  const effectiveHandoffAudit = effectiveHandoff?.audit ?? null;
+  const boundNativeHandoffClean = effectiveHandoff?.source === "bound-native-source-report" && isCamHandoffAuditProductionClean(effectiveHandoffAudit);
   const orchestratorBaseReady = diagnostics.level !== "critical"
     && Array.isArray(diagnostics.checks)
     && diagnostics.checks
@@ -1338,7 +1359,9 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
       order: 4,
       id: "adapter-validation",
       title: "外部 CAM Adapter 验证",
-      status: !adapterValidation
+      status: boundNativeHandoffClean
+        ? "done"
+        : !adapterValidation
         ? "pending"
         : adapterValidation.overall.failed > 0
           ? "blocked"
@@ -1349,11 +1372,15 @@ function createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapt
           ? "done"
           : "pending",
       command: "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
-      evidence: ["v3-external-adapter-validation.json", "adapter-report.json", "handoffClassificationAudit"],
-      detail: adapterValidation
+      evidence: boundNativeHandoffClean
+        ? ["native-cam-real-output-acceptance.json", "sourceReportHandoffAudit", "v3-external-adapter-validation.json"]
+        : ["v3-external-adapter-validation.json", "adapter-report.json", "handoffClassificationAudit"],
+      detail: boundNativeHandoffClean
+        ? `同源 Native CAM 真实输出已绑定 sourceReportHandoffAudit：productionCandidate=${effectiveHandoffAudit.productionCandidateCount}，unsafe=${effectiveHandoffAudit.unsafeCount}，unboundContact=${effectiveHandoffAudit.unboundProductionCandidateCount ?? 0}；最新 adapter 矩阵仅作覆盖率参考。`
+        : adapterValidation
         ? `计划 ${adapterValidation.overall.generatedPlans}/${adapterValidation.overall.adapterCount}，completed ${adapterValidation.overall.completedAdapters}，失败 ${adapterValidation.overall.failed}，productionCandidate=${adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0}，unsafe=${adapterValidation.handoffClassificationAudit?.unsafeCount ?? "unknown"}，contactBound=${adapterValidation.handoffClassificationAudit?.contactReportBindingCounts?.bound ?? 0}，unboundContact=${adapterValidation.handoffClassificationAudit?.unboundProductionCandidateCount ?? 0}`
         : "尚未运行外部 Adapter 验证。",
-      blocksProduction: !adapterValidation || adapterValidation.overall.failed > 0 || (adapterValidation.handoffClassificationAudit?.unsafeCount ?? 1) > 0 || (adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0) === 0 || (adapterValidation.handoffClassificationAudit?.unboundProductionCandidateCount ?? 0) > 0
+      blocksProduction: !boundNativeHandoffClean && (!adapterValidation || adapterValidation.overall.failed > 0 || (adapterValidation.handoffClassificationAudit?.unsafeCount ?? 1) > 0 || (adapterValidation.handoffClassificationAudit?.productionCandidateCount ?? 0) === 0 || (adapterValidation.handoffClassificationAudit?.unboundProductionCandidateCount ?? 0) > 0)
     }),
     createAcceptanceStep({
       order: 4.5,

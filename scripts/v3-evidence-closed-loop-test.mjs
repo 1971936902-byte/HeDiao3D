@@ -120,6 +120,11 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance?.level === "ready", "readiness should expose latest native CAM acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose native CAM source binding");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose strict contact validation");
+  const adapterStep = readiness.acceptancePlan?.steps?.find((step) => step.id === "adapter-validation");
+  assert(adapterStep?.status === "done", `bound native CAM source report should satisfy adapter validation step, got ${adapterStep?.status}`);
+  assert(adapterStep?.blocksProduction === false, "bound native CAM source report should prevent stale adapter fixture audit from blocking production");
+  assert(adapterStep?.detail?.includes("同源 Native CAM 真实输出"), "adapter validation step should explain effective native handoff evidence");
+  assert(!(readiness.gates?.blockers ?? []).some((item) => item.includes("Adapter handoff 分类存在")), "readiness should not block on stale adapter unsafe audit once bound native handoff is clean");
   assert(readiness.readinessCamoticsEvidence?.source === "latest-job-evidence-dossier", `readiness should use latest job CAMotics evidence, got ${readiness.readinessCamoticsEvidence?.source}`);
   assert(readiness.readinessCamoticsEvidence.productionEvidenceEligible === true, "readiness should mark latest job CAMotics evidence eligible");
   assert(readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched", "readiness CAMotics evidence should preserve matched input identity");
