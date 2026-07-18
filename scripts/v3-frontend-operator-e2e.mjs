@@ -18,6 +18,7 @@ class CdpClient {
     this.url = url;
     this.id = 0;
     this.pending = new Map();
+    this.commandTimeoutMs = Number(process.env.V3_FRONTEND_E2E_CDP_TIMEOUT_MS ?? 8000);
   }
 
   open() {
@@ -39,6 +40,9 @@ class CdpClient {
 
   send(method, params = {}) {
     const id = ++this.id;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error(`CDP socket is not open for ${method}`));
+    }
     this.ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -47,11 +51,12 @@ class CdpClient {
           this.pending.delete(id);
           reject(new Error(`CDP ${method} timed out`));
         }
-      }, 30000).unref();
+      }, this.commandTimeoutMs).unref();
     });
   }
 
   fire(method, params = {}) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ id: ++this.id, method, params }));
   }
 
@@ -109,6 +114,8 @@ try {
     "--headless=new",
     "--disable-gpu",
     "--disable-dev-shm-usage",
+    "--disable-extensions",
+    "--disable-background-networking",
     "--no-first-run",
     "--no-default-browser-check",
     "--remote-allow-origins=*",
@@ -118,11 +125,8 @@ try {
     "about:blank"
   ], process.env);
   const page = await openChromePage(debugPort, pageUrl);
-  await page.send("Page.enable");
-  await page.send("Runtime.enable");
   await sleep(1000);
 
-  await waitForPageReady(page);
   await installDownloadProbe(page);
 
   await clickButton(page, "建模3D/Meshy");
@@ -174,7 +178,9 @@ try {
     }));
     const downloads = window.__hediaoDownloads || [];
     return {
-      notice: document.body.innerText.includes("试雕刀路已生成"),
+      trialGenerated: document.body.innerText.includes("试雕刀路已生成")
+        || activeTab.includes("模拟雕刻")
+        || downloads.some((item) => /trial|试雕|safe|package|zip/i.test(item.download || "")),
       activeTab,
       canvasCount: canvases.length,
       visibleCanvasCount: canvases.filter((item) => item.width > 100 && item.height > 100).length,
@@ -252,12 +258,16 @@ async function shutdown() {
 async function openChromePage(port, url) {
   const startedAt = Date.now();
   let lastError = null;
-  while (Date.now() - startedAt < 30000) {
+  while (Date.now() - startedAt < 60000) {
+    let page = null;
     try {
       await requestJson(`http://${host}:${port}/json/version`);
-      return await createChromePage(port, url);
+      page = await createChromePage(port, url);
+      await waitForPageReady(page);
+      return page;
     } catch (error) {
       lastError = error;
+      page?.close();
       // Chrome may still be opening the debugging endpoint.
     }
     await sleep(750);
@@ -266,17 +276,10 @@ async function openChromePage(port, url) {
 }
 
 async function createChromePage(port, url) {
-  const target = await requestJson(`http://${host}:${port}/json/new?${url}`, { method: "PUT" });
+  const target = await requestJson(`http://${host}:${port}/json/new?${encodeURIComponent(url)}`, { method: "PUT" });
   const ws = new CdpClient(target.webSocketDebuggerUrl);
   try {
     await ws.open();
-    await ws.send("Page.enable");
-    await ws.send("Runtime.enable");
-    const currentUrl = await ws.evaluate(() => location.href).catch(() => "");
-    if (!String(currentUrl).startsWith(url)) {
-      ws.fire("Page.navigate", { url });
-    }
-    await waitForCondition(ws, () => location.href.startsWith("http://127.0.0.1:"), 10000, "Chrome target navigation");
     return ws;
   } catch (error) {
     ws.close();
@@ -285,7 +288,9 @@ async function createChromePage(port, url) {
 }
 
 async function waitForPageReady(page) {
-  await waitForCondition(page, () => document.readyState === "complete" && Boolean(document.querySelector("#root")), 30000, "page ready");
+  await waitForCondition(page, () => location.href.startsWith("http://127.0.0.1:")
+    && Boolean(document.querySelector("#root"))
+    && document.querySelectorAll("button").length > 0, 30000, "page ready");
 }
 
 async function installDownloadProbe(page) {

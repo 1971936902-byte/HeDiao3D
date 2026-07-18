@@ -39,6 +39,8 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-schema" && check.status === "pass"), "self-check should verify closed-loop check support");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-schema" && check.status === "pass"), "self-check should verify diagnostics bundle schema");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-schema" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike schema");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-boundary" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike boundary");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
 
@@ -53,7 +55,9 @@ try {
   const diagnosticsReport = JSON.parse(diagnostics.stdout);
   assert(diagnosticsReport.schema === "hediao3d.native-cam-diagnostics-bundle.v1", "diagnostics bundle schema mismatch");
   assert(diagnosticsReport.productionLocked === true, "diagnostics bundle must keep production locked");
+  assert(["diagnostic", "missing", "partial", "ready"].includes(diagnosticsReport.level), "diagnostics bundle level should stay in a diagnostic/readiness range");
   assert(existsSync(join(workDir, "native-cam-diagnostics-bundle.zip")), "diagnostics bundle should write ZIP");
+  assert(existsSync(join(workDir, "opencamlib-real-contact-spike.json")), "diagnostics bundle should write contact spike report");
 
   unlinkSync(join(workDir, "camotics-material-removal-validate.mjs"));
   const blocked = spawnSync(node, [selfCheckPath, workDir], {

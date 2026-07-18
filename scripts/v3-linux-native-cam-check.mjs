@@ -532,6 +532,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "探测 Linux Python 环境实际暴露的 opencamlib/ocl 模块、版本、surface/cutter/drop-cutter 候选符号，作为真实 runner 实现前的证据。"
       },
       {
+        filename: "opencamlib-contact-spike.py",
+        role: "opencamlib-real-contact-spike",
+        description: "在 Linux 侧尝试最小真实 OpenCAMLib/ocl drop-cutter 调用；成功只证明 API 可调用，不解锁生产 NC。"
+      },
+      {
         filename: "opencamlib-candidate-package-validate.mjs",
         role: "opencamlib-candidate-package-validator",
         description: "预检真实 OpenCAMLib 候选输出目录，生成 contact 验证结果和轻量候选证据 ZIP。"
@@ -563,6 +568,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
       "python3 opencamlib-probe.py --out opencamlib-runtime-probe.json",
+      "python3 opencamlib-contact-spike.py --out opencamlib-real-contact-spike.json --neutral-out neutral-toolpath-spike.json",
       "node opencamlib-candidate-package-validate.mjs --root .",
       "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
       "node camotics-material-removal-validate.mjs --result camotics-result.json --run-package camotics-cli-run-package.json",
@@ -581,6 +587,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-diagnostics-bundle.mjs"), createNativeCamDiagnosticsBundleScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-probe.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_probe.py")), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "opencamlib-contact-spike.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_contact_spike.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "camotics-material-removal-validate.mjs"), readFileSync(join(root, "scripts", "v3-camotics-material-removal-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
@@ -695,6 +702,7 @@ const requiredFiles = [
   "native-cam-closed-loop-check.mjs",
   "native-cam-diagnostics-bundle.mjs",
   "opencamlib-probe.py",
+  "opencamlib-contact-spike.py",
   "opencamlib-contact-output-validate.mjs",
   "opencamlib-candidate-package-validate.mjs",
   "camotics-material-removal-validate.mjs",
@@ -716,6 +724,7 @@ check("command:self-check", commands.includes("native-cam-server-package-self-ch
 check("command:closed-loop-check", commands.includes("native-cam-closed-loop-check.mjs"), "manifest.commands must include the closed-loop check command.");
 check("command:diagnostics-bundle", commands.includes("native-cam-diagnostics-bundle.mjs"), "manifest.commands must include the diagnostics bundle command.");
 check("command:opencamlib-probe", commands.includes("opencamlib-probe.py"), "manifest.commands must include OpenCAMLib runtime probe.");
+check("command:opencamlib-contact-spike", commands.includes("opencamlib-contact-spike.py"), "manifest.commands must include OpenCAMLib real contact spike.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
 check("command:camotics-material", commands.includes("camotics-material-removal-validate.mjs"), "manifest.commands must include CAMotics material-removal validation.");
@@ -730,12 +739,15 @@ check("target-tool", target.tool?.toolProfileId === "vflat-4mm-25deg", "target t
 const openCamValidator = readTextIfExists(join(root, "opencamlib-contact-output-validate.mjs"));
 const openCamCandidateValidator = readTextIfExists(join(root, "opencamlib-candidate-package-validate.mjs"));
 const openCamProbe = readTextIfExists(join(root, "opencamlib-probe.py"));
+const openCamContactSpike = readTextIfExists(join(root, "opencamlib-contact-spike.py"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
 const diagnosticsBundle = readTextIfExists(join(root, "native-cam-diagnostics-bundle.mjs"));
 check("opencamlib-probe-schema", openCamProbe.includes("hediao3d.opencamlib-runtime-probe.v1"), "OpenCAMLib probe must emit the runtime probe schema.");
 check("opencamlib-probe-boundary", openCamProbe.includes("must not be used as cutter-contact output"), "OpenCAMLib probe must keep the production boundary explicit.");
+check("opencamlib-contact-spike-schema", openCamContactSpike.includes("hediao3d.opencamlib-real-contact-spike.v1"), "OpenCAMLib contact spike must emit the spike schema.");
+check("opencamlib-contact-spike-boundary", openCamContactSpike.includes("must not unlock trial or production NC"), "OpenCAMLib contact spike must keep the production boundary explicit.");
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
 check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");
@@ -1328,6 +1340,24 @@ if (existsSync(join(root, "opencamlib-probe.py"))) {
   recordMissing("opencamlib-runtime-probe", false, "opencamlib-probe.py");
 }
 
+if (existsSync(join(root, "opencamlib-contact-spike.py"))) {
+  const python = findCommand(["python3", "python"]);
+  if (python) {
+    runStep({
+      id: "opencamlib-real-contact-spike",
+      required: false,
+      command: python,
+      args: ["opencamlib-contact-spike.py", "--out", "opencamlib-real-contact-spike.json", "--neutral-out", "neutral-toolpath-spike.json"],
+      outputJson: "opencamlib-real-contact-spike.json",
+      passStatuses: [0, 4]
+    });
+  } else {
+    recordMissing("opencamlib-real-contact-spike", false, "python3/python");
+  }
+} else {
+  recordMissing("opencamlib-real-contact-spike", false, "opencamlib-contact-spike.py");
+}
+
 for (const probe of [
   { id: "freecad-command", commands: ["FreeCADCmd", "freecadcmd", "freecad.cmd", "freecad"], args: ["--version"] },
   { id: "blender-command", commands: ["blender"], args: ["--version"] },
@@ -1384,7 +1414,9 @@ writeFileSync(bundlePath, createZip([
   { name: "native-cam-diagnostics.md", content: createMarkdown(report) },
   ...optionalFile("native-cam-server-package.json"),
   ...optionalFile("native-cam-server-package-self-check.json"),
-  ...optionalFile("opencamlib-runtime-probe.json")
+  ...optionalFile("opencamlib-runtime-probe.json"),
+  ...optionalFile("opencamlib-real-contact-spike.json"),
+  ...optionalFile("neutral-toolpath-spike.json")
 ]));
 
 console.log(JSON.stringify({
@@ -1397,7 +1429,7 @@ console.log(JSON.stringify({
 }, null, 2));
 if (!report.ok) process.exitCode = 2;
 
-function runStep({ id, required, command, args, outputJson }) {
+function runStep({ id, required, command, args, outputJson, passStatuses = [0] }) {
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: "utf8",
@@ -1405,12 +1437,13 @@ function runStep({ id, required, command, args, outputJson }) {
     env: { ...process.env }
   });
   const parsed = outputJson ? readJsonIfExists(join(root, outputJson)) : null;
+  const exitCode = typeof result.status === "number" ? result.status : null;
   steps.push({
     id,
     required,
-    status: result.status === 0 ? "pass" : "fail",
+    status: exitCode !== null && passStatuses.includes(exitCode) ? "pass" : "fail",
     command: [command, ...args].join(" "),
-    exitCode: result.status,
+    exitCode,
     outputJson: outputJson ?? null,
     parsedSchema: parsed?.schema ?? null,
     stdoutTail: tail(result.stdout),
@@ -1425,7 +1458,7 @@ function recordMissing(id, required, summary) {
 function findCommand(commands) {
   for (const command of commands) {
     const result = spawnSync(command, ["--version"], { encoding: "utf8", shell: false });
-    if (!result.error) return command;
+    if (!result.error && result.status === 0) return command;
   }
   return null;
 }

@@ -33,6 +33,7 @@
     "test:v3:repair-artifact-handoff": "node scripts/v3-repair-artifact-handoff-test.mjs",
     "test:v3:opencamlib-runner": "node scripts/v3-opencamlib-runner-contract-test.mjs",
     "test:v3:opencamlib-probe": "node scripts/v3-opencamlib-probe-test.mjs",
+    "test:v3:opencamlib-contact-spike": "node scripts/v3-opencamlib-contact-spike-test.mjs",
     "test:v3:opencamlib-contact-validate": "node scripts/v3-opencamlib-contact-output-validate-test.mjs",
     "test:v3:opencamlib-candidate-package": "node scripts/v3-opencamlib-candidate-package-validate-test.mjs",
     "test:v3:neutral-import": "node scripts/v3-opencamlib-neutral-import-test.mjs",
