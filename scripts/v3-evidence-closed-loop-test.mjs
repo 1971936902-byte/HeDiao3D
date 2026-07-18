@@ -73,11 +73,12 @@ async function main() {
   const previewSha256 = sha256(previewText);
   const previewMotionProfile = createPreviewMotionProfile(previewText);
   const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
+  const runPackage = JSON.parse(runPackageText);
   const runPackageSha256 = sha256(runPackageText);
 
   const camoticsImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({
-      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2),
+      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, runPackage.upstreamCamEvidence), null, 2),
       "camotics-result-local-validation.json": JSON.stringify(createLocalValidation(), null, 2),
       "camotics-preview.png": "closed-loop-fixture-camotics-png",
       "camotics-material-removal.stl": "solid closed_loop_material\nendsolid closed_loop_material\n"
@@ -96,6 +97,7 @@ async function main() {
   assert(dossier.crossChecks?.camoticsCliRunPackageBindingStatus === "matched", "CAMotics CLI package binding should be matched");
   assert(dossier.crossChecks?.camoticsMotionConsistencyStatus === "matched", "CAMotics motion consistency should be matched");
   assert(dossier.crossChecks?.camoticsMachineContextStatus === "matched", "CAMotics machine context should be matched");
+  assert(["matched", "not-required"].includes(dossier.crossChecks?.camoticsUpstreamCamEvidenceStatus), "CAMotics upstream CAM evidence should be matched or not required");
   assert(dossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "production package must remain locked without field acceptance and real external handoff");
   assert(dossier.status !== "production-evidence-complete", "dossier must remain incomplete before field evidence");
 
@@ -266,7 +268,7 @@ function createTargetMachineBoundaryFixture() {
   };
 }
 
-function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256) {
+function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, upstreamCamEvidence = null) {
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId,
@@ -280,7 +282,8 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       preferredGcodeSha256,
       camoticsCliRunPackage: "camotics-cli-run-package.json",
       camoticsCliRunPackageSha256: runPackageSha256,
-      machineContext: motionProfile.machineContext
+      machineContext: motionProfile.machineContext,
+      upstreamCamEvidence
     },
     metrics: {
       motionLineCount: motionProfile.motionLineCount,

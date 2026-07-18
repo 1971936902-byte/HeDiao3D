@@ -430,6 +430,7 @@ function createCliRunPackageIdentity(path) {
     status: parsed?.status ?? "unknown",
     createdAt: parsed?.createdAt ?? null,
     preferredGcodeSha256: parsed?.preferredGcodeIdentity?.sha256 ?? null,
+    upstreamCamEvidence: parsed?.upstreamCamEvidence ?? null,
     message: "CAMotics CLI run package identity hash computed."
   };
 }
@@ -442,6 +443,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
   const expectedCliPackageHash = inputIdentity?.cliRunPackageIdentity?.sha256 ?? null;
   const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
   const machineContext = evaluateCamoticsMachineContext(result?.inputs?.machineContext ?? null, inputIdentity?.machineContext ?? null);
+  const upstreamCamEvidence = evaluateUpstreamCamEvidenceBinding(result?.inputs?.upstreamCamEvidence ?? null, inputIdentity?.cliRunPackageIdentity?.upstreamCamEvidence ?? null);
   const bundleManifestIntegrity = result?.importBundleManifestIntegrity ?? null;
   const bundleManifestIntegrityOk = !bundleManifestIntegrity || bundleManifestIntegrity.status === "matched";
   const expectedJobId = adapterJob?.jobId ?? null;
@@ -509,6 +511,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       message: machineContext.message
     },
     {
+      id: "upstreamCamEvidence",
+      ok: upstreamCamEvidence.ok,
+      message: upstreamCamEvidence.summary
+    },
+    {
       id: "bundleManifestIntegrity",
       ok: bundleManifestIntegrityOk,
       message: "When camotics-result-bundle-manifest.json is present, its file hashes and identity claims must match the ZIP entries and result JSON."
@@ -572,11 +579,54 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
     },
     motionConsistency,
     machineContext,
+    upstreamCamEvidence,
     bundleManifestIntegrity,
     artifactEvidence,
     summary: missing.length === 0
       ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."
       : `CAMotics result imported, but evidence is incomplete: ${missing.join(", ")}.`
+  };
+}
+
+function evaluateUpstreamCamEvidenceBinding(imported, expected) {
+  if (!expected?.required) {
+    return {
+      ok: true,
+      status: "not-required",
+      required: false,
+      presentCount: Number(expected?.presentCount ?? 0),
+      summary: "No upstream CAM/OpenCAMLib evidence was captured in the run package."
+    };
+  }
+  const expectedFiles = Array.isArray(expected.files)
+    ? expected.files.filter((file) => file.exists && file.sha256)
+    : [];
+  const importedFiles = Array.isArray(imported?.files) ? imported.files : [];
+  const mismatches = expectedFiles
+    .map((expectedFile) => {
+      const actual = importedFiles.find((file) => file.key === expectedFile.key || file.filename === expectedFile.filename);
+      return {
+        key: expectedFile.key,
+        filename: expectedFile.filename,
+        expectedSha256: expectedFile.sha256,
+        importedSha256: actual?.sha256 ?? null,
+        matched: Boolean(actual && actual.exists !== false && actual.sha256 === expectedFile.sha256)
+      };
+    })
+    .filter((item) => !item.matched);
+  const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1"
+    && expectedFiles.length > 0
+    && mismatches.length === 0;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    required: true,
+    expectedCount: expectedFiles.length,
+    importedCount: importedFiles.length,
+    mismatches,
+    summary: ok
+      ? "Imported CAMotics result is hash-bound to the upstream Native CAM/OpenCAMLib evidence captured by the run package."
+      : "Imported CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
   };
 }
 

@@ -36,6 +36,8 @@ try {
   assert(readyReport.checks.some((check) => check.id === "run-package-hash" && check.status === "pass"), "run package hash check missing");
   assert(readyReport.checks.some((check) => check.id === "machine-context" && check.status === "pass"), "machine context check missing");
   assert(readyReport.checks.some((check) => check.id === "simulator-evidence" && check.status === "pass"), "simulator evidence check missing");
+  assert(readyReport.checks.some((check) => check.id === "upstream-cam-evidence" && check.ok && check.status === "matched"), "upstream CAM evidence check missing");
+  assert(readyReport.upstreamCamEvidence?.status === "matched", "ready report should expose matched upstream CAM evidence");
   assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
   const bundlePath = join(workDir, "camotics-result-bundle.zip");
@@ -67,6 +69,19 @@ try {
   for (const id of ["result-non-synthetic", "result-risk-ready", "run-package-hash", "machine-context", "simulator-evidence", "visual-or-material-artifact"]) {
     assert(blockedReport.missing.includes(id), `blocked report missing ${id}`);
   }
+  writeJsonWithHash(resultPath, createResult({
+    runPackage,
+    runPackageSha,
+    upstreamCamEvidence: null
+  }));
+  const upstreamMismatch = spawnSync(node, [validator, "--result", resultPath, "--run-package", runPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(upstreamMismatch.status === 3, "upstream evidence mismatch should fail strict validation");
+  const upstreamMismatchReport = JSON.parse(upstreamMismatch.stdout);
+  assert(upstreamMismatchReport.missing.includes("upstream-cam-evidence"), "upstream mismatch should list upstream-cam-evidence");
 
   console.log(JSON.stringify({
     ok: true,
@@ -100,6 +115,7 @@ function createRunPackage() {
       screenshot: "camotics-preview.png",
       materialMesh: "camotics-material-removal.stl"
     },
+    upstreamCamEvidence: createUpstreamCamEvidence(),
     safetyLocks: {
       productionUnlockFromPreparePackage: false,
       syntheticResultAllowedForProduction: false
@@ -107,7 +123,7 @@ function createRunPackage() {
   };
 }
 
-function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel = "ready", machineContext = null, artifacts = null }) {
+function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel = "ready", machineContext = null, artifacts = null, upstreamCamEvidence = runPackage.upstreamCamEvidence }) {
   return {
     schema: "hediao3d.camotics-result.v1",
     engine: "camotics",
@@ -124,7 +140,8 @@ function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel 
     inputs: {
       preferredGcodeSha256: runPackage.preferredGcodeIdentity.sha256,
       camoticsCliRunPackageSha256: runPackageSha,
-      machineContext: machineContext ?? runPackage.preferredGcodeIdentity.machineContext
+      machineContext: machineContext ?? runPackage.preferredGcodeIdentity.machineContext,
+      upstreamCamEvidence
     },
     metrics: {
       motionLineCount: runPackage.preferredGcodeIdentity.motionProfile.motionLineCount,
@@ -136,6 +153,34 @@ function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel 
       screenshot: "camotics-preview.png",
       materialMesh: "camotics-material-removal.stl"
     }
+  };
+}
+
+function createUpstreamCamEvidence() {
+  return {
+    schema: "hediao3d.camotics-upstream-cam-evidence.v1",
+    status: "hash-bound",
+    required: true,
+    presentCount: 2,
+    files: [
+      {
+        key: "opencamlibRealCandidateRun",
+        label: "OpenCAMLib 一键真实候选链路",
+        filename: "opencamlib-real-candidate-run.json",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("real-candidate-fixture")
+      },
+      {
+        key: "opencamlibContactValidation",
+        label: "OpenCAMLib strict contact 验收",
+        filename: "opencamlib-contact-output-validation.json",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("contact-validation-fixture")
+      }
+    ],
+    summary: "Fixture upstream CAM evidence."
   };
 }
 

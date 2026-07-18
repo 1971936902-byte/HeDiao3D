@@ -9057,6 +9057,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camoticsMotionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
       camoticsMachineContextStatus: camoticsIdentity.machineContextStatus,
       camoticsArtifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
+      camoticsUpstreamCamEvidenceStatus: camoticsIdentity.upstreamCamEvidenceStatus,
       camHandoffReady: camHandoffQuality?.level === "ready",
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       neutralSourceBindingPass: !neutralBinding.required || neutralBinding.status === "pass",
@@ -9335,6 +9336,7 @@ function summarizeCamoticsEvidenceIdentity(simulationEvidence) {
     cliRunPackageBindingStatus: evidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "not-required",
     motionConsistencyStatus: evidenceQuality?.motionConsistency?.status ?? "missing",
     machineContextStatus: evidenceQuality?.machineContext?.status ?? "missing",
+    upstreamCamEvidenceStatus: evidenceQuality?.upstreamCamEvidence?.status ?? "not-required",
     artifactEvidenceStatus: evidenceQuality?.artifactEvidence?.complete === true || evidenceQuality?.artifactEvidenceComplete === true
       ? "complete"
       : Array.isArray(evidenceQuality?.missing) && evidenceQuality.missing.some((item) => /screenshot|material|artifact|截图|网格/i.test(String(item)))
@@ -10676,11 +10678,23 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
       simulationPlan: "camotics-simulation-plan.json",
       machineGcodeReferenceOnly: "toolpath.nc",
       airRunReferenceOnly: "air-run.nc",
+      nativeCamRealOutputAcceptance: existsSync(join(job.workDir, "native-cam-real-output-acceptance.json"))
+        ? "native-cam-real-output-acceptance.json"
+        : null,
+      opencamlibContactValidation: existsSync(join(job.workDir, "opencamlib-contact-output-validation.json"))
+        ? "opencamlib-contact-output-validation.json"
+        : null,
+      opencamlibRealCandidateRun: existsSync(join(job.workDir, "opencamlib-real-candidate-run.json"))
+        ? "opencamlib-real-candidate-run.json"
+        : null,
       opencamlibCandidatePackageValidation: existsSync(join(job.workDir, "opencamlib-candidate-package-validation.json"))
         ? "opencamlib-candidate-package-validation.json"
         : null,
       opencamlibCandidatePackageBundle: existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip"))
         ? "opencamlib-candidate-package-bundle.zip"
+        : null,
+      sourceAdapterValidation: existsSync(join(job.workDir, "v3-external-adapter-validation.json"))
+        ? "v3-external-adapter-validation.json"
         : null
     },
     commandCandidates: [
@@ -10724,7 +10738,7 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
         "inputs.machineContext 必须匹配 camotics-preview.nc 的 ROTARY_WRAP_AXIS、ROTARY_WRAP_PER_REV_MM 和 LENGTH_AXIS。",
         "metrics.motionLineCount 和 Z 范围必须匹配 camotics-preview.nc 的运动画像。",
         "截图或材料去除 STL 必须复制进加工包并生成 SHA-256。",
-        "若使用 OpenCAMLib 真实候选输出，opencamlib-candidate-package-validation.json 必须随同 CAMotics 结果一起保留。",
+        "若使用 Native CAM/OpenCAMLib 真实候选输出，inputs.upstreamCamEvidence 必须匹配准备包捕获的 source/runner/contact/candidate 证据哈希。",
         "synthetic 或 fixture 结果不能作为生产证据。"
       ]
     },

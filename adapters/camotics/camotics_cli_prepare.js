@@ -30,7 +30,12 @@ const requiredInputKeys = [
 ];
 const optionalInputKeys = [
   ["machineGcodeReferenceOnly", plan.inputs?.machineGcodeReferenceOnly ?? "toolpath.nc"],
-  ["airRunReferenceOnly", plan.inputs?.airRunReferenceOnly ?? "air-run.nc"]
+  ["airRunReferenceOnly", plan.inputs?.airRunReferenceOnly ?? "air-run.nc"],
+  ["nativeCamRealOutputAcceptance", plan.inputs?.nativeCamRealOutputAcceptance ?? "native-cam-real-output-acceptance.json"],
+  ["opencamlibContactValidation", plan.inputs?.opencamlibContactValidation ?? "opencamlib-contact-output-validation.json"],
+  ["opencamlibRealCandidateRun", plan.inputs?.opencamlibRealCandidateRun ?? "opencamlib-real-candidate-run.json"],
+  ["opencamlibCandidatePackageValidation", plan.inputs?.opencamlibCandidatePackageValidation ?? "opencamlib-candidate-package-validation.json"],
+  ["sourceAdapterValidation", plan.inputs?.sourceAdapterValidation ?? "v3-external-adapter-validation.json"]
 ];
 
 const inputs = {};
@@ -133,6 +138,7 @@ function resolveJobPath(value) {
 function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, ready) {
   const preferred = inspectedInputs.preferredGcode;
   const expectedResult = plan.expectedOutputs ?? {};
+  const upstreamCamEvidence = createUpstreamCamEvidence(inspectedInputs);
   return {
     schema: "hediao3d.camotics-cli-run-package.v1",
     createdAt: new Date().toISOString(),
@@ -152,6 +158,7 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
       motionProfile,
       machineContext
     } : null,
+    upstreamCamEvidence,
     commandCandidates: normalizeCommands(plan.commandCandidates ?? [], jobDir, outputDir),
     expectedOutputs: {
       resultJson: expectedResult.resultJson ?? "camotics-result.json",
@@ -176,6 +183,7 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
         "inputs.preferredGcodeSha256 等于 preferredGcodeIdentity.sha256",
         "inputs.camoticsCliRunPackageSha256 等于 camotics-cli-run-package.json 的 SHA-256",
         "inputs.machineContext 与 preferredGcodeIdentity.machineContext 一致",
+        "若 upstreamCamEvidence.required=true，inputs.upstreamCamEvidence 必须匹配准备包中的上游 CAM/OpenCAMLib 证据哈希",
         "metrics.motionLineCount/zMin/zMax 与 preferredGcodeIdentity.motionProfile 匹配",
         "至少提供 camotics-preview.png 或 camotics-material-removal.stl",
         "simulator.name/version/sourceCommand 记录实际使用的 CAMotics 或等效材料去除仿真器"
@@ -194,6 +202,38 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
   };
 }
 
+function createUpstreamCamEvidence(inspectedInputs) {
+  const candidates = [
+    ["nativeCamRealOutputAcceptance", "native-cam-real-output-acceptance.json", "Native CAM 真实输出验收"],
+    ["opencamlibContactValidation", "opencamlib-contact-output-validation.json", "OpenCAMLib strict contact 验收"],
+    ["opencamlibRealCandidateRun", "opencamlib-real-candidate-run.json", "OpenCAMLib 一键真实候选链路"],
+    ["opencamlibCandidatePackageValidation", "opencamlib-candidate-package-validation.json", "OpenCAMLib 候选包预检"],
+    ["sourceAdapterValidation", "v3-external-adapter-validation.json", "外部 CAM adapter 源报告"]
+  ];
+  const files = candidates.map(([key, expectedFilename, label]) => {
+    const input = inspectedInputs[key] ?? {};
+    return {
+      key,
+      label,
+      filename: input.filename ?? expectedFilename,
+      exists: Boolean(input.exists),
+      sizeBytes: input.sizeBytes ?? null,
+      sha256: input.sha256 ?? null
+    };
+  });
+  const present = files.filter((file) => file.exists && file.sha256);
+  return {
+    schema: "hediao3d.camotics-upstream-cam-evidence.v1",
+    status: present.length > 0 ? "hash-bound" : "missing",
+    required: present.length > 0,
+    presentCount: present.length,
+    files,
+    summary: present.length > 0
+      ? `CAMotics run package is hash-bound to ${present.length} upstream CAM/OpenCAMLib evidence file(s).`
+      : "No upstream Native CAM/OpenCAMLib evidence file was present in this job folder when the CAMotics package was prepared."
+  };
+}
+
 function inspectWrittenRunPackage(path) {
   const bytes = readFileSync(path);
   return {
@@ -206,6 +246,7 @@ function inspectWrittenRunPackage(path) {
 
 function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity) {
   const machineContext = motionProfile?.machineContext ?? createMachineContextFromGcode(preferred.exists ? readFileSync(preferred.path, "utf8") : "");
+  const runPackage = readJsonIfExists(runPackageIdentity.path) ?? {};
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId: plan.jobId ?? null,
@@ -227,7 +268,8 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
       camoticsCliRunPackage: runPackageIdentity.filename,
       camoticsCliRunPackageSha256: runPackageIdentity.sha256,
       machineContext,
-      expectedMotionProfile: motionProfile
+      expectedMotionProfile: motionProfile,
+      upstreamCamEvidence: runPackage.upstreamCamEvidence ?? null
     },
     metrics: {
       motionLineCount: motionProfile?.motionLineCount ?? null,
@@ -243,6 +285,7 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
       "Before importing, run: node camotics-result-validate.js",
       "materialRemovedMm3 must come from the real CAMotics/material-removal run.",
       "If CAMotics is not usable on this Linux host, record the equivalent simulator name/version/sourceCommand and keep synthetic=false only for real material-removal evidence.",
+      "If inputs.upstreamCamEvidence.required=true, keep every listed upstream CAM/OpenCAMLib SHA-256 unchanged.",
       "Do not import this template until the screenshot or material-removal STL exists.",
       "Synthetic or hand-edited fixture evidence must remain locked for production."
     ]
@@ -375,6 +418,7 @@ function createResultValidatorScript(packageJson) {
   const resultJson = expectedResult.resultJson ?? "camotics-result.json";
   const screenshot = expectedResult.screenshot ?? "camotics-preview.png";
   const materialMesh = expectedResult.materialMesh ?? "camotics-material-removal.stl";
+  const upstreamCamEvidence = packageJson.upstreamCamEvidence ?? null;
   return `#!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -389,7 +433,8 @@ const expected = {
   motionProfile: ${JSON.stringify(expectedMotion)},
   machineContext: ${JSON.stringify(expectedMachineContext)},
   screenshot: ${JSON.stringify(screenshot)},
-  materialMesh: ${JSON.stringify(materialMesh)}
+  materialMesh: ${JSON.stringify(materialMesh)},
+  upstreamCamEvidence: ${JSON.stringify(upstreamCamEvidence)}
 };
 
 const checks = [];
@@ -402,6 +447,7 @@ check("risk-ready", result?.riskLevel === "ready", "riskLevel must be ready.");
 check("preferred-gcode-hash", Boolean(expected.preferredGcodeSha256) && result?.inputs?.preferredGcodeSha256 === expected.preferredGcodeSha256, "inputs.preferredGcodeSha256 must match camotics-preview.nc.");
 check("run-package-hash", Boolean(expected.camoticsCliRunPackageSha256) && result?.inputs?.camoticsCliRunPackageSha256 === expected.camoticsCliRunPackageSha256, "inputs.camoticsCliRunPackageSha256 must match this run package.");
 check("machine-context", machineContextMatches(result?.inputs?.machineContext, expected.machineContext), "inputs.machineContext must match camotics-preview.nc rotary-wrap axis and wrap distance.");
+check("upstream-cam-evidence", upstreamCamEvidenceMatches(result?.inputs?.upstreamCamEvidence, expected.upstreamCamEvidence), "inputs.upstreamCamEvidence must match the CAM/OpenCAMLib evidence hashes captured by camotics-cli-run-package.json.");
 check("motion-line-count", Number(result?.metrics?.motionLineCount) === Number(expected.motionProfile?.motionLineCount), "metrics.motionLineCount must match camotics-preview.nc.");
 check("z-min", close(Number(result?.metrics?.zMin), Number(expected.motionProfile?.zMin), 0.05), "metrics.zMin must match camotics-preview.nc within 0.05mm.");
 check("z-max", close(Number(result?.metrics?.zMax), Number(expected.motionProfile?.zMax), 0.05), "metrics.zMax must match camotics-preview.nc within 0.05mm.");
@@ -426,7 +472,8 @@ const report = {
     preferredGcodeSha256: expected.preferredGcodeSha256,
     camoticsCliRunPackageSha256: expected.camoticsCliRunPackageSha256,
     machineContext: expected.machineContext,
-    motionProfile: expected.motionProfile
+    motionProfile: expected.motionProfile,
+    upstreamCamEvidence: expected.upstreamCamEvidence
   },
   nextActions: productionEvidenceEligible
     ? [
@@ -452,6 +499,19 @@ if (ok) {
     localValidationPath,
     artifactEvidence
   }));
+}
+
+function upstreamCamEvidenceMatches(imported, expectedEvidence) {
+  if (!expectedEvidence?.required) return true;
+  if (!imported || typeof imported !== "object") return false;
+  if (imported.schema !== "hediao3d.camotics-upstream-cam-evidence.v1") return false;
+  const expectedFiles = Array.isArray(expectedEvidence.files) ? expectedEvidence.files.filter((file) => file.exists && file.sha256) : [];
+  const importedFiles = Array.isArray(imported.files) ? imported.files : [];
+  if (expectedFiles.length === 0) return true;
+  return expectedFiles.every((expectedFile) => {
+    const actual = importedFiles.find((file) => file.key === expectedFile.key || file.filename === expectedFile.filename);
+    return Boolean(actual && actual.exists !== false && actual.sha256 === expectedFile.sha256);
+  });
 }
 
 console.log(JSON.stringify(report, null, 2));
@@ -580,7 +640,8 @@ function createResultBundleManifest(files, resultContent, localValidationContent
       riskLevel: result?.riskLevel ?? null,
       preferredGcodeSha256: result?.inputs?.preferredGcodeSha256 ?? null,
       camoticsCliRunPackageSha256: result?.inputs?.camoticsCliRunPackageSha256 ?? null,
-      machineContext: result?.inputs?.machineContext ?? null
+      machineContext: result?.inputs?.machineContext ?? null,
+      upstreamCamEvidence: result?.inputs?.upstreamCamEvidence ?? null
     },
     localValidation: {
       schema: localValidation?.schema ?? null,

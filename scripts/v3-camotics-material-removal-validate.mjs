@@ -52,6 +52,8 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
     expected: expectedMachineContext,
     reported: result.inputs?.machineContext ?? null
   });
+  const upstreamCamEvidence = evaluateUpstreamCamEvidenceBinding(result.inputs?.upstreamCamEvidence, runPackage.upstreamCamEvidence);
+  check(checks, "upstream-cam-evidence", upstreamCamEvidence.ok, upstreamCamEvidence.summary, upstreamCamEvidence);
   check(checks, "motion-line-count", Number(result.metrics?.motionLineCount) === Number(expectedMotion.motionLineCount), "result metrics.motionLineCount must match run package motion profile.", {
     expected: expectedMotion.motionLineCount ?? null,
     reported: result.metrics?.motionLineCount ?? null
@@ -69,7 +71,7 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
   const artifactEvidence = inspectArtifacts({ result, resultPath, args, runPackage });
   check(checks, "visual-or-material-artifact", artifactEvidence.hasScreenshot || artifactEvidence.hasMaterialMesh, "provide at least one real artifact: screenshot or material-removal mesh.", artifactEvidence);
 
-  const failed = checks.filter((item) => item.status === "fail");
+  const failed = checks.filter((item) => item.ok !== true);
   const ok = failed.length === 0;
   return {
     schema: "hediao3d.camotics-result-local-validation.v1",
@@ -90,6 +92,7 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
     },
     checks,
     simulator,
+    upstreamCamEvidence,
     missing: failed.map((item) => item.id),
     artifactEvidence,
     output: {
@@ -109,6 +112,47 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
     summary: ok
       ? "CAMotics/equivalent material-removal validation passed."
       : `CAMotics/equivalent material-removal validation failed: ${failed.map((item) => item.id).join(", ")}`
+  };
+}
+
+function evaluateUpstreamCamEvidenceBinding(imported, expected) {
+  if (!expected?.required) {
+    return {
+      ok: true,
+      status: "not-required",
+      required: false,
+      presentCount: Number(expected?.presentCount ?? 0),
+      summary: "No upstream CAM/OpenCAMLib evidence was captured in the run package, so upstream binding is not required for this validator run."
+    };
+  }
+  const expectedFiles = Array.isArray(expected.files)
+    ? expected.files.filter((file) => file.exists && file.sha256)
+    : [];
+  const importedFiles = Array.isArray(imported?.files) ? imported.files : [];
+  const mismatches = expectedFiles
+    .map((expectedFile) => {
+      const actual = importedFiles.find((file) => file.key === expectedFile.key || file.filename === expectedFile.filename);
+      const matched = Boolean(actual && actual.exists !== false && actual.sha256 === expectedFile.sha256);
+      return {
+        key: expectedFile.key,
+        filename: expectedFile.filename,
+        expectedSha256: expectedFile.sha256,
+        importedSha256: actual?.sha256 ?? null,
+        matched
+      };
+    })
+    .filter((item) => !item.matched);
+  const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1" && expectedFiles.length > 0 && mismatches.length === 0;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    required: true,
+    expectedCount: expectedFiles.length,
+    importedCount: importedFiles.length,
+    mismatches,
+    summary: ok
+      ? "CAMotics result is hash-bound to the upstream Native CAM/OpenCAMLib evidence captured by the run package."
+      : "CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
   };
 }
 

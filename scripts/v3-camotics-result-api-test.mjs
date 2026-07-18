@@ -54,11 +54,12 @@ async function main() {
   const previewSha256 = createHash("sha256").update(previewText).digest("hex");
   const previewMotionProfile = createPreviewMotionProfile(previewText);
   const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
+  const runPackage = JSON.parse(runPackageText);
   const runPackageSha256 = createHash("sha256").update(runPackageText).digest("hex");
   const resultTemplate = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-template.json`);
   assert(resultTemplate.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "CAMotics result template should bind to the current CLI run package hash");
   const completeImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256),
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence),
     localValidation: createLocalValidation(true),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: [
@@ -114,12 +115,13 @@ async function main() {
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
+  assert(["matched", "not-required"].includes(resultArtifact.evidenceQuality?.upstreamCamEvidence?.status), "camotics result should expose upstream CAM evidence binding status");
   assert(resultArtifact.evidenceQuality?.motionConsistency?.status === "matched", "camotics result motion profile should match");
   assert(resultArtifact.evidenceQuality?.machineContext?.status === "matched", "camotics result machine context should match");
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
-  const zipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256), null, 2);
+  const zipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence), null, 2);
   const zipLocalValidationText = JSON.stringify(createLocalValidation(true), null, 2);
   const zipScreenshotText = "zip-fixture-camotics-png";
   const zipMaterialText = "solid zip_material\nendsolid zip_material\n";
@@ -187,7 +189,7 @@ async function main() {
   assert(badManifestAudit.zipManifest?.integrity?.status === "mismatch", "bad manifest audit should record mismatch");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256),
+    result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -196,7 +198,7 @@ async function main() {
   assert(mismatchImport.simulationEvidence?.productionUnlockEligible === false, "hash mismatch must not be production eligible");
 
   const runPackageMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, "1".repeat(64)),
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, "1".repeat(64), undefined, runPackage.upstreamCamEvidence),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -209,7 +211,7 @@ async function main() {
       ...previewMotionProfile,
       motionLineCount: Math.max(0, previewMotionProfile.motionLineCount - 100),
       zMin: previewMotionProfile.zMin + 0.5
-    }, runPackageSha256),
+    }, runPackageSha256, undefined, runPackage.upstreamCamEvidence),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -220,7 +222,7 @@ async function main() {
     result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, {
       ...previewMotionProfile.machineContext,
       rotaryWrapAxis: "X"
-    }),
+    }, runPackage.upstreamCamEvidence),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -228,7 +230,7 @@ async function main() {
   assert(machineContextMismatchImport.simulationEvidence?.productionUnlockEligible === false, "machine context mismatch must not be production eligible");
 
   const jobMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
-    result: createCamoticsResult("wrong-job-id", previewSha256, previewMotionProfile, runPackageSha256),
+    result: createCamoticsResult("wrong-job-id", previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence),
     screenshotDataUrl: toDataUrl("fake-camotics-png"),
     materialMeshText: "solid material\nendsolid material\n"
   });
@@ -247,7 +249,7 @@ async function main() {
   }, null, 2));
 }
 
-function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, machineContext = motionProfile.machineContext) {
+function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, machineContext = motionProfile.machineContext, upstreamCamEvidence = null) {
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId,
@@ -261,7 +263,8 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       preferredGcodeSha256,
       camoticsCliRunPackage: "camotics-cli-run-package.json",
       camoticsCliRunPackageSha256: runPackageSha256,
-      machineContext
+      machineContext,
+      upstreamCamEvidence
     },
     metrics: {
       motionLineCount: motionProfile.motionLineCount,

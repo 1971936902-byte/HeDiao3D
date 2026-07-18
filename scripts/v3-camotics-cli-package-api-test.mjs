@@ -71,6 +71,7 @@ async function main() {
   assert(runPackage.preferredGcodeIdentity?.sha256 === previewSha256, "run package preview hash mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMin === previewMotionProfile.zMin, "run package zMin mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMax === previewMotionProfile.zMax, "run package zMax mismatch");
+  assert(runPackage.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "run package should expose upstream CAM evidence binding");
   assert(runPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "run package must keep production locked");
   const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
   const runPackageSha256 = createHash("sha256").update(runPackageText).digest("hex");
@@ -81,6 +82,7 @@ async function main() {
   assert(template.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "result template should bind to current CLI run package hash");
   assert(template.inputs?.machineContext?.rotaryWrapAxis === "Y", "result template should bind Y rotary machine context");
   assert(template.inputs?.machineContext?.rotaryWrapPerRevolutionMm === 100, "result template should bind rotary wrap distance");
+  assert(template.inputs?.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "result template should include upstream CAM evidence binding");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
 
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
@@ -104,7 +106,8 @@ async function main() {
     validatorScript,
     previewSha256,
     runPackageSha256,
-    previewMotionProfile
+    previewMotionProfile,
+    upstreamCamEvidence: runPackage.upstreamCamEvidence
   });
 
   const preflight = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-execution-preflight`, {});
@@ -194,7 +197,7 @@ function matchHeader(text, key) {
   return match ? match[1] : null;
 }
 
-function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPackageSha256, previewMotionProfile }) {
+function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPackageSha256, previewMotionProfile, upstreamCamEvidence }) {
   const dir = join(tmpdir(), `hediao3d-camotics-validator-${Date.now()}`);
   mkdirSync(dir, { recursive: true });
   try {
@@ -216,7 +219,8 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
         preferredGcodeSha256: previewSha256,
         camoticsCliRunPackage: "camotics-cli-run-package.json",
         camoticsCliRunPackageSha256: runPackageSha256,
-        machineContext: previewMotionProfile.machineContext
+        machineContext: previewMotionProfile.machineContext,
+        upstreamCamEvidence
       },
       metrics: {
         motionLineCount: previewMotionProfile.motionLineCount,
