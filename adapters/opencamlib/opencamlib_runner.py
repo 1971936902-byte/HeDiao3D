@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import math
 import os
 import re
 import struct
@@ -57,7 +58,10 @@ def main() -> int:
     detection = detect_opencamlib()
     geometry = analyze_model_geometry(plan)
     if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT")):
-        neutral = create_heightfield_neutral_toolpath(job, plan, detection, geometry)
+        if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT")):
+            neutral = create_rotary_heightfield_neutral_toolpath(job, plan, detection, geometry)
+        else:
+            neutral = create_heightfield_neutral_toolpath(job, plan, detection, geometry)
         if neutral is None:
             print("STL heightfield output requested, but no valid surface samples could be generated.", file=sys.stderr)
             return 5
@@ -380,6 +384,143 @@ def create_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any
     }
 
 
+def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    triangles = parse_ascii_stl_triangles(plan)
+    bounds = geometry.get("bounds") or {}
+    min_bounds = bounds.get("min") or {}
+    max_bounds = bounds.get("max") or {}
+    if not triangles or not min_bounds or not max_bounds:
+        return None
+
+    settings = job.get("settings") or {}
+    stock = plan.get("stock") or {}
+    sampling = plan.get("sampling") or {}
+    axis_mapping = sampling.get("axisMapping") or {}
+    safe_z = float(settings.get("safeZ") or 22)
+    output_length = float(stock.get("lengthMm") or settings.get("lengthMm") or max(0.001, float(geometry.get("dimensions", {}).get("x") or 1)))
+    output_depth = max(0.001, float(settings.get("depthMm") or settings.get("maxCutDepth") or max(0.001, float(geometry.get("dimensions", {}).get("z") or 1))))
+    stock_radius = max(0.001, float(stock.get("diameterMm") or settings.get("diameterMm") or 15) / 2)
+    rotary_axis = axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y"
+    cols = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_COLS") or 8)))
+    rows = max(2, int(float(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_ROWS") or 12)))
+
+    x_min = float(min_bounds["x"])
+    x_max = float(max_bounds["x"])
+    y_min = float(min_bounds["y"])
+    y_max = float(max_bounds["y"])
+    z_min = float(min_bounds["z"])
+    z_max = float(max_bounds["z"])
+    center_y = (y_min + y_max) / 2
+    center_z = (z_min + z_max) / 2
+    model_radius = max(
+        0.001,
+        max(abs(y_min - center_y), abs(y_max - center_y), abs(z_min - center_z), abs(z_max - center_z)),
+    )
+    ray_start_radius = model_radius * 3 + stock_radius
+    radial_samples: List[Dict[str, Any]] = []
+    miss_count = 0
+
+    for row in range(rows):
+        row_t = row / (rows - 1)
+        angle = row_t * 360
+        angle_rad = math.radians(angle)
+        radial_dir = [0.0, math.cos(angle_rad), math.sin(angle_rad)]
+        ray_direction = [0.0, -radial_dir[1], -radial_dir[2]]
+        for col in range(cols):
+            col_t = col / (cols - 1)
+            x = x_min + (x_max - x_min) * col_t
+            origin = [
+                x,
+                center_y + radial_dir[1] * ray_start_radius,
+                center_z + radial_dir[2] * ray_start_radius,
+            ]
+            hit = sample_rotary_surface_radius(triangles, origin, ray_direction, [0.0, center_y, center_z], radial_dir)
+            if hit is None:
+                miss_count += 1
+                continue
+            radial_samples.append({
+                "row": row,
+                "col": col,
+                "rowT": row_t,
+                "colT": col_t,
+                "angle": angle,
+                "modelX": x,
+                **hit,
+            })
+
+    if not radial_samples:
+        return None
+
+    radii = [float(sample["radius"]) for sample in radial_samples]
+    min_radius = min(radii)
+    max_radius = max(radii)
+    radius_span = max(1e-9, max_radius - min_radius)
+    points: List[Dict[str, Any]] = []
+    for sample in radial_samples:
+        col_t = float(sample["colT"])
+        output_x = -output_length / 2 + output_length * col_t
+        normalized_depth = max(0.0, min(1.0, (max_radius - float(sample["radius"])) / radius_span))
+        depth = output_depth * normalized_depth
+        points.append({
+            "x": round(output_x, 4),
+            "a": round(float(sample["angle"]), 6),
+            "z": round(safe_z - depth, 4),
+            "depth": round(depth, 4),
+            "surfaceRadius": round(float(sample["radius"]), 6),
+            "surfaceY": round(float(sample["point"][1]), 6),
+            "surfaceZ": round(float(sample["point"][2]), 6),
+            "modelX": round(float(sample["modelX"]), 6),
+            "rotarySample": True,
+            "source": "stl-rotary-heightfield-preview",
+        })
+
+    return {
+        "schema": NEUTRAL_SCHEMA,
+        "jobId": job.get("jobId"),
+        "engine": "opencamlib",
+        "synthetic": False,
+        "fixture": False,
+        "experimentalHeightfield": True,
+        "experimentalRotaryHeightfield": True,
+        "generatedBy": "adapters/opencamlib/opencamlib_runner.py",
+        "generatedByExternalCommand": True,
+        "coordinate": {
+            "lengthAxis": "X",
+            "rotaryAxis": rotary_axis,
+            "depthAxis": "Z",
+            "rotaryUnit": "degree",
+        },
+        "estimatedMinutes": max(0.5, len(points) / 36),
+        "points": points,
+        "runner": {
+            "mode": "stl-rotary-heightfield-preview",
+            "opencamlibAvailable": detection["available"],
+            "opencamlibModule": detection["module"],
+            "geometry": geometry,
+            "heightfield": {
+                "rows": rows,
+                "cols": cols,
+                "pointCount": len(points),
+                "missCount": miss_count,
+                "fallbackCount": 0,
+                "rotaryEnvelope": True,
+                "center": {"xAxis": "X", "y": center_y, "z": center_z},
+                "stockRadiusMm": stock_radius,
+                "surfaceRadiusMin": round(min_radius, 6),
+                "surfaceRadiusMax": round(max_radius, 6),
+                "outputLengthMm": output_length,
+                "outputDepthMm": output_depth,
+            },
+            "warning": "Rotary heightfield mode samples the STL by X + rotary angle rays. It is closer to the rotary fixture workflow than flat Z projection, but still remains a preview scaffold until validated OpenCAMLib cutter-contact replaces it.",
+        },
+        "planEcho": {
+            "schema": plan.get("schema"),
+            "recommendedPrimary": (plan.get("sampling") or {}).get("recommendedPrimary"),
+            "operationCount": len(plan.get("operations") or []),
+        },
+    }
+
+
 def compute_preview_cutter_radius(tool: Dict[str, Any], settings: Dict[str, Any]) -> float:
     diameter = float(tool.get("diameterMm") or settings.get("toolDiameter") or 0)
     flat_tip = float(tool.get("flatTipMm") or 0)
@@ -556,6 +697,72 @@ def interpolate_triangle_z(tri: List[List[float]], x: float, y: float) -> Option
     if a < -tolerance or b < -tolerance or c < -tolerance:
         return None
     return a * z1 + b * z2 + c * z3
+
+
+def sample_rotary_surface_radius(triangles: List[List[List[float]]], origin: List[float], direction: List[float], center: List[float], radial_dir: List[float]) -> Optional[Dict[str, Any]]:
+    best_radius = -float("inf")
+    best_point: Optional[List[float]] = None
+    for tri in triangles:
+        hit = intersect_ray_triangle(origin, direction, tri)
+        if hit is None:
+            continue
+        radius = (
+            (hit[1] - center[1]) * radial_dir[1]
+            + (hit[2] - center[2]) * radial_dir[2]
+        )
+        if radius > best_radius:
+            best_radius = radius
+            best_point = hit
+    if best_point is None:
+        return None
+    return {
+        "radius": max(0.0, best_radius),
+        "point": best_point,
+    }
+
+
+def intersect_ray_triangle(origin: List[float], direction: List[float], tri: List[List[float]]) -> Optional[List[float]]:
+    epsilon = 1e-9
+    v0, v1, v2 = tri
+    edge1 = vec_sub(v1, v0)
+    edge2 = vec_sub(v2, v0)
+    h = vec_cross(direction, edge2)
+    a = vec_dot(edge1, h)
+    if -epsilon < a < epsilon:
+        return None
+    f = 1.0 / a
+    s = vec_sub(origin, v0)
+    u = f * vec_dot(s, h)
+    if u < -epsilon or u > 1.0 + epsilon:
+        return None
+    q = vec_cross(s, edge1)
+    v = f * vec_dot(direction, q)
+    if v < -epsilon or u + v > 1.0 + epsilon:
+        return None
+    t = f * vec_dot(edge2, q)
+    if t < -epsilon:
+        return None
+    return [
+        origin[0] + direction[0] * t,
+        origin[1] + direction[1] * t,
+        origin[2] + direction[2] * t,
+    ]
+
+
+def vec_sub(a: List[float], b: List[float]) -> List[float]:
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+
+
+def vec_dot(a: List[float], b: List[float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def vec_cross(a: List[float], b: List[float]) -> List[float]:
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 
 
 def create_fixture_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any]) -> Dict[str, Any]:

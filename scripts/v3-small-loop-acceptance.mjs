@@ -37,6 +37,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-real-neutral-handoff-test.mjs")]
   },
   {
+    id: "rotary-heightfield-runner",
+    label: "Rotary wrap heightfield runner loop",
+    command: [process.execPath, join("scripts", "v3-rotary-heightfield-runner-test.mjs")]
+  },
+  {
     id: "camotics-cli-package-api",
     label: "CAMotics Linux package API",
     command: [process.execPath, join("scripts", "v3-camotics-cli-package-api-test.mjs")]
