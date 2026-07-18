@@ -58,6 +58,11 @@ const checks = [
     summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, candidate package preflight step, evidence JSON, and blocker diagnostics."
   },
   {
+    id: "linux-camotics-upstream-binding-visible",
+    ok: source.includes("Linux CAMotics绑定：") && source.includes("formatLinuxCamoticsUpstreamEvidence") && source.includes("candidatePackageValidationBound") && source.includes("candidatePackageBundleBound") && source.includes("候选包预检已绑定") && source.includes("候选包证据包已绑定"),
+    summary: "Focused readiness UI should expose CAMotics upstream binding to OpenCAMLib candidate package validation and bundle evidence."
+  },
+  {
     id: "opencamlib-input-package-download",
     ok: source.includes("handleDownloadV3OpenCamLibCandidateInputs") && source.includes("opencamlib-candidate-inputs.zip") && source.includes("下载OCL输入包"),
     summary: "Focused operator UI should expose an OpenCAMLib Linux real-candidate input package download."

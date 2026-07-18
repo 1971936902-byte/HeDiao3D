@@ -81,6 +81,9 @@ async function main() {
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackageBlockedReason === null, "Linux evidence chain should preserve candidate package blocked reason");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackage?.filename === "opencamlib-candidate-package-validation.json", "Linux evidence chain should preserve candidate package validation file summary");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", "Linux evidence chain should preserve candidate package validation level");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "Linux evidence chain should preserve CAMotics binding to candidate package validation");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "Linux evidence chain should preserve CAMotics binding to candidate package bundle");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.matchedCount === 4, "Linux evidence chain should preserve CAMotics upstream matched file count");
   assert(linuxEvidenceArtifact.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "Linux evidence chain should preserve candidate package validation step");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "native-cam-closed-loop-check.json" && file.status === "imported"), "Linux evidence should preserve closed-loop check");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.status === "imported"), "Linux evidence should preserve CAMotics validation");
@@ -94,6 +97,8 @@ async function main() {
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "latest runbook result should summarize OpenCAMLib path coverage");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.protectedZones?.status === "ready", "latest runbook result should summarize OpenCAMLib protected zones");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidatePackage?.exists === true, "latest runbook result should summarize OpenCAMLib candidate package file");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "latest runbook result should summarize CAMotics candidate package validation binding");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "latest runbook result should summarize CAMotics candidate package bundle binding");
   assert(latest.latest.linuxEvidence?.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "latest runbook result should summarize OpenCAMLib candidate package validation step");
 
   const readinessAfterImport = await postJson("/api/orchestrator/readiness", {});
@@ -171,7 +176,24 @@ function createClosedLoopEvidenceChainFixture() {
     camotics: {
       productionEvidenceEligible: true,
       upstreamEvidenceRequired: true,
-      upstreamEvidenceStatus: "matched"
+      upstreamEvidenceStatus: "matched",
+      upstreamEvidence: {
+        required: true,
+        status: "matched",
+        source: "camotics-result-local-validation.json",
+        expectedCount: 4,
+        importedCount: 4,
+        matchedCount: 4,
+        mismatchCount: 0,
+        candidatePackageValidationBound: true,
+        candidatePackageBundleBound: true,
+        files: [
+          { key: "opencamlibRealCandidateRun", filename: "opencamlib-real-candidate-run.json", matched: true, expectedSha256: "real-candidate-sha", importedSha256: "real-candidate-sha" },
+          { key: "opencamlibContactValidation", filename: "opencamlib-contact-output-validation.json", matched: true, expectedSha256: "contact-validation-sha", importedSha256: "contact-validation-sha" },
+          { key: "opencamlibCandidatePackageValidation", filename: "opencamlib-candidate-package-validation.json", matched: true, expectedSha256: "candidate-package-validation-sha", importedSha256: "candidate-package-validation-sha" },
+          { key: "opencamlibCandidatePackageBundle", filename: "opencamlib-candidate-package-bundle.zip", matched: true, expectedSha256: "candidate-package-bundle-sha", importedSha256: "candidate-package-bundle-sha" }
+        ]
+      }
     },
     crossChecks: {
       nativeRealOutputStep: "pass",

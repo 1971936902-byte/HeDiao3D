@@ -1649,6 +1649,29 @@ type V3ReadinessSummary = {
             sha256?: string | null;
           } | null;
         };
+        camotics?: {
+          productionEvidenceEligible?: boolean;
+          upstreamEvidenceRequired?: boolean;
+          upstreamEvidenceStatus?: string;
+          upstreamEvidence?: {
+            required?: boolean;
+            status?: string;
+            source?: string;
+            expectedCount?: number;
+            importedCount?: number;
+            matchedCount?: number;
+            mismatchCount?: number;
+            candidatePackageValidationBound?: boolean;
+            candidatePackageBundleBound?: boolean;
+            files?: Array<{
+              key?: string | null;
+              filename?: string | null;
+              matched?: boolean;
+              expectedSha256?: string | null;
+              importedSha256?: string | null;
+            }>;
+          } | null;
+        };
         crossChecks?: {
           candidatePackageStep?: string;
         };
@@ -6198,6 +6221,11 @@ export function App() {
                           Linux OpenCAMLib：{formatLinuxOpenCamLibEvidence(v3Readiness.runbookResult.linuxEvidence.evidenceChain.openCamLib)}
                         </small>
                       )}
+                      {v3Readiness.runbookResult.linuxEvidence.evidenceChain?.camotics && (
+                        <small className={v3Readiness.runbookResult.linuxEvidence.evidenceChain.camotics.upstreamEvidence?.status === "matched" ? "v3-inline-ok" : "v3-inline-warning"}>
+                          Linux CAMotics绑定：{formatLinuxCamoticsUpstreamEvidence(v3Readiness.runbookResult.linuxEvidence.evidenceChain.camotics)}
+                        </small>
+                      )}
                     </>
                   )}
                   {!V3_TRIAL_FOCUSED_UI && v3Readiness.acceptancePlan && (
@@ -8699,6 +8727,17 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const packageFile = openCamLib?.candidatePackage?.exists ? "证据JSON已回填" : "";
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
   return [candidate, coverage, protectedZones, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+}
+
+function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["camotics"]) {
+  const evidence = camotics?.upstreamEvidence;
+  const status = evidence?.status ?? camotics?.upstreamEvidenceStatus ?? "missing";
+  const statusText = status === "matched" ? "已绑定" : status === "not-required" ? "未要求" : status === "mismatch" ? "不匹配" : status === "missing" ? "缺失" : status;
+  const matched = `${evidence?.matchedCount ?? 0}/${evidence?.expectedCount ?? 0}`;
+  const candidateValidation = evidence?.candidatePackageValidationBound ? "候选包预检已绑定" : "候选包预检未绑定";
+  const candidateBundle = evidence?.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
+  const mismatches = evidence?.mismatchCount ? `不匹配 ${evidence.mismatchCount}` : "";
+  return [statusText, `哈希 ${matched}`, candidateValidation, candidateBundle, mismatches].filter(Boolean).join(" · ");
 }
 
 function formatLinuxEvidenceStepStatus(status?: string) {

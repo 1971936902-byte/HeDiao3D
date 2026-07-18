@@ -2812,7 +2812,29 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
     camotics: {
       productionEvidenceEligible: Boolean(chain.camotics?.productionEvidenceEligible),
       upstreamEvidenceRequired: Boolean(chain.camotics?.upstreamEvidenceRequired),
-      upstreamEvidenceStatus: chain.camotics?.upstreamEvidenceStatus ?? "missing"
+      upstreamEvidenceStatus: chain.camotics?.upstreamEvidenceStatus ?? "missing",
+      upstreamEvidence: chain.camotics?.upstreamEvidence && typeof chain.camotics.upstreamEvidence === "object"
+        ? {
+            required: Boolean(chain.camotics.upstreamEvidence.required),
+            status: chain.camotics.upstreamEvidence.status ?? "missing",
+            source: chain.camotics.upstreamEvidence.source ?? "missing",
+            expectedCount: Number(chain.camotics.upstreamEvidence.expectedCount ?? 0),
+            importedCount: Number(chain.camotics.upstreamEvidence.importedCount ?? 0),
+            matchedCount: Number(chain.camotics.upstreamEvidence.matchedCount ?? 0),
+            mismatchCount: Number(chain.camotics.upstreamEvidence.mismatchCount ?? 0),
+            candidatePackageValidationBound: Boolean(chain.camotics.upstreamEvidence.candidatePackageValidationBound),
+            candidatePackageBundleBound: Boolean(chain.camotics.upstreamEvidence.candidatePackageBundleBound),
+            files: Array.isArray(chain.camotics.upstreamEvidence.files)
+              ? chain.camotics.upstreamEvidence.files.slice(0, 12).map((file) => ({
+                  key: file.key ?? null,
+                  filename: file.filename ?? null,
+                  matched: Boolean(file.matched),
+                  expectedSha256: file.expectedSha256 ?? null,
+                  importedSha256: file.importedSha256 ?? null
+                }))
+              : []
+          }
+        : null
     },
     crossChecks: {
       nativeRealOutputStep: chain.crossChecks?.nativeRealOutputStep ?? "missing",
