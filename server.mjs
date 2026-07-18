@@ -14106,7 +14106,7 @@ function detectFreeCadEngine() {
 
 function detectOpenCamLibEngine() {
   if (String(process.env.HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER ?? "").toLowerCase() === "true") {
-    const command = process.env.PYTHON ?? "python";
+    const command = process.env.PYTHON ?? process.env.V3_PYTHON_CMD ?? (process.platform === "win32" ? "python" : "python3");
     return {
       id: "opencamlib",
       name: "OpenCAMLib",

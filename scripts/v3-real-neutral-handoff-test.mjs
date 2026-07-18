@@ -66,6 +66,7 @@ async function main() {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      PYTHON: process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3"),
       API_PORT: String(port),
       ENABLE_EXTERNAL_CAM_ADAPTERS: "true",
       HEDIAO3D_FORCE_OPENCAMLIB_ADAPTER: "true",
