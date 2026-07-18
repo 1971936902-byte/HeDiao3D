@@ -183,6 +183,8 @@ async function main() {
   const linuxCamJobZipNames = listZipFilenames(linuxCamJobPackage.bytes);
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md"), "Linux CAM job package missing README");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"), "Linux CAM job package missing manifest");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/run-linux-cam-job.sh"), "Linux CAM job package missing one-command run script");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs"), "Linux CAM job package missing local validation script");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/job.json"), "Linux CAM job package missing OpenCAMLib job spec");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/opencamlib-kernel-plan.json"), "Linux CAM job package missing OpenCAMLib kernel plan");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/repaired-model.stl"), "Linux CAM job package missing OpenCAMLib STL input");
@@ -191,6 +193,9 @@ async function main() {
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/camotics/run/camotics-result-validate.js"), "Linux CAM job package missing CAMotics validator");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/linux-cam-closed-loop-handoff.md"), "Linux CAM job package missing closed-loop handoff reference");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/package-integrity.json"), "Linux CAM job package missing package integrity reference");
+  const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");
+  assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
+  assert(linuxCamJobValidator.includes("native-cam-real-output-bundle.zip") && linuxCamJobValidator.includes("camotics-result-bundle.zip"), "Linux CAM job validator should name expected upload bundles");
 
   console.log(JSON.stringify({
     ok: true,
@@ -408,6 +413,29 @@ function listZipFilenames(bytes) {
     offset += 1;
   }
   return names;
+}
+
+function readStoredZipEntry(bytes, wantedName) {
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = bytes.readUInt32LE(offset);
+    if (signature === 0x04034b50) {
+      const compressedSize = bytes.readUInt32LE(offset + 18);
+      const fileNameLength = bytes.readUInt16LE(offset + 26);
+      const extraLength = bytes.readUInt16LE(offset + 28);
+      const nameStart = offset + 30;
+      const nameEnd = nameStart + fileNameLength;
+      const name = bytes.subarray(nameStart, nameEnd).toString("utf8");
+      const dataStart = nameEnd + extraLength;
+      const dataEnd = dataStart + compressedSize;
+      if (name === wantedName) return bytes.subarray(dataStart, dataEnd).toString("utf8");
+      offset = dataEnd;
+      continue;
+    }
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    offset += 1;
+  }
+  throw new Error(`ZIP entry not found: ${wantedName}`);
 }
 
 function assert(condition, message) {
