@@ -78,7 +78,8 @@ async function main() {
       "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256, { includeContactValidation: false }), null, 2),
       "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2),
       "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2),
-      "opencamlib-runner-readiness.json": JSON.stringify(createRunnerReadinessFixture(), null, 2)
+      "opencamlib-runner-readiness.json": JSON.stringify(createRunnerReadinessFixture(), null, 2),
+      "opencamlib-real-candidate-run.json": JSON.stringify(createRealCandidateFixture(), null, 2)
     })
   });
   assert(zipImported.schema === "hediao3d.native-cam-real-output-acceptance.v1", "zip imported acceptance schema mismatch");
@@ -87,14 +88,19 @@ async function main() {
   assert(zipImported.contactValidationStatus?.status === "ready", "zip import should preserve ready contact validation");
   assert(zipImported.runnerReadinessStatus?.status === "blocked", "zip import should expose blocked runner readiness status");
   assert(zipImported.runnerReadiness?.firstBlocker === "real-drop-cutter-not-implemented", "zip import should preserve runner readiness blocker summary");
+  assert(zipImported.openCamLibRealCandidateStatus?.status === "blocked", "zip import should expose blocked OpenCAMLib real candidate status");
+  assert(zipImported.openCamLibRealCandidate?.firstBlocking === "opencamlib-production-candidate-not-proven", "zip import should preserve real candidate blocker summary");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
   assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
   assert(zipArtifact.runnerReadiness?.sha256, "zip import artifact should preserve runner readiness sha256");
   assert(zipArtifact.runnerReadinessStatus?.summary?.includes("OpenCAMLib runner readiness"), "zip import artifact should preserve runner readiness status summary");
+  assert(zipArtifact.openCamLibRealCandidate?.sha256, "zip import artifact should preserve OpenCAMLib real candidate sha256");
+  assert(zipArtifact.openCamLibRealCandidateStatus?.summary?.includes("OpenCAMLib one-command real candidate"), "zip import artifact should preserve OpenCAMLib real candidate status summary");
   const zipImportReport = await getJson(zipImported.apiArtifacts.importJson);
   assert(zipImportReport.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import report should preserve source bundle filename");
   assert(zipImportReport.runnerReadinessStatus?.status === "blocked", "zip import report should preserve runner readiness status");
+  assert(zipImportReport.openCamLibRealCandidateStatus?.status === "blocked", "zip import report should preserve OpenCAMLib real candidate status");
 
   const readiness = await postJson("/api/orchestrator/readiness", {});
   assert(readiness.nativeCamRealOutputAcceptance, "readiness should include imported native CAM real output acceptance");
@@ -105,6 +111,8 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose ready strict contact validation");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadinessStatus?.status === "blocked", "readiness should expose imported OpenCAMLib runner readiness status");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadiness?.blockerCount === 1, "readiness should expose imported OpenCAMLib runner readiness summary");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.status === "blocked", "readiness should expose imported OpenCAMLib real candidate status");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidate?.blockingCount === 1, "readiness should expose imported OpenCAMLib real candidate summary");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
@@ -250,6 +258,26 @@ function createRunnerReadinessFixture() {
     contactSpike: {
       status: "blocked"
     }
+  };
+}
+
+function createRealCandidateFixture() {
+  return {
+    schema: "hediao3d.opencamlib-real-candidate-run.v1",
+    createdAt: new Date().toISOString(),
+    ok: false,
+    level: "blocked",
+    productionLocked: true,
+    contactValidation: {
+      level: "ready",
+      evidenceClass: "production-candidate",
+      productionCandidateEligible: true
+    },
+    candidatePackage: {
+      level: "critical",
+      readyForImport: false
+    },
+    blocking: ["opencamlib-production-candidate-not-proven"]
   };
 }
 

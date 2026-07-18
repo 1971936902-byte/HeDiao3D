@@ -2093,6 +2093,20 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       firstBlocker: report.runnerReadiness.firstBlocker ?? null,
       sha256: report.runnerReadiness.sha256 ?? null
     } : null,
+    openCamLibRealCandidateStatus: createOpenCamLibRealCandidateStatus(report.openCamLibRealCandidate),
+    openCamLibRealCandidate: report.openCamLibRealCandidate && typeof report.openCamLibRealCandidate === "object" ? {
+      schema: report.openCamLibRealCandidate.schema ?? "hediao3d.opencamlib-real-candidate-run-summary.v1",
+      level: report.openCamLibRealCandidate.level ?? "missing",
+      ok: Boolean(report.openCamLibRealCandidate.ok),
+      productionLocked: report.openCamLibRealCandidate.productionLocked !== false,
+      contactValidationLevel: report.openCamLibRealCandidate.contactValidationLevel ?? null,
+      contactEvidenceClass: report.openCamLibRealCandidate.contactEvidenceClass ?? null,
+      candidatePackageLevel: report.openCamLibRealCandidate.candidatePackageLevel ?? null,
+      candidateReadyForImport: Boolean(report.openCamLibRealCandidate.candidateReadyForImport),
+      blockingCount: Number(report.openCamLibRealCandidate.blockingCount ?? 0),
+      firstBlocking: report.openCamLibRealCandidate.firstBlocking ?? null,
+      sha256: report.openCamLibRealCandidate.sha256 ?? null
+    } : null,
     targetMachineBoundaryStatus,
     targetMachineBoundary: report.targetMachineBoundary ? {
       schema: report.targetMachineBoundary.schema ?? "hediao3d.target-machine-boundary.v1",
@@ -2145,6 +2159,37 @@ function createOpenCamLibRunnerReadinessStatus(runnerReadiness) {
     summary: ready
       ? `OpenCAMLib runner readiness ready：module=${readiness.selectedModule ?? "unknown"}。`
       : `OpenCAMLib runner readiness 未就绪：status=${readiness.status ?? "missing"}，blockers=${blockerCount}。`
+  };
+}
+
+function createOpenCamLibRealCandidateStatus(realCandidate) {
+  const report = realCandidate && typeof realCandidate === "object" ? realCandidate : null;
+  if (!report) {
+    return {
+      schema: "hediao3d.opencamlib-real-candidate-status.v1",
+      status: "missing",
+      ready: false,
+      required: false,
+      summary: "Native CAM 回填包未随附 opencamlib-real-candidate-run.json。"
+    };
+  }
+  const ready = report.ok === true || report.level === "production-candidate-ready-for-import";
+  const blockingCount = Number(report.blockingCount ?? (Array.isArray(report.blocking) ? report.blocking.length : 0));
+  return {
+    schema: "hediao3d.opencamlib-real-candidate-status.v1",
+    status: ready ? "ready" : report.level === "blocked" ? "blocked" : "review",
+    ready,
+    required: false,
+    level: report.level ?? null,
+    productionLocked: report.productionLocked !== false,
+    contactValidationLevel: report.contactValidationLevel ?? null,
+    contactEvidenceClass: report.contactEvidenceClass ?? null,
+    candidatePackageLevel: report.candidatePackageLevel ?? null,
+    candidateReadyForImport: Boolean(report.candidateReadyForImport),
+    blockingCount,
+    summary: ready
+      ? "OpenCAMLib one-command real candidate chain is ready for HeDiao3D import review."
+      : `OpenCAMLib one-command real candidate chain 未就绪：level=${report.level ?? "missing"}，blocking=${blockingCount}。`
   };
 }
 
@@ -2219,6 +2264,27 @@ function createOpenCamLibRunnerReadinessSummary(report, rawBytes = null) {
     warningCount: warnings.length,
     firstBlocker: blockers[0] ?? null,
     firstWarning: warnings[0] ?? null,
+    sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
+  };
+}
+
+function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
+  const blocking = Array.isArray(report?.blocking) ? report.blocking : [];
+  const contactValidation = report?.contactValidation && typeof report.contactValidation === "object" ? report.contactValidation : null;
+  const candidatePackage = report?.candidatePackage && typeof report.candidatePackage === "object" ? report.candidatePackage : null;
+  return {
+    schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
+    sourceSchema: report?.schema ?? null,
+    createdAt: report?.createdAt ?? null,
+    level: report?.level ?? "missing",
+    ok: Boolean(report?.ok),
+    productionLocked: report?.productionLocked !== false,
+    contactValidationLevel: contactValidation?.level ?? null,
+    contactEvidenceClass: contactValidation?.evidenceClass ?? null,
+    candidatePackageLevel: candidatePackage?.level ?? null,
+    candidateReadyForImport: Boolean(candidatePackage?.readyForImport),
+    blockingCount: blocking.length,
+    firstBlocking: blocking[0] ?? null,
     sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
   };
 }
@@ -3760,6 +3826,9 @@ async function importNativeCamRealOutputAcceptance(req, res) {
       : {}),
     ...(zipBundle?.runnerReadinessReport && !acceptance.runnerReadiness
       ? { runnerReadiness: createOpenCamLibRunnerReadinessSummary(zipBundle.runnerReadinessReport, zipBundle.runnerReadinessReportBytes) }
+      : {}),
+    ...(zipBundle?.openCamLibRealCandidateReport && !acceptance.openCamLibRealCandidate
+      ? { openCamLibRealCandidate: createOpenCamLibRealCandidateSummary(zipBundle.openCamLibRealCandidateReport, zipBundle.openCamLibRealCandidateReportBytes) }
       : {})
   };
   const bindingInput = {
@@ -3798,6 +3867,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     targetMachineBoundaryStatus,
     contactValidationStatus,
     runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(acceptanceWithContactValidation.runnerReadiness),
+    openCamLibRealCandidateStatus: createOpenCamLibRealCandidateStatus(acceptanceWithContactValidation.openCamLibRealCandidate),
     warnings: [
       ...(Array.isArray(acceptanceWithContactValidation.warnings) ? acceptanceWithContactValidation.warnings : []),
       ...(targetMachineBoundaryStatus.status === "matched" ? [] : [targetMachineBoundaryStatus.summary])
@@ -3829,6 +3899,7 @@ async function importNativeCamRealOutputAcceptance(req, res) {
     targetMachineBoundaryStatus,
     contactValidationStatus,
     runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(imported.runnerReadiness),
+    openCamLibRealCandidateStatus: createOpenCamLibRealCandidateStatus(imported.openCamLibRealCandidate),
     productionCandidateCount: Number(imported.productionCandidateCount ?? 0),
     unsafeCount: Number(imported.unsafeCount ?? 0),
     missingCount: Number(imported.missingCount ?? 0)
@@ -3854,6 +3925,7 @@ function extractNativeCamRealOutputAcceptanceZipBundle(value) {
   const validationEntry = findEntry((name) => /(^|\/)v3-external-adapter-validation\.json$/.test(name));
   const contactValidationEntry = findEntry((name) => /(^|\/)opencamlib-contact-output-validation\.json$/.test(name));
   const runnerReadinessEntry = findEntry((name) => /(^|\/)opencamlib-runner-readiness\.json$/.test(name));
+  const realCandidateEntry = findEntry((name) => /(^|\/)opencamlib-real-candidate-run\.json$/.test(name));
   return {
     sourceBuffer: buffer,
     sourceName: "native-cam-real-output-bundle.zip",
@@ -3863,6 +3935,8 @@ function extractNativeCamRealOutputAcceptanceZipBundle(value) {
     contactValidationReportBytes: contactValidationEntry?.content ?? null,
     runnerReadinessReport: runnerReadinessEntry ? parseJsonBuffer(runnerReadinessEntry.content, "opencamlib-runner-readiness.json") : null,
     runnerReadinessReportBytes: runnerReadinessEntry?.content ?? null,
+    openCamLibRealCandidateReport: realCandidateEntry ? parseJsonBuffer(realCandidateEntry.content, "opencamlib-real-candidate-run.json") : null,
+    openCamLibRealCandidateReportBytes: realCandidateEntry?.content ?? null,
     entries: entries.map((entry) => ({
       name: entry.name,
       sizeBytes: entry.content.length
@@ -3997,6 +4071,14 @@ function validateNativeCamRealOutputAcceptance(acceptance) {
     }
     if (acceptance.runnerReadiness.schema && acceptance.runnerReadiness.schema !== "hediao3d.opencamlib-runner-readiness-summary.v1") {
       return { ok: false, error: "runnerReadiness.schema 必须是 hediao3d.opencamlib-runner-readiness-summary.v1。" };
+    }
+  }
+  if (acceptance.openCamLibRealCandidate !== undefined) {
+    if (!acceptance.openCamLibRealCandidate || typeof acceptance.openCamLibRealCandidate !== "object") {
+      return { ok: false, error: "openCamLibRealCandidate 必须是 JSON object。" };
+    }
+    if (acceptance.openCamLibRealCandidate.schema && acceptance.openCamLibRealCandidate.schema !== "hediao3d.opencamlib-real-candidate-run-summary.v1") {
+      return { ok: false, error: "openCamLibRealCandidate.schema 必须是 hediao3d.opencamlib-real-candidate-run-summary.v1。" };
     }
   }
   return { ok: true };

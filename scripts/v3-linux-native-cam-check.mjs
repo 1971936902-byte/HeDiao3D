@@ -783,6 +783,7 @@ check("real-output-contact-validation", realOutputCheck.includes("opencamlib-con
 check("real-output-contact-ready-gate", realOutputCheck.includes("strict contact validation"), "real output checker must block production candidates without ready strict contact validation.");
 check("real-output-target-boundary", realOutputCheck.includes("target-machine-boundary.json"), "real output checker must write target-machine-boundary.json.");
 check("real-output-runner-readiness", realOutputCheck.includes("opencamlib-runner-readiness.json") && realOutputCheck.includes("runnerReadiness"), "real output checker must carry OpenCAMLib runner readiness evidence into the upload bundle.");
+check("real-output-real-candidate", realOutputCheck.includes("opencamlib-real-candidate-run.json") && realOutputCheck.includes("openCamLibRealCandidate"), "real output checker must carry OpenCAMLib one-command real candidate evidence into the upload bundle.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
 check("diagnostics-bundle-schema", diagnosticsBundle.includes("hediao3d.native-cam-diagnostics-bundle.v1"), "diagnostics bundle must emit the diagnostics schema.");
@@ -1089,12 +1090,27 @@ ACCEPTANCE_BUNDLE="$OUT_DIR/native-cam-real-output-bundle.zip"
 TARGET_BOUNDARY="$OUT_DIR/target-machine-boundary.json"
 CONTACT_VALIDATION_REPORT="$OUT_DIR/opencamlib-contact-output-validation.json"
 RUNNER_READINESS_REPORT="$OUT_DIR/opencamlib-runner-readiness.json"
+REAL_CANDIDATE_REPORT="$OUT_DIR/opencamlib-real-candidate-run.json"
 if [[ ! -s "$REPORT" ]]; then
   echo "[HeDiao3D] Missing validation report: $REPORT" >&2
   exit 2
 fi
 
 echo "[HeDiao3D] Step 4/4 OpenCAMLib strict contact validation"
+if [[ -f "opencamlib-real-candidate-run.mjs" && -s "$OUT_DIR/job.json" && -s "$OUT_DIR/opencamlib-kernel-plan.json" && -s "$OUT_DIR/repaired-model.stl" ]]; then
+  echo "[HeDiao3D] Running OpenCAMLib real candidate chain"
+  HEDIAO3D_OPENCAMLIB_JOB_JSON="$OUT_DIR/job.json" \
+  HEDIAO3D_OPENCAMLIB_PLAN_JSON="$OUT_DIR/opencamlib-kernel-plan.json" \
+  HEDIAO3D_OPENCAMLIB_MODEL_STL="$OUT_DIR/repaired-model.stl" \
+  HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON="$OUT_DIR/neutral-toolpath.json" \
+  HEDIAO3D_OPENCAMLIB_CONTACT_JSON="$OUT_DIR/opencamlib-cutter-contact-report.json" \
+  HEDIAO3D_OPENCAMLIB_CONTACT_VALIDATION_JSON="$CONTACT_VALIDATION_REPORT" \
+  HEDIAO3D_OPENCAMLIB_REAL_CANDIDATE_REPORT_JSON="$REAL_CANDIDATE_REPORT" \
+  node opencamlib-real-candidate-run.mjs . || true
+else
+  echo "[HeDiao3D] OpenCAMLib real candidate inputs not found in $OUT_DIR; skipping one-command candidate chain." >&2
+fi
+
 if [[ -s "$OUT_DIR/neutral-toolpath.json" && -s "$OUT_DIR/opencamlib-kernel-plan.json" && -s "$OUT_DIR/repaired-model.stl" && -s "$OUT_DIR/opencamlib-cutter-contact-report.json" ]]; then
   node opencamlib-contact-output-validate.mjs \
     --neutral "$OUT_DIR/neutral-toolpath.json" \
@@ -1106,10 +1122,10 @@ else
   echo "[HeDiao3D] OpenCAMLib contact validation inputs not found in $OUT_DIR; acceptance will stay blocked for production candidates." >&2
 fi
 
-node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" "$TARGET_BOUNDARY" "$CONTACT_VALIDATION_REPORT" "$RUNNER_READINESS_REPORT" <<'NODE'
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$STRICT" "$EXPECT_PRODUCTION_CANDIDATE" "$TARGET_BOUNDARY" "$CONTACT_VALIDATION_REPORT" "$RUNNER_READINESS_REPORT" "$REAL_CANDIDATE_REPORT" <<'NODE'
 const { readFileSync, writeFileSync } = require("fs");
 const { createHash } = require("crypto");
-const [reportPath, acceptancePath, strictValue, expectValue, targetBoundaryPath, contactValidationPath, runnerReadinessPath] = process.argv.slice(2);
+const [reportPath, acceptancePath, strictValue, expectValue, targetBoundaryPath, contactValidationPath, runnerReadinessPath, realCandidatePath] = process.argv.slice(2);
 const strict = /^(1|true|yes|on)$/i.test(strictValue || "");
 const expectProductionCandidate = /^(1|true|yes|on)$/i.test(expectValue || "");
 const reportBytes = readFileSync(reportPath);
@@ -1192,6 +1208,42 @@ try {
     sha256: null
   };
 }
+let openCamLibRealCandidate = null;
+try {
+  const realCandidateBytes = readFileSync(realCandidatePath);
+  const parsed = JSON.parse(realCandidateBytes.toString("utf8"));
+  const blocking = Array.isArray(parsed.blocking) ? parsed.blocking : [];
+  openCamLibRealCandidate = {
+    schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
+    sourceSchema: parsed.schema || null,
+    createdAt: parsed.createdAt || null,
+    level: parsed.level || "missing",
+    ok: Boolean(parsed.ok),
+    productionLocked: parsed.productionLocked !== false,
+    contactValidationLevel: parsed.contactValidation?.level || null,
+    contactEvidenceClass: parsed.contactValidation?.evidenceClass || null,
+    candidatePackageLevel: parsed.candidatePackage?.level || null,
+    candidateReadyForImport: Boolean(parsed.candidatePackage?.readyForImport),
+    blockingCount: blocking.length,
+    firstBlocking: blocking[0] || null,
+    sha256: createHash("sha256").update(realCandidateBytes).digest("hex")
+  };
+} catch {
+  openCamLibRealCandidate = {
+    schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
+    sourceSchema: null,
+    level: "missing",
+    ok: false,
+    productionLocked: true,
+    contactValidationLevel: null,
+    contactEvidenceClass: null,
+    candidatePackageLevel: null,
+    candidateReadyForImport: false,
+    blockingCount: 0,
+    firstBlocking: "opencamlib-real-candidate-run.json missing",
+    sha256: null
+  };
+}
 const adapters = Array.isArray(report.adapters) ? report.adapters : [];
 const rows = adapters.map((adapter) => ({
   id: adapter.id,
@@ -1246,6 +1298,7 @@ const acceptance = {
   missingCount: missing.length,
   contactValidation,
   runnerReadiness,
+  openCamLibRealCandidate,
   adapters: rows,
   blockers,
   warnings,
@@ -1278,9 +1331,9 @@ if (strict && (unsafe.length || (expectProductionCandidate && candidates.length 
 }
 NODE
 
-node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" "$TARGET_BOUNDARY" "$CONTACT_VALIDATION_REPORT" "$RUNNER_READINESS_REPORT" <<'NODE'
+node - "$REPORT" "$ACCEPTANCE_REPORT" "$ACCEPTANCE_BUNDLE" "$TARGET_BOUNDARY" "$CONTACT_VALIDATION_REPORT" "$RUNNER_READINESS_REPORT" "$REAL_CANDIDATE_REPORT" <<'NODE'
 const { existsSync, readFileSync, writeFileSync } = require("fs");
-const [reportPath, acceptancePath, bundlePath, targetBoundaryPath, contactValidationPath, runnerReadinessPath] = process.argv.slice(2);
+const [reportPath, acceptancePath, bundlePath, targetBoundaryPath, contactValidationPath, runnerReadinessPath, realCandidatePath] = process.argv.slice(2);
 const files = [
   { name: "v3-external-adapter-validation.json", content: readFileSync(reportPath) },
   { name: "native-cam-real-output-acceptance.json", content: readFileSync(acceptancePath) },
@@ -1298,6 +1351,7 @@ const files = [
       "- target-machine-boundary.json",
       "- opencamlib-contact-output-validation.json, when OpenCAMLib contact validation inputs were available",
       "- opencamlib-runner-readiness.json, when the OpenCAMLib runner emitted readiness/blocker evidence",
+      "- opencamlib-real-candidate-run.json, when the one-command OpenCAMLib candidate chain was attempted",
       "",
       "Target machine boundary:",
       "- 3-axis controller + Y-axis rotary fixture",
@@ -1315,6 +1369,9 @@ if (existsSync(contactValidationPath)) {
 }
 if (existsSync(runnerReadinessPath)) {
   files.splice(4, 0, { name: "opencamlib-runner-readiness.json", content: readFileSync(runnerReadinessPath) });
+}
+if (existsSync(realCandidatePath)) {
+  files.splice(5, 0, { name: "opencamlib-real-candidate-run.json", content: readFileSync(realCandidatePath) });
 }
 writeFileSync(bundlePath, createZip(files));
 console.log("[HeDiao3D] Wrote real-output import bundle: " + bundlePath);
@@ -1396,6 +1453,8 @@ const planPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_PLAN_JSON ?? "ope
 const neutralPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON ?? "neutral-toolpath.json");
 const contactPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_CONTACT_JSON ?? "opencamlib-cutter-contact-report.json");
 const modelPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_MODEL_STL ?? "repaired-model.stl");
+const contactValidationPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_CONTACT_VALIDATION_JSON ?? "opencamlib-contact-output-validation.json");
+const reportPath = resolve(root, process.env.HEDIAO3D_OPENCAMLIB_REAL_CANDIDATE_REPORT_JSON ?? "opencamlib-real-candidate-run.json");
 const steps = [];
 
 recordInput("python", Boolean(python), python || "python3/python");
@@ -1444,9 +1503,10 @@ if (existsSync(neutralPath) && existsSync(contactPath) && existsSync(join(root, 
       "--neutral", neutralPath,
       "--plan", planPath,
       "--model", modelPath,
-      "--contact", contactPath
+      "--contact", contactPath,
+      "--out", contactValidationPath
     ],
-    outputJson: "opencamlib-contact-output-validation.json",
+    outputJson: contactValidationPath,
     passStatuses: [0, 3]
   });
 }
@@ -1462,7 +1522,7 @@ if (existsSync(neutralPath) && existsSync(join(root, "opencamlib-candidate-packa
   });
 }
 
-const contactValidation = readJsonIfExists(join(root, "opencamlib-contact-output-validation.json"));
+const contactValidation = readJsonIfExists(contactValidationPath);
 const candidatePackage = readJsonIfExists(join(root, "opencamlib-candidate-package-validation.json"));
 const requiredFailures = steps.filter((step) => step.required && step.status !== "pass");
 const productionCandidate = Boolean(
@@ -1519,7 +1579,7 @@ const report = {
   ]
 };
 
-writeFileSync(join(root, "opencamlib-real-candidate-run.json"), JSON.stringify(report, null, 2), "utf8");
+writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf8");
 console.log(JSON.stringify(report, null, 2));
 if (!report.ok) process.exitCode = 3;
 

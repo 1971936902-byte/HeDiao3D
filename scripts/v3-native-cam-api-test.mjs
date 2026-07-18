@@ -105,6 +105,8 @@ async function main() {
   assert(realOutputCheck.includes("targetMachineBoundary"), "real output check should include target machine boundary in acceptance report");
   assert(realOutputCheck.includes("opencamlib-runner-readiness.json"), "real output check should include OpenCAMLib runner readiness evidence in acceptance bundle when present");
   assert(realOutputCheck.includes("runnerReadiness"), "real output check should summarize OpenCAMLib runner readiness in acceptance report");
+  assert(realOutputCheck.includes("opencamlib-real-candidate-run.json"), "real output check should include OpenCAMLib real candidate evidence in acceptance bundle when present");
+  assert(realOutputCheck.includes("openCamLibRealCandidate"), "real output check should summarize OpenCAMLib real candidate evidence in acceptance report");
   assert(realOutputCheck.includes("README-NATIVE-CAM-REAL-OUTPUT.md"), "real output check bundle should include README");
   assert(realOutputCheck.includes("hediao3d.native-cam-real-output-acceptance.v1"), "real output check should write acceptance schema");
   assert(realOutputCheck.includes("V3_ADAPTER_USE_NATIVE_COMMANDS=true"), "real output check should run native adapter validation");
