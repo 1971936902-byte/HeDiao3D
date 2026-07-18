@@ -56,6 +56,11 @@ const checks = [
     id: "linux-opencamlib-evidence-visible",
     ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage") && source.includes("protectedZones") && source.includes("端部保护"),
     summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, and candidate package blocker diagnostics."
+  },
+  {
+    id: "opencamlib-input-package-download",
+    ok: source.includes("handleDownloadV3OpenCamLibCandidateInputs") && source.includes("opencamlib-candidate-inputs.zip") && source.includes("下载OCL输入包"),
+    summary: "Focused operator UI should expose an OpenCAMLib Linux real-candidate input package download."
   }
 ];
 

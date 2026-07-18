@@ -4029,6 +4029,55 @@ export function App() {
     }
   };
 
+  const handleDownloadV3OpenCamLibCandidateInputs = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再下载 OpenCAMLib 输入包。");
+      return;
+    }
+
+    setIsV3PackageDownloading(true);
+    setV3Status("正在打包 OpenCAMLib Linux 输入包");
+    try {
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/opencamlib-candidate-inputs.zip`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? `OpenCAMLib 输入包下载失败：${response.status}`);
+      }
+      const blob = await response.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-opencamlib-inputs-${stamp}.zip`;
+      downloadBlob(filename, blob);
+      setV3Status("OpenCAMLib Linux 输入包已由 Orchestrator 打包");
+      setV3UserNotice({
+        level: "ok",
+        title: "OpenCAMLib 输入包已开始下载",
+        detail: `${filename}；复制到 Linux Native CAM 服务包目录后运行 real candidate 脚本。`
+      });
+      recordTask({
+        category: "cam",
+        status: "ok",
+        title: "下载 OpenCAMLib Linux 输入包",
+        detail: "包含 job.json、opencamlib-kernel-plan.json、STL 模型和清单；只用于真实 CAM 候选验证，不解锁生产 NC。"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "OpenCAMLib 输入包下载失败";
+      setV3Status(message);
+      setV3UserNotice({
+        level: "warning",
+        title: "OpenCAMLib 输入包下载失败",
+        detail: message
+      });
+      recordTask({
+        category: "cam",
+        status: "warning",
+        title: "OpenCAMLib 输入包下载失败",
+        detail: message
+      });
+    } finally {
+      setIsV3PackageDownloading(false);
+    }
+  };
+
   const handleDownloadV3EvidenceReviewPackage = async () => {
     if (!v3Job?.id) {
       setV3Status("请先运行或恢复一个 V3 任务，再下载证据审查包。");
@@ -5812,6 +5861,16 @@ export function App() {
                   <button
                     className="demo-action package-action"
                     type="button"
+                    onClick={handleDownloadV3OpenCamLibCandidateInputs}
+                    disabled={!v3Job?.id || isV3PackageDownloading}
+                    title="下载当前 job 的 OpenCAMLib real-candidate 输入包，复制到 Linux Native CAM 服务包后运行真实候选链路"
+                  >
+                    <Download size={17} />
+                    下载OCL输入包
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
                     onClick={handleDownloadV3EvidenceReviewPackage}
                     disabled={!v3Job?.result?.summary.deliveryManifest || isV3PackageDownloading}
                     title="集中下载当前 job 的门禁、哈希、仿真、后处理和现场证据报告；不是上机包"
@@ -6583,6 +6642,16 @@ export function App() {
                     >
                       <Download size={17} />
                       {isV3PackageDownloading ? "打包中..." : "下载Linux仿真包"}
+                    </button>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handleDownloadV3OpenCamLibCandidateInputs}
+                      disabled={!v3Job?.id || isV3PackageDownloading}
+                      title="复制到 Linux Native CAM 服务包目录，运行 opencamlib-real-candidate-run.mjs"
+                    >
+                      <Download size={17} />
+                      下载OCL输入包
                     </button>
                     <button
                       className="demo-action package-action"

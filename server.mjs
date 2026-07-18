@@ -148,6 +148,11 @@ const server = createServer(async (req, res) => {
       return getOrchestratorCamoticsLinuxPackage(orchestratorCamoticsLinuxPackageMatch[1], res);
     }
 
+    const orchestratorOpenCamLibCandidateInputsMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/opencamlib-candidate-inputs\.zip$/);
+    if (req.method === "GET" && orchestratorOpenCamLibCandidateInputsMatch) {
+      return getOrchestratorOpenCamLibCandidateInputsPackage(orchestratorOpenCamLibCandidateInputsMatch[1], res);
+    }
+
     const orchestratorEvidenceReviewPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/evidence-review-package$/);
     if (req.method === "GET" && orchestratorEvidenceReviewPackageMatch) {
       return getOrchestratorEvidenceReviewPackage(orchestratorEvidenceReviewPackageMatch[1], res);
@@ -14982,6 +14987,353 @@ function getOrchestratorCamoticsLinuxPackage(jobId, res) {
     "Cache-Control": "no-store"
   });
   res.end(zip);
+}
+
+async function getOrchestratorOpenCamLibCandidateInputsPackage(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
+    return json(res, 400, { error: "非法 job 路径" });
+  }
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  const jobSpec = readJsonFileSafe(join(workDir, "job.json"));
+  if (!jobSpec) {
+    return json(res, 409, {
+      error: "缺少 job.json，请先运行 V3 小闭环生成 Orchestrator 作业规格。",
+      nextActions: ["重新点击“生成试雕刀路与安全包”。"]
+    });
+  }
+
+  let prepared;
+  try {
+    prepared = await createOpenCamLibCandidateInputsPackageFiles(job, workDir, jobSpec);
+  } catch (error) {
+    return json(res, 409, {
+      error: error instanceof Error ? error.message : "生成 OpenCAMLib 候选输入包失败。",
+      nextActions: [
+        "确认当前 job 已完成 V3 小闭环。",
+        "如果源模型是 GLB/GLTF/OBJ，确认后端可以转换为 STL。",
+        "重新运行该下载接口生成 Linux 输入包。"
+      ]
+    });
+  }
+
+  const zip = createServerZipBuffer(prepared.files);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `hediao3d-v3-${safeJobId.slice(0, 8)}-opencamlib-inputs-${stamp}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
+async function createOpenCamLibCandidateInputsPackageFiles(job, workDir, jobSpec) {
+  const model = await prepareOpenCamLibCandidateStl(job, workDir, jobSpec);
+  const exportJobSpec = createOpenCamLibCandidateExportJobSpec(job, jobSpec);
+  const existingPlan = readJsonFileSafe(join(workDir, "opencamlib-kernel-plan.json"));
+  const plan = normalizeOpenCamLibCandidateKernelPlan(existingPlan, exportJobSpec);
+  const manifest = createOpenCamLibCandidateInputManifest(job, model, exportJobSpec, plan);
+  const readme = createOpenCamLibCandidateInputsReadme(manifest);
+  const prefix = "hediao3d-opencamlib-candidate-inputs";
+  return {
+    manifest,
+    files: [
+      {
+        name: `${prefix}/job.json`,
+        content: JSON.stringify(exportJobSpec, null, 2)
+      },
+      {
+        name: `${prefix}/opencamlib-kernel-plan.json`,
+        content: JSON.stringify(plan, null, 2)
+      },
+      {
+        name: `${prefix}/repaired-model.stl`,
+        content: model.content
+      },
+      {
+        name: `${prefix}/opencamlib-candidate-input-manifest.json`,
+        content: JSON.stringify(manifest, null, 2)
+      },
+      {
+        name: `${prefix}/README-OPENCAMLIB-CANDIDATE.md`,
+        content: readme
+      }
+    ]
+  };
+}
+
+async function prepareOpenCamLibCandidateStl(job, workDir, jobSpec) {
+  const sourceCandidates = [
+    join(workDir, "repaired-model.stl"),
+    join(workDir, "cam-source-converted.stl"),
+    join(workDir, "cam-decimated-model.stl"),
+    typeof jobSpec.modelPath === "string" && /\.stl$/i.test(jobSpec.modelPath) ? jobSpec.modelPath : null,
+    /\.stl$/i.test(localModelUrlToPath(job.modelUrl)) ? localModelUrlToPath(job.modelUrl) : null
+  ].filter(Boolean);
+  const existing = sourceCandidates.find((filePath) => existsSync(filePath));
+  if (existing) {
+    return {
+      sourcePath: existing,
+      generated: false,
+      packageFilename: "repaired-model.stl",
+      content: readFileSync(existing),
+      sha256: createHash("sha256").update(readFileSync(existing)).digest("hex")
+    };
+  }
+
+  const sourceModelPath = typeof jobSpec.modelPath === "string" && existsSync(jobSpec.modelPath)
+    ? jobSpec.modelPath
+    : localModelUrlToPath(job.modelUrl);
+  if (!sourceModelPath || !existsSync(sourceModelPath)) {
+    throw new Error("找不到可转换为 STL 的源模型。");
+  }
+  const geometry = await loadModelGeometry(sourceModelPath);
+  try {
+    const conversion = geometryToAsciiStl(geometry, `hediao3d_${job.id}_opencamlib_candidate`, {
+      maxTriangles: getCamStlMaxTriangles()
+    });
+    const targetPath = join(workDir, "cam-source-converted.stl");
+    await writeFile(targetPath, conversion.stl, "utf8");
+    return {
+      sourcePath: sourceModelPath,
+      generated: true,
+      conversion: {
+        originalTriangleCount: conversion.originalTriangleCount,
+        exportedTriangleCount: conversion.exportedTriangleCount,
+        decimated: conversion.decimated,
+        strategy: conversion.strategy
+      },
+      packageFilename: "repaired-model.stl",
+      content: Buffer.from(conversion.stl, "utf8"),
+      sha256: createHash("sha256").update(conversion.stl).digest("hex")
+    };
+  } finally {
+    geometry.dispose?.();
+  }
+}
+
+function createOpenCamLibCandidateExportJobSpec(job, jobSpec) {
+  return {
+    ...jobSpec,
+    schema: jobSpec.schema ?? "hediao3d.adapter-job.v1",
+    jobId: jobSpec.jobId ?? job.id,
+    workDir: ".",
+    modelPath: "repaired-model.stl",
+    modelUrl: "repaired-model.stl",
+    outputs: {
+      ...(jobSpec.outputs ?? {}),
+      neutralToolpath: "neutral-toolpath.json",
+      gcode: "toolpath.nc",
+      report: "adapter-report.json"
+    },
+    linuxCandidateInputBundle: {
+      schema: "hediao3d.opencamlib-candidate-input-job-binding.v1",
+      createdAt: new Date().toISOString(),
+      sourceJobId: job.id,
+      modelPathInBundle: "repaired-model.stl",
+      productionLocked: true,
+      note: "This job spec is path-normalized for Linux OpenCAMLib real-candidate execution. It does not unlock production by itself."
+    }
+  };
+}
+
+function normalizeOpenCamLibCandidateKernelPlan(existingPlan, exportJobSpec) {
+  const plan = existingPlan && existingPlan.schema === "hediao3d.opencamlib-kernel-plan.v1"
+    ? { ...existingPlan }
+    : createOpenCamLibCandidateKernelPlan(exportJobSpec);
+  const settings = exportJobSpec.settings ?? {};
+  plan.schema = "hediao3d.opencamlib-kernel-plan.v1";
+  plan.jobId = exportJobSpec.jobId ?? plan.jobId ?? null;
+  plan.engine = "opencamlib";
+  plan.model = {
+    ...(plan.model ?? {}),
+    path: "repaired-model.stl",
+    format: "stl",
+    exists: true,
+    requiredMeshState: plan.model?.requiredMeshState ?? "triangulated-manifold-or-repaired-mesh"
+  };
+  plan.stock = {
+    ...(plan.stock ?? {}),
+    lengthMm: plan.stock?.lengthMm ?? settings.lengthMm ?? null,
+    diameterMm: plan.stock?.diameterMm ?? settings.diameterMm ?? null,
+    leftHoldMm: plan.stock?.leftHoldMm ?? settings.leftHoldMm ?? null,
+    rightHoldMm: plan.stock?.rightHoldMm ?? settings.rightHoldMm ?? null,
+    endTransitionMm: plan.stock?.endTransitionMm ?? settings.endTransitionMm ?? null
+  };
+  plan.tool = {
+    ...(plan.tool ?? {}),
+    toolProfileId: plan.tool?.toolProfileId ?? settings.toolProfileId ?? "vflat-4mm-25deg",
+    diameterMm: plan.tool?.diameterMm ?? settings.toolDiameter ?? 4,
+    flatTipMm: plan.tool?.flatTipMm ?? 0.4,
+    angleDeg: plan.tool?.angleDeg ?? 25
+  };
+  plan.sampling = {
+    ...(plan.sampling ?? {}),
+    recommendedPrimary: plan.sampling?.recommendedPrimary ?? "unwrapped-rotary-drop-cutter",
+    stepoverMm: plan.sampling?.stepoverMm ?? settings.stepoverMm ?? null,
+    stepoverDeg: plan.sampling?.stepoverDeg ?? settings.stepoverDeg ?? null,
+    maxCutDepthMm: plan.sampling?.maxCutDepthMm ?? settings.maxCutDepth ?? null,
+    stockAllowanceMm: plan.sampling?.stockAllowanceMm ?? settings.stockAllowance ?? null,
+    axisMapping: {
+      ...(plan.sampling?.axisMapping ?? {}),
+      lengthAxis: "X",
+      depthAxis: "Z",
+      rotaryAxis: settings.camMode === "rotaryWrap" ? (settings.rotaryOutputAxis ?? "Y") : null,
+      rotaryWrapPerRevolutionMm: settings.camMode === "rotaryWrap" ? (settings.rotaryWrapPerRevolutionMm ?? null) : null
+    }
+  };
+  plan.outputs = {
+    ...(plan.outputs ?? {}),
+    neutralPolyline: "neutral-toolpath.json",
+    cutterContactReport: "opencamlib-cutter-contact-report.json",
+    finalMachineNc: "toolpath.nc"
+  };
+  plan.productionLocked = true;
+  plan.productionCandidateCriteria = Array.isArray(plan.productionCandidateCriteria) ? plan.productionCandidateCriteria : [
+    "neutral-toolpath.json must be non-synthetic, non-fixture and non-preview.",
+    "opencamlib-cutter-contact-report.json must pass strict contact validation.",
+    "protectedZones must be enabled with violationCount=0 and sampled X inside the safe span.",
+    "CAMotics/material-removal evidence, air-run, trial feedback and machine acceptance are still required before production unlock."
+  ];
+  return plan;
+}
+
+function createOpenCamLibCandidateKernelPlan(jobSpec) {
+  const settings = jobSpec.settings ?? {};
+  return {
+    schema: "hediao3d.opencamlib-kernel-plan.v1",
+    jobId: jobSpec.jobId ?? null,
+    engine: "opencamlib",
+    model: {
+      path: "repaired-model.stl",
+      format: "stl",
+      exists: true,
+      requiredMeshState: "triangulated-manifold-or-repaired-mesh",
+      conversionHint: "This package normalizes the selected CAM mesh into repaired-model.stl for Linux execution."
+    },
+    stock: {
+      lengthMm: settings.lengthMm ?? null,
+      diameterMm: settings.diameterMm ?? null,
+      leftHoldMm: settings.leftHoldMm ?? null,
+      rightHoldMm: settings.rightHoldMm ?? null,
+      endTransitionMm: settings.endTransitionMm ?? null,
+      blankShape: settings.camMode === "rotaryWrap" ? "olive-core-rotary-wrap" : "rectangular-relief"
+    },
+    tool: {
+      toolProfileId: settings.toolProfileId ?? "vflat-4mm-25deg",
+      diameterMm: settings.toolDiameter ?? 4,
+      flatTipMm: 0.4,
+      angleDeg: 25,
+      cutterModel: "4mm 25deg flat-tip V cutter; production use requires local calibration."
+    },
+    sampling: {
+      strategies: ["drop-cutter-z-map", "waterline-steep-region", "rest-detail-contact-pass"],
+      recommendedPrimary: settings.camMode === "rotaryWrap" ? "unwrapped-rotary-drop-cutter" : "drop-cutter-z-map",
+      stepoverMm: settings.stepoverMm ?? null,
+      stepoverDeg: settings.stepoverDeg ?? null,
+      maxCutDepthMm: settings.maxCutDepth ?? null,
+      stockAllowanceMm: settings.stockAllowance ?? null,
+      axisMapping: {
+        lengthAxis: "X",
+        depthAxis: "Z",
+        rotaryAxis: settings.camMode === "rotaryWrap" ? (settings.rotaryOutputAxis ?? "Y") : null,
+        rotaryWrapPerRevolutionMm: settings.camMode === "rotaryWrap" ? (settings.rotaryWrapPerRevolutionMm ?? null) : null
+      }
+    },
+    operations: [],
+    operationCounts: { total: 0, enabled: 0 },
+    outputs: {
+      neutralPointCloud: "opencamlib-cutter-contact-points.json",
+      neutralPolyline: "neutral-toolpath.json",
+      cutterContactReport: "opencamlib-cutter-contact-report.json",
+      handoff: "HeDiao3D converts neutral cutter-contact output into rotary-wrap machine NC.",
+      finalMachineNc: "toolpath.nc"
+    },
+    opencamlib: {
+      available: null,
+      module: null,
+      note: "Resolved on the Linux Native CAM server by opencamlib-runner.py/probe."
+    }
+  };
+}
+
+function createOpenCamLibCandidateInputManifest(job, model, exportJobSpec, plan) {
+  const jobText = JSON.stringify(exportJobSpec, null, 2);
+  const planText = JSON.stringify(plan, null, 2);
+  return {
+    schema: "hediao3d.opencamlib-candidate-input-package.v1",
+    createdAt: new Date().toISOString(),
+    jobId: job.id,
+    productionLocked: true,
+    purpose: "Linux OpenCAMLib real-candidate input handoff",
+    expectedRunner: "node opencamlib-real-candidate-run.mjs .",
+    files: [
+      { filename: "job.json", sha256: createHash("sha256").update(jobText).digest("hex") },
+      { filename: "opencamlib-kernel-plan.json", sha256: createHash("sha256").update(planText).digest("hex") },
+      { filename: "repaired-model.stl", sha256: model.sha256, generated: Boolean(model.generated), sourcePath: model.sourcePath }
+    ],
+    modelConversion: model.conversion ?? null,
+    machineBoundary: {
+      controllerClass: "3axis-controller-with-rotary-fixture",
+      machineProfileId: exportJobSpec.settings?.machineProfileId ?? null,
+      camMode: exportJobSpec.settings?.camMode ?? null,
+      postProcessor: exportJobSpec.settings?.postProcessor ?? null,
+      rotaryOutputAxis: exportJobSpec.settings?.rotaryOutputAxis ?? null
+    },
+    protectedZones: {
+      leftHoldMm: exportJobSpec.settings?.leftHoldMm ?? null,
+      rightHoldMm: exportJobSpec.settings?.rightHoldMm ?? null,
+      endTransitionMm: exportJobSpec.settings?.endTransitionMm ?? null,
+      required: true
+    },
+    nextCommands: [
+      "unzip hediao3d-v3-*-opencamlib-inputs-*.zip",
+      "cp -a hediao3d-opencamlib-candidate-inputs/* /path/to/hediao3d-native-cam-server/",
+      "cd /path/to/hediao3d-native-cam-server",
+      "node opencamlib-real-candidate-run.mjs .",
+      "bash native-cam-real-output-check.sh .",
+      "upload native-cam-real-output-bundle.zip back to HeDiao3D"
+    ]
+  };
+}
+
+function createOpenCamLibCandidateInputsReadme(manifest) {
+  return [
+    "# HeDiao3D OpenCAMLib Candidate Inputs",
+    "",
+    "This ZIP contains the current V3 job inputs normalized for Linux OpenCAMLib real-candidate execution.",
+    "",
+    "## Files",
+    "",
+    "- `job.json`: path-normalized adapter job spec.",
+    "- `opencamlib-kernel-plan.json`: path-normalized OpenCAMLib plan.",
+    "- `repaired-model.stl`: STL mesh input used by the runner.",
+    "- `opencamlib-candidate-input-manifest.json`: hashes and machine boundary summary.",
+    "",
+    "## Run On Linux Native CAM Server",
+    "",
+    "Copy these files into the unpacked `hediao3d-native-cam-server` directory, then run:",
+    "",
+    "```bash",
+    "node native-cam-server-package-self-check.mjs .",
+    "node opencamlib-real-candidate-run.mjs .",
+    "bash native-cam-real-output-check.sh .",
+    "```",
+    "",
+    "Upload `native-cam-real-output-bundle.zip` back to the HeDiao3D V3 Native CAM real-output panel.",
+    "",
+    "## Safety",
+    "",
+    `Production locked: ${manifest.productionLocked ? "yes" : "no"}.`,
+    "This package only prepares Linux CAM inputs. It does not unlock machine production NC.",
+    "Production still requires strict contact validation, protected end-zone checks, material-removal simulation, air-run, trial feedback and machine acceptance.",
+    ""
+  ].join("\n");
 }
 
 function getOrchestratorEvidenceReviewPackage(jobId, res) {

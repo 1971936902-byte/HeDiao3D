@@ -148,6 +148,16 @@ async function main() {
   assert(linuxZipNames.includes("hediao3d-v3-camotics/references/camotics-execution-preflight.json"), "CAMotics Linux package missing execution preflight report");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-template.json"), "CAMotics Linux package missing result template");
 
+  const openCamLibInputsPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/opencamlib-candidate-inputs.zip`);
+  assert(openCamLibInputsPackage.bytes[0] === 0x50 && openCamLibInputsPackage.bytes[1] === 0x4b, "OpenCAMLib candidate input package should be a ZIP file");
+  assert((openCamLibInputsPackage.contentType ?? "").includes("application/zip"), "OpenCAMLib candidate input package should use application/zip content type");
+  const openCamLibInputZipNames = listZipFilenames(openCamLibInputsPackage.bytes);
+  assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/job.json"), "OpenCAMLib input ZIP missing job.json");
+  assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/opencamlib-kernel-plan.json"), "OpenCAMLib input ZIP missing kernel plan");
+  assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/repaired-model.stl"), "OpenCAMLib input ZIP missing STL model");
+  assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/opencamlib-candidate-input-manifest.json"), "OpenCAMLib input ZIP missing manifest");
+  assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/README-OPENCAMLIB-CANDIDATE.md"), "OpenCAMLib input ZIP missing README");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
