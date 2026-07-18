@@ -46,6 +46,7 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "camotics-runner-schema" && check.status === "pass"), "self-check should verify CAMotics runner schema");
   assert(readyReport.checks?.some((check) => check.id === "camotics-runner-fail-closed" && check.status === "pass"), "self-check should verify CAMotics runner fail-closed production lock");
   assert(readyReport.checks?.some((check) => check.id === "camotics-runner-real-command" && check.status === "pass"), "self-check should verify CAMotics runner real command and bundle path");
+  assert(readyReport.checks?.some((check) => check.id === "camotics-validator-upstream-evidence-gate" && check.status === "pass"), "self-check should verify CAMotics validator rejects mismatched upstream CAM evidence");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-schema" && check.status === "pass"), "self-check should verify diagnostics bundle schema");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-schema" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike schema");
