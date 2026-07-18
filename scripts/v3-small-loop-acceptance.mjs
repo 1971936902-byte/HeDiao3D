@@ -22,6 +22,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-buddha-e2e-api-test.mjs")]
   },
   {
+    id: "focused-ui-contract",
+    label: "V3 focused operator UI contract",
+    command: [process.execPath, join("scripts", "v3-focused-ui-contract-test.mjs")]
+  },
+  {
     id: "v3-smoke",
     label: "V3 orchestrator smoke loop",
     command: [process.execPath, join("scripts", "v3-smoke-test.mjs")]

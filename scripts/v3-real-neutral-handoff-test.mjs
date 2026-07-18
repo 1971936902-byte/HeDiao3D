@@ -109,6 +109,13 @@ async function main() {
   assert(adapterReport.metrics?.neutralToolpath?.cutterContactReport?.inputIdentityBinding?.status === "bound", "heightfield contact report should bind to neutral output hash");
   assert(adapterReport.metrics?.neutralToolpath?.imported === false, "external command output should not be classified as imported fixture");
   assert(adapterReport.metrics?.neutralToolpath?.synthetic === false, "adapter neutral output must not be synthetic");
+  assert(adapterReport.metrics?.opencamlibRuntimeProbe?.reportSchema === "hediao3d.opencamlib-runtime-probe.v1", "adapter report should expose OpenCAMLib runtime probe summary");
+  assert(["ready", "partial", "missing"].includes(adapterReport.metrics.opencamlibRuntimeProbe.status), "runtime probe summary should classify readiness");
+  assert(typeof adapterReport.metrics.opencamlibRuntimeProbe.dropCutterReady === "boolean", "runtime probe summary should expose dropCutterReady");
+
+  const runtimeProbe = await getArtifactJson(job.id, "opencamlib-runtime-probe.json");
+  assert(runtimeProbe.schema === "hediao3d.opencamlib-runtime-probe.v1", "runtime probe artifact schema mismatch");
+  assert(runtimeProbe.productionBoundary?.includes("must not be used"), "runtime probe artifact should preserve production boundary");
 
   const neutralToolpath = await getArtifactJson(job.id, "neutral-toolpath.json");
   assert(neutralToolpath.schema === "hediao3d.neutral-toolpath.v1", "neutral schema mismatch");

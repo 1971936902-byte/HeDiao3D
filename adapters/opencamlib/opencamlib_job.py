@@ -24,6 +24,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from opencamlib_probe import create_probe_report
+
 
 PROTOCOL_VERSION = "hediao3d.adapter.v1"
 ENGINE = "opencamlib"
@@ -193,11 +195,14 @@ def write_plan_artifacts(job: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str,
     work_dir.mkdir(parents=True, exist_ok=True)
     plan_path = work_dir / "opencamlib-kernel-plan.json"
     script_path = work_dir / "opencamlib-run-template.py"
+    probe_path = work_dir / "opencamlib-runtime-probe.json"
     plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     script_path.write_text(create_run_template(plan), encoding="utf-8")
+    probe_path.write_text(json.dumps(create_probe_report(), ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "opencamlibKernelPlan": str(plan_path),
         "opencamlibRunTemplate": str(script_path),
+        "opencamlibRuntimeProbe": str(probe_path),
     }
 
 
@@ -996,6 +1001,7 @@ def main() -> int:
                     "enabledOperationCount": plan["operationCounts"]["enabled"],
                     "recommendedPrimary": plan["sampling"]["recommendedPrimary"],
                 },
+                "opencamlibRuntimeProbe": summarize_runtime_probe_artifact(artifact_paths.get("opencamlibRuntimeProbe")),
                 "neutralToolpath": {
                     "status": "generated" if attempt.get("neutralToolpathPath") else "not_generated",
                     "path": attempt.get("neutralToolpathPath"),
@@ -1078,6 +1084,39 @@ def create_missing_handoff_evidence(engine: str, output_kind: str, attempt: Dict
         "pointCount": 0,
         "productionCandidate": False,
         "productionBoundary": "No external neutral output was generated; production NC remains locked.",
+    }
+
+
+def summarize_runtime_probe_artifact(path: Optional[str]) -> Dict[str, Any]:
+    if not path:
+        return {
+            "schema": "hediao3d.opencamlib-runtime-probe-summary.v1",
+            "status": "missing",
+            "path": None,
+            "summary": "OpenCAMLib runtime probe artifact was not generated.",
+        }
+    try:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "schema": "hediao3d.opencamlib-runtime-probe-summary.v1",
+            "status": "unreadable",
+            "path": path,
+            "summary": "OpenCAMLib runtime probe artifact exists but could not be parsed.",
+        }
+    capability = report.get("capabilitySummary") if isinstance(report.get("capabilitySummary"), dict) else {}
+    return {
+        "schema": "hediao3d.opencamlib-runtime-probe-summary.v1",
+        "status": report.get("level") or "unknown",
+        "path": path,
+        "reportSchema": report.get("schema"),
+        "selectedModule": report.get("selectedModule"),
+        "dropCutterReady": bool(capability.get("dropCutterReady")),
+        "surfaceCandidateCount": capability.get("surfaceCandidateCount"),
+        "cutterCandidateCount": capability.get("cutterCandidateCount"),
+        "dropCutterCandidateCount": capability.get("dropCutterCandidateCount"),
+        "productionBoundary": report.get("productionBoundary"),
+        "summary": capability.get("summary") or "OpenCAMLib runtime probe generated.",
     }
 
 
