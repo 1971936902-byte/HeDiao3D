@@ -37,6 +37,11 @@ try {
   assert(readyReport.schema === "hediao3d.opencamlib-candidate-package-validation.v1", "candidate package schema mismatch");
   assert(readyReport.level === "ready", `ready candidate package level mismatch: ${readyReport.level}`);
   assert(readyReport.contactValidation?.level === "ready", "ready package should include ready contact validation");
+  assert(readyReport.artifactManifest?.schema === "hediao3d.opencamlib-candidate-artifact-manifest.v1", "ready package should include artifact manifest");
+  assert(readyReport.artifactManifest?.readyForImport === true, "ready artifact manifest should be ready for import");
+  assert(readyReport.handoffContract?.schema === "hediao3d.opencamlib-neutral-handoff-contract.v1", "ready package should include handoff contract");
+  assert(readyReport.handoffContract?.status === "ready-for-hediao3d-import", "ready handoff contract should be import-ready");
+  assert(readyReport.handoffContract?.strictAcceptance?.neutralHashBound === true, "ready handoff contract should confirm neutral hash binding");
   assert(readyReport.files.neutral?.sha256 === sha256File(neutralPath), "ready package should hash neutral output");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-validation.json")), "candidate package report should be written");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-bundle.zip")), "candidate package bundle should be written");
@@ -53,6 +58,8 @@ try {
   assert(blocked.status === 3, `blocked candidate package should fail strict mode, got ${blocked.status}: ${blocked.stdout}`);
   const blockedReport = JSON.parse(blocked.stdout);
   assert(blockedReport.level === "critical", "blocked package should be critical");
+  assert(blockedReport.artifactManifest?.readyForImport === false, "blocked artifact manifest should not be import-ready");
+  assert(blockedReport.handoffContract?.status === "blocked", "blocked handoff contract should be blocked");
   assert(blockedReport.blockers?.some((item) => /contact/i.test(item)), "blocked package should mention missing contact");
   assert(existsSync(join(blockedDir, "opencamlib-candidate-package-validation.json")), "blocked package should still write report");
   rmSync(blockedDir, { recursive: true, force: true });

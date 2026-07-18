@@ -55,6 +55,8 @@ const blockers = [
   ...(contactValidation && contactValidation.level !== "ready" ? [`strict contact validation is ${contactValidation.level}`] : [])
 ];
 const level = blockers.length ? "critical" : "ready";
+const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation });
+const handoffContract = createHandoffContract({ level, files, contactValidation });
 const report = {
   schema: "hediao3d.opencamlib-candidate-package-validation.v1",
   createdAt: new Date().toISOString(),
@@ -62,6 +64,8 @@ const report = {
   strict,
   root,
   files,
+  artifactManifest,
+  handoffContract,
   contactValidation: contactValidation ? createContactValidationSummary(contactValidation) : null,
   validatorRun: validatorRun ? {
     exitCode: validatorRun.status,
@@ -137,9 +141,72 @@ function createContactValidationSummary(value) {
   };
 }
 
+function createArtifactManifest({ files, outPath, bundlePath, contactValidation }) {
+  const entries = [
+    createManifestEntry("neutral-toolpath", files.neutral, "required", "HeDiao3D imports this neutral cutter-contact point path before rotary-Y postprocessing."),
+    createManifestEntry("opencamlib-kernel-plan", files.plan, "required", "Hash-bound CAM kernel plan used by the real OpenCAMLib run."),
+    createManifestEntry("cutter-contact-report", files.contact, "required", "Strict cutter-contact, tool, residual and identity evidence."),
+    createManifestEntry("source-model", files.model, "required", "Source/repaired mesh identity. The bundle records this hash but does not include the model by default."),
+    createManifestEntry("contact-output-validator", files.validator, "audit", "Validator script version used for this preflight."),
+    createManifestEntry("candidate-package-validation", createFileIdentity(outPath, "opencamlib-candidate-package-validation.json"), "generated", "This report."),
+    createManifestEntry("candidate-package-bundle", createFileIdentity(bundlePath, "opencamlib-candidate-package-bundle.zip"), "generated", "Lightweight evidence ZIP for job audit.")
+  ];
+  return {
+    schema: "hediao3d.opencamlib-candidate-artifact-manifest.v1",
+    readyForImport: contactValidation?.level === "ready" && entries.every((entry) => entry.required !== true || entry.exists),
+    entries,
+    missingRequired: entries.filter((entry) => entry.required && !entry.exists).map((entry) => entry.filename ?? entry.kind),
+    productionBoundary: "These artifacts can enter HeDiao3D as CAM evidence only; they do not bypass material-removal simulation, air-run, trial feedback or machine acceptance."
+  };
+}
+
+function createManifestEntry(kind, identity, role, description) {
+  return {
+    kind,
+    role,
+    required: role === "required",
+    path: identity?.path ?? null,
+    filename: identity?.filename ?? null,
+    exists: Boolean(identity?.exists),
+    sizeBytes: identity?.sizeBytes ?? 0,
+    sha256: identity?.sha256 ?? null,
+    description
+  };
+}
+
+function createHandoffContract({ level, files, contactValidation }) {
+  return {
+    schema: "hediao3d.opencamlib-neutral-handoff-contract.v1",
+    status: level === "ready" ? "ready-for-hediao3d-import" : "blocked",
+    importTarget: "OpenCAMLib neutral handoff -> HeDiao3D rotary-Y postprocess -> CAMotics/material-removal -> air-run/trial gate",
+    requiredFiles: [
+      "neutral-toolpath.json",
+      "opencamlib-cutter-contact-report.json",
+      "opencamlib-kernel-plan.json",
+      files.model.filename || "source/repaired model"
+    ],
+    requiredSchemas: {
+      neutral: "hediao3d.neutral-toolpath.v1",
+      contact: "hediao3d.opencamlib-cutter-contact-report.v1",
+      plan: "hediao3d.opencamlib-kernel-plan.v1"
+    },
+    strictAcceptance: {
+      contactValidationLevel: contactValidation?.level ?? "not-run",
+      productionCandidateEligible: Boolean(contactValidation?.productionCandidateEligible),
+      neutralHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-neutral" && check.status === "pass")),
+      planHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-plan" && check.status === "pass")),
+      modelHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-model" && check.status === "pass"))
+    },
+    blockedReason: level === "ready" ? null : "Candidate output is missing required files or failed strict cutter-contact validation.",
+    machineUse: "report-only-until-full-production-gates-pass"
+  };
+}
+
 function createBundleFiles(report, reportPath, identities) {
   const files = [
-    { name: "opencamlib-candidate-package-validation.json", content: Buffer.from(JSON.stringify(report, null, 2), "utf8") }
+    { name: "opencamlib-candidate-package-validation.json", content: Buffer.from(JSON.stringify(report, null, 2), "utf8") },
+    { name: "opencamlib-candidate-artifact-manifest.json", content: Buffer.from(JSON.stringify(report.artifactManifest, null, 2), "utf8") },
+    { name: "opencamlib-neutral-handoff-contract.json", content: Buffer.from(JSON.stringify(report.handoffContract, null, 2), "utf8") }
   ];
   for (const [key, identity] of Object.entries(identities)) {
     if (!identity.exists || key === "model" || key === "validator") continue;
@@ -158,6 +225,10 @@ function createBundleFiles(report, reportPath, identities) {
       "It does not contain the source model by default; model identity is recorded in the JSON report.",
       "",
       "Use it before Native CAM real-output import, CAMotics validation, air-run and trial evidence.",
+      "",
+      "Important:",
+      "- The package is report-only until every HeDiao3D production gate passes.",
+      "- The model file is not included by default; use the recorded sha256 to verify the exact source/repaired mesh.",
       ""
     ].join("\n"), "utf8")
   });
