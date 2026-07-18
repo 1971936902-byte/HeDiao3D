@@ -42,6 +42,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-rotary-heightfield-runner-test.mjs")]
   },
   {
+    id: "rotary-neutral-handoff",
+    label: "OpenCAMLib rotary neutral handoff loop",
+    command: [process.execPath, join("scripts", "v3-rotary-neutral-handoff-test.mjs")]
+  },
+  {
     id: "camotics-cli-package-api",
     label: "CAMotics Linux package API",
     command: [process.execPath, join("scripts", "v3-camotics-cli-package-api-test.mjs")]

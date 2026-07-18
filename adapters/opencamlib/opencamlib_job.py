@@ -46,6 +46,7 @@ def detect_opencamlib() -> Dict[str, Any]:
         "modules": modules,
         "experimentalOutputEnabled": is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_EXPERIMENTAL_OUTPUT")),
         "heightfieldPreviewEnabled": is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_HEIGHTFIELD_PREVIEW")),
+        "rotaryHeightfieldPreviewEnabled": is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_PREVIEW")),
         "externalCommand": os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND"),
         "externalCommandJson": os.environ.get("HEDIAO3D_OPENCAMLIB_EXTERNAL_COMMAND_JSON"),
     }
@@ -224,6 +225,10 @@ def attempt_experimental_kernel_output(job: Dict[str, Any], plan: Dict[str, Any]
         preview_command = resolve_bundled_heightfield_runner_command()
         if preview_command is not None:
             os.environ["HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT"] = "true"
+            if should_use_rotary_heightfield_preview(job, plan):
+                os.environ["HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT"] = "true"
+            else:
+                os.environ.pop("HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT", None)
             commanded = run_external_neutral_command(job, plan, job_path, Path(plan_path), preview_command)
             if commanded is not None:
                 return {
@@ -286,6 +291,17 @@ def resolve_bundled_heightfield_runner_command() -> Optional[List[str]]:
         return None
     python = os.environ.get("PYTHON") or sys.executable or "python"
     return [python, str(runner_path)]
+
+
+def should_use_rotary_heightfield_preview(job: Dict[str, Any], plan: Dict[str, Any]) -> bool:
+    if not is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_PREVIEW")):
+        return False
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    sampling = plan.get("sampling") if isinstance(plan.get("sampling"), dict) else {}
+    return (
+        settings.get("camMode") == "rotaryWrap"
+        or sampling.get("recommendedPrimary") == "unwrapped-rotary-drop-cutter"
+    )
 
 
 def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_path: Path, plan_path: Path, command_parts: List[str]) -> Optional[Dict[str, Any]]:
