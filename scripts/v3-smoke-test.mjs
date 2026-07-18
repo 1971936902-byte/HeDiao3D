@@ -202,6 +202,8 @@ async function main() {
   assert(packageIndex.openSourceCamExecutionPlan?.artifact === "open-source-cam-execution-plan.json", "package index missing open-source CAM execution plan");
   assert(packageIndex.camServerConfig?.artifact === "cam-server-config.json", "package index missing CAM server config artifact");
   assert(packageIndex.camServerConfig?.prepChecklist === "cam-server-prep-checklist.md", "package index missing CAM server prep checklist artifact");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "opencamlib-candidate-package-validation.json"), "readFirst missing OpenCAMLib candidate package validation entry");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "opencamlib-candidate-package-bundle.zip"), "readFirst missing OpenCAMLib candidate package bundle entry");
   assert(packageIndex.machineAcceptance?.artifact === "machine-acceptance-checklist.json", "package index missing machine acceptance artifact");
   assert(packageIndex.productionEvidenceDossier?.missingEvidenceCount > 0, "package index should expose missing production evidence count");
   assert(packageIndex.productionEvidenceDossier?.missingEvidenceTop?.some((item) => item.id === "material-removal-simulation" || item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose top missing production evidence items");
@@ -238,6 +240,8 @@ async function main() {
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.every((file) => file.machineUse?.class), "delivery-manifest artifact missing machineUse classifications");
   assert(deliveryManifest.files?.some((file) => file.filename === "open-source-cam-execution-plan.json" && file.downloadable), "delivery manifest should expose open-source CAM execution plan");
+  assert(deliveryManifest.files?.some((file) => file.filename === "opencamlib-candidate-package-validation.json" && file.machineUse?.class === "report-only"), "delivery manifest should expose OpenCAMLib candidate package validation as report-only evidence");
+  assert(deliveryManifest.files?.some((file) => file.filename === "opencamlib-candidate-package-bundle.zip" && file.machineUse?.class === "report-only"), "delivery manifest should expose OpenCAMLib candidate package bundle as report-only evidence");
   assert(deliveryManifest.files?.some((file) => file.filename === "safe-trial-execution-plan.json" && file.downloadable), "delivery manifest should expose safe trial execution plan");
   assert(deliveryManifest.files?.some((file) => file.filename === "operator-download-checklist.md" && file.downloadable), "delivery manifest should expose operator download checklist");
   const safeTrialPackageFiles = deliveryManifest.files.filter((file) => isSafeTrialPackageFile(file, deliveryManifest.allowTrialNc));

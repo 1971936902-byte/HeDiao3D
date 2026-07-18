@@ -5174,6 +5174,8 @@ async function processOrchestratorJob(job, settings) {
     pushIfArtifactExists(job, "opencamlib-run-template.py");
     pushIfArtifactExists(job, "opencamlib-cutter-contact-report.json");
     pushIfArtifactExists(job, "opencamlib-cutter-envelope-report.json");
+    pushIfArtifactExists(job, "opencamlib-candidate-package-validation.json");
+    pushIfArtifactExists(job, "opencamlib-candidate-package-bundle.zip");
     pushIfArtifactExists(job, "neutral-toolpath.json");
     pushIfArtifactExists(job, "camotics-simulation-plan.json");
     pushIfArtifactExists(job, "camotics-project-template.json");
@@ -5528,6 +5530,8 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-wrap-preview-report.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-trace-report.json"));
   pushIfArtifactExists(job, "toolpath-sequencing-report.json");
+  pushIfArtifactExists(job, "opencamlib-candidate-package-validation.json");
+  pushIfArtifactExists(job, "opencamlib-candidate-package-bundle.zip");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "rotary-calibration-airrun.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-run.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "camotics-preview.nc"));
@@ -10287,7 +10291,13 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
       projectTemplate: "camotics-project-template.json",
       simulationPlan: "camotics-simulation-plan.json",
       machineGcodeReferenceOnly: "toolpath.nc",
-      airRunReferenceOnly: "air-run.nc"
+      airRunReferenceOnly: "air-run.nc",
+      opencamlibCandidatePackageValidation: existsSync(join(job.workDir, "opencamlib-candidate-package-validation.json"))
+        ? "opencamlib-candidate-package-validation.json"
+        : null,
+      opencamlibCandidatePackageBundle: existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip"))
+        ? "opencamlib-candidate-package-bundle.zip"
+        : null
     },
     commandCandidates: [
       {
@@ -10330,6 +10340,7 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
         "inputs.machineContext 必须匹配 camotics-preview.nc 的 ROTARY_WRAP_AXIS、ROTARY_WRAP_PER_REV_MM 和 LENGTH_AXIS。",
         "metrics.motionLineCount 和 Z 范围必须匹配 camotics-preview.nc 的运动画像。",
         "截图或材料去除 STL 必须复制进加工包并生成 SHA-256。",
+        "若使用 OpenCAMLib 真实候选输出，opencamlib-candidate-package-validation.json 必须随同 CAMotics 结果一起保留。",
         "synthetic 或 fixture 结果不能作为生产证据。"
       ]
     },
@@ -10351,6 +10362,7 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
     notes: [
       "camotics-preview.nc 是展开三轴仿真文件，禁止上机。",
       "toolpath.nc 是目标机床后处理文件，不能直接等同于 CAMotics 三轴材料去除结论。",
+      "OpenCAMLib candidate package preflight 只证明候选包契约完整，仍需真实材料去除仿真和现场证据。",
       settings.camMode === "rotaryWrap"
         ? "Y/A 旋转夹具真实圆柱材料去除仍需结合旋转包裹预览报告和现场空跑。"
         : "三轴模式仍需核对机床控制器方言和空跑结果。"
@@ -10480,6 +10492,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
+  const opencamlibCandidatePackageValidation = readJsonFile(join(job.workDir, "opencamlib-candidate-package-validation.json"));
   const nativeCamRealOutputAcceptance = readLatestNativeCamRealOutputAcceptanceSummary();
   const machineAcceptanceLog = readJsonFile(join(job.workDir, "machine-acceptance-log.json"));
   const latestMachineAcceptanceRecord = Array.isArray(machineAcceptanceLog?.records) ? machineAcceptanceLog.records[0] : null;
@@ -10534,6 +10547,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-engine-selection.json"),
         getFile("open-source-cam-execution-plan.json"),
         getFile("external-cam-recipe.json"),
+        getFile("opencamlib-candidate-package-validation.json"),
+        getFile("opencamlib-candidate-package-bundle.zip"),
         getFile("neutral-toolpath-import-validation.json"),
         getFile("external-gcode-import-validation.json"),
         getFile("postprocess-profile.json"),
@@ -10631,6 +10646,19 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       productionCandidate: Boolean(externalGcodeImportValidation.productionCandidate),
       postprocessEligible: Boolean(externalGcodeImportValidation.postprocessEligible),
       summary: externalGcodeImportValidation.summary
+    } : null,
+    opencamlibCandidatePackage: opencamlibCandidatePackageValidation ? {
+      artifact: "opencamlib-candidate-package-validation.json",
+      bundle: getFile("opencamlib-candidate-package-bundle.zip")?.exists ? "opencamlib-candidate-package-bundle.zip" : null,
+      level: opencamlibCandidatePackageValidation.level ?? "unknown",
+      status: opencamlibCandidatePackageValidation.status ?? null,
+      contactValidationLevel: opencamlibCandidatePackageValidation.contactValidation?.level ?? null,
+      checkCount: opencamlibCandidatePackageValidation.contactValidation?.checkCount ?? 0,
+      blockerCount: opencamlibCandidatePackageValidation.blockers?.length ?? 0,
+      warningCount: opencamlibCandidatePackageValidation.warnings?.length ?? 0,
+      productionUnlockEligible: false,
+      productionBoundary: opencamlibCandidatePackageValidation.productionBoundary ?? "OpenCAMLib candidate package preflight does not unlock production NC by itself.",
+      summary: opencamlibCandidatePackageValidation.summary ?? `OpenCAMLib candidate package level=${opencamlibCandidatePackageValidation.level ?? "unknown"}`
     } : null,
     rotaryWrapPreview: rotaryWrapPreviewReport ? {
       level: rotaryWrapPreviewReport.level,
@@ -10819,6 +10847,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "external-cam-recipe.json", "外部CAM作业配方", "report", true, "统一描述 FreeCAD/BlenderCAM/OpenCAMLib 所需模型、毛坯、刀具、工序、后处理和仿真要求。"),
     createDeliveryFile(job.id, "adapter-report.json", "外部 CAM Adapter 报告", "report", existsSync(join(job.workDir, "adapter-report.json")), "记录外部 CAM 或 API 回填中立刀路的执行结果、来源和风险。"),
     createDeliveryFile(job.id, "neutral-toolpath.json", "外部中立刀路", "report", existsSync(join(job.workDir, "neutral-toolpath.json")), "外部 CAM 输出的统一刀位点，HeDiao3D 会在此基础上执行 Y/A 旋转夹具后处理。"),
+    createDeliveryFile(job.id, "opencamlib-candidate-package-validation.json", "OpenCAMLib候选包预检报告", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-validation.json")), "Linux/OpenCAMLib 真实候选输出目录的契约预检结果；只作为证据链输入，不单独解锁生产。"),
+    createDeliveryFile(job.id, "opencamlib-candidate-package-bundle.zip", "OpenCAMLib候选包证据包", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip")), "OpenCAMLib 候选输出的轻量证据包，用于随 job 一起审计和交给 CAMotics/材料去除验证。"),
     createDeliveryFile(job.id, "imported-neutral-toolpath.json", "API导入原始中立刀路", "report", existsSync(join(job.workDir, "imported-neutral-toolpath.json")), "通过 API 回填时保存的原始 neutral-toolpath 输入快照，用于审计和复现。"),
     createDeliveryFile(job.id, "neutral-toolpath-import-validation.json", "中立刀路导入校验", "report", existsSync(join(job.workDir, "neutral-toolpath-import-validation.json")), "导入外部 neutral-toolpath 前的 schema、点位、fixture/synthetic/preview 和坐标安全校验报告。"),
     createDeliveryFile(job.id, "external-gcode-import-validation.json", "外部G-code导入校验", "report", existsSync(join(job.workDir, "external-gcode-import-validation.json")), "校验外部 FreeCAD/BlenderCAM G-code、sourceSnapshot、最终 toolpath.nc 和 CAM proof 的哈希绑定。"),
@@ -11163,6 +11193,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "camotics-result.json", "CAMotics 仿真结果", "report", existsSync(join(job.workDir, "camotics-result.json")), "CAMotics 或 synthetic 仿真 adapter 返回的材料去除检查摘要。"),
     createDeliveryFile(job.id, "camotics-preview.png", "CAMotics 仿真截图", "report", existsSync(join(job.workDir, "camotics-preview.png")), "真实 CAMotics 或等效材料去除仿真截图，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
+    createDeliveryFile(job.id, "opencamlib-candidate-package-validation.json", "OpenCAMLib候选包预检报告", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-validation.json")), "Linux/OpenCAMLib 真实候选输出目录的契约预检结果；只作为证据链输入，不单独解锁生产。"),
+    createDeliveryFile(job.id, "opencamlib-candidate-package-bundle.zip", "OpenCAMLib候选包证据包", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip")), "OpenCAMLib 候选输出的轻量证据包，用于随 job 一起审计和交给 CAMotics/材料去除验证。"),
     createDeliveryFile(job.id, "camotics-cli-run-package.json", "CAMotics Linux运行包", "report", existsSync(join(job.workDir, "camotics-cli-run-package.json")), "Linux CAM 服务器执行前准备包，包含输入哈希、运动画像、命令和回填要求。"),
     createDeliveryFile(job.id, "camotics-result-template.json", "CAMotics结果回填模板", "report", existsSync(join(job.workDir, "camotics-result-template.json")), "真实 CAMotics 材料去除后按此模板填写 result JSON，再回填到 HeDiao3D。"),
     createDeliveryFile(job.id, "camotics-linux-run.sh", "CAMotics Linux运行脚本", "report", existsSync(join(job.workDir, "camotics-linux-run.sh")), "Linux CAM 服务器辅助脚本，仅用于打开/执行仿真准备流程，不解锁生产 NC。"),
