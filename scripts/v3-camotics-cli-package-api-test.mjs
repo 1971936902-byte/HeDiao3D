@@ -212,6 +212,23 @@ async function main() {
   assert(localValidation.productionUnlockEligible === false, "Linux CAM job local validation must not unlock production");
   assert(localValidation.expectedUploads?.nativeCam === "native-cam-real-output-bundle.zip", "Linux CAM job local validation missing Native CAM expected upload");
   assert(localValidation.expectedUploads?.camotics === "camotics-result-bundle.zip", "Linux CAM job local validation missing CAMotics expected upload");
+  const importedLinuxCamJobValidation = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-job-validation`, {
+    validation: localValidation,
+    sourceName: "linux-cam-job-local-validation.json"
+  });
+  assert(importedLinuxCamJobValidation.ok === true, "Linux CAM job validation import should succeed");
+  assert(importedLinuxCamJobValidation.productionUnlockEligible === false, "Linux CAM job validation import must not unlock production");
+  assert(importedLinuxCamJobValidation.validation?.level === "waiting-for-linux-evidence", "Linux CAM job validation import should preserve level");
+  assert(importedLinuxCamJobValidation.artifacts?.validation?.endsWith("linux-cam-job-local-validation.json"), "Linux CAM job validation import should expose validation artifact");
+  const reloadedAfterLinuxCamJobValidation = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
+  assert(reloadedAfterLinuxCamJobValidation.result?.summary?.linuxCamJobValidation?.level === "waiting-for-linux-evidence", "job summary should expose Linux CAM job validation");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.productionUnlockEligible === false, "job summary Linux CAM job validation must not unlock production");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-local-validation.json" && file.exists), "delivery manifest should expose Linux CAM job local validation");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-validation-import.json" && file.exists), "delivery manifest should expose Linux CAM job validation import audit");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-job-local-validation.json" && file.sha256), "package integrity should hash Linux CAM job local validation");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-job-validation-import.json" && file.sha256), "package integrity should hash Linux CAM job validation import audit");
+  const importedLinuxCamJobValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/linux-cam-job-local-validation.json`);
+  assert(importedLinuxCamJobValidationArtifact.importedVia === "api-linux-cam-job-validation", "Linux CAM job validation artifact should record API import");
 
   console.log(JSON.stringify({
     ok: true,

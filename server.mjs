@@ -133,6 +133,11 @@ const server = createServer(async (req, res) => {
       return importOrchestratorCamoticsResult(req, orchestratorCamoticsResultMatch[1], res);
     }
 
+    const orchestratorLinuxCamJobValidationMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-job-validation$/);
+    if (req.method === "POST" && orchestratorLinuxCamJobValidationMatch) {
+      return importOrchestratorLinuxCamJobValidation(req, orchestratorLinuxCamJobValidationMatch[1], res);
+    }
+
     const orchestratorCamoticsCliPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/camotics-cli-package$/);
     if (req.method === "POST" && orchestratorCamoticsCliPackageMatch) {
       return createOrchestratorCamoticsCliPackage(orchestratorCamoticsCliPackageMatch[1], res);
@@ -11379,6 +11384,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("native-cam-readiness.json"),
         getFile("cam-server-config.json"),
         getFile("cam-server-prep-checklist.md"),
+        getFile("linux-cam-job-local-validation.json"),
+        getFile("linux-cam-job-validation-import.json"),
         getFile("cam-engine-selection.json"),
         getFile("open-source-cam-execution-plan.json"),
         getFile("external-cam-recipe.json"),
@@ -11410,6 +11417,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("camotics-cli-package-report.json"),
         getFile("camotics-execution-preflight.json"),
         getFile("camotics-execution-preflight.md"),
+        getFile("linux-cam-job-local-validation.json"),
+        getFile("linux-cam-job-validation-import.json"),
         getFile("camotics-adapter-report.json"),
         getFile("camotics-result.json"),
         getFile("camotics-run.md"),
@@ -11704,6 +11713,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
     createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
+    createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
+    createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
     createDeliveryFile(job.id, "open-source-cam-execution-plan.json", "开源CAM执行计划", "report", true, "绑定本次任务的 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 输入、输出、验收命令和生产边界。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
@@ -12047,6 +12058,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "opencamlib-candidate-package-validation.json", "OpenCAMLib候选包预检报告", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-validation.json")), "Linux/OpenCAMLib 真实候选输出目录的契约预检结果；只作为证据链输入，不单独解锁生产。"),
     createDeliveryFile(job.id, "opencamlib-candidate-package-bundle.zip", "OpenCAMLib候选包证据包", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip")), "OpenCAMLib 候选输出的轻量证据包，用于随 job 一起审计和交给 CAMotics/材料去除验证。"),
+    createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
+    createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
     createDeliveryFile(job.id, "camotics-cli-run-package.json", "CAMotics Linux运行包", "report", existsSync(join(job.workDir, "camotics-cli-run-package.json")), "Linux CAM 服务器执行前准备包，包含输入哈希、运动画像、命令和回填要求。"),
     createDeliveryFile(job.id, "camotics-result-template.json", "CAMotics结果回填模板", "report", existsSync(join(job.workDir, "camotics-result-template.json")), "真实 CAMotics 材料去除后按此模板填写 result JSON，再回填到 HeDiao3D。"),
     createDeliveryFile(job.id, "camotics-linux-run.sh", "CAMotics Linux运行脚本", "report", existsSync(join(job.workDir, "camotics-linux-run.sh")), "Linux CAM 服务器辅助脚本，仅用于打开/执行仿真准备流程，不解锁生产 NC。"),
@@ -12923,6 +12936,106 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
       adapterReport: publicArtifactUrl(safeJobId, "camotics-adapter-report.json"),
       screenshot: existsSync(join(workDir, "camotics-preview.png")) ? publicArtifactUrl(safeJobId, "camotics-preview.png") : null,
       materialMesh: existsSync(join(workDir, "camotics-material-removal.stl")) ? publicArtifactUrl(safeJobId, "camotics-material-removal.stl") : null
+    }
+  });
+}
+
+async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  const input = await readJson(req, 5_000_000);
+  const validation = normalizeLinuxCamJobLocalValidation(input.validation ?? input);
+  if (validation.jobId && validation.jobId !== safeJobId) {
+    return json(res, 409, {
+      error: "Linux CAM 整单本地校验报告与当前 job 不匹配。",
+      expectedJobId: safeJobId,
+      actualJobId: validation.jobId
+    });
+  }
+  validation.jobId = safeJobId;
+  validation.importedVia = "api-linux-cam-job-validation";
+  validation.importedAt = new Date().toISOString();
+  validation.productionUnlockEligible = false;
+
+  await writeFile(join(workDir, "linux-cam-job-local-validation.json"), JSON.stringify(validation, null, 2), "utf8");
+  const importAudit = {
+    schema: "hediao3d.v3-linux-cam-job-validation-import.v1",
+    jobId: safeJobId,
+    importedAt: validation.importedAt,
+    sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : "linux-cam-job-local-validation.json",
+    level: validation.level,
+    productionUnlockEligible: false,
+    expectedUploads: validation.expectedUploads ?? null,
+    nextActions: validation.nextActions ?? [],
+    summary: validation.summary ?? "Linux CAM job local validation imported."
+  };
+  await writeFile(join(workDir, "linux-cam-job-validation-import.json"), JSON.stringify(importAudit, null, 2), "utf8");
+
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  appendOrchestratorLog(job, `Linux CAM 整单本地校验已回填：${validation.level ?? "unknown"}。`);
+  job.workDir = workDir;
+  job.updatedAt = validation.importedAt;
+  job.linuxCamJobValidation = {
+    importedAt: validation.importedAt,
+    level: validation.level,
+    productionUnlockEligible: false,
+    artifact: "linux-cam-job-local-validation.json",
+    importAudit: "linux-cam-job-validation-import.json"
+  };
+  job.result = job.result ?? {};
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    linuxCamJobValidation: {
+      level: validation.level,
+      summary: validation.summary ?? null,
+      expectedUploads: validation.expectedUploads ?? null,
+      nextActions: Array.isArray(validation.nextActions) ? validation.nextActions.slice(0, 6) : [],
+      productionUnlockEligible: false,
+      artifact: "linux-cam-job-local-validation.json",
+      importAudit: "linux-cam-job-validation-import.json"
+    },
+    ...(refreshedDelivery ? {
+      deliveryManifest: refreshedDelivery.deliveryManifest,
+      packageIntegrity: {
+        schema: refreshedDelivery.packageIntegrity.schema,
+        status: refreshedDelivery.packageIntegrity.status,
+        summary: refreshedDelivery.packageIntegrity.summary,
+        fileCount: refreshedDelivery.packageIntegrity.fileCount,
+        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
+        files: refreshedDelivery.packageIntegrity.files
+      }
+    } : {})
+  };
+  for (const filename of [
+    "linux-cam-job-local-validation.json",
+    "linux-cam-job-validation-import.json",
+    "delivery-manifest.json",
+    "operator-download-checklist.md",
+    "package-integrity.json",
+    "next-action-checklist.md"
+  ]) {
+    pushIfArtifactExists(job, filename);
+  }
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: true,
+    validation,
+    importAudit,
+    productionUnlockEligible: false,
+    deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
+    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null,
+    artifacts: {
+      validation: publicArtifactUrl(safeJobId, "linux-cam-job-local-validation.json"),
+      importAudit: publicArtifactUrl(safeJobId, "linux-cam-job-validation-import.json")
     }
   });
 }
@@ -13807,6 +13920,40 @@ function normalizeCamoticsLocalValidation(value) {
     productionEvidenceEligible: value.productionEvidenceEligible === true,
     missing: Array.isArray(value.missing) ? value.missing.map((item) => String(item)).slice(0, 50) : [],
     summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
+  };
+}
+
+function normalizeLinuxCamJobLocalValidation(value) {
+  if (!value || typeof value !== "object") {
+    throw new Error("validation 不能为空，需传入 linux-cam-job-local-validation.json。");
+  }
+  if (value.schema !== "hediao3d.v3-linux-cam-job-local-validation.v1") {
+    throw new Error("validation.schema 必须是 hediao3d.v3-linux-cam-job-local-validation.v1。");
+  }
+  return {
+    ...value,
+    level: typeof value.level === "string" ? value.level.slice(0, 80) : "unknown",
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null,
+    productionUnlockEligible: false,
+    expectedUploads: value.expectedUploads && typeof value.expectedUploads === "object"
+      ? {
+          nativeCam: typeof value.expectedUploads.nativeCam === "string" ? value.expectedUploads.nativeCam.slice(0, 120) : null,
+          camotics: typeof value.expectedUploads.camotics === "string" ? value.expectedUploads.camotics.slice(0, 120) : null
+        }
+      : null,
+    checks: Array.isArray(value.checks)
+      ? value.checks.slice(0, 80).map((check) => ({
+          relativePath: typeof check?.relativePath === "string" ? check.relativePath.slice(0, 240) : null,
+          required: Boolean(check?.required),
+          exists: Boolean(check?.exists),
+          status: typeof check?.status === "string" ? check.status.slice(0, 80) : null,
+          sizeBytes: Number.isFinite(Number(check?.sizeBytes)) ? Number(check.sizeBytes) : null,
+          sha256: typeof check?.sha256 === "string" ? check.sha256.slice(0, 128) : null
+        }))
+      : [],
+    nextActions: Array.isArray(value.nextActions)
+      ? value.nextActions.slice(0, 10).map((item) => String(item).slice(0, 300))
+      : []
   };
 }
 
