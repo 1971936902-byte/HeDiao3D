@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -507,6 +507,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "在 Linux CAM 服务端执行真实 adapter 输出验收，解析 handoffEvidence 并阻止 fixture/synthetic/preview 误入生产证据。"
       },
       {
+        filename: "opencamlib-contact-output-validate.mjs",
+        role: "opencamlib-contact-output-validator",
+        description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
+      },
+      {
         filename: "linux-cam-closed-loop-handoff.md",
         role: "closed-loop-operator-handoff",
         description: "一页式 Linux CAM 闭环交接说明：Native CAM 验收、真实输出 ZIP、CAMotics 结果 ZIP、V3 回填和 readiness 复核顺序。"
@@ -519,6 +524,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
       "V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters",
+      "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json",
       "bash native-cam-real-output-check.sh",
       "npm run test:v3:readiness-api"
     ],
@@ -529,6 +535,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-env.template"), createNativeCamEnvTemplate(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-acceptance-checklist.md"), createNativeCamAcceptanceChecklist(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "linux-cam-closed-loop-handoff.md"), createLinuxCamClosedLoopHandoff(report), "utf8");
   writeFileSync(join(outputRoot, "native-cam-server-package.json"), JSON.stringify(artifacts, null, 2), "utf8");
   return artifacts;
@@ -977,6 +984,7 @@ ${rows.join("\n")}
 - [ ] \`npm run test:v3:native-cam\`
 - [ ] \`npm run test:v3:freecad-proof-handoff\`
 - [ ] \`V3_ADAPTER_USE_NATIVE_COMMANDS=true npm run test:v3:external-adapters\`
+- [ ] OpenCAMLib 真实输出后运行 \`node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json\`
 - [ ] \`bash native-cam-real-output-check.sh\`
 - [ ] \`npm run test:v3:freecad-external-handoff\` for 3-axis/regular-solid route
 - [ ] \`npm run test:v3:closed-neutral-handoff\` for OpenCAMLib neutral route

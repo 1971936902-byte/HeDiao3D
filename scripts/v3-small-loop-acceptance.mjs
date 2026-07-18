@@ -37,6 +37,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-real-neutral-handoff-test.mjs")]
   },
   {
+    id: "opencamlib-contact-validate",
+    label: "OpenCAMLib contact output validator",
+    command: [process.execPath, join("scripts", "v3-opencamlib-contact-output-validate-test.mjs")]
+  },
+  {
     id: "rotary-heightfield-runner",
     label: "Rotary wrap heightfield runner loop",
     command: [process.execPath, join("scripts", "v3-rotary-heightfield-runner-test.mjs")]

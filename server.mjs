@@ -3261,6 +3261,7 @@ function getNativeCamServerPackage(checkId, res) {
     "native-cam-acceptance-checklist.md",
     "linux-cam-closed-loop-handoff.md",
     "native-cam-real-output-check.sh",
+    "opencamlib-contact-output-validate.mjs",
     "native-cam-server-package.json"
   ];
   const filenames = Array.from(new Set([...requiredFiles, ...listedFiles]));
