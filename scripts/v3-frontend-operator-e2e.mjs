@@ -9,6 +9,7 @@ import net from "node:net";
 const host = "127.0.0.1";
 const timeoutMs = Number(process.env.V3_FRONTEND_E2E_TIMEOUT_MS ?? 180000);
 const chromePath = process.env.CHROME_PATH ?? findChromePath();
+const mode = process.argv.includes("--import-model") ? "import-model" : "buddha-fixture";
 const children = [];
 const tempDirs = [];
 
@@ -118,14 +119,24 @@ try {
 
   await clickButton(page, "建模3D/Meshy");
   await waitForCondition(page, () => document.body.innerText.includes("推荐：真实3D网格"), 10000, "model stage visible");
-  await clickButton(page, "载入佛头测试模型");
-  await waitForCondition(page, () => {
-    const text = document.body.innerText;
-    return text.includes("后端 CAM 可读取")
-      || text.includes("去生成试雕刀路")
-      || text.includes("Mesh 可进入刀路生成")
-      || text.includes("Meshy模型已加载");
-  }, 20000, "Buddha test model ready for CAM");
+  if (mode === "import-model") {
+    await importInlineStlModel(page);
+    await waitForCondition(page, () => {
+      const text = document.body.innerText;
+      return text.includes("原始3D模型已缓存")
+        || text.includes("后端 CAM 可读取")
+        || text.includes("已导入原始3D模型");
+    }, 30000, "imported STL model cached for CAM");
+  } else {
+    await clickButton(page, "载入佛头测试模型");
+    await waitForCondition(page, () => {
+      const text = document.body.innerText;
+      return text.includes("后端 CAM 可读取")
+        || text.includes("去生成试雕刀路")
+        || text.includes("Mesh 可进入刀路生成")
+        || text.includes("Meshy模型已加载");
+    }, 20000, "Buddha test model ready for CAM");
+  }
 
   const movedToCam = await clickButtonIfPresent(page, "去生成试雕刀路");
   if (!movedToCam) await clickButton(page, "刀路生成/下载");
@@ -167,6 +178,7 @@ try {
   console.log(JSON.stringify({
     ok: true,
     schema: "hediao3d.v3-frontend-operator-e2e.v1",
+    mode,
     ui: pageUrl,
     api: `http://${host}:${apiPort}`,
     chrome: chromePath,
@@ -174,6 +186,21 @@ try {
   }, null, 2));
 } finally {
   await shutdown();
+}
+
+async function importInlineStlModel(page) {
+  const result = await page.evaluate((stlText) => {
+    const input = document.querySelector('input[type="file"][accept*=".stl"]');
+    if (!input) return { ok: false, reason: "original model file input not found" };
+    const file = new File([stlText], "browser-import-fixture.stl", { type: "model/stl" });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, filename: file.name, size: file.size };
+  }, createBrowserImportStl());
+  if (!result.ok) throw new Error(`Failed to import inline STL model: ${result.reason}`);
+  return result;
 }
 
 function start(label, command, args, env) {
@@ -374,4 +401,24 @@ function canListen(port) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createBrowserImportStl() {
+  return `solid browser_import
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 38 0 0.6
+      vertex 0 15 0.2
+    endloop
+  endfacet
+  facet normal 0 0 1
+    outer loop
+      vertex 38 0 0.6
+      vertex 38 15 1.1
+      vertex 0 15 0.2
+    endloop
+  endfacet
+endsolid browser_import
+`;
 }
