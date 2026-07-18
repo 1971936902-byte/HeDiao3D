@@ -67,6 +67,7 @@ async function main() {
   assert(nativeCamImport.sourceReportBindingStatus === "matched", "native CAM acceptance should bind to adapter validation report");
   assert(nativeCamImport.targetMachineBoundaryStatus?.status === "matched", "native CAM acceptance should bind target machine boundary");
   assert(nativeCamImport.contactValidationStatus?.status === "ready", "native CAM acceptance should bind strict contact validation");
+  assert(nativeCamImport.contactValidationStatus?.pathCoverage?.status === "ready", "native CAM acceptance should expose ready contact path coverage");
   assert(nativeCamImport.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "native CAM import should preserve source ZIP");
 
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
@@ -122,6 +123,7 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance?.level === "ready", "readiness should expose latest native CAM acceptance");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose native CAM source binding");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose strict contact validation");
+  assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.pathCoverage?.status === "ready", "readiness should expose strict contact path coverage");
   const adapterStep = readiness.acceptancePlan?.steps?.find((step) => step.id === "adapter-validation");
   assert(adapterStep?.status === "done", `bound native CAM source report should satisfy adapter validation step, got ${adapterStep?.status}`);
   assert(adapterStep?.blocksProduction === false, "bound native CAM source report should prevent stale adapter fixture audit from blocking production");

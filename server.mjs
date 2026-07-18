@@ -2078,6 +2078,7 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       errorCount: Number(report.contactValidation.errorCount ?? contactValidationErrors?.length ?? 0),
       warningCount: Number(report.contactValidation.warningCount ?? contactValidationWarnings?.length ?? 0),
       firstError: report.contactValidation.firstError ?? contactValidationErrors?.[0] ?? null,
+      pathCoverage: report.contactValidation.pathCoverage ?? createOpenCamLibContactPathCoverageSummary(report.contactValidation),
       sha256: report.contactValidation.sha256 ?? null
     } : null,
     runnerReadinessStatus: createOpenCamLibRunnerReadinessStatus(report.runnerReadiness),
@@ -2193,6 +2194,50 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   };
 }
 
+function createOpenCamLibContactPathCoverageSummary(contact) {
+  if (contact?.pathCoverage && typeof contact.pathCoverage === "object") {
+    return {
+      schema: contact.pathCoverage.schema ?? "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+      required: contact.pathCoverage.required !== false,
+      status: contact.pathCoverage.status ?? "missing",
+      ready: Boolean(contact.pathCoverage.ready),
+      x: contact.pathCoverage.x ?? null,
+      cross: contact.pathCoverage.cross ?? null,
+      summary: contact.pathCoverage.summary ?? "OpenCAMLib 刀路覆盖率摘要已由上游 contact validation 提供。"
+    };
+  }
+  const checks = Array.isArray(contact?.checks) ? contact.checks : [];
+  const findCheck = (id) => checks.find((check) => check?.id === id) ?? null;
+  const summarizeCheck = (check) => {
+    if (!check) return null;
+    return {
+      id: check.id ?? null,
+      status: check.status ?? "unknown",
+      summary: check.summary ?? null,
+      reported: check.reported ?? null,
+      expected: check.expected ?? null
+    };
+  };
+  const x = summarizeCheck(findCheck("contact-path-coverage-x"));
+  const cross = summarizeCheck(findCheck("contact-path-coverage-cross"));
+  const missing = !x || !cross;
+  const ready = !missing && x.status === "pass" && cross.status === "pass";
+  const failed = [x, cross].filter((item) => item && item.status !== "pass");
+  return {
+    schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+    required: true,
+    status: ready ? "ready" : missing ? "missing" : "review",
+    ready,
+    x,
+    cross,
+    summary: ready
+      ? "OpenCAMLib 刀路覆盖率达标：X 向和旋转/横向覆盖均通过。"
+      : missing
+        ? "OpenCAMLib strict contact 验证缺少 X 向或旋转/横向刀路覆盖率检查。"
+        : `OpenCAMLib 刀路覆盖率未达标：${failed[0]?.id ?? "unknown"} ${failed[0]?.summary ?? ""}`.trim()
+  };
+}
+
 function createNativeCamContactValidationStatus(report) {
   const candidates = Number(report?.productionCandidateCount ?? 0);
   const opencamlibCandidate = Array.isArray(report?.adapters)
@@ -2205,6 +2250,15 @@ function createNativeCamContactValidationStatus(report) {
       status: "not-required",
       ready: true,
       required: false,
+      pathCoverage: {
+        schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+        required: false,
+        status: "not-required",
+        ready: true,
+        x: null,
+        cross: null,
+        summary: "当前验收未声明生产候选输出，刀路覆盖率检查暂不作为硬门。"
+      },
       summary: "当前验收未声明生产候选输出，strict contact 验证暂不作为本项硬门。"
     };
   }
@@ -2214,9 +2268,19 @@ function createNativeCamContactValidationStatus(report) {
       status: "missing",
       ready: false,
       required: true,
+      pathCoverage: {
+        schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+        required: true,
+        status: "missing",
+        ready: false,
+        x: null,
+        cross: null,
+        summary: "缺少 OpenCAMLib strict contact 验证，无法判断刀路覆盖率。"
+      },
       summary: "Native CAM 真实输出缺少 OpenCAMLib strict contact 验证，不能作为生产候选证据。"
     };
   }
+  const pathCoverage = createOpenCamLibContactPathCoverageSummary(contact);
   const ready = contact.schema === "hediao3d.opencamlib-contact-output-validation.v1"
     && contact.level === "ready"
     && contact.strict === true
@@ -2237,6 +2301,7 @@ function createNativeCamContactValidationStatus(report) {
     failedCheckCount,
     errorCount,
     warningCount,
+    pathCoverage,
     summary: ready
       ? `OpenCAMLib strict contact 验证 ready：${checkCount} checks。`
       : `OpenCAMLib strict contact 验证未达到生产候选门槛：level=${contact.level ?? "missing"}，failed=${failedCheckCount}，errors=${errorCount}。`
@@ -2293,6 +2358,7 @@ function createNativeCamContactValidationSummary(report, rawBytes = null) {
   const checks = Array.isArray(report?.checks) ? report.checks : [];
   const errors = Array.isArray(report?.errors) ? report.errors : [];
   const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
+  const pathCoverage = createOpenCamLibContactPathCoverageSummary({ ...report, checks });
   return {
     schema: report?.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
     createdAt: report?.createdAt ?? null,
@@ -2305,6 +2371,7 @@ function createNativeCamContactValidationSummary(report, rawBytes = null) {
     errorCount: errors.length,
     warningCount: warnings.length,
     firstError: errors[0] ?? null,
+    pathCoverage,
     sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
   };
 }

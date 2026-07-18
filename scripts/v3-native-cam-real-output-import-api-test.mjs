@@ -44,7 +44,9 @@ async function main() {
   assert(imported.sourceReportHandoffAudit?.productionCandidateCount === 1, "imported acceptance should expose source report production candidate audit");
   assert(imported.sourceReportHandoffAudit?.unsafeCount === 0, "imported acceptance should expose source report unsafe audit");
   assert(imported.contactValidationStatus?.status === "ready", "imported acceptance should expose ready strict contact validation");
+  assert(imported.contactValidationStatus?.pathCoverage?.status === "ready", "imported acceptance should expose ready path coverage status");
   assert(imported.contactValidation?.checkCount >= 9, "imported acceptance should expose contact validation check count");
+  assert(imported.contactValidation?.pathCoverage?.status === "ready", "imported acceptance should expose contact validation path coverage summary");
   assert(imported.apiArtifacts?.json?.includes("native-cam-real-output-acceptance.json"), "imported acceptance should expose JSON artifact");
 
   const artifact = await getJson(imported.apiArtifacts.json);
@@ -53,7 +55,28 @@ async function main() {
   assert(artifact.sourceReportBinding?.status === "matched", "artifact should preserve source report binding");
   assert(artifact.targetMachineBoundaryStatus?.status === "matched", "artifact should preserve target machine boundary status");
   assert(artifact.contactValidationStatus?.status === "ready", "artifact should preserve strict contact validation status");
+  assert(artifact.contactValidationStatus?.pathCoverage?.status === "ready", "artifact should preserve path coverage status");
   assert(artifact.sourceReportSnapshot?.handoffClassificationAudit?.productionCandidateCount === 1, "artifact should preserve source report handoff audit snapshot");
+
+  const lowCoverageContactValidation = createContactValidationFixture({
+    level: "critical",
+    productionCandidateEligible: false,
+    failedCheckCount: 1,
+    errors: ["contact-path-coverage-x failed"],
+    checks: createContactValidationChecks().map((check) => (
+      check.id === "contact-path-coverage-x"
+        ? { ...check, status: "fail", summary: "xCoverageRatio=0.72", reported: 0.72, expected: ">=0.98" }
+        : check
+    ))
+  });
+  const lowCoverage = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
+    sourceName: "native-cam-real-output-acceptance-low-coverage.json",
+    validationReport,
+    acceptance: createAcceptanceFixture(validationReportSha256, { contactValidation: lowCoverageContactValidation })
+  });
+  assert(lowCoverage.level === "critical", "low OpenCAMLib path coverage should remain critical");
+  assert(lowCoverage.contactValidationStatus?.pathCoverage?.status === "review", "low path coverage should be exposed as review status");
+  assert(lowCoverage.contactValidationStatus?.pathCoverage?.x?.status === "fail", "low path coverage should expose failing X coverage check");
 
   const missingContact = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-acceptance-missing-contact.json",
@@ -86,6 +109,7 @@ async function main() {
   assert(zipImported.sourceReportBindingStatus === "matched", "zip imported acceptance should bind validation report");
   assert(zipImported.targetMachineBoundaryStatus?.status === "matched", "zip import should preserve matched target boundary");
   assert(zipImported.contactValidationStatus?.status === "ready", "zip import should preserve ready contact validation");
+  assert(zipImported.contactValidationStatus?.pathCoverage?.status === "ready", "zip import should preserve ready path coverage");
   assert(zipImported.runnerReadinessStatus?.status === "blocked", "zip import should expose blocked runner readiness status");
   assert(zipImported.runnerReadiness?.firstBlocker === "real-drop-cutter-not-implemented", "zip import should preserve runner readiness blocker summary");
   assert(zipImported.openCamLibRealCandidateStatus?.status === "blocked", "zip import should expose blocked OpenCAMLib real candidate status");
@@ -93,6 +117,7 @@ async function main() {
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
   assert(zipArtifact.importSource?.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import artifact should preserve source bundle filename");
+  assert(zipArtifact.contactValidation?.pathCoverage?.status === "ready", "zip import artifact should preserve contact path coverage summary");
   assert(zipArtifact.runnerReadiness?.sha256, "zip import artifact should preserve runner readiness sha256");
   assert(zipArtifact.runnerReadinessStatus?.summary?.includes("OpenCAMLib runner readiness"), "zip import artifact should preserve runner readiness status summary");
   assert(zipArtifact.openCamLibRealCandidate?.sha256, "zip import artifact should preserve OpenCAMLib real candidate sha256");
@@ -109,6 +134,7 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportBindingStatus === "matched", "readiness should expose matched source report binding");
   assert(readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus?.status === "matched", "readiness should expose matched target machine boundary");
   assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.status === "ready", "readiness should expose ready strict contact validation");
+  assert(readiness.nativeCamRealOutputAcceptance.contactValidationStatus?.pathCoverage?.status === "ready", "readiness should expose ready path coverage status");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadinessStatus?.status === "blocked", "readiness should expose imported OpenCAMLib runner readiness status");
   assert(readiness.nativeCamRealOutputAcceptance.runnerReadiness?.blockerCount === 1, "readiness should expose imported OpenCAMLib runner readiness summary");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.status === "blocked", "readiness should expose imported OpenCAMLib real candidate status");
@@ -167,6 +193,7 @@ function createValidationReportFixture() {
 function createAcceptanceFixture(sourceReportSha256, options = {}) {
   const includeTargetMachineBoundary = options.includeTargetMachineBoundary !== false;
   const includeContactValidation = options.includeContactValidation !== false;
+  const contactValidation = options.contactValidation ?? createContactValidationFixture();
   return {
     schema: "hediao3d.native-cam-real-output-acceptance.v1",
     createdAt: new Date().toISOString(),
@@ -181,7 +208,7 @@ function createAcceptanceFixture(sourceReportSha256, options = {}) {
     strict: true,
     expectProductionCandidate: true,
     ...(includeTargetMachineBoundary ? { targetMachineBoundary: createTargetMachineBoundaryFixture() } : {}),
-    ...(includeContactValidation ? { contactValidation: createContactValidationFixture() } : {}),
+    ...(includeContactValidation ? { contactValidation } : {}),
     productionCandidateCount: 1,
     unsafeCount: 0,
     missingCount: 0,
@@ -204,7 +231,23 @@ function createAcceptanceFixture(sourceReportSha256, options = {}) {
 }
 
 function createContactValidationFixture(overrides = {}) {
-  const checks = [
+  const checks = createContactValidationChecks();
+  return {
+    schema: "hediao3d.opencamlib-contact-output-validation.v1",
+    createdAt: new Date().toISOString(),
+    level: "ready",
+    strict: true,
+    expectProductionCandidate: true,
+    productionCandidateEligible: true,
+    checks,
+    errors: [],
+    warnings: [],
+    ...overrides
+  };
+}
+
+function createContactValidationChecks() {
+  return [
     "neutral-schema",
     "neutral-points",
     "neutral-not-synthetic",
@@ -229,18 +272,6 @@ function createContactValidationFixture(overrides = {}) {
     "identity-plan",
     "identity-model"
   ].map((id) => ({ id, status: "pass", summary: `${id} pass` }));
-  return {
-    schema: "hediao3d.opencamlib-contact-output-validation.v1",
-    createdAt: new Date().toISOString(),
-    level: "ready",
-    strict: true,
-    expectProductionCandidate: true,
-    productionCandidateEligible: true,
-    checks,
-    errors: [],
-    warnings: [],
-    ...overrides
-  };
 }
 
 function createRunnerReadinessFixture() {
