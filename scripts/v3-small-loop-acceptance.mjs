@@ -32,6 +32,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-native-cam-api-test.mjs")]
   },
   {
+    id: "native-cam-package-self-check",
+    label: "Native CAM server package self-check",
+    command: [process.execPath, join("scripts", "v3-native-cam-server-package-self-check-test.mjs")]
+  },
+  {
     id: "opencamlib-small-loop",
     label: "OpenCAMLib neutral toolpath small loop",
     command: [process.execPath, join("scripts", "v3-real-neutral-handoff-test.mjs")]
