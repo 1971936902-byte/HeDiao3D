@@ -64,9 +64,17 @@ if (strict && summary.readyCount < summary.requiredCount) {
 }
 
 function checkFreeCad() {
-  const command = findWorkingCommand([process.env.V3_FREECAD_CMD, "FreeCADCmd", "freecadcmd", "FreeCAD", "freecad"].filter(Boolean), ["--version"]);
+  const command = findWorkingCommand([
+    process.env.V3_FREECAD_CMD,
+    "FreeCADCmd",
+    "freecadcmd",
+    "freecad.cmd",
+    "/snap/bin/freecad.cmd",
+    "FreeCAD",
+    "freecad"
+  ].filter(Boolean), ["--version"]);
   const pythonProbe = command.command
-    ? spawn(command.command, ["--console", "-c", "import Path; print('PATH_WORKBENCH_OK')"])
+    ? spawn(command.command, ["-c", "import Path; print('PATH_WORKBENCH_OK')"])
     : null;
   const pathWorkbenchAvailable = Boolean(pythonProbe && (pythonProbe.stdout.includes("PATH_WORKBENCH_OK") || pythonProbe.exitCode === 0));
   return createCheck({
@@ -82,12 +90,12 @@ function checkFreeCad() {
     },
     ready: Boolean(command.command && pathWorkbenchAvailable),
     missing: [
-      ...(!command.command ? ["FreeCADCmd/freecadcmd 命令不可用"] : []),
+      ...(!command.command ? ["FreeCADCmd/freecadcmd/freecad.cmd 命令不可用"] : []),
       ...(command.command && !pathWorkbenchAvailable ? ["FreeCAD Path/CAM Workbench Python 模块未通过探测"] : [])
     ],
     installHints: [
       "Ubuntu/Debian: sudo apt install freecad",
-      "确认运行 Node API 的同一用户可以执行 FreeCADCmd --version 或 freecadcmd --version",
+      "确认运行 Node API 的同一用户可以执行 FreeCADCmd --version、freecadcmd --version 或 freecad.cmd --version",
       "Path Workbench 未通过时，先在 FreeCAD GUI 中确认 CAM/Path 工作台可用，再回到服务用户环境复测"
     ]
   });

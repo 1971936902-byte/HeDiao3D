@@ -5983,7 +5983,7 @@ function createEngineReadinessReport(engines, selected, settings) {
         engine: "FreeCAD CAM",
         when: "规则实体、三轴平面/2.5D、夹具或治具类零件优先接入",
         windows: "安装 FreeCAD，并确保 FreeCADCmd 或 freecadcmd 可被 PATH 找到。",
-        linux: "安装 freecad/freecadcmd；服务器上建议使用 FreeCADCmd 无界面运行 adapter。"
+        linux: "安装 freecad/freecadcmd；snap 安装时通常需要暴露 freecad.cmd。"
       },
       {
         engine: "CAMotics",
@@ -6075,7 +6075,7 @@ function createCamEnginePreferenceOrder(settings) {
 function createCamEngineSelectionNextActions(candidates, camInputPlan) {
   const actions = [];
   if (camInputPlan.status === "blocked") actions.push("先修复/重网格 CAM 输入模型，再启用外部 CAM 生产试算。");
-  if (candidates.some((candidate) => candidate.id === "freecad" && !candidate.available)) actions.push("安装 FreeCAD 并暴露 FreeCADCmd/freecadcmd。");
+  if (candidates.some((candidate) => candidate.id === "freecad" && !candidate.available)) actions.push("安装 FreeCAD 并暴露 FreeCADCmd/freecadcmd/freecad.cmd。");
   if (candidates.some((candidate) => candidate.id === "blendercam" && !candidate.available)) actions.push("安装 Blender + BlenderCAM/FabexCNC，用于艺术 Mesh 曲面加工。");
   if (candidates.some((candidate) => candidate.id === "opencamlib" && !candidate.available)) actions.push("在 CAM 服务端安装 OpenCAMLib/ocl Python 模块。");
   if (!enableExternalCamAdapters) actions.push("外部 adapter 小模型验证后，设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true。");
@@ -6411,7 +6411,7 @@ function createNativeCamRequiredActions(adapters) {
   const actions = [];
   for (const adapter of adapters) {
     if (adapter.ready) continue;
-    if (adapter.id === "freecad") actions.push("安装 FreeCAD 并确认 FreeCADCmd/freecadcmd 可被服务进程调用。");
+    if (adapter.id === "freecad") actions.push("安装 FreeCAD 并确认 FreeCADCmd/freecadcmd/freecad.cmd 可被服务进程调用。");
     if (adapter.id === "blendercam") actions.push("安装 Blender 与 BlenderCAM/FabexCNC 插件，并确认 blender 可被服务进程调用。");
     if (adapter.id === "opencamlib") actions.push("在 CAM 服务端安装 OpenCAMLib/ocl Python 模块，用于曲面刀具接触计算。");
     if (adapter.id === "camotics") actions.push("安装 CAMotics/camotics-cli，用于正式 NC 下载前的材料去除仿真。");
@@ -6484,7 +6484,7 @@ function createAdapterDeploymentHints(engineId) {
   if (engineId === "freecad") {
     return [
       "Windows: 安装 FreeCAD，确认 FreeCADCmd 或 freecadcmd 在 PATH 中。",
-      "Linux: 安装 freecad/freecadcmd，优先使用 FreeCADCmd 无界面执行 adapter。",
+      "Linux: 安装 freecad/freecadcmd；snap 安装时确认 freecad.cmd 可被服务进程调用。",
       "启用前设置 ENABLE_EXTERNAL_CAM_ADAPTERS=true，并先用小模型 dry-run。"
     ];
   }
@@ -14092,13 +14092,13 @@ function detectFreeCadEngine() {
       adapterReady: true,
       command,
       version: "forced adapter contract mode",
-      notes: "HEDIAO3D_FORCE_FREECAD_ADAPTER=true，仅用于 adapter/Orchestrator 合约测试；生产环境必须安装真实 FreeCADCmd/freecadcmd。"
+      notes: "HEDIAO3D_FORCE_FREECAD_ADAPTER=true，仅用于 adapter/Orchestrator 合约测试；生产环境必须安装真实 FreeCADCmd/freecadcmd/freecad.cmd。"
     };
   }
   return detectCommandEngine({
     id: "freecad",
     name: "FreeCAD CAM",
-    commands: ["FreeCADCmd", "freecadcmd", "FreeCAD", "freecad"],
+    commands: ["FreeCADCmd", "freecadcmd", "freecad.cmd", "/snap/bin/freecad.cmd", "FreeCAD", "freecad"],
     role: "专业 CAM job / Path Workbench adapter",
     adapterReady: true
   });
