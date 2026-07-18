@@ -107,6 +107,7 @@ try {
   const candidatePackageReport = JSON.parse(readFileSync(join(workDir, "opencamlib-candidate-package-validation.json"), "utf8"));
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", `closed-loop evidence chain should read candidate package validation level: ${JSON.stringify(candidatePackageReport, null, 2)}`);
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackageReadyForImport === true, "closed-loop evidence chain should mark candidate package ready for import");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidateMachineFit?.level === candidatePackageReport.machineFit?.level, "closed-loop evidence chain should preserve candidate machine-fit preflight");
   assert(candidateClosedLoopReport.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "closed-loop cross-checks should expose candidate package validation step");
   assert(candidateClosedLoopReport.blocking?.some((item) => item.id === "native-cam-real-output-check"), "closed-loop should still block missing Native CAM evidence");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-validation.json")), "closed-loop should write OpenCAMLib candidate package validation report");

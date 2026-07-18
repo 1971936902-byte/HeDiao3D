@@ -2271,6 +2271,10 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     ?? nativeCandidate?.candidatePackageBlockedReason
     ?? chainOpenCamLib?.candidatePackageBlockedReason
     ?? null;
+  const candidateMachineFit = nativeCandidateStatus?.candidateMachineFit
+    ?? nativeCandidate?.candidateMachineFit
+    ?? chainOpenCamLib?.candidateMachineFit
+    ?? null;
   const status = realCandidateReady && contactPathCoverage?.ready && protectedZones?.ready && candidatePackageReadyForImport
     ? "ready-for-review"
     : realCandidateKnown || contactPathCoverage?.status !== "missing" || candidatePackageLevel !== "missing"
@@ -2297,6 +2301,7 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     candidatePackageLevel,
     candidatePackageReadyForImport,
     candidatePackageBlockedReason,
+    candidateMachineFit,
     firstBlocking: blocker,
     summary: status === "ready-for-review"
       ? "Linux OpenCAMLib 真实候选链路已具备可回填复核证据；仍需同 job 的材料去除、空跑和试雕证据后才可生产解锁。"
@@ -2311,9 +2316,12 @@ function formatLinuxOpenCamLibEvidenceOfflineLine(summary) {
   const coverageStatus = summary.contactPathCoverage?.status ?? "missing";
   const coverageText = summary.contactPathCoverage?.summary ?? "无覆盖率摘要";
   const protectedZonesStatus = summary.protectedZones?.status ?? "missing";
+  const machineFitText = summary.candidateMachineFit
+    ? ` / 机床适配 ${summary.candidateMachineFit.level ?? "missing"}`
+    : "";
   const candidateText = `${summary.candidatePackageLevel ?? "missing"} / ${summary.candidatePackageReadyForImport ? "可导入复核" : "不可导入"}`;
   const blockerText = summary.candidatePackageBlockedReason ?? summary.firstBlocking ?? "无明确阻断原因";
-  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 端部保护 ${protectedZonesStatus} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
+  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 端部保护 ${protectedZonesStatus}${machineFitText} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
 }
 
 function createOpenCamLibContactPathCoverageSummary(contact) {
@@ -2816,6 +2824,9 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       candidatePackageLevel: chain.openCamLib?.candidatePackageLevel ?? "missing",
       candidatePackageReadyForImport: Boolean(chain.openCamLib?.candidatePackageReadyForImport),
       candidatePackageBlockedReason: chain.openCamLib?.candidatePackageBlockedReason ?? null,
+      candidateMachineFit: chain.openCamLib?.candidateMachineFit && typeof chain.openCamLib.candidateMachineFit === "object"
+        ? createRunbookMachineFitSummary(chain.openCamLib.candidateMachineFit)
+        : null,
       candidatePackageStep: chain.crossChecks?.candidatePackageStep ?? "missing",
       candidatePackage: chain.openCamLib?.candidatePackage ?? null
     },
@@ -2853,6 +2864,41 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       camoticsUpstreamEvidenceMatched: Boolean(chain.crossChecks?.camoticsUpstreamEvidenceMatched),
       materialRemovalBoundToUpstreamCam: Boolean(chain.crossChecks?.materialRemovalBoundToUpstreamCam)
     }
+  };
+}
+
+function createRunbookMachineFitSummary(machineFit) {
+  return {
+    schema: machineFit.schema ?? "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+    level: machineFit.level ?? "missing",
+    summary: machineFit.summary ?? null,
+    targetMachine: machineFit.targetMachine && typeof machineFit.targetMachine === "object" ? {
+      controllerClass: machineFit.targetMachine.controllerClass ?? null,
+      rotaryOutputAxis: machineFit.targetMachine.rotaryOutputAxis ?? null,
+      wrapPerRevolutionMm: Number.isFinite(Number(machineFit.targetMachine.wrapPerRevolutionMm)) ? Number(machineFit.targetMachine.wrapPerRevolutionMm) : null,
+      toolProfileId: machineFit.targetMachine.toolProfileId ?? null
+    } : null,
+    coverage: machineFit.coverage && typeof machineFit.coverage === "object" ? {
+      pointCount: Number(machineFit.coverage.pointCount ?? 0),
+      finitePointCount: Number(machineFit.coverage.finitePointCount ?? 0),
+      xSpanMm: Number.isFinite(Number(machineFit.coverage.xSpanMm)) ? Number(machineFit.coverage.xSpanMm) : null,
+      rotarySampleCount: Number(machineFit.coverage.rotarySampleCount ?? 0),
+      rotarySpanDeg: Number.isFinite(Number(machineFit.coverage.rotarySpanDeg)) ? Number(machineFit.coverage.rotarySpanDeg) : null,
+      expectedRotaryCoverageDeg: Number.isFinite(Number(machineFit.coverage.expectedRotaryCoverageDeg)) ? Number(machineFit.coverage.expectedRotaryCoverageDeg) : null,
+      rotaryCoverageRatio: Number.isFinite(Number(machineFit.coverage.rotaryCoverageRatio)) ? Number(machineFit.coverage.rotaryCoverageRatio) : null,
+      depthMax: Number.isFinite(Number(machineFit.coverage.depthMax)) ? Number(machineFit.coverage.depthMax) : null
+    } : null,
+    riskCounts: machineFit.riskCounts && typeof machineFit.riskCounts === "object" ? {
+      holdZonePointCount: Number(machineFit.riskCounts.holdZonePointCount ?? 0),
+      deepPointCount: Number(machineFit.riskCounts.deepPointCount ?? 0),
+      invalidPointCount: Number(machineFit.riskCounts.invalidPointCount ?? 0),
+      missingRotaryCount: Number(machineFit.riskCounts.missingRotaryCount ?? 0)
+    } : null,
+    checks: machineFit.checks && typeof machineFit.checks === "object" ? {
+      rotaryCoordinatePresent: Boolean(machineFit.checks.rotaryCoordinatePresent),
+      protectedZoneClean: Boolean(machineFit.checks.protectedZoneClean),
+      depthWithinLimit: Boolean(machineFit.checks.depthWithinLimit)
+    } : null
   };
 }
 

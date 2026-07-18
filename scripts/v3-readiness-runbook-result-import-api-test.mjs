@@ -81,6 +81,9 @@ async function main() {
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackageBlockedReason === null, "Linux evidence chain should preserve candidate package blocked reason");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackage?.filename === "opencamlib-candidate-package-validation.json", "Linux evidence chain should preserve candidate package validation file summary");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", "Linux evidence chain should preserve candidate package validation level");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidateMachineFit?.level === "ok", "Linux evidence chain should preserve OpenCAMLib candidate machine-fit level");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "Linux evidence chain should preserve machine-fit rotary axis");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidateMachineFit?.coverage?.rotarySpanDeg === 360, "Linux evidence chain should preserve machine-fit rotary coverage");
   assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "Linux evidence chain should preserve CAMotics binding to candidate package validation");
   assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "Linux evidence chain should preserve CAMotics binding to candidate package bundle");
   assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.matchedCount === 4, "Linux evidence chain should preserve CAMotics upstream matched file count");
@@ -97,6 +100,8 @@ async function main() {
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "latest runbook result should summarize OpenCAMLib path coverage");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.protectedZones?.status === "ready", "latest runbook result should summarize OpenCAMLib protected zones");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidatePackage?.exists === true, "latest runbook result should summarize OpenCAMLib candidate package file");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidateMachineFit?.level === "ok", "latest runbook result should summarize OpenCAMLib candidate machine-fit");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidateMachineFit?.riskCounts?.missingRotaryCount === 0, "latest runbook result should summarize machine-fit risk counts");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "latest runbook result should summarize CAMotics candidate package validation binding");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "latest runbook result should summarize CAMotics candidate package bundle binding");
   assert(latest.latest.linuxEvidence?.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "latest runbook result should summarize OpenCAMLib candidate package validation step");
@@ -171,6 +176,38 @@ function createClosedLoopEvidenceChainFixture() {
         status: null,
         ok: null,
         sha256: "candidate-package-fixture-sha"
+      },
+      candidateMachineFit: {
+        schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+        level: "ok",
+        summary: "neutral output matches the target rotary-Y machine boundary for pre-import review.",
+        targetMachine: {
+          controllerClass: "3axis-controller-with-rotary-fixture",
+          rotaryOutputAxis: "Y",
+          wrapPerRevolutionMm: 100,
+          toolProfileId: "vflat-4mm-25deg"
+        },
+        coverage: {
+          pointCount: 231,
+          finitePointCount: 231,
+          xSpanMm: 20,
+          rotarySampleCount: 33,
+          rotarySpanDeg: 360,
+          expectedRotaryCoverageDeg: 360,
+          rotaryCoverageRatio: 1,
+          depthMax: 0.8
+        },
+        riskCounts: {
+          holdZonePointCount: 0,
+          deepPointCount: 0,
+          invalidPointCount: 0,
+          missingRotaryCount: 0
+        },
+        checks: {
+          rotaryCoordinatePresent: true,
+          protectedZoneClean: true,
+          depthWithinLimit: true
+        }
       }
     },
     camotics: {

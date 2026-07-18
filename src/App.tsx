@@ -1641,6 +1641,29 @@ type V3ReadinessSummary = {
           candidatePackageLevel?: string;
           candidatePackageReadyForImport?: boolean;
           candidatePackageBlockedReason?: string | null;
+          candidateMachineFit?: {
+            level?: string;
+            summary?: string | null;
+            targetMachine?: {
+              controllerClass?: string | null;
+              rotaryOutputAxis?: string | null;
+              wrapPerRevolutionMm?: number | null;
+              toolProfileId?: string | null;
+            } | null;
+            coverage?: {
+              pointCount?: number;
+              rotarySpanDeg?: number | null;
+              expectedRotaryCoverageDeg?: number | null;
+              rotaryCoverageRatio?: number | null;
+              depthMax?: number | null;
+            } | null;
+            riskCounts?: {
+              holdZonePointCount?: number;
+              deepPointCount?: number;
+              invalidPointCount?: number;
+              missingRotaryCount?: number;
+            } | null;
+          } | null;
           candidatePackageStep?: string;
           candidatePackage?: {
             filename?: string;
@@ -8927,8 +8950,28 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const packageStep = openCamLib?.candidatePackageStep ?? openCamLib?.candidatePackage?.status ?? "";
   const packageStepStatus = packageStep ? `预检 ${formatLinuxEvidenceStepStatus(packageStep)}` : "";
   const packageFile = openCamLib?.candidatePackage?.exists ? "证据JSON已回填" : "";
+  const machineFit = formatLinuxOpenCamLibMachineFit(openCamLib?.candidateMachineFit);
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
-  return [candidate, coverage, protectedZones, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+  return [candidate, coverage, protectedZones, machineFit, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+}
+
+function formatLinuxOpenCamLibMachineFit(machineFit: NonNullable<NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["openCamLib"]>["candidateMachineFit"]) {
+  if (!machineFit) return "";
+  const level = machineFit.level ?? "missing";
+  const rotarySpan = Number.isFinite(Number(machineFit.coverage?.rotarySpanDeg))
+    ? `${Number(machineFit.coverage?.rotarySpanDeg).toFixed(0)}°`
+    : "未知角度";
+  const target = Number.isFinite(Number(machineFit.coverage?.expectedRotaryCoverageDeg))
+    ? `/${Number(machineFit.coverage?.expectedRotaryCoverageDeg).toFixed(0)}°`
+    : "";
+  const risks = machineFit.riskCounts
+    ? [
+        machineFit.riskCounts.holdZonePointCount ? `端部${machineFit.riskCounts.holdZonePointCount}` : "",
+        machineFit.riskCounts.deepPointCount ? `超深${machineFit.riskCounts.deepPointCount}` : "",
+        machineFit.riskCounts.missingRotaryCount ? `缺旋转${machineFit.riskCounts.missingRotaryCount}` : ""
+      ].filter(Boolean).join("/")
+    : "";
+  return `机床适配 ${level} · 旋转${rotarySpan}${target}${risks ? ` · 风险${risks}` : ""}`;
 }
 
 function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["camotics"]) {

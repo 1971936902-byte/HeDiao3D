@@ -1284,6 +1284,11 @@ function createEvidenceChain(root, steps) {
     ?? candidatePackage?.blockedReason
     ?? candidatePackage?.handoffContract?.blockedReason
     ?? null;
+  const candidateMachineFit = realCandidate?.candidatePackage?.machineFit
+    ?? realCandidate?.candidateMachineFit
+    ?? nativeAcceptance?.openCamLibRealCandidate?.candidateMachineFit
+    ?? candidatePackage?.machineFit
+    ?? null;
   const camoticsReady = camoticsLocalValidation?.ok === true
     && camoticsLocalValidation?.productionEvidenceEligible === true
     && (!upstreamRequired || upstreamStatus === "matched");
@@ -1325,6 +1330,7 @@ function createEvidenceChain(root, steps) {
       candidatePackageLevel,
       candidatePackageReadyForImport,
       candidatePackageBlockedReason,
+      candidateMachineFit: summarizeMachineFit(candidateMachineFit),
       candidatePackage: summarizeJson("opencamlib-candidate-package-validation.json", candidatePackage),
       contactValidation: summarizeJson("opencamlib-contact-output-validation.json", contactValidation)
     },
@@ -1400,6 +1406,46 @@ function summarizeJson(filename, value) {
     ok: typeof value?.ok === "boolean" ? value.ok : null,
     sha256: inspectFile(join(root, filename)).sha256
   };
+}
+
+function summarizeMachineFit(machineFit) {
+  if (!machineFit || typeof machineFit !== "object") return null;
+  return {
+    schema: machineFit.schema ?? "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+    level: machineFit.level ?? "missing",
+    summary: machineFit.summary ?? null,
+    targetMachine: machineFit.targetMachine ? {
+      controllerClass: machineFit.targetMachine.controllerClass ?? null,
+      rotaryOutputAxis: machineFit.targetMachine.rotaryOutputAxis ?? null,
+      wrapPerRevolutionMm: machineFit.targetMachine.wrapPerRevolutionMm ?? null,
+      toolProfileId: machineFit.targetMachine.toolProfileId ?? null
+    } : null,
+    coverage: machineFit.coverage ? {
+      pointCount: Number(machineFit.coverage.pointCount ?? 0),
+      finitePointCount: Number(machineFit.coverage.finitePointCount ?? 0),
+      xSpanMm: numberOrNull(machineFit.coverage.xSpanMm),
+      rotarySampleCount: Number(machineFit.coverage.rotarySampleCount ?? 0),
+      rotarySpanDeg: numberOrNull(machineFit.coverage.rotarySpanDeg),
+      expectedRotaryCoverageDeg: numberOrNull(machineFit.coverage.expectedRotaryCoverageDeg),
+      rotaryCoverageRatio: numberOrNull(machineFit.coverage.rotaryCoverageRatio),
+      depthMax: numberOrNull(machineFit.coverage.depthMax)
+    } : null,
+    riskCounts: machineFit.riskCounts ? {
+      holdZonePointCount: Number(machineFit.riskCounts.holdZonePointCount ?? 0),
+      deepPointCount: Number(machineFit.riskCounts.deepPointCount ?? 0),
+      invalidPointCount: Number(machineFit.riskCounts.invalidPointCount ?? 0),
+      missingRotaryCount: Number(machineFit.riskCounts.missingRotaryCount ?? 0)
+    } : null,
+    checks: machineFit.checks ? {
+      rotaryCoordinatePresent: Boolean(machineFit.checks.rotaryCoordinatePresent),
+      protectedZoneClean: Boolean(machineFit.checks.protectedZoneClean),
+      depthWithinLimit: Boolean(machineFit.checks.depthWithinLimit)
+    } : null
+  };
+}
+
+function numberOrNull(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
 function inspectFile(path) {
@@ -2099,7 +2145,8 @@ const report = {
     level: candidatePackage.level,
     evidenceClass: candidatePackage.contactValidation?.evidenceClass ?? candidatePackage.artifactManifest?.evidenceClass ?? null,
     readyForImport: candidatePackage.handoffContract?.status === "ready-for-hediao3d-import",
-    blockedReason: candidatePackage.blockedReason ?? null,
+    blockedReason: candidatePackage.blockedReason ?? candidatePackage.handoffContract?.blockedReason ?? null,
+    machineFit: summarizeMachineFit(candidatePackage.machineFit),
     bundle: candidatePackage.bundlePath ?? "opencamlib-candidate-package-bundle.zip"
   } : null,
   steps,
