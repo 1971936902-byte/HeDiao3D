@@ -2610,7 +2610,11 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       realCandidateKnown: Boolean(chain.openCamLib?.realCandidateKnown),
       realCandidateReady: Boolean(chain.openCamLib?.realCandidateReady),
       productionLocked: chain.openCamLib?.productionLocked !== false,
-      firstBlocking: chain.openCamLib?.firstBlocking ?? null
+      firstBlocking: chain.openCamLib?.firstBlocking ?? null,
+      contactPathCoverage: chain.openCamLib?.contactPathCoverage ?? null,
+      candidatePackageLevel: chain.openCamLib?.candidatePackageLevel ?? "missing",
+      candidatePackageReadyForImport: Boolean(chain.openCamLib?.candidatePackageReadyForImport),
+      candidatePackageBlockedReason: chain.openCamLib?.candidatePackageBlockedReason ?? null
     },
     camotics: {
       productionEvidenceEligible: Boolean(chain.camotics?.productionEvidenceEligible),

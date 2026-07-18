@@ -38,6 +38,7 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "camotics-validator-bundle" && check.status === "pass"), "self-check should verify CAMotics result bundle support");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-schema" && check.status === "pass"), "self-check should verify closed-loop check support");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-evidence-chain" && check.status === "pass"), "self-check should verify closed-loop evidence-chain support");
+  assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-opencamlib-coverage" && check.status === "pass"), "self-check should verify closed-loop OpenCAMLib coverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-schema" && check.status === "pass"), "self-check should verify diagnostics bundle schema");
   assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-contact-spike-schema" && check.status === "pass"), "self-check should verify OpenCAMLib contact spike schema");

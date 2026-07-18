@@ -789,6 +789,7 @@ check("real-candidate-path-coverage", openCamRealCandidate.includes("pathCoverag
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
 check("closed-loop-check-evidence-chain", closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1") && closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop checker must summarize Native CAM/OpenCAMLib/CAMotics evidence chain and upstream binding.");
+check("closed-loop-check-opencamlib-coverage", closedLoopCheck.includes("contactPathCoverage") && closedLoopCheck.includes("candidatePackageBlockedReason"), "closed-loop checker must summarize OpenCAMLib path coverage and candidate package blockers.");
 check("diagnostics-bundle-schema", diagnosticsBundle.includes("hediao3d.native-cam-diagnostics-bundle.v1"), "diagnostics bundle must emit the diagnostics schema.");
 check("diagnostics-bundle-zip", diagnosticsBundle.includes("native-cam-diagnostics-bundle.zip"), "diagnostics bundle must generate native-cam-diagnostics-bundle.zip.");
 
@@ -954,6 +955,26 @@ function createEvidenceChain(root, steps) {
     || contactValidation?.level === "ready";
   const realCandidateKnown = Boolean(realCandidate);
   const realCandidateReady = realCandidate?.level === "ready" || realCandidate?.candidateReadyForImport === true || realCandidate?.ok === true;
+  const contactPathCoverage = realCandidate?.contactValidation?.pathCoverage
+    ?? realCandidate?.contactValidationPathCoverage
+    ?? nativeAcceptance?.openCamLibRealCandidate?.contactValidationPathCoverage
+    ?? nativeAcceptance?.contactValidation?.pathCoverage
+    ?? nativeAcceptance?.contactValidationStatus?.pathCoverage
+    ?? contactValidation?.pathCoverage
+    ?? null;
+  const candidatePackageLevel = realCandidate?.candidatePackage?.level
+    ?? realCandidate?.candidatePackageLevel
+    ?? nativeAcceptance?.openCamLibRealCandidate?.candidatePackageLevel
+    ?? "missing";
+  const candidatePackageReadyForImport = Boolean(
+    realCandidate?.candidatePackage?.readyForImport
+    ?? realCandidate?.candidateReadyForImport
+    ?? nativeAcceptance?.openCamLibRealCandidate?.candidateReadyForImport
+  );
+  const candidatePackageBlockedReason = realCandidate?.candidatePackage?.blockedReason
+    ?? realCandidate?.candidatePackageBlockedReason
+    ?? nativeAcceptance?.openCamLibRealCandidate?.candidatePackageBlockedReason
+    ?? null;
   const camoticsReady = camoticsLocalValidation?.ok === true
     && camoticsLocalValidation?.productionEvidenceEligible === true
     && (!upstreamRequired || upstreamStatus === "matched");
@@ -986,6 +1007,10 @@ function createEvidenceChain(root, steps) {
       realCandidateKnown,
       productionLocked: realCandidate?.productionLocked !== false,
       firstBlocking: realCandidate?.firstBlocking ?? (Array.isArray(realCandidate?.blocking) ? realCandidate.blocking[0] : null),
+      contactPathCoverage,
+      candidatePackageLevel,
+      candidatePackageReadyForImport,
+      candidatePackageBlockedReason,
       contactValidation: summarizeJson("opencamlib-contact-output-validation.json", contactValidation)
     },
     camotics: {

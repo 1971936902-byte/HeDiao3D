@@ -75,6 +75,8 @@ async function main() {
   assert(linuxEvidenceArtifact.schema === "hediao3d.v3-runbook-linux-evidence.v1", "Linux evidence artifact schema mismatch");
   assert(linuxEvidenceArtifact.evidenceChain?.schema === "hediao3d.native-cam-linux-evidence-chain.v1", "Linux evidence should expose closed-loop evidence chain");
   assert(linuxEvidenceArtifact.evidenceChain?.crossChecks?.materialRemovalBoundToUpstreamCam === true, "Linux evidence chain should preserve CAMotics upstream binding");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "Linux evidence chain should preserve OpenCAMLib path coverage summary");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackageBlockedReason === null, "Linux evidence chain should preserve candidate package blocked reason");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "native-cam-closed-loop-check.json" && file.status === "imported"), "Linux evidence should preserve closed-loop check");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.status === "imported"), "Linux evidence should preserve CAMotics validation");
 
@@ -84,6 +86,7 @@ async function main() {
   assert(latest.latest.ok === true, "latest runbook result should be the zip all-pass import");
   assert(latest.latest.linuxEvidence?.status === "ready-for-review", "latest runbook result should preserve Linux evidence summary");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidenceStatus === "matched", "latest runbook result should summarize CAMotics upstream evidence status");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "latest runbook result should summarize OpenCAMLib path coverage");
 
   const readinessAfterImport = await postJson("/api/orchestrator/readiness", {});
   assert(readinessAfterImport.runbookResult?.readinessReportId === readiness.id, "readiness should include latest imported runbook result");
@@ -117,7 +120,19 @@ function createClosedLoopEvidenceChainFixture() {
       realCandidateKnown: true,
       realCandidateReady: true,
       productionLocked: true,
-      firstBlocking: null
+      firstBlocking: null,
+      contactPathCoverage: {
+        schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+        required: true,
+        status: "ready",
+        ready: true,
+        x: { id: "contact-path-coverage-x", status: "pass", summary: "xCoverageRatio=1" },
+        cross: { id: "contact-path-coverage-cross", status: "pass", summary: "crossCoverageRatio=1" },
+        summary: "OpenCAMLib path coverage checks passed."
+      },
+      candidatePackageLevel: "ready",
+      candidatePackageReadyForImport: true,
+      candidatePackageBlockedReason: null
     },
     camotics: {
       productionEvidenceEligible: true,
