@@ -63,7 +63,14 @@ async function main() {
     level: "ready",
     handoffContract: { status: "ready-for-hediao3d-import" },
     contactValidation: { level: "ready", evidenceClass: "production-candidate", checkCount: 27 },
-    artifactManifest: { readyForImport: true, evidenceClass: "production-candidate" }
+    artifactManifest: { readyForImport: true, evidenceClass: "production-candidate" },
+    machineFit: {
+      schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+      level: "ok",
+      targetMachine: { controllerClass: "3axis-controller-with-rotary-fixture", rotaryOutputAxis: "Y", wrapPerRevolutionMm: 100, toolProfileId: "vflat-4mm-25deg" },
+      coverage: { pointCount: 231, rotarySpanDeg: 360, expectedRotaryCoverageDeg: 360, rotaryCoverageRatio: 1, depthMax: 0.8 },
+      riskCounts: { holdZonePointCount: 0, deepPointCount: 0, invalidPointCount: 0, missingRotaryCount: 0 }
+    }
   }, null, 2);
   const candidatePackageBundleText = "PK fixture candidate package bundle";
   const jobDir = join(process.cwd(), "public", "orchestrator-jobs", job.id);
@@ -85,6 +92,8 @@ async function main() {
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMin === previewMotionProfile.zMin, "run package zMin mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMax === previewMotionProfile.zMax, "run package zMax mismatch");
   assert(runPackage.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "run package should expose upstream CAM evidence binding");
+  assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "run package should carry OpenCAMLib candidate machine-fit");
+  assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "run package should carry machine-fit rotary axis");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.exists && file.sha256 === candidatePackageValidationSha), "run package should hash-bind OpenCAMLib candidate package validation");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.exists && file.sha256 === candidatePackageBundleSha), "run package should hash-bind OpenCAMLib candidate package bundle");
   assert(runPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "run package must keep production locked");
@@ -98,6 +107,7 @@ async function main() {
   assert(template.inputs?.machineContext?.rotaryWrapAxis === "Y", "result template should bind Y rotary machine context");
   assert(template.inputs?.machineContext?.rotaryWrapPerRevolutionMm === 100, "result template should bind rotary wrap distance");
   assert(template.inputs?.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "result template should include upstream CAM evidence binding");
+  assert(template.inputs?.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "result template should carry candidate machine-fit evidence");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");

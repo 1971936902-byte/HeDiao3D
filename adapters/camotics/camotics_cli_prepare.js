@@ -204,6 +204,8 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
 }
 
 function createUpstreamCamEvidence(inspectedInputs) {
+  const candidatePackageValidation = readJsonIfExists(inspectedInputs.opencamlibCandidatePackageValidation?.path);
+  const candidateMachineFit = summarizeCandidateMachineFit(candidatePackageValidation?.machineFit);
   const candidates = [
     ["nativeCamRealOutputAcceptance", "native-cam-real-output-acceptance.json", "Native CAM 真实输出验收"],
     ["opencamlibContactValidation", "opencamlib-contact-output-validation.json", "OpenCAMLib strict contact 验收"],
@@ -229,11 +231,44 @@ function createUpstreamCamEvidence(inspectedInputs) {
     status: present.length > 0 ? "hash-bound" : "missing",
     required: present.length > 0,
     presentCount: present.length,
+    candidateMachineFit,
     files,
     summary: present.length > 0
       ? `CAMotics run package is hash-bound to ${present.length} upstream CAM/OpenCAMLib evidence file(s).`
       : "No upstream Native CAM/OpenCAMLib evidence file was present in this job folder when the CAMotics package was prepared."
   };
+}
+
+function summarizeCandidateMachineFit(machineFit) {
+  if (!machineFit || typeof machineFit !== "object") return null;
+  return {
+    schema: machineFit.schema ?? "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+    level: machineFit.level ?? "missing",
+    summary: machineFit.summary ?? null,
+    targetMachine: machineFit.targetMachine ? {
+      controllerClass: machineFit.targetMachine.controllerClass ?? null,
+      rotaryOutputAxis: machineFit.targetMachine.rotaryOutputAxis ?? null,
+      wrapPerRevolutionMm: numberOrNull(machineFit.targetMachine.wrapPerRevolutionMm),
+      toolProfileId: machineFit.targetMachine.toolProfileId ?? null
+    } : null,
+    coverage: machineFit.coverage ? {
+      pointCount: Number(machineFit.coverage.pointCount ?? 0),
+      rotarySpanDeg: numberOrNull(machineFit.coverage.rotarySpanDeg),
+      expectedRotaryCoverageDeg: numberOrNull(machineFit.coverage.expectedRotaryCoverageDeg),
+      rotaryCoverageRatio: numberOrNull(machineFit.coverage.rotaryCoverageRatio),
+      depthMax: numberOrNull(machineFit.coverage.depthMax)
+    } : null,
+    riskCounts: machineFit.riskCounts ? {
+      holdZonePointCount: Number(machineFit.riskCounts.holdZonePointCount ?? 0),
+      deepPointCount: Number(machineFit.riskCounts.deepPointCount ?? 0),
+      invalidPointCount: Number(machineFit.riskCounts.invalidPointCount ?? 0),
+      missingRotaryCount: Number(machineFit.riskCounts.missingRotaryCount ?? 0)
+    } : null
+  };
+}
+
+function numberOrNull(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
 function inspectWrittenRunPackage(path) {
@@ -450,6 +485,7 @@ check("preferred-gcode-hash", Boolean(expected.preferredGcodeSha256) && result?.
 check("run-package-hash", Boolean(expected.camoticsCliRunPackageSha256) && result?.inputs?.camoticsCliRunPackageSha256 === expected.camoticsCliRunPackageSha256, "inputs.camoticsCliRunPackageSha256 must match this run package.");
 check("machine-context", machineContextMatches(result?.inputs?.machineContext, expected.machineContext), "inputs.machineContext must match camotics-preview.nc rotary-wrap axis and wrap distance.");
 check("upstream-cam-evidence", upstreamCamEvidenceMatches(result?.inputs?.upstreamCamEvidence, expected.upstreamCamEvidence), "inputs.upstreamCamEvidence must match the CAM/OpenCAMLib evidence hashes captured by camotics-cli-run-package.json.");
+check("upstream-machine-fit", upstreamMachineFitMatches(result?.inputs?.upstreamCamEvidence?.candidateMachineFit, expected.upstreamCamEvidence?.candidateMachineFit), "inputs.upstreamCamEvidence.candidateMachineFit must match the run package and must not be critical.");
 check("motion-line-count", Number(result?.metrics?.motionLineCount) === Number(expected.motionProfile?.motionLineCount), "metrics.motionLineCount must match camotics-preview.nc.");
 check("z-min", close(Number(result?.metrics?.zMin), Number(expected.motionProfile?.zMin), 0.05), "metrics.zMin must match camotics-preview.nc within 0.05mm.");
 check("z-max", close(Number(result?.metrics?.zMax), Number(expected.motionProfile?.zMax), 0.05), "metrics.zMax must match camotics-preview.nc within 0.05mm.");
@@ -514,6 +550,18 @@ function upstreamCamEvidenceMatches(imported, expectedEvidence) {
     const actual = importedFiles.find((file) => file.key === expectedFile.key || file.filename === expectedFile.filename);
     return Boolean(actual && actual.exists !== false && actual.sha256 === expectedFile.sha256);
   });
+}
+
+function upstreamMachineFitMatches(importedMachineFit, expectedMachineFit) {
+  if (!expectedMachineFit) return true;
+  if (!importedMachineFit || typeof importedMachineFit !== "object") return false;
+  const expectedSchema = expectedMachineFit.schema ?? "hediao3d.opencamlib-candidate-machine-fit-preflight.v1";
+  const expectedAxis = String(expectedMachineFit.targetMachine?.rotaryOutputAxis ?? "").toUpperCase();
+  const importedAxis = String(importedMachineFit.targetMachine?.rotaryOutputAxis ?? "").toUpperCase();
+  return importedMachineFit.schema === expectedSchema
+    && importedMachineFit.level === expectedMachineFit.level
+    && importedMachineFit.level !== "critical"
+    && importedAxis === expectedAxis;
 }
 
 console.log(JSON.stringify(report, null, 2));

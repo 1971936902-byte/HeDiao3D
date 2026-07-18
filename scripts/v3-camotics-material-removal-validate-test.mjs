@@ -37,7 +37,9 @@ try {
   assert(readyReport.checks.some((check) => check.id === "machine-context" && check.status === "pass"), "machine context check missing");
   assert(readyReport.checks.some((check) => check.id === "simulator-evidence" && check.status === "pass"), "simulator evidence check missing");
   assert(readyReport.checks.some((check) => check.id === "upstream-cam-evidence" && check.ok && check.status === "matched"), "upstream CAM evidence check missing");
+  assert(readyReport.checks.some((check) => check.id === "upstream-machine-fit" && check.ok && check.status === "matched"), "upstream machine-fit check missing");
   assert(readyReport.upstreamCamEvidence?.status === "matched", "ready report should expose matched upstream CAM evidence");
+  assert(readyReport.upstreamCamEvidence?.machineFit?.status === "matched", "ready report should expose matched upstream machine-fit");
   assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
   const bundlePath = join(workDir, "camotics-result-bundle.zip");
@@ -83,6 +85,29 @@ try {
   const upstreamMismatchReport = JSON.parse(upstreamMismatch.stdout);
   assert(upstreamMismatchReport.missing.includes("upstream-cam-evidence"), "upstream mismatch should list upstream-cam-evidence");
 
+  const criticalMachineFitRunPackagePath = join(workDir, "critical-machinefit-camotics-cli-run-package.json");
+  const criticalMachineFitRunPackage = createRunPackage({
+    upstreamCamEvidence: createUpstreamCamEvidence({
+      candidateMachineFit: createCandidateMachineFit({ level: "critical", missingRotaryCount: 12 })
+    })
+  });
+  writeJsonWithHash(criticalMachineFitRunPackagePath, criticalMachineFitRunPackage);
+  const criticalMachineFitRunPackageSha = sha256File(criticalMachineFitRunPackagePath);
+  writeJsonWithHash(resultPath, createResult({
+    runPackage: criticalMachineFitRunPackage,
+    runPackageSha: criticalMachineFitRunPackageSha
+  }));
+  const criticalMachineFit = spawnSync(node, [validator, "--result", resultPath, "--run-package", criticalMachineFitRunPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(criticalMachineFit.status === 3, "critical upstream machine-fit should fail material-removal validation");
+  const criticalMachineFitReport = JSON.parse(criticalMachineFit.stdout);
+  assert(criticalMachineFitReport.missing.includes("upstream-cam-evidence"), "critical machine-fit should fail upstream CAM evidence");
+  assert(criticalMachineFitReport.missing.includes("upstream-machine-fit"), "critical machine-fit should list upstream-machine-fit");
+  assert(criticalMachineFitReport.upstreamCamEvidence?.machineFit?.importedLevel === "critical", "critical machine-fit report should expose imported critical level");
+
   console.log(JSON.stringify({
     ok: true,
     readyLevel: readyReport.level,
@@ -93,7 +118,7 @@ try {
   rmSync(workDir, { recursive: true, force: true });
 }
 
-function createRunPackage() {
+function createRunPackage(overrides = {}) {
   const preferredGcodeSha = sha256Text("(ROTARY_WRAP_AXIS=Y)\n(ROTARY_WRAP_PER_REV_MM=100)\n(LENGTH_AXIS=X)\nG0 X0 Y0 Z22\nG1 X10 Y5 Z21.45\n");
   return {
     schema: "hediao3d.camotics-cli-run-package.v1",
@@ -115,7 +140,7 @@ function createRunPackage() {
       screenshot: "camotics-preview.png",
       materialMesh: "camotics-material-removal.stl"
     },
-    upstreamCamEvidence: createUpstreamCamEvidence(),
+    upstreamCamEvidence: overrides.upstreamCamEvidence ?? createUpstreamCamEvidence(),
     safetyLocks: {
       productionUnlockFromPreparePackage: false,
       syntheticResultAllowedForProduction: false
@@ -156,12 +181,13 @@ function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel 
   };
 }
 
-function createUpstreamCamEvidence() {
+function createUpstreamCamEvidence(overrides = {}) {
   return {
     schema: "hediao3d.camotics-upstream-cam-evidence.v1",
     status: "hash-bound",
     required: true,
     presentCount: 2,
+    candidateMachineFit: overrides.candidateMachineFit ?? createCandidateMachineFit(),
     files: [
       {
         key: "opencamlibRealCandidateRun",
@@ -181,6 +207,33 @@ function createUpstreamCamEvidence() {
       }
     ],
     summary: "Fixture upstream CAM evidence."
+  };
+}
+
+function createCandidateMachineFit({ level = "ok", missingRotaryCount = 0 } = {}) {
+  return {
+    schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+    level,
+    summary: level === "ok" ? "Fixture machine-fit ok." : "Fixture machine-fit critical.",
+    targetMachine: {
+      controllerClass: "3axis-controller-with-rotary-fixture",
+      rotaryOutputAxis: "Y",
+      wrapPerRevolutionMm: 100,
+      toolProfileId: "vflat-4mm-25deg"
+    },
+    coverage: {
+      pointCount: 231,
+      rotarySpanDeg: level === "ok" ? 360 : 0,
+      expectedRotaryCoverageDeg: 360,
+      rotaryCoverageRatio: level === "ok" ? 1 : 0,
+      depthMax: 0.8
+    },
+    riskCounts: {
+      holdZonePointCount: 0,
+      deepPointCount: 0,
+      invalidPointCount: 0,
+      missingRotaryCount
+    }
   };
 }
 
