@@ -113,6 +113,9 @@ def build_kernel_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[st
         "stock": {
             "lengthMm": stock.get("lengthMm") or settings.get("lengthMm"),
             "diameterMm": stock.get("diameterMm") or settings.get("diameterMm"),
+            "leftHoldMm": stock.get("leftHoldMm") or settings.get("leftHoldMm"),
+            "rightHoldMm": stock.get("rightHoldMm") or settings.get("rightHoldMm"),
+            "endTransitionMm": stock.get("endTransitionMm") or settings.get("endTransitionMm"),
             "blankShape": "olive-core-rotary-wrap" if cam_mode == "rotaryWrap" else "rectangular-relief",
         },
         "tool": {
@@ -168,6 +171,7 @@ def build_kernel_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[st
             "cutter contact report quality.previewScaffold must be false.",
             "cutter contact report inputIdentity must bind modelSha256, planSha256 and neutralToolpathSha256 or neutralToolpathWithoutContactReportSha256.",
             "cutter contact report must include strict tool/contact/residual evidence: real algorithm, 4mm/25deg/flat-tip tool geometry, hitRate >= 0.995, stepToCutterRatio <= 0.25, X/cross pathCoverage >= 0.98, gouge <= 0.03mm and undercut <= 0.08mm.",
+            "cutter contact report must include protectedZones with left/right hold and transition zones enabled, violationCount=0 and sampled X fully inside the safe span.",
             "HeDiao3D still requires postprocess checks, material removal simulation, air-run, trial feedback and machine acceptance before production NC unlock.",
         ],
         "opencamlib": detection,
@@ -254,6 +258,37 @@ def normalize_residual_material(operation_metrics):
     return residual
 
 
+def normalize_protected_zones(points, operation_metrics):
+    zones = dict((operation_metrics or {{}}).get("protectedZones") or {{}})
+    stock = PLAN.get("stock") or {{}}
+    length = float(stock.get("lengthMm") or 1)
+    left_hold = float(stock.get("leftHoldMm") or 0)
+    right_hold = float(stock.get("rightHoldMm") or 0)
+    transition = float(stock.get("endTransitionMm") or 0)
+    safe_min = -length / 2 + left_hold + transition
+    safe_max = length / 2 - right_hold - transition
+    xs = [float(point.get("x")) for point in points if isinstance(point, dict) and point.get("x") is not None]
+    zones.setdefault("schema", "hediao3d.opencamlib-protected-zones.v1")
+    zones.setdefault("enabled", True)
+    zones.setdefault("leftHoldMm", left_hold)
+    zones.setdefault("rightHoldMm", right_hold)
+    zones.setdefault("endTransitionMm", transition)
+    zones.setdefault("safeMinX", safe_min)
+    zones.setdefault("safeMaxX", safe_max)
+    zones.setdefault("sampledMinX", min(xs) if xs else None)
+    zones.setdefault("sampledMaxX", max(xs) if xs else None)
+    violations = zones.get("violations")
+    if not isinstance(violations, list):
+        violations = [
+            {{"x": x}}
+            for x in xs
+            if x < float(zones["safeMinX"]) - 0.001 or x > float(zones["safeMaxX"]) + 0.001
+        ]
+    zones["violations"] = violations[:12]
+    zones.setdefault("violationCount", len(violations))
+    return zones
+
+
 def write_candidate_outputs(points, operation_metrics):
     """Write the strict HeDiao3D neutral handoff expected from real OpenCAMLib.
 
@@ -285,6 +320,7 @@ def write_candidate_outputs(points, operation_metrics):
     contact_sampling["pointCount"] = contact_sampling.get("pointCount") or len(points)
     contact_sampling["contactPointCount"] = contact_sampling.get("contactPointCount") or len(points)
     residual_material = normalize_residual_material(operation_metrics)
+    protected_zones = normalize_protected_zones(points, operation_metrics)
     neutral_sha = sha256_json_without_contact_report(neutral)
     contact_report = {{
         "schema": "hediao3d.opencamlib-cutter-contact-report.v1",
@@ -305,6 +341,7 @@ def write_candidate_outputs(points, operation_metrics):
         }},
         "contactSampling": contact_sampling,
         "residualMaterial": residual_material,
+        "protectedZones": protected_zones,
         "tolerances": {{
             "maxGougeMm": 0.03,
             "maxUndercutMm": 0.08,

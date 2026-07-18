@@ -122,10 +122,18 @@ try {
   assert(pathDropContact.contactSampling?.samplingSource === "env-override", "PathDropCutter contact report should expose sampling source");
   assert(pathDropContact.contactSampling?.pathCoverage?.xCoverageRatio === 1, "PathDropCutter contact report should expose full X path coverage");
   assert(pathDropContact.contactSampling?.pathCoverage?.crossCoverageRatio === 1, "PathDropCutter contact report should expose full cross path coverage");
+  assert(pathDropContact.contactSampling?.pathCoverage?.xCoverageDomain === "protected-machinable-span", "PathDropCutter contact report should measure X coverage against protected machinable span");
   assert(Number.isFinite(pathDropContact.contactSampling?.stepToCutterRatio), "PathDropCutter contact report should expose step-to-cutter ratio");
   assert(pathDropContact.residualMaterial?.evidenceClass === "engineering-estimate", "PathDropCutter contact report should expose conservative residual estimate");
   assert(Number.isFinite(pathDropContact.residualMaterial?.maxGougeMm), "PathDropCutter contact report should expose max gouge estimate");
   assert(Number.isFinite(pathDropContact.residualMaterial?.maxUndercutMm), "PathDropCutter contact report should expose max undercut estimate");
+  assert(pathDropContact.protectedZones?.enabled === true, "PathDropCutter contact report should declare protected end zones");
+  assert(pathDropContact.protectedZones?.leftHoldMm === 2, "PathDropCutter protected zone should echo left hold");
+  assert(pathDropContact.protectedZones?.rightHoldMm === 2, "PathDropCutter protected zone should echo right hold");
+  assert(pathDropContact.protectedZones?.endTransitionMm === 1.2, "PathDropCutter protected zone should echo end transition");
+  assert(pathDropContact.protectedZones?.violationCount === 0, "PathDropCutter sampling must stay outside protected end zones");
+  assert(Math.min(...pathDrop.points.map((point) => point.x)) >= pathDropContact.protectedZones.safeMinX - 0.001, "PathDropCutter neutral X min should stay inside safe zone");
+  assert(Math.max(...pathDrop.points.map((point) => point.x)) <= pathDropContact.protectedZones.safeMaxX + 0.001, "PathDropCutter neutral X max should stay inside safe zone");
   assert(pathDropContact.tolerances?.maxGougeMm === 0.03, "PathDropCutter contact report should expose gouge tolerance");
   assert(pathDropContact.quality?.productionCandidate === false, "PathDropCutter contact report must not be production candidate yet");
   assert(pathDropContact.quality?.level === "experimental-real-api", "PathDropCutter contact report level mismatch");
@@ -185,6 +193,9 @@ function createJob() {
       spindleRpm: 12000,
       rotaryOutputAxis: "Y",
       rotaryWrapPerRevolutionMm: 100,
+      leftHoldMm: 2,
+      rightHoldMm: 2,
+      endTransitionMm: 1.2,
       toolProfileId: "vflat-4mm-25deg",
       toolDiameter: 4,
       stepoverMm: 0.28,

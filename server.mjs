@@ -4699,6 +4699,7 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   const pathCoverage = sampling.pathCoverage && typeof sampling.pathCoverage === "object" ? sampling.pathCoverage : {};
   const residual = report?.residualMaterial && typeof report.residualMaterial === "object" ? report.residualMaterial : {};
   const tolerances = report?.tolerances && typeof report.tolerances === "object" ? report.tolerances : {};
+  const protectedZones = report?.protectedZones && typeof report.protectedZones === "object" ? report.protectedZones : {};
   const algorithm = String(sampling.algorithm ?? report?.mode ?? "");
   const hitRate = finiteNumberOrNull(sampling.hitRate);
   const pointCount = finiteNumberOrNull(sampling.pointCount);
@@ -4710,6 +4711,12 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   const maxUndercut = finiteNumberOrNull(residual.maxUndercutMm);
   const maxGougeTolerance = finiteNumberOrNull(tolerances.maxGougeMm) ?? 0.03;
   const maxUndercutTolerance = finiteNumberOrNull(tolerances.maxUndercutMm) ?? 0.08;
+  const protectedViolationCount = finiteNumberOrNull(protectedZones.violationCount);
+  const safeMinX = finiteNumberOrNull(protectedZones.safeMinX);
+  const safeMaxX = finiteNumberOrNull(protectedZones.safeMaxX);
+  const sampledMinX = finiteNumberOrNull(protectedZones.sampledMinX);
+  const sampledMaxX = finiteNumberOrNull(protectedZones.sampledMaxX);
+  const protectedBoundsReady = safeMinX !== null && safeMaxX !== null && sampledMinX !== null && sampledMaxX !== null && safeMinX <= safeMaxX && sampledMinX >= safeMinX - 0.001 && sampledMaxX <= safeMaxX + 0.001;
 
   addNeutralImportStrictCheck(checks, "contact-algorithm-real", /(drop-cutter|cutter-contact|waterline)/i.test(algorithm) && !/(preview|heightfield|scaffold|fixture|synthetic)/i.test(algorithm), `algorithm=${algorithm || "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-tool-diameter", finiteNumberOrNull(tool.diameterMm) > 0, `diameterMm=${tool.diameterMm ?? "missing"}`);
@@ -4722,6 +4729,9 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   addNeutralImportStrictCheck(checks, "contact-path-coverage-cross", crossCoverageRatio !== null && crossCoverageRatio >= 0.98, `crossCoverageRatio=${crossCoverageRatio ?? "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-residual-gouge", maxGouge !== null && maxGouge <= maxGougeTolerance, `maxGougeMm=${maxGouge ?? "missing"}, tolerance=${maxGougeTolerance}`);
   addNeutralImportStrictCheck(checks, "contact-residual-undercut", maxUndercut !== null && maxUndercut <= maxUndercutTolerance, `maxUndercutMm=${maxUndercut ?? "missing"}, tolerance=${maxUndercutTolerance}`);
+  addNeutralImportStrictCheck(checks, "protected-zones-present", protectedZones.enabled === true, `enabled=${protectedZones.enabled ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "protected-zones-no-violations", protectedViolationCount !== null && protectedViolationCount === 0, `violationCount=${protectedViolationCount ?? "missing"}`);
+  addNeutralImportStrictCheck(checks, "protected-zones-sampled-bounds", protectedBoundsReady, `safe=[${safeMinX ?? "missing"}, ${safeMaxX ?? "missing"}], sampled=[${sampledMinX ?? "missing"}, ${sampledMaxX ?? "missing"}]`);
   const failed = checks.filter((check) => check.status !== "pass");
   return {
     schema: "hediao3d.opencamlib-contact-strict-evidence.v1",

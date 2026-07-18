@@ -200,6 +200,19 @@ function createContact({ modelSha, planSha, neutralSha }) {
       maxGougeMm: 0.03,
       maxUndercutMm: 0.08
     },
+    protectedZones: {
+      schema: "hediao3d.opencamlib-protected-zones.v1",
+      enabled: true,
+      leftHoldMm: 2,
+      rightHoldMm: 2,
+      endTransitionMm: 1.2,
+      safeMinX: -10,
+      safeMaxX: 10,
+      sampledMinX: -10,
+      sampledMaxX: 10,
+      violationCount: 0,
+      violations: []
+    },
     quality: {
       level: "validated-contact",
       previewScaffold: false,

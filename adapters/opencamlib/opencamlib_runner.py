@@ -874,6 +874,9 @@ def create_opencamlib_path(module: Any, point_cls: Any, line_cls: Any, path_cls:
     y_min = float(min_bounds.get("y") or 0)
     y_max = float(max_bounds.get("y") or 1)
     path_grid = resolve_path_dropcutter_grid(job, plan, geometry)
+    protected_zones = compute_path_dropcutter_protected_zones(job, plan, geometry)
+    safe_model_x_min = float(protected_zones.get("safeModelMinX") or x_min)
+    safe_model_x_max = float(protected_zones.get("safeModelMaxX") or x_max)
     rows = int(path_grid["rows"])
     path = path_cls()
     input_points: List[List[float]] = []
@@ -881,13 +884,14 @@ def create_opencamlib_path(module: Any, point_cls: Any, line_cls: Any, path_cls:
     for row in range(rows):
         t = row / max(1, rows - 1)
         y = y_min + (y_max - y_min) * t
-        start_x, end_x = (x_min, x_max) if row % 2 == 0 else (x_max, x_min)
+        start_x, end_x = (safe_model_x_min, safe_model_x_max) if row % 2 == 0 else (safe_model_x_max, safe_model_x_min)
         start = point_cls(start_x, y, z_clear)
         end = point_cls(end_x, y, z_clear)
         line = line_cls(start, end)
         append_path_segment(path, line)
         input_points.extend([[start_x, y, z_clear], [end_x, y, z_clear]])
         segment_count += 1
+    path_grid["protectedZones"] = protected_zones
     return [path, input_points, rows, segment_count, path_grid]
 
 
@@ -984,6 +988,7 @@ def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, A
             },
         },
         "residualMaterial": metrics["residualMaterial"],
+        "protectedZones": metrics["protectedZones"],
         "tolerances": metrics["tolerances"],
         "quality": {
             "level": "experimental-real-api",
@@ -1019,12 +1024,14 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
     y_span = read_positive_number(dimensions.get("y"), axis_span(bounds, "y"), 1.0)
     x_step = x_span / max(1.0, points_per_row - 1.0) if points_per_row > 1 else None
     path_grid = path_report.get("pathGrid") if isinstance(path_report.get("pathGrid"), dict) else {}
+    protected_zones = path_grid.get("protectedZones") if isinstance(path_grid.get("protectedZones"), dict) else compute_path_dropcutter_protected_zones(job, plan, geometry)
+    protected_zones = summarize_sampled_protected_zones(points, protected_zones)
     cross_step = read_positive_number(path_grid.get("crossStepMm"), y_span / max(1, row_count - 1) if row_count > 1 else None, 0)
     linear_steps = [value for value in (x_step, cross_step) if value is not None]
     max_linear_step = max(linear_steps) if linear_steps else None
     step_to_cutter_ratio = max_linear_step / cutter_diameter if max_linear_step is not None and cutter_diameter > 0 else None
     hit_rate = 1.0 if points else 0.0
-    path_coverage = compute_path_dropcutter_coverage(points, bounds)
+    path_coverage = compute_path_dropcutter_coverage(points, bounds, protected_zones)
     max_gouge_tolerance = 0.03
     max_undercut_tolerance = 0.08
     conservative_residual = max_linear_step * 0.5 if max_linear_step is not None else None
@@ -1054,6 +1061,10 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
         blockers.append("residual-undercut-not-estimated")
     elif max_undercut > max_undercut_tolerance:
         blockers.append("estimated-undercut-above-production-tolerance")
+    if not protected_zones.get("enabled"):
+        blockers.append("protected-zones-not-enabled")
+    if int(protected_zones.get("violationCount") or 0) > 0:
+        blockers.append("protected-zone-sampling-violations")
     return {
         "hitRate": round(hit_rate, 6),
         "xStepMm": round(x_step, 6) if x_step is not None else None,
@@ -1074,15 +1085,20 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
             "maxUndercutMm": round(max_undercut, 6) if max_undercut is not None else None,
             "requiresMaterialRemovalSimulation": True,
         },
+        "protectedZones": protected_zones,
         "blockers": blockers,
         "warnings": warnings,
     }
 
 
-def compute_path_dropcutter_coverage(points: List[Dict[str, Any]], bounds: Dict[str, Any]) -> Dict[str, Any]:
+def compute_path_dropcutter_coverage(points: List[Dict[str, Any]], bounds: Dict[str, Any], protected_zones: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     model_x_values = [float(point.get("modelX")) for point in points if is_number(point.get("modelX"))]
     model_y_values = [float(point.get("modelY")) for point in points if is_number(point.get("modelY"))]
-    x_span = axis_span(bounds, "x") or 0
+    protected_zones = protected_zones if isinstance(protected_zones, dict) else {}
+    safe_min_x = protected_zones.get("safeModelMinX")
+    safe_max_x = protected_zones.get("safeModelMaxX")
+    safe_x_span = float(safe_max_x) - float(safe_min_x) if is_number(safe_min_x) and is_number(safe_max_x) and float(safe_max_x) > float(safe_min_x) else None
+    x_span = safe_x_span or axis_span(bounds, "x") or 0
     y_span = axis_span(bounds, "y") or 0
     sampled_x_span = max(model_x_values) - min(model_x_values) if model_x_values else 0
     sampled_y_span = max(model_y_values) - min(model_y_values) if model_y_values else 0
@@ -1097,6 +1113,70 @@ def compute_path_dropcutter_coverage(points: List[Dict[str, Any]], bounds: Dict[
         "modelXSpanMm": round(x_span, 6),
         "modelCrossSpanMm": round(y_span, 6),
         "crossAxisSource": "modelY-to-rotary-angle-experimental",
+        "xCoverageDomain": "protected-machinable-span" if safe_x_span else "full-model-span",
+    }
+
+
+def compute_path_dropcutter_protected_zones(job: Dict[str, Any], plan: Dict[str, Any], geometry: Dict[str, Any]) -> Dict[str, Any]:
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    bounds = geometry.get("bounds") if isinstance(geometry.get("bounds"), dict) else {}
+    min_bounds = bounds.get("min") if isinstance(bounds.get("min"), dict) else {}
+    max_bounds = bounds.get("max") if isinstance(bounds.get("max"), dict) else {}
+    x_min = read_number(min_bounds.get("x"), 0.0)
+    x_max = read_number(max_bounds.get("x"), 1.0)
+    x_span = max(1e-9, x_max - x_min)
+    output_length = read_positive_number((plan.get("stock") or {}).get("lengthMm"), settings.get("lengthMm"), x_span)
+    left_hold = max(0.0, read_number(settings.get("leftHoldMm"), 0.0))
+    right_hold = max(0.0, read_number(settings.get("rightHoldMm"), 0.0))
+    transition = max(0.0, read_number(settings.get("endTransitionMm"), 0.0))
+    safe_left_mm = min(output_length / 2 - 1e-6, left_hold + transition)
+    safe_right_mm = min(output_length / 2 - 1e-6, right_hold + transition)
+    safe_min_t = max(0.0, min(0.49, safe_left_mm / max(1e-9, output_length)))
+    safe_max_t = min(1.0, max(0.51, 1.0 - safe_right_mm / max(1e-9, output_length)))
+    safe_model_min_x = x_min + x_span * safe_min_t
+    safe_model_max_x = x_min + x_span * safe_max_t
+    safe_output_min_x = -output_length / 2 + output_length * safe_min_t
+    safe_output_max_x = -output_length / 2 + output_length * safe_max_t
+    return {
+        "schema": "hediao3d.opencamlib-protected-zones.v1",
+        "enabled": True,
+        "leftHoldMm": round(left_hold, 6),
+        "rightHoldMm": round(right_hold, 6),
+        "endTransitionMm": round(transition, 6),
+        "safeMinX": round(safe_output_min_x, 6),
+        "safeMaxX": round(safe_output_max_x, 6),
+        "safeModelMinX": round(safe_model_min_x, 6),
+        "safeModelMaxX": round(safe_model_max_x, 6),
+        "modelXMin": round(x_min, 6),
+        "modelXMax": round(x_max, 6),
+        "outputLengthMm": round(output_length, 6),
+        "summary": "PathDropCutter sampling is clipped to the rotary fixture machinable X span outside hold/end transition zones.",
+    }
+
+
+def summarize_sampled_protected_zones(points: List[Dict[str, Any]], protected_zones: Dict[str, Any]) -> Dict[str, Any]:
+    sampled_x = [float(point.get("x")) for point in points if is_number(point.get("x"))]
+    sampled_model_x = [float(point.get("modelX")) for point in points if is_number(point.get("modelX"))]
+    safe_min_x = float(protected_zones.get("safeMinX") or 0)
+    safe_max_x = float(protected_zones.get("safeMaxX") or 0)
+    safe_model_min_x = float(protected_zones.get("safeModelMinX") or 0)
+    safe_model_max_x = float(protected_zones.get("safeModelMaxX") or 0)
+    tolerance = 0.001
+    violations = []
+    for point in points:
+        x = point.get("x")
+        model_x = point.get("modelX")
+        if is_number(x) and (float(x) < safe_min_x - tolerance or float(x) > safe_max_x + tolerance):
+            violations.append({"x": round(float(x), 6), "modelX": round(float(model_x), 6) if is_number(model_x) else None})
+    return {
+        **protected_zones,
+        "sampledMinX": round(min(sampled_x), 6) if sampled_x else None,
+        "sampledMaxX": round(max(sampled_x), 6) if sampled_x else None,
+        "sampledModelMinX": round(min(sampled_model_x), 6) if sampled_model_x else None,
+        "sampledModelMaxX": round(max(sampled_model_x), 6) if sampled_model_x else None,
+        "violationCount": len(violations),
+        "violations": violations[:12],
+        "modelBoundsReady": bool(sampled_model_x) and min(sampled_model_x) >= safe_model_min_x - tolerance and max(sampled_model_x) <= safe_model_max_x + tolerance,
     }
 
 
@@ -1234,6 +1314,14 @@ def read_positive_number(*values: Any) -> float:
         if parsed > 0:
             return parsed
     return 0.5
+
+
+def read_number(value: Any, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if math.isfinite(parsed) else fallback
 
 
 def find_operation_positive_number(plan: Dict[str, Any], key: str) -> Optional[float]:

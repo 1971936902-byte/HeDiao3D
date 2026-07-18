@@ -183,6 +183,19 @@ writeFileSync(candidateContactReportPath, JSON.stringify({
     maxGougeMm: 0.03,
     maxUndercutMm: 0.08
   },
+  protectedZones: {
+    schema: "hediao3d.opencamlib-protected-zones.v1",
+    enabled: true,
+    leftHoldMm: 2,
+    rightHoldMm: 2,
+    endTransitionMm: 1.2,
+    safeMinX: -12,
+    safeMaxX: 12,
+    sampledMinX: -12,
+    sampledMaxX: 12,
+    violationCount: 0,
+    violations: []
+  },
   quality: {
     level: "ready",
     productionCandidate: true,

@@ -46,6 +46,8 @@ try {
   assert(readyReport.checks.some((check) => check.id === "contact-residual-gouge" && check.status === "pass"), "residual gouge evidence should pass");
   assert(readyReport.checks.some((check) => check.id === "contact-path-coverage-x" && check.status === "pass"), "X path coverage evidence should pass");
   assert(readyReport.checks.some((check) => check.id === "contact-path-coverage-cross" && check.status === "pass"), "cross path coverage evidence should pass");
+  assert(readyReport.checks.some((check) => check.id === "protected-zones-present" && check.status === "pass"), "protected zone evidence should pass");
+  assert(readyReport.checks.some((check) => check.id === "protected-zones-no-violations" && check.status === "pass"), "protected zone violation check should pass");
 
   const previewNeutralPath = join(workDir, "preview-neutral-toolpath.json");
   const previewContactPath = join(workDir, "preview-contact-report.json");
@@ -99,6 +101,30 @@ try {
   assert(weak.status === 3, `weak contact evidence should fail strict mode, got ${weak.status}: ${weak.stdout}`);
   const weakReport = JSON.parse(weak.stdout);
   assert(weakReport.errors.some((error) => /hitRate|过切|gouge|maxGouge|step-to-cutter|pathCoverage|coverage/i.test(error)), "weak contact evidence should report quality metric failures");
+
+  const missingProtectedContactPath = join(workDir, "missing-protected-contact-report.json");
+  const missingProtectedNeutralPath = join(workDir, "missing-protected-neutral-toolpath.json");
+  const missingProtectedNeutral = createNeutral(missingProtectedContactPath);
+  const missingProtectedSha = sha256Json(missingProtectedNeutral);
+  const missingProtectedContact = createContact({
+    modelSha: sha256File(modelPath),
+    planSha: sha256File(planPath),
+    neutralSha: missingProtectedSha,
+    productionCandidate: true,
+    previewScaffold: false,
+    omitProtectedZones: true
+  });
+  missingProtectedNeutral.cutterContactReport = missingProtectedContact;
+  writeFileSync(missingProtectedNeutralPath, JSON.stringify(missingProtectedNeutral, null, 2), "utf8");
+  writeFileSync(missingProtectedContactPath, JSON.stringify(missingProtectedContact, null, 2), "utf8");
+  const missingProtected = spawnSync(node, [validator, "--neutral", missingProtectedNeutralPath, "--plan", planPath, "--model", modelPath, "--contact", missingProtectedContactPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(missingProtected.status === 3, `missing protected zone evidence should fail strict mode, got ${missingProtected.status}: ${missingProtected.stdout}`);
+  const missingProtectedReport = JSON.parse(missingProtected.stdout);
+  assert(missingProtectedReport.errors.some((error) => /protectedZones|protected zone/i.test(error)), "missing protected zone evidence should report protectedZones failure");
 
   const experimentalContactPath = join(workDir, "experimental-contact-report.json");
   const experimentalNeutralPath = join(workDir, "experimental-neutral-toolpath.json");
@@ -182,7 +208,7 @@ function createNeutral(contactPath) {
   };
 }
 
-function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false, experimental = false }) {
+function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false, experimental = false, omitProtectedZones = false }) {
   return {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     jobId: "contact-output-validate-test",
@@ -229,6 +255,21 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
       maxGougeMm: 0.03,
       maxUndercutMm: 0.08
     },
+    ...(omitProtectedZones ? {} : {
+      protectedZones: {
+        schema: "hediao3d.opencamlib-protected-zones.v1",
+        enabled: true,
+        leftHoldMm: 2,
+        rightHoldMm: 2,
+        endTransitionMm: 1.2,
+        safeMinX: -10,
+        safeMaxX: 10,
+        sampledMinX: -10,
+        sampledMaxX: 10,
+        violationCount: 0,
+        violations: []
+      }
+    }),
     quality: {
       level: previewScaffold ? "preview-scaffold" : experimental ? "experimental-real-api" : "validated-contact",
       previewScaffold,

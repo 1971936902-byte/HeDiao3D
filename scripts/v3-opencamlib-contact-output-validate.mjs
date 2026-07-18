@@ -148,6 +148,7 @@ function checkProductionContactEvidence(checks, contact, target) {
   const sampling = contact?.contactSampling && typeof contact.contactSampling === "object" ? contact.contactSampling : {};
   const residual = contact?.residualMaterial && typeof contact.residualMaterial === "object" ? contact.residualMaterial : {};
   const tolerance = contact?.tolerances && typeof contact.tolerances === "object" ? contact.tolerances : {};
+  const protectedZones = contact?.protectedZones && typeof contact.protectedZones === "object" ? contact.protectedZones : {};
   const maxGougeMm = numberOrNull(residual.maxGougeMm);
   const maxUndercutMm = numberOrNull(residual.maxUndercutMm);
   const gougeToleranceMm = numberOrNull(tolerance.maxGougeMm) ?? 0.03;
@@ -159,6 +160,13 @@ function checkProductionContactEvidence(checks, contact, target) {
   const pathCoverage = sampling.pathCoverage && typeof sampling.pathCoverage === "object" ? sampling.pathCoverage : {};
   const xCoverageRatio = numberOrNull(pathCoverage.xCoverageRatio);
   const crossCoverageRatio = numberOrNull(pathCoverage.crossCoverageRatio);
+  const protectedEnabled = protectedZones.enabled === true;
+  const protectedViolationCount = numberOrNull(protectedZones.violationCount);
+  const safeMinX = numberOrNull(protectedZones.safeMinX);
+  const safeMaxX = numberOrNull(protectedZones.safeMaxX);
+  const sampledMinX = numberOrNull(protectedZones.sampledMinX);
+  const sampledMaxX = numberOrNull(protectedZones.sampledMaxX);
+  const protectedBoundsReady = safeMinX !== null && safeMaxX !== null && sampledMinX !== null && sampledMaxX !== null && safeMinX <= safeMaxX && sampledMinX >= safeMinX - 0.001 && sampledMaxX <= safeMaxX + 0.001;
 
   check(
     checks,
@@ -178,6 +186,9 @@ function checkProductionContactEvidence(checks, contact, target) {
   check(checks, "contact-path-coverage-cross", crossCoverageRatio !== null && crossCoverageRatio >= 0.98, "contactSampling.pathCoverage.crossCoverageRatio must be at least 98%", target, { reported: crossCoverageRatio });
   check(checks, "contact-residual-gouge", maxGougeMm !== null && maxGougeMm <= gougeToleranceMm, "residualMaterial.maxGougeMm must be present and within tolerance", target, { reported: maxGougeMm, tolerance: gougeToleranceMm });
   check(checks, "contact-residual-undercut", maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm, "residualMaterial.maxUndercutMm must be present and within tolerance", target, { reported: maxUndercutMm, tolerance: undercutToleranceMm });
+  check(checks, "protected-zones-present", protectedEnabled, "contact report must declare enabled protectedZones for rotary fixture hold/end transition areas", target, { reported: protectedZones.enabled ?? null });
+  check(checks, "protected-zones-no-violations", protectedViolationCount !== null && protectedViolationCount === 0, "protectedZones.violationCount must be 0", target, { reported: protectedViolationCount });
+  check(checks, "protected-zones-sampled-bounds", protectedBoundsReady, "protectedZones sampledMinX/sampledMaxX must stay inside safeMinX/safeMaxX", target, { safeMinX, safeMaxX, sampledMinX, sampledMaxX });
 }
 
 function resolveContactPath(neutralPath, neutral) {
