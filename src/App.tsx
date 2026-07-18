@@ -4130,6 +4130,55 @@ export function App() {
     }
   };
 
+  const handleDownloadV3LinuxCamJobPackage = async () => {
+    if (!v3Job?.id) {
+      setV3Status("请先运行或恢复一个 V3 任务，再下载 Linux CAM 整单包。");
+      return;
+    }
+
+    setIsV3PackageDownloading(true);
+    setV3Status("正在打包 Linux CAM 整单执行包");
+    try {
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/linux-cam-job-package`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? `Linux CAM 整单包下载失败：${response.status}`);
+      }
+      const blob = await response.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-linux-cam-job-${stamp}.zip`;
+      downloadBlob(filename, blob);
+      setV3Status("Linux CAM 整单执行包已由 Orchestrator 打包");
+      setV3UserNotice({
+        level: "ok",
+        title: "Linux CAM 整单包已开始下载",
+        detail: `${filename}；包含 OpenCAMLib 输入、CAMotics 仿真准备、闭环说明和回填清单。`
+      });
+      recordTask({
+        category: "cam",
+        status: "ok",
+        title: "下载 Linux CAM 整单执行包",
+        detail: "将当前 job 的 OpenCAMLib 真实候选输入、CAMotics 材料去除仿真文件和证据回填说明放入同一个 ZIP；不解锁生产 NC。"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Linux CAM 整单包下载失败";
+      setV3Status(message);
+      setV3UserNotice({
+        level: "warning",
+        title: "Linux CAM 整单包下载失败",
+        detail: message
+      });
+      recordTask({
+        category: "cam",
+        status: "warning",
+        title: "Linux CAM 整单包下载失败",
+        detail: message
+      });
+    } finally {
+      setIsV3PackageDownloading(false);
+    }
+  };
+
   const handleDownloadV3EvidenceReviewPackage = async () => {
     if (!v3Job?.id) {
       setV3Status("请先运行或恢复一个 V3 任务，再下载证据审查包。");
@@ -5913,6 +5962,16 @@ export function App() {
                   <button
                     className="demo-action package-action"
                     type="button"
+                    onClick={handleDownloadV3LinuxCamJobPackage}
+                    disabled={!v3Job?.id || !v3Job.result?.summary.camoticsCliPackage || isV3PackageDownloading}
+                    title="下载包含 OpenCAMLib 输入、CAMotics 准备文件和回填说明的 Linux CAM 整单执行包"
+                  >
+                    <Download size={17} />
+                    下载Linux整单包
+                  </button>
+                  <button
+                    className="demo-action package-action"
+                    type="button"
                     onClick={handleDownloadV3OpenCamLibCandidateInputs}
                     disabled={!v3Job?.id || isV3PackageDownloading}
                     title="下载当前 job 的 OpenCAMLib real-candidate 输入包，复制到 Linux Native CAM 服务包后运行真实候选链路"
@@ -6699,6 +6758,16 @@ export function App() {
                     >
                       <Download size={17} />
                       {isV3PackageDownloading ? "打包中..." : "下载Linux仿真包"}
+                    </button>
+                    <button
+                      className="demo-action package-action"
+                      type="button"
+                      onClick={handleDownloadV3LinuxCamJobPackage}
+                      disabled={!v3Job?.id || !v3Job.result?.summary.camoticsCliPackage || isV3PackageDownloading}
+                      title="整单下载 OpenCAMLib 输入、CAMotics 准备文件和证据回填说明"
+                    >
+                      <Download size={17} />
+                      下载Linux整单包
                     </button>
                     <button
                       className="demo-action package-action"

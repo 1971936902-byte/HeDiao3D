@@ -148,6 +148,11 @@ const server = createServer(async (req, res) => {
       return getOrchestratorCamoticsLinuxPackage(orchestratorCamoticsLinuxPackageMatch[1], res);
     }
 
+    const orchestratorLinuxCamJobPackageMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-job-package$/);
+    if (req.method === "GET" && orchestratorLinuxCamJobPackageMatch) {
+      return getOrchestratorLinuxCamJobPackage(orchestratorLinuxCamJobPackageMatch[1], res);
+    }
+
     const orchestratorOpenCamLibCandidateInputsMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/opencamlib-candidate-inputs\.zip$/);
     if (req.method === "GET" && orchestratorOpenCamLibCandidateInputsMatch) {
       return getOrchestratorOpenCamLibCandidateInputsPackage(orchestratorOpenCamLibCandidateInputsMatch[1], res);
@@ -15083,6 +15088,163 @@ function getOrchestratorCamoticsLinuxPackage(jobId, res) {
   res.end(zip);
 }
 
+async function getOrchestratorLinuxCamJobPackage(jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
+    return json(res, 400, { error: "非法 job 路径" });
+  }
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  const jobSpec = readJsonFileSafe(join(workDir, "job.json"));
+  const deliveryManifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
+  const packageIntegrity = readJsonFileSafe(join(workDir, "package-integrity.json"));
+  const runPackage = readJsonFileSafe(join(workDir, "camotics-cli-run-package.json"));
+  if (!jobSpec) {
+    return json(res, 409, {
+      error: "缺少 job.json，请先运行 V3 小闭环生成 Orchestrator 作业规格。",
+      nextActions: ["重新点击“生成试雕刀路与安全包”。"]
+    });
+  }
+  if (!deliveryManifest?.files?.length) {
+    return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
+  }
+  if (!runPackage) {
+    return json(res, 409, {
+      error: "缺少 CAMotics Linux 运行包，请先生成仿真准备包",
+      nextActions: [
+        "调用 POST /api/orchestrator/jobs/:jobId/camotics-cli-package。",
+        "再下载 Linux CAM 整单执行包。"
+      ]
+    });
+  }
+
+  let openCamLibPrepared;
+  try {
+    openCamLibPrepared = await createOpenCamLibCandidateInputsPackageFiles(job, workDir, jobSpec);
+  } catch (error) {
+    return json(res, 409, {
+      error: error instanceof Error ? error.message : "生成 OpenCAMLib 候选输入失败。",
+      nextActions: [
+        "确认当前 job 已完成 V3 小闭环。",
+        "如果源模型是 GLB/GLTF/OBJ，确认后端可以转换为 STL。",
+        "重新下载 Linux CAM 整单执行包。"
+      ]
+    });
+  }
+
+  const camoticsCritical = [
+    "camotics-preview.nc",
+    "camotics-project-template.json",
+    "camotics-simulation-plan.json",
+    "camotics-cli-execution-plan.json",
+    "camotics-cli-run-package.json",
+    "camotics-result-template.json",
+    "camotics-linux-run.sh",
+    "camotics-result-validate.js",
+    "camotics-linux-operator-checklist.md"
+  ];
+  const missingCamotics = camoticsCritical.filter((filename) => !existsSync(join(workDir, filename)));
+  if (missingCamotics.length > 0) {
+    return json(res, 409, {
+      error: "Linux CAM 整单包缺少 CAMotics 必需文件，请重新生成仿真准备包",
+      missing: missingCamotics
+    });
+  }
+
+  const root = "hediao3d-v3-linux-cam-job";
+  const camoticsOptional = [
+    "camotics-input.json",
+    "camotics-run.md",
+    "camotics-cli-package-report.json",
+    "camotics-execution-preflight.json",
+    "camotics-execution-preflight.md"
+  ];
+  const referenceFiles = [
+    "linux-cam-closed-loop-handoff.md",
+    "cam-server-config.json",
+    "delivery-manifest.json",
+    "package-integrity.json",
+    "machining-package-index.json",
+    "production-gate.json",
+    "production-evidence-dossier.json",
+    "operator-download-checklist.md",
+    "next-action-checklist.md",
+    "machine-controller-profile.json",
+    "postprocess-profile.json",
+    "postprocess-trace-report.json",
+    "rotary-wrap-preview-report.json",
+    "toolpath.nc",
+    "air-run.nc",
+    "rotary-calibration-airrun.nc",
+    "opencamlib-candidate-package-validation.json",
+    "opencamlib-candidate-package-bundle.zip"
+  ];
+
+  const files = [];
+  const openCamLibFiles = openCamLibPrepared.files.map((file) => {
+    const relative = file.name.replace(/^hediao3d-opencamlib-candidate-inputs\/?/, "");
+    const name = `${root}/native-cam/opencamlib-candidate-inputs/${relative}`;
+    files.push({ name, content: file.content });
+    return createLinuxCamJobPackageFileSummary(name, file.content, "native-cam-input");
+  });
+  const camoticsFiles = [
+    ...camoticsCritical,
+    ...camoticsOptional.filter((filename) => existsSync(join(workDir, filename)))
+  ].map((filename) => {
+    const file = createCamoticsLinuxPackageFile(workDir, filename, camoticsCritical.includes(filename));
+    const name = `${root}/camotics/${file.folder}/${file.filename}`;
+    const content = readFileSync(join(workDir, filename));
+    files.push({ name, content });
+    return {
+      ...createLinuxCamJobPackageFileSummary(name, content, "camotics"),
+      filename,
+      folder: file.folder,
+      required: file.required,
+      machineUse: file.machineUse
+    };
+  });
+  const references = referenceFiles
+    .filter((filename) => existsSync(join(workDir, filename)))
+    .map((filename) => {
+      const content = readFileSync(join(workDir, filename));
+      const name = `${root}/references/${filename}`;
+      files.push({ name, content });
+      return createLinuxCamJobPackageFileSummary(name, content, "reference");
+    });
+
+  const manifest = createLinuxCamJobPackageManifest({
+    jobId: safeJobId,
+    runPackage,
+    deliveryManifest,
+    packageIntegrity,
+    openCamLibManifest: openCamLibPrepared.manifest,
+    openCamLibFiles,
+    camoticsFiles,
+    references
+  });
+  files.push({
+    name: `${root}/linux-cam-job-package-manifest.json`,
+    content: JSON.stringify(manifest, null, 2)
+  });
+  files.push({
+    name: `${root}/README-LINUX-CAM-JOB.md`,
+    content: createLinuxCamJobPackageReadme(manifest)
+  });
+
+  const zip = createServerZipBuffer(files);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `hediao3d-v3-${safeJobId.slice(0, 8)}-linux-cam-job-${stamp}.zip`;
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zip.length,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  });
+  res.end(zip);
+}
+
 async function getOrchestratorOpenCamLibCandidateInputsPackage(jobId, res) {
   const safeJobId = decodeURIComponent(jobId);
   if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) {
@@ -15739,6 +15901,142 @@ function createCamoticsLinuxPackageFile(workDir, filename, required) {
 
 function sha256File(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function createLinuxCamJobPackageFileSummary(name, content, purpose) {
+  const bytes = Buffer.isBuffer(content)
+    ? content
+    : content instanceof Uint8Array
+      ? Buffer.from(content)
+      : Buffer.from(String(content), "utf8");
+  return {
+    name,
+    purpose,
+    sizeBytes: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex")
+  };
+}
+
+function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest, packageIntegrity, openCamLibManifest, openCamLibFiles, camoticsFiles, references }) {
+  return {
+    schema: "hediao3d.v3-linux-cam-job-package.v1",
+    jobId,
+    createdAt: new Date().toISOString(),
+    packageLevel: deliveryManifest.packageLevel ?? "unknown",
+    allowProductionNc: Boolean(deliveryManifest.allowProductionNc),
+    productionLocked: !deliveryManifest.allowProductionNc,
+    policy: {
+      productionUseAllowed: false,
+      machineUseAllowed: false,
+      purpose: "Linux CAM 服务器整单执行：OpenCAMLib 真实候选刀路 + CAMotics/等效材料去除仿真 + 证据回填。",
+      machineModel: "三轴控制器 + Y轴旋转夹具",
+      axisMapping: "X=长度方向，Y/A=旋转夹具，Z=刀深/安全高度",
+      forbiddenOnMachine: ["camotics/camotics-preview.nc", "camotics-linux-run.sh", "camotics-result-validate.js"],
+      productionUnlockBoundary: "本包不会解锁生产 NC；必须回填 native-cam-real-output-bundle.zip、camotics-result-bundle.zip、空跑/试雕和机床验收证据。"
+    },
+    sourcePackageIntegrity: packageIntegrity?.schema ? "references/package-integrity.json" : null,
+    nativeCam: {
+      inputManifest: openCamLibManifest,
+      inputRoot: "native-cam/opencamlib-candidate-inputs",
+      expectedCommands: [
+        "node native-cam-server-package-self-check.mjs .",
+        "node opencamlib-real-candidate-run.mjs .",
+        "bash native-cam-real-output-check.sh ."
+      ],
+      expectedUpload: "native-cam-real-output-bundle.zip",
+      files: openCamLibFiles
+    },
+    camotics: {
+      inputRoot: "camotics",
+      runPackage: {
+        status: runPackage?.status ?? "unknown",
+        preferredGcode: runPackage?.preferredGcodeIdentity?.filename ?? null,
+        preferredGcodeSha256: runPackage?.preferredGcodeIdentity?.sha256 ?? null,
+        motionProfile: runPackage?.preferredGcodeIdentity?.motionProfile ?? null,
+        upstreamCamEvidence: runPackage?.upstreamCamEvidence ?? null,
+        safetyLocks: runPackage?.safetyLocks ?? null
+      },
+      expectedCommands: [
+        "bash camotics/run/camotics-linux-run.sh",
+        "node camotics/run/camotics-result-validate.js camotics-result.json"
+      ],
+      expectedUpload: "camotics-result-bundle.zip",
+      files: camoticsFiles
+    },
+    references,
+    requiredSequence: [
+      "解压本包到 Linux CAM 服务器。",
+      "准备/解压 HeDiao3D Native CAM server-package.zip，并把 native-cam/opencamlib-candidate-inputs 内文件复制进去。",
+      "在 Native CAM 服务目录运行 OpenCAMLib 真实候选链路，生成 native-cam-real-output-bundle.zip。",
+      "在同一 job 上运行 CAMotics/等效材料去除仿真，生成 camotics-result-bundle.zip。",
+      "把 native-cam-real-output-bundle.zip 和 camotics-result-bundle.zip 回填到 HeDiao3D V3。",
+      "重新生成 readiness；只有总门禁、空跑、试雕和机床验收全部通过后，production-package 才能生成正式生产包。"
+    ],
+    importBack: {
+      nativeCamEndpoint: "/api/orchestrator/native-cam/real-output-acceptance",
+      camoticsEndpoint: `/api/orchestrator/jobs/${jobId}/camotics-result`,
+      productionPackageEndpoint: `/api/orchestrator/jobs/${jobId}/production-package`
+    }
+  };
+}
+
+function createLinuxCamJobPackageReadme(manifest) {
+  const nativeFiles = manifest.nativeCam.files.map((file) => `- ${file.name}: ${file.sizeBytes} bytes / sha256=${file.sha256}`).join("\n");
+  const camoticsFiles = manifest.camotics.files.map((file) => `- ${file.name}: ${file.sizeBytes} bytes / sha256=${file.sha256}`).join("\n");
+  const references = manifest.references.length
+    ? manifest.references.map((file) => `- ${file.name}: ${file.sizeBytes} bytes / sha256=${file.sha256}`).join("\n")
+    : "- 无";
+  return [
+    "# HeDiao3D V3 Linux CAM 整单执行包",
+    "",
+    `Job ID: ${manifest.jobId}`,
+    `包级别: ${manifest.packageLevel}`,
+    `生产 NC 是否已放行: ${manifest.allowProductionNc ? "是" : "否"}`,
+    "",
+    "## 使用边界",
+    "",
+    "- 本包用于 Linux CAM 服务器执行真实 OpenCAMLib 候选刀路和 CAMotics/等效材料去除仿真。",
+    "- 本包不是安全试雕包，也不是正式生产包。",
+    "- 本包内的 `camotics-preview.nc` 只用于展开三轴仿真，禁止上机。",
+    "- 正式上机文件只能来自 HeDiao3D `production-package` 总门禁放行后的生产包。",
+    "",
+    "## 推荐执行顺序",
+    "",
+    ...manifest.requiredSequence.map((item, index) => `${index + 1}. ${item}`),
+    "",
+    "## Native CAM / OpenCAMLib",
+    "",
+    "把 `native-cam/opencamlib-candidate-inputs` 内文件复制到 Native CAM server-package 解压目录后执行：",
+    "",
+    "```bash",
+    ...manifest.nativeCam.expectedCommands,
+    "```",
+    "",
+    `回填文件: ${manifest.nativeCam.expectedUpload}`,
+    "",
+    "## CAMotics / 材料去除仿真",
+    "",
+    "```bash",
+    ...manifest.camotics.expectedCommands,
+    "```",
+    "",
+    `回填文件: ${manifest.camotics.expectedUpload}`,
+    "",
+    "## 文件清单",
+    "",
+    "### Native CAM 输入",
+    "",
+    nativeFiles || "- 无",
+    "",
+    "### CAMotics 文件",
+    "",
+    camoticsFiles || "- 无",
+    "",
+    "### 参考证据",
+    "",
+    references,
+    ""
+  ].join("\n");
 }
 
 function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, missing, productionEvidenceDossier = null) {

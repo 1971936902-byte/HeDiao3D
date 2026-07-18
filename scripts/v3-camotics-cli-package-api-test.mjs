@@ -177,6 +177,21 @@ async function main() {
   assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/opencamlib-candidate-input-manifest.json"), "OpenCAMLib input ZIP missing manifest");
   assert(openCamLibInputZipNames.includes("hediao3d-opencamlib-candidate-inputs/README-OPENCAMLIB-CANDIDATE.md"), "OpenCAMLib input ZIP missing README");
 
+  const linuxCamJobPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-job-package`);
+  assert(linuxCamJobPackage.bytes[0] === 0x50 && linuxCamJobPackage.bytes[1] === 0x4b, "Linux CAM job package should be a ZIP file");
+  assert((linuxCamJobPackage.contentType ?? "").includes("application/zip"), "Linux CAM job package should use application/zip content type");
+  const linuxCamJobZipNames = listZipFilenames(linuxCamJobPackage.bytes);
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md"), "Linux CAM job package missing README");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"), "Linux CAM job package missing manifest");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/job.json"), "Linux CAM job package missing OpenCAMLib job spec");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/opencamlib-kernel-plan.json"), "Linux CAM job package missing OpenCAMLib kernel plan");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/repaired-model.stl"), "Linux CAM job package missing OpenCAMLib STL input");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/camotics/inputs/camotics-preview.nc"), "Linux CAM job package missing CAMotics preview NC");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/camotics/run/camotics-linux-run.sh"), "Linux CAM job package missing CAMotics run script");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/camotics/run/camotics-result-validate.js"), "Linux CAM job package missing CAMotics validator");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/linux-cam-closed-loop-handoff.md"), "Linux CAM job package missing closed-loop handoff reference");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/package-integrity.json"), "Linux CAM job package missing package integrity reference");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,

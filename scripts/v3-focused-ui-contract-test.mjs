@@ -76,6 +76,11 @@ const checks = [
     id: "opencamlib-input-package-download",
     ok: source.includes("handleDownloadV3OpenCamLibCandidateInputs") && source.includes("opencamlib-candidate-inputs.zip") && source.includes("下载OCL输入包"),
     summary: "Focused operator UI should expose an OpenCAMLib Linux real-candidate input package download."
+  },
+  {
+    id: "linux-cam-job-package-download",
+    ok: source.includes("handleDownloadV3LinuxCamJobPackage") && source.includes("linux-cam-job-package") && source.includes("下载Linux整单包") && source.includes("OpenCAMLib 输入、CAMotics 准备文件和证据回填说明"),
+    summary: "Focused operator UI should expose a unified Linux CAM job package download."
   }
 ];
 
