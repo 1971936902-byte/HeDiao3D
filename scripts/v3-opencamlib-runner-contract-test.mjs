@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -83,6 +83,41 @@ try {
   assert(envelopeReport.quality?.productionCandidate === false, "heightfield envelope report must not be production candidate");
   assert(/preview/i.test(envelopeReport.quality?.level ?? ""), "cutter envelope report should remain preview-scaffold");
 
+  const fakeOclRoot = join(workDir, "fake-pythonpath");
+  installFakeOfficialOcl(fakeOclRoot);
+  const pathDropOutput = join(workDir, "neutral-path-dropcutter.json");
+  const pathDropRun = spawnSync(python, [runnerPath, jobPath, planPath, pathDropOutput], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONPATH: `${fakeOclRoot}${process.env.PYTHONPATH ? `${process.platform === "win32" ? ";" : ":"}${process.env.PYTHONPATH}` : ""}`,
+      HEDIAO3D_OPENCAMLIB_RUNNER_PATH_DROPCUTTER_OUTPUT: "true",
+      HEDIAO3D_OPENCAMLIB_PATH_DROPCUTTER_ROWS: "3"
+    },
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30000
+  });
+  assert(pathDropRun.status === 0, `fake PathDropCutter runner exited ${pathDropRun.status}: ${pathDropRun.stderr || pathDropRun.stdout}`);
+  const pathDrop = JSON.parse(readFileSync(pathDropOutput, "utf8"));
+  assert(pathDrop.schema === "hediao3d.neutral-toolpath.v1", "PathDropCutter neutral schema mismatch");
+  assert(pathDrop.synthetic === false, "PathDropCutter neutral must be non-synthetic");
+  assert(pathDrop.fixture === false, "PathDropCutter neutral must not be fixture output");
+  assert(pathDrop.experimentalOpenCamLibPathDropCutter === true, "PathDropCutter experimental marker missing");
+  assert(pathDrop.productionCandidate === false, "PathDropCutter runner output must not be production candidate yet");
+  assert(pathDrop.runner?.mode === "opencamlib-path-drop-cutter-experimental", "PathDropCutter runner mode mismatch");
+  assert(pathDrop.runner?.opencamlibModule === "opencamlib.ocl", "PathDropCutter runner should select official opencamlib.ocl binding");
+  assert(pathDrop.runner?.pathDropCutter?.algorithm === "opencamlib-path-drop-cutter", "PathDropCutter algorithm summary mismatch");
+  assert(pathDrop.runner?.pathDropCutter?.pathRows === 3, "PathDropCutter row count should honor env override");
+  assert(Array.isArray(pathDrop.points) && pathDrop.points.length >= 6, "PathDropCutter runner should emit neutral points");
+  assert(pathDrop.points.every((point) => point.source === "opencamlib-path-drop-cutter-experimental"), "PathDropCutter point source mismatch");
+  assert(existsSync(pathDrop.cutterContactReportPath), "PathDropCutter contact report should be written");
+  const pathDropContact = JSON.parse(readFileSync(pathDrop.cutterContactReportPath, "utf8"));
+  assert(pathDropContact.schema === "hediao3d.opencamlib-cutter-contact-report.v1", "PathDropCutter contact report schema mismatch");
+  assert(pathDropContact.contactSampling?.algorithm === "opencamlib-path-drop-cutter", "PathDropCutter contact algorithm mismatch");
+  assert(pathDropContact.quality?.productionCandidate === false, "PathDropCutter contact report must not be production candidate yet");
+  assert(pathDropContact.quality?.level === "experimental-real-api", "PathDropCutter contact report level mismatch");
+
   const noFixtureOutput = join(workDir, "neutral-no-fixture.json");
   const readinessPath = join(workDir, "opencamlib-runner-readiness.json");
   const spikePrecheckPath = join(workDir, "opencamlib-real-contact-spike.json");
@@ -112,6 +147,7 @@ try {
     runner: runnerPath,
     fixturePoints: neutral.points.length,
     heightfieldPoints: heightfield.points.length,
+    pathDropCutterPoints: pathDrop.points.length,
     fixtureMode: neutral.runner?.mode,
     failClosedExit: noFixtureRun.status,
     readinessLevel: readiness.level
@@ -203,6 +239,74 @@ function createAsciiStl() {
   endfacet
 endsolid sample
 `;
+}
+
+function installFakeOfficialOcl(root) {
+  const packageDir = join(root, "opencamlib");
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, "__init__.py"), "from . import ocl\n", "utf8");
+  writeFileSync(join(packageDir, "ocl.py"), String.raw`
+class Point:
+    def __init__(self, x=0.0, y=0.0, z=0.0):
+        self.x = float(x)
+        self.y = float(y)
+        self.z = float(z)
+
+class Triangle:
+    def __init__(self, a, b, c):
+        self.a = a
+        self.b = b
+        self.c = c
+
+class STLSurf:
+    def __init__(self):
+        self.triangles = []
+    def addTriangle(self, triangle):
+        self.triangles.append(triangle)
+
+class CylCutter:
+    def __init__(self, diameter=4.0, length=20.0):
+        self.diameter = diameter
+        self.length = length
+
+class Line:
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+
+class Path:
+    def __init__(self):
+        self.segments = []
+    def append(self, segment):
+        self.segments.append(segment)
+
+class PathDropCutter:
+    def __init__(self):
+        self.surface = None
+        self.cutter = None
+        self.path = None
+        self.z = 22.0
+        self.points = []
+    def setSTL(self, surface):
+        self.surface = surface
+    def setCutter(self, cutter):
+        self.cutter = cutter
+    def setPath(self, path):
+        self.path = path
+    def setZ(self, z):
+        self.z = float(z)
+    def run(self):
+        self.points = []
+        for segment in getattr(self.path, "segments", []):
+            for index in range(3):
+                t = index / 2.0
+                x = segment.start.x + (segment.end.x - segment.start.x) * t
+                y = segment.start.y + (segment.end.y - segment.start.y) * t
+                z = self.z - 0.25 - 0.02 * len(self.points)
+                self.points.append(Point(x, y, z))
+    def getCLPoints(self):
+        return self.points
+`, "utf8");
 }
 
 function assert(condition, message) {

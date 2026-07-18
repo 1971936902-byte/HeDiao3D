@@ -59,6 +59,33 @@ def main() -> int:
     detection = detect_opencamlib()
     geometry = analyze_model_geometry(plan)
     readiness_path = output_path.with_name("opencamlib-runner-readiness.json")
+    if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_RUNNER_PATH_DROPCUTTER_OUTPUT")):
+        neutral = create_path_dropcutter_neutral_toolpath(job, plan, detection, geometry)
+        if neutral is None:
+            readiness = create_runner_readiness_report(job, plan, detection, geometry, readiness_path)
+            readiness["pathDropCutterAttempted"] = True
+            readiness["pathDropCutterFailure"] = "real OpenCAMLib PathDropCutter output requested, but the runtime/model/API mapping did not produce cutter-location points"
+            write_json(readiness_path, readiness)
+            print(f"OpenCAMLib PathDropCutter output requested but no real cutter-location points were produced. Readiness report: {readiness_path}", file=sys.stderr)
+            return 6
+        contact_path = output_path.with_name("opencamlib-cutter-contact-report.json")
+        contact_report = create_path_dropcutter_contact_report(job, plan, neutral, detection, geometry, plan_path)
+        neutral["cutterContactReport"] = contact_report
+        neutral["cutterContactReportPath"] = str(contact_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+        contact_path.write_text(json.dumps(contact_report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({
+            "ok": True,
+            "mode": neutral["runner"]["mode"],
+            "schema": neutral["schema"],
+            "points": len(neutral["points"]),
+            "cutterContactReport": str(contact_path),
+            "output": str(output_path),
+            "opencamlibAvailable": detection["available"],
+            "productionCandidate": False,
+        }, ensure_ascii=False))
+        return 0
     if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_RUNNER_HEIGHTFIELD_OUTPUT")):
         if is_true(os.environ.get("HEDIAO3D_OPENCAMLIB_ROTARY_HEIGHTFIELD_OUTPUT")):
             neutral = create_rotary_heightfield_neutral_toolpath(job, plan, detection, geometry)
@@ -711,6 +738,209 @@ def create_rotary_heightfield_neutral_toolpath(job: Dict[str, Any], plan: Dict[s
     }
 
 
+def create_path_dropcutter_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not detection.get("available") or not detection.get("module"):
+        return None
+    triangles = parse_ascii_stl_triangles(plan)
+    bounds = geometry.get("bounds") or {}
+    min_bounds = bounds.get("min") or {}
+    max_bounds = bounds.get("max") or {}
+    if not triangles or not min_bounds or not max_bounds:
+        return None
+    try:
+        module = __import__(str(detection["module"]), fromlist=["*"])
+        result = run_path_dropcutter_api(module, triangles, job, plan, geometry)
+    except Exception:
+        return None
+    if not result or not result.get("points"):
+        return None
+
+    settings = job.get("settings") or {}
+    sampling = plan.get("sampling") or {}
+    axis_mapping = sampling.get("axisMapping") or {}
+    stock = plan.get("stock") or {}
+    output_length = float(stock.get("lengthMm") or settings.get("lengthMm") or max(0.001, float((geometry.get("dimensions") or {}).get("x") or 1)))
+    safe_z = float(settings.get("safeZ") or 22)
+    y_min = float(min_bounds["y"])
+    y_max = float(max_bounds["y"])
+    y_span = max(1e-9, y_max - y_min)
+    points: List[Dict[str, Any]] = []
+    for point in result["points"]:
+        model_x = float(point["x"])
+        model_y = float(point["y"])
+        model_z = float(point["z"])
+        x_t = normalize_between(model_x, float(min_bounds["x"]), float(max_bounds["x"]))
+        output_x = -output_length / 2 + output_length * x_t
+        angle = ((model_y - y_min) / y_span) * 360.0
+        depth = max(0.0, safe_z - model_z)
+        points.append({
+            "x": round(output_x, 4),
+            "a": round(angle, 6),
+            "z": round(model_z, 4),
+            "depth": round(depth, 4),
+            "modelX": round(model_x, 6),
+            "modelY": round(model_y, 6),
+            "modelZ": round(model_z, 6),
+            "source": "opencamlib-path-drop-cutter-experimental",
+        })
+    if not points:
+        return None
+    return {
+        "schema": NEUTRAL_SCHEMA,
+        "jobId": job.get("jobId"),
+        "engine": "opencamlib",
+        "synthetic": False,
+        "fixture": False,
+        "experimentalOpenCamLibPathDropCutter": True,
+        "productionCandidate": False,
+        "generatedBy": "adapters/opencamlib/opencamlib_runner.py",
+        "generatedByExternalCommand": True,
+        "coordinate": {
+            "lengthAxis": "X",
+            "rotaryAxis": axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y",
+            "depthAxis": "Z",
+            "rotaryUnit": "degree",
+        },
+        "estimatedMinutes": max(0.5, len(points) / 36),
+        "points": points,
+        "runner": {
+            "mode": "opencamlib-path-drop-cutter-experimental",
+            "opencamlibAvailable": detection["available"],
+            "opencamlibModule": detection["module"],
+            "geometry": geometry,
+            "pathDropCutter": {
+                "algorithm": result.get("algorithm"),
+                "pathRows": result.get("pathRows"),
+                "pathSegments": result.get("pathSegments"),
+                "inputPointCount": result.get("inputPointCount"),
+                "pointCount": len(points),
+                "modelBounds": geometry.get("bounds"),
+                "outputLengthMm": output_length,
+            },
+            "warning": "This output uses a real OpenCAMLib PathDropCutter-style API on the source STL, but remains experimental and non-production until strict contact validation, material-removal simulation and machine evidence pass.",
+        },
+        "planEcho": {
+            "schema": plan.get("schema"),
+            "recommendedPrimary": (plan.get("sampling") or {}).get("recommendedPrimary"),
+            "operationCount": len(plan.get("operations") or []),
+        },
+    }
+
+
+def run_path_dropcutter_api(module: Any, triangles: List[List[List[float]]], job: Dict[str, Any], plan: Dict[str, Any], geometry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    point_cls = find_attr(module, ["Point"])
+    triangle_cls = find_attr(module, ["Triangle"])
+    surface_cls = find_attr(module, ["STLSurf", "STLSurface"])
+    cutter_cls = find_attr(module, ["CylCutter", "FlatCutter", "BallCutter"])
+    line_cls = find_attr(module, ["Line"])
+    path_cls = find_attr(module, ["Path"])
+    dropper_cls = find_attr(module, ["PathDropCutter", "AdaptivePathDropCutter"])
+    if not all([point_cls, triangle_cls, surface_cls, cutter_cls, line_cls, path_cls, dropper_cls]):
+        return None
+    surface = surface_cls()
+    triangle_limit = read_positive_env_int("HEDIAO3D_OPENCAMLIB_PATH_DROPCUTTER_TRIANGLE_LIMIT") or len(triangles)
+    for tri in triangles[:triangle_limit]:
+        add_opencamlib_triangle(surface, triangle_cls, point_cls, tri)
+    cutter = instantiate_opencamlib_cutter(cutter_cls, plan, job)
+    path, input_points, row_count, segment_count = create_opencamlib_path(module, point_cls, line_cls, path_cls, job, plan, geometry)
+    dropper = dropper_cls()
+    call_first_method(dropper, ["setSTL", "setSTLSurf", "setSurface"], surface)
+    call_first_method(dropper, ["setCutter"], cutter)
+    call_first_method(dropper, ["setPath"], path)
+    call_optional_method(dropper, ["setZ"], float((job.get("settings") or {}).get("safeZ") or 22))
+    call_first_method(dropper, ["run", "dropCutter", "runDropCutter"])
+    output = get_opencamlib_points(dropper)
+    if not output:
+        return None
+    return {
+        "algorithm": "opencamlib-path-drop-cutter",
+        "points": output,
+        "inputPointCount": len(input_points),
+        "pathRows": row_count,
+        "pathSegments": segment_count,
+    }
+
+
+def create_opencamlib_path(module: Any, point_cls: Any, line_cls: Any, path_cls: Any, job: Dict[str, Any], plan: Dict[str, Any], geometry: Dict[str, Any]) -> List[Any]:
+    bounds = geometry.get("bounds") or {}
+    min_bounds = bounds.get("min") or {}
+    max_bounds = bounds.get("max") or {}
+    settings = job.get("settings") or {}
+    rows = read_positive_env_int("HEDIAO3D_OPENCAMLIB_PATH_DROPCUTTER_ROWS") or 8
+    z_clear = float(settings.get("safeZ") or 22)
+    x_min = float(min_bounds.get("x") or 0)
+    x_max = float(max_bounds.get("x") or 1)
+    y_min = float(min_bounds.get("y") or 0)
+    y_max = float(max_bounds.get("y") or 1)
+    path = path_cls()
+    input_points: List[List[float]] = []
+    segment_count = 0
+    for row in range(rows):
+        t = row / max(1, rows - 1)
+        y = y_min + (y_max - y_min) * t
+        start_x, end_x = (x_min, x_max) if row % 2 == 0 else (x_max, x_min)
+        start = point_cls(start_x, y, z_clear)
+        end = point_cls(end_x, y, z_clear)
+        line = line_cls(start, end)
+        append_path_segment(path, line)
+        input_points.extend([[start_x, y, z_clear], [end_x, y, z_clear]])
+        segment_count += 1
+    return [path, input_points, rows, segment_count]
+
+
+def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
+    points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
+    path_report = ((neutral.get("runner") or {}).get("pathDropCutter") or {})
+    return {
+        "schema": "hediao3d.opencamlib-cutter-contact-report.v1",
+        "jobId": job.get("jobId"),
+        "engine": "opencamlib",
+        "mode": "opencamlib-path-drop-cutter-experimental",
+        "createdBy": "adapters/opencamlib/opencamlib_runner.py",
+        "inputIdentity": {
+            "modelSha256": sha256_file(Path(str((plan.get("model") or {}).get("path") or ""))),
+            "planSha256": sha256_file(plan_path),
+            "sourceNeutralToolpathSha256": sha256_json_without_contact_report(neutral),
+            "neutralToolpathWithoutContactReportSha256": sha256_json_without_contact_report(neutral),
+        },
+        "opencamlib": detection,
+        "model": {
+            "format": (plan.get("model") or {}).get("format"),
+            "geometry": geometry,
+        },
+        "tool": {
+            "toolProfileId": ((plan.get("tool") or {}).get("toolProfileId") or (job.get("settings") or {}).get("toolProfileId")),
+            "diameterMm": (plan.get("tool") or {}).get("diameterMm") or (job.get("settings") or {}).get("toolDiameter"),
+            "flatTipMm": (plan.get("tool") or {}).get("flatTipMm"),
+            "angleDeg": (plan.get("tool") or {}).get("angleDeg"),
+        },
+        "contactSampling": {
+            "algorithm": "opencamlib-path-drop-cutter",
+            "pointCount": len(points),
+            "pathRows": path_report.get("pathRows"),
+            "pathSegments": path_report.get("pathSegments"),
+            "inputPointCount": path_report.get("inputPointCount"),
+            "hitRate": 1.0 if points else 0.0,
+            "samplingQuality": {
+                "level": "experimental-real-api",
+                "summary": "Real OpenCAMLib PathDropCutter-style API returned cutter-location points, but rotary wrap production quality is not yet proven.",
+            },
+        },
+        "quality": {
+            "level": "experimental-real-api",
+            "previewScaffold": False,
+            "postprocessEligible": False,
+            "productionCandidate": False,
+            "summary": "OpenCAMLib PathDropCutter API executed against the source STL and returned neutral points. This is stronger than heightfield preview, but remains non-production until strict residual metrics, CAMotics material removal, air-run and machine acceptance are bound.",
+            "requiredUpgrade": "Bind residual gouge/undercut metrics and target rotary fixture sampling before declaring production-candidate output.",
+        },
+        "productionBoundary": [
+            "This report proves the real OpenCAMLib PathDropCutter API can be called from the runner.",
+            "It is not yet a production candidate because rotary fixture residual metrics and material-removal evidence are missing.",
+        ],
+    }
+
+
 def apply_rotary_cutter_envelope(sample: Dict[str, Any], samples: List[Dict[str, Any]], cutter_radius: float, angular_tolerance_deg: float) -> Dict[str, Any]:
     if cutter_radius <= 1e-9:
         return {"radius": float(sample["radius"]), "sampleCount": 1}
@@ -1096,6 +1326,94 @@ def is_number(value: Any) -> bool:
         return True
     except (TypeError, ValueError):
         return False
+
+
+def find_attr(module: Any, names: List[str]) -> Any:
+    for name in names:
+        value = getattr(module, name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def add_opencamlib_triangle(surface: Any, triangle_cls: Any, point_cls: Any, coords: List[List[float]]) -> None:
+    triangle = triangle_cls(*(point_cls(*coord) for coord in coords))
+    for method in ("addTriangle", "add_triangle", "add"):
+        if hasattr(surface, method):
+            getattr(surface, method)(triangle)
+            return
+    raise RuntimeError("surface object does not expose addTriangle/add_triangle/add")
+
+
+def instantiate_opencamlib_cutter(cutter_cls: Any, plan: Dict[str, Any], job: Dict[str, Any]) -> Any:
+    tool = plan.get("tool") if isinstance(plan.get("tool"), dict) else {}
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    diameter = float(tool.get("diameterMm") or settings.get("toolDiameter") or 4.0)
+    attempts = [
+        (diameter, 20.0),
+        (diameter,),
+        (),
+    ]
+    last_error: Optional[Exception] = None
+    for args in attempts:
+        try:
+            return cutter_cls(*args)
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"could not instantiate OpenCAMLib cutter: {last_error}")
+
+
+def call_first_method(obj: Any, methods: List[str], *args: Any) -> Any:
+    for method in methods:
+        if hasattr(obj, method):
+            return getattr(obj, method)(*args)
+    raise RuntimeError(f"object {type(obj).__name__} missing methods {methods}")
+
+
+def call_optional_method(obj: Any, methods: List[str], *args: Any) -> bool:
+    for method in methods:
+        if hasattr(obj, method):
+            getattr(obj, method)(*args)
+            return True
+    return False
+
+
+def append_path_segment(path: Any, segment: Any) -> None:
+    for method in ("append", "push_back", "add", "addLine"):
+        if hasattr(path, method):
+            getattr(path, method)(segment)
+            return
+    raise RuntimeError("path object does not expose append/push_back/add/addLine")
+
+
+def get_opencamlib_points(dropper: Any) -> List[Dict[str, float]]:
+    for method in ("getCLPoints", "getPoints", "getCL"):
+        if not hasattr(dropper, method):
+            continue
+        raw_points = getattr(dropper, method)()
+        return [normalize_opencamlib_point(point) for point in list(raw_points)]
+    return []
+
+
+def normalize_opencamlib_point(point: Any) -> Dict[str, float]:
+    values: Dict[str, float] = {}
+    for axis in ("x", "y", "z"):
+        attr = getattr(point, axis, None)
+        if callable(attr):
+            attr = attr()
+        if attr is None and hasattr(point, axis.upper()):
+            attr = getattr(point, axis.upper())
+            if callable(attr):
+                attr = attr()
+        values[axis] = float(attr if attr is not None else 0.0)
+    return values
+
+
+def normalize_between(value: float, lower: float, upper: float) -> float:
+    span = upper - lower
+    if abs(span) < 1e-9:
+        return 0.0
+    return max(0.0, min(1.0, (value - lower) / span))
 
 
 def sha256_file(path: Path) -> Optional[str]:
