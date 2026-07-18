@@ -35,3 +35,27 @@ sampling-step-larger-than-quarter-cutter-diameter
 npm run test:v3:rotary-heightfield: 通过
 npm run test:v3:rotary-neutral-handoff: 通过
 ```
+
+## Linux 服务器复测
+
+服务器: Ubuntu 24.04.3 LTS
+
+项目路径:
+
+```text
+/opt/hediao3d/HeDiao3D
+```
+
+提交:
+
+```text
+2cf3334 add-opencamlib-sampling-quality-gate
+```
+
+复测结果:
+
+```text
+npm run test:v3:rotary-heightfield: 通过
+npm run test:v3:rotary-neutral-handoff: 通过
+git status --short: clean
+```
