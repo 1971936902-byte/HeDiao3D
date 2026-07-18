@@ -516,6 +516,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       message: upstreamCamEvidence.summary
     },
     {
+      id: "upstreamMachineFit",
+      ok: upstreamCamEvidence.machineFit?.ok !== false,
+      message: upstreamCamEvidence.machineFit?.summary ?? "Upstream candidate machine-fit was not required."
+    },
+    {
       id: "bundleManifestIntegrity",
       ok: bundleManifestIntegrityOk,
       message: "When camotics-result-bundle-manifest.json is present, its file hashes and identity claims must match the ZIP entries and result JSON."
@@ -595,6 +600,12 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
       status: "not-required",
       required: false,
       presentCount: Number(expected?.presentCount ?? 0),
+      machineFit: {
+        ok: true,
+        status: "not-required",
+        required: false,
+        summary: "No upstream candidate machine-fit preflight was captured in the run package."
+      },
       summary: "No upstream CAM/OpenCAMLib evidence was captured in the run package."
     };
   }
@@ -617,16 +628,72 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
   const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1"
     && expectedFiles.length > 0
     && mismatches.length === 0;
+  const machineFit = evaluateUpstreamMachineFit(imported?.candidateMachineFit, expected?.candidateMachineFit);
+  const allOk = ok && machineFit.ok;
   return {
-    ok,
-    status: ok ? "matched" : "mismatch",
+    ok: allOk,
+    status: allOk ? "matched" : "mismatch",
     required: true,
     expectedCount: expectedFiles.length,
     importedCount: importedFiles.length,
     mismatches,
-    summary: ok
+    machineFit,
+    summary: allOk
       ? "Imported CAMotics result is hash-bound to the upstream Native CAM/OpenCAMLib evidence captured by the run package."
-      : "Imported CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
+      : machineFit.ok
+        ? "Imported CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
+        : `Imported CAMotics result is bound to an unacceptable upstream machine-fit: ${machineFit.summary}`
+  };
+}
+
+function evaluateUpstreamMachineFit(importedMachineFit, expectedMachineFit) {
+  if (!expectedMachineFit) {
+    return {
+      ok: true,
+      status: "not-required",
+      required: false,
+      summary: "No upstream candidate machine-fit preflight was captured in the run package."
+    };
+  }
+  const expectedLevel = expectedMachineFit.level ?? "missing";
+  const importedLevel = importedMachineFit?.level ?? "missing";
+  const expectedAxis = String(expectedMachineFit.targetMachine?.rotaryOutputAxis ?? "").toUpperCase();
+  const importedAxis = String(importedMachineFit?.targetMachine?.rotaryOutputAxis ?? "").toUpperCase();
+  const schemaOk = importedMachineFit?.schema === (expectedMachineFit.schema ?? "hediao3d.opencamlib-candidate-machine-fit-preflight.v1");
+  const levelOk = importedLevel === expectedLevel;
+  const notCritical = importedLevel !== "critical";
+  const rotaryAxisOk = expectedAxis === importedAxis;
+  const ok = schemaOk && levelOk && notCritical && rotaryAxisOk;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    required: true,
+    expectedLevel,
+    importedLevel,
+    schemaOk,
+    levelOk,
+    notCritical,
+    rotaryAxisOk,
+    expected: summarizeMachineFitForEvidence(expectedMachineFit),
+    imported: summarizeMachineFitForEvidence(importedMachineFit),
+    summary: ok
+      ? `Upstream OpenCAMLib candidate machine-fit is ${importedLevel} and matches the run package.`
+      : `Expected machineFit level=${expectedLevel}, axis=${expectedAxis || "missing"}; got level=${importedLevel}, axis=${importedAxis || "missing"}.`
+  };
+}
+
+function summarizeMachineFitForEvidence(machineFit) {
+  if (!machineFit || typeof machineFit !== "object") return null;
+  return {
+    schema: machineFit.schema ?? null,
+    level: machineFit.level ?? "missing",
+    rotaryOutputAxis: machineFit.targetMachine?.rotaryOutputAxis ?? null,
+    wrapPerRevolutionMm: Number.isFinite(Number(machineFit.targetMachine?.wrapPerRevolutionMm)) ? Number(machineFit.targetMachine.wrapPerRevolutionMm) : null,
+    rotarySpanDeg: Number.isFinite(Number(machineFit.coverage?.rotarySpanDeg)) ? Number(machineFit.coverage.rotarySpanDeg) : null,
+    expectedRotaryCoverageDeg: Number.isFinite(Number(machineFit.coverage?.expectedRotaryCoverageDeg)) ? Number(machineFit.coverage.expectedRotaryCoverageDeg) : null,
+    holdZonePointCount: Number(machineFit.riskCounts?.holdZonePointCount ?? 0),
+    deepPointCount: Number(machineFit.riskCounts?.deepPointCount ?? 0),
+    missingRotaryCount: Number(machineFit.riskCounts?.missingRotaryCount ?? 0)
   };
 }
 

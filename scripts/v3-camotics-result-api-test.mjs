@@ -58,6 +58,7 @@ async function main() {
   const runPackageSha256 = createHash("sha256").update(runPackageText).digest("hex");
   const resultTemplate = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-template.json`);
   assert(resultTemplate.inputs?.camoticsCliRunPackageSha256 === runPackageSha256, "CAMotics result template should bind to the current CLI run package hash");
+  assert(runPackage.upstreamCamEvidence?.machineFit?.status !== "mismatch", "default CAMotics run package should not start with mismatched machine-fit evidence");
   const completeImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence),
     localValidation: createLocalValidation(true),
@@ -115,10 +116,12 @@ async function main() {
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next action checklist should show imported CAMotics evidence level");
   assert(operatorDownloadChecklist.includes("CAMotics 上游绑定"), "operator download checklist should show CAMotics upstream binding after import");
   assert(operatorDownloadChecklist.includes("候选包预检"), "operator download checklist should mention candidate package validation binding after import");
+  assert(operatorDownloadChecklist.includes("机床适配"), "operator download checklist should show upstream machine-fit status after import");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.status === "matched", "camotics result input identity should match");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.job?.status === "matched", "camotics result should bind to current job id");
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
   assert(["matched", "not-required"].includes(resultArtifact.evidenceQuality?.upstreamCamEvidence?.status), "camotics result should expose upstream CAM evidence binding status");
+  assert(["matched", "not-required"].includes(resultArtifact.evidenceQuality?.upstreamCamEvidence?.machineFit?.status), "camotics result should expose upstream machine-fit evidence status");
   assert(resultArtifact.evidenceQuality?.motionConsistency?.status === "matched", "camotics result motion profile should match");
   assert(resultArtifact.evidenceQuality?.machineContext?.status === "matched", "camotics result machine context should match");
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");

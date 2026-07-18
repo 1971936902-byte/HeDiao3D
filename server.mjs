@@ -9779,6 +9779,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
       mismatchCount: 0,
       candidatePackageValidationBound: false,
       candidatePackageBundleBound: false,
+      machineFit: summarizeCamoticsUpstreamMachineFit(null),
       summary: "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
     };
   }
@@ -9797,6 +9798,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
   const hasMatchedKey = (key) => normalizedFiles.some((file) => file.key === key && file.matched);
   const candidatePackageValidationBound = Boolean(upstream.candidatePackageValidationBound ?? hasMatchedKey("opencamlibCandidatePackageValidation"));
   const candidatePackageBundleBound = Boolean(upstream.candidatePackageBundleBound ?? hasMatchedKey("opencamlibCandidatePackageBundle"));
+  const machineFit = summarizeCamoticsUpstreamMachineFit(upstream.machineFit ?? upstream.candidateMachineFit);
   return {
     required: Boolean(upstream.required),
     status,
@@ -9805,12 +9807,38 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
     mismatchCount,
     candidatePackageValidationBound,
     candidatePackageBundleBound,
+    machineFit,
     files: normalizedFiles,
     summary: status === "matched"
       ? `CAMotics 材料去除结果已绑定上游 CAM/OpenCAMLib 证据 ${matchedCount}/${expectedCount}。`
       : status === "not-required"
         ? "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
         : `CAMotics 上游 CAM/OpenCAMLib 证据未匹配：${matchedCount}/${expectedCount}，mismatch=${mismatchCount}。`
+  };
+}
+
+function summarizeCamoticsUpstreamMachineFit(machineFit) {
+  if (!machineFit || typeof machineFit !== "object") {
+    return {
+      required: false,
+      status: "not-required",
+      level: "missing",
+      summary: "CAMotics 材料去除结果未要求绑定上游机床适配预检。"
+    };
+  }
+  const imported = machineFit.imported && typeof machineFit.imported === "object" ? machineFit.imported : null;
+  const expected = machineFit.expected && typeof machineFit.expected === "object" ? machineFit.expected : null;
+  const level = machineFit.importedLevel ?? imported?.level ?? machineFit.level ?? "missing";
+  return {
+    required: Boolean(machineFit.required),
+    status: machineFit.status ?? (machineFit.ok === true ? "matched" : "mismatch"),
+    level,
+    expectedLevel: machineFit.expectedLevel ?? expected?.level ?? null,
+    importedLevel: machineFit.importedLevel ?? imported?.level ?? null,
+    rotaryOutputAxis: imported?.rotaryOutputAxis ?? machineFit.targetMachine?.rotaryOutputAxis ?? null,
+    rotarySpanDeg: imported?.rotarySpanDeg ?? machineFit.coverage?.rotarySpanDeg ?? null,
+    missingRotaryCount: imported?.missingRotaryCount ?? machineFit.riskCounts?.missingRotaryCount ?? null,
+    summary: machineFit.summary ?? `CAMotics 上游机床适配状态：${level}。`
   };
 }
 
@@ -11302,7 +11330,10 @@ function formatCamoticsUpstreamEvidenceLine(evidence) {
   const matched = `${Number(evidence.matchedCount ?? 0)}/${Number(evidence.expectedCount ?? 0)}`;
   const candidateValidation = evidence.candidatePackageValidationBound ? "候选包预检已绑定" : "候选包预检未绑定";
   const candidateBundle = evidence.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
-  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}`;
+  const machineFit = evidence.machineFit
+    ? ` / 机床适配 ${evidence.machineFit.level ?? evidence.machineFit.status ?? "missing"}`
+    : "";
+  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}${machineFit}`;
 }
 
 function createCamoticsPreviewGcode(points, settings, estimatedMinutes) {
