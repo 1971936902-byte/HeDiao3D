@@ -2404,10 +2404,25 @@ export function App() {
     () => findV3DeliveryFile(v3Job, "linux-cam-closed-loop-handoff.md"),
     [v3Job]
   );
+  const v3AirRunFile = useMemo(
+    () => findV3DeliveryFile(v3Job, "air-run.nc"),
+    [v3Job]
+  );
+  const v3OperatorPackageFile = useMemo(
+    () => findV3DeliveryFile(v3Job, "operator-runbook.md") ?? findV3DeliveryFile(v3Job, "operator-download-checklist.md"),
+    [v3Job]
+  );
+  const v3SafetyReportFile = useMemo(
+    () => findV3DeliveryFile(v3Job, "production-gate.json") ?? findV3DeliveryFile(v3Job, "nc-static-analysis.json") ?? findV3DeliveryFile(v3Job, "operator-runbook.md"),
+    [v3Job]
+  );
   const v3DownloadChecklistSummary = useMemo(() => createV3DownloadChecklistSummary(v3Job), [v3Job]);
   const isOriginalModelSource = Boolean(originalModelFileName);
   const isOriginalModelLocalPreview = Boolean(originalModelFileName && aiMeshUrl?.startsWith("blob:"));
   const isModelReadyForCam = Boolean(aiMeshStlUrl && !isOriginalModelLocalPreview);
+  const canDownloadAirRun = Boolean(airRunProgram || (v3AirRunFile?.url && v3AirRunFile.downloadable));
+  const canDownloadOperatorPackage = Boolean(toolpath || v3OperatorPackageFile?.url);
+  const canDownloadSafetyReport = Boolean(toolpath || v3SafetyReportFile?.url);
   const v3EvidenceLoopSummary = useMemo(
     () => createV3EvidenceLoopSummary(v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance),
     [v3Job, v3DownloadChecklistSummary, selectedMachineAcceptance]
@@ -3974,8 +3989,57 @@ export function App() {
     }
   };
 
-  const handleDownloadOperatorPackage = () => {
-    if (!toolpath) return;
+  const downloadUrlAsset = async (url: string, fallbackName: string, context: string) => {
+    const response = await fetch(url);
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      let detail = "";
+      try {
+        const data = JSON.parse(text) as { error?: string; summary?: string };
+        detail = data.summary ?? data.error ?? "";
+      } catch {
+        detail = text.trim().slice(0, 180);
+      }
+      throw new Error(`${context}失败：${detail || response.status}`);
+    }
+    const blob = await response.blob();
+    const headerName = response.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/i)?.[1];
+    const filename = headerName ? decodeURIComponent(headerName) : extractDownloadFilename(url, fallbackName);
+    downloadBlob(filename, blob);
+    return filename;
+  };
+
+  const handleDownloadOperatorPackage = async () => {
+    const v3Runbook = findV3DeliveryFile(v3Job, "operator-runbook.md");
+    const v3Checklist = findV3DeliveryFile(v3Job, "operator-download-checklist.md");
+    const v3File = v3Runbook?.url ? v3Runbook : v3Checklist;
+    if (v3File?.url) {
+      try {
+        const filename = await downloadUrlAsset(v3File.url, v3File.filename, "加工包说明下载");
+        setV3Status(`加工包说明已开始下载：${filename}`);
+        setV3UserNotice({
+          level: "ok",
+          title: "加工包说明已开始下载",
+          detail: filename
+        });
+        recordTask({
+          category: "cam",
+          status: "ok",
+          title: "下载加工包说明",
+          detail: `已下载 V3 后端生成的 ${filename}。`
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "加工包说明下载失败";
+        setV3Status(message);
+        setV3UserNotice({ level: "error", title: "加工包说明下载失败", detail: message });
+        recordTask({ category: "cam", status: "error", title: "加工包说明下载失败", detail: message });
+      }
+      return;
+    }
+    if (!toolpath) {
+      setV3Status("请先生成刀路或 V3 安全包，再下载加工包说明。");
+      return;
+    }
     const content = createOperatorPackageMarkdown({
       settings,
       toolpath,
@@ -3997,11 +4061,7 @@ export function App() {
 
   const handleDownloadModelAsset = async (url: string, fallbackName: string) => {
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`模型文件下载失败：${response.status}`);
-      const blob = await response.blob();
-      const filename = extractDownloadFilename(url, fallbackName);
-      downloadBlob(filename, blob);
+      const filename = await downloadUrlAsset(url, fallbackName, "模型文件下载");
       setV3UserNotice({
         level: "ok",
         title: "模型文件已开始下载",
@@ -4322,8 +4382,36 @@ export function App() {
     }
   };
 
-  const handleDownloadAirRun = () => {
-    if (!airRunProgram) return;
+  const handleDownloadAirRun = async () => {
+    const v3AirRun = findV3DeliveryFile(v3Job, "air-run.nc");
+    if (v3AirRun?.url && v3AirRun.downloadable) {
+      try {
+        const filename = await downloadUrlAsset(v3AirRun.url, v3AirRun.filename, "离料空跑 NC 下载");
+        setExportGate((current) => ({ ...current, airRunVerified: true }));
+        setV3Status(`离料空跑 NC 已开始下载：${filename}`);
+        setV3UserNotice({
+          level: "ok",
+          title: "离料空跑 NC 已开始下载",
+          detail: "只允许主轴关闭、离料状态下验证行程和方向。"
+        });
+        recordTask({
+          category: "cam",
+          status: "ok",
+          title: "下载离料空跑程序",
+          detail: `已下载 V3 后端生成的 ${filename}。`
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "离料空跑 NC 下载失败";
+        setV3Status(message);
+        setV3UserNotice({ level: "error", title: "离料空跑 NC 下载失败", detail: message });
+        recordTask({ category: "cam", status: "error", title: "离料空跑 NC 下载失败", detail: message });
+      }
+      return;
+    }
+    if (!airRunProgram) {
+      setV3Status("请先生成刀路或 V3 安全包，再下载离料空跑 NC。");
+      return;
+    }
     downloadText(airRunProgram.filename, airRunProgram.gcode);
     setExportGate((current) => ({ ...current, airRunVerified: true }));
     recordTask({
@@ -4465,9 +4553,39 @@ export function App() {
     });
   };
 
-  const handleDownloadSafetyReport = (format: "json" | "md") => {
+  const handleDownloadSafetyReport = async (format: "json" | "md") => {
+    const v3File = format === "json"
+      ? findV3DeliveryFile(v3Job, "production-gate.json") ?? findV3DeliveryFile(v3Job, "nc-static-analysis.json")
+      : findV3DeliveryFile(v3Job, "operator-runbook.md") ?? findV3DeliveryFile(v3Job, "operator-download-checklist.md");
+    if (v3File?.url) {
+      try {
+        const filename = await downloadUrlAsset(v3File.url, v3File.filename, `安全报告 ${format.toUpperCase()} 下载`);
+        setExportGate((current) => ({ ...current, safetyReportReviewed: true }));
+        setV3Status(`安全报告已开始下载：${filename}`);
+        setV3UserNotice({
+          level: "ok",
+          title: "安全报告已开始下载",
+          detail: filename
+        });
+        recordTask({
+          category: "cam",
+          status: v3File.downloadable ? "ok" : "warning",
+          title: `下载安全报告：${format.toUpperCase()}`,
+          detail: `已下载 V3 后端生成的 ${filename}。`
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "安全报告下载失败";
+        setV3Status(message);
+        setV3UserNotice({ level: "error", title: "安全报告下载失败", detail: message });
+        recordTask({ category: "cam", status: "error", title: "安全报告下载失败", detail: message });
+      }
+      return;
+    }
     const reportInput = createReportInput();
-    if (!reportInput) return;
+    if (!reportInput) {
+      setV3Status("请先生成刀路或 V3 安全包，再下载安全报告。");
+      return;
+    }
     if (format === "json") {
       downloadText("safety-report.json", JSON.stringify(createSafetyReport(reportInput), null, 2), "application/json");
     } else {
@@ -5769,10 +5887,10 @@ export function App() {
               ))}
             </div>
             <div className="report-actions">
-              <button className="demo-action" type="button" onClick={() => handleDownloadSafetyReport("md")} disabled={!toolpath}>
+              <button className="demo-action" type="button" onClick={() => handleDownloadSafetyReport("md")} disabled={!canDownloadSafetyReport}>
                 下载安全报告 MD
               </button>
-              <button className="demo-action" type="button" onClick={() => handleDownloadSafetyReport("json")} disabled={!toolpath}>
+              <button className="demo-action" type="button" onClick={() => handleDownloadSafetyReport("json")} disabled={!canDownloadSafetyReport}>
                 下载安全报告 JSON
               </button>
             </div>
@@ -7772,11 +7890,11 @@ export function App() {
               <Download size={17} />
               下载 ZIP 加工包
             </button>
-            <button className="demo-action package-action" onClick={handleDownloadAirRun} disabled={!airRunProgram} type="button" title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
+            <button className="demo-action package-action" onClick={handleDownloadAirRun} disabled={!canDownloadAirRun} type="button" title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
               <Download size={17} />
               下载离料空跑 NC
             </button>
-            <button className="demo-action package-action" onClick={handleDownloadOperatorPackage} disabled={!toolpath} type="button">
+            <button className="demo-action package-action" onClick={handleDownloadOperatorPackage} disabled={!canDownloadOperatorPackage} type="button">
               <Download size={17} />
               下载加工包说明
             </button>
@@ -8419,11 +8537,11 @@ export function App() {
                 </>
               ) : (
                 <>
-                  <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={!toolpath} title="下载加工参数、模型来源、校验结果和上机说明">
+                  <button className="download secondary" onClick={handleDownloadOperatorPackage} disabled={!canDownloadOperatorPackage} title="下载加工参数、模型来源、校验结果和上机说明">
                     <Download size={17} />
                     加工包说明
                   </button>
-                  <button className="download secondary" onClick={handleDownloadAirRun} disabled={!airRunProgram} title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
+                  <button className="download secondary" onClick={handleDownloadAirRun} disabled={!canDownloadAirRun} title="主轴关闭，Z 保持安全高度，用于离料空跑验证机器动作">
                     <Download size={17} />
                     下载空跑 NC
                   </button>

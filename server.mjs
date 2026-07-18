@@ -3220,10 +3220,10 @@ function createV3ReadinessPublicSummary(report, reportId) {
         summary: report.adapterValidation.handoffClassificationAudit.summary ?? ""
       } : null
     } : null,
-    nativeCamRealOutputAcceptance: report.nativeCamRealOutputAcceptance ?? null,
+    nativeCamRealOutputAcceptance: createNativeCamRealOutputAcceptanceReadinessSummary(report.nativeCamRealOutputAcceptance),
     runbookResult: report.runbookResult ?? null,
     externalHandoff: report.externalHandoff ?? null,
-    externalCamHandoffs: report.externalCamHandoffs ?? null,
+    externalCamHandoffs: createExternalCamHandoffsReadinessSummary(report.externalCamHandoffs),
     neutralImport: report.neutralImport ?? null,
     postprocessHandoffReadiness: report.postprocessHandoffReadiness ?? null,
     camoticsImport: report.camoticsImport ?? null,
@@ -3231,8 +3231,130 @@ function createV3ReadinessPublicSummary(report, reportId) {
     latestJob: report.latestJob,
     latestTrialFeedback: report.latestTrialFeedback ?? null,
     latestMachineAcceptance: report.latestMachineAcceptance ?? null,
-    latestEvidenceDossier: report.latestEvidenceDossier ?? null,
+    latestEvidenceDossier: createReadinessEvidenceDossierPublicSummary(report.latestEvidenceDossier),
     apiArtifacts: createV3ReadinessArtifactLinks(reportId)
+  };
+}
+
+function createNativeCamRealOutputAcceptanceReadinessSummary(acceptance) {
+  if (!acceptance || typeof acceptance !== "object") return null;
+  return {
+    id: acceptance.id ?? null,
+    schema: acceptance.schema ?? "hediao3d.native-cam-real-output-acceptance.v1",
+    createdAt: acceptance.createdAt ?? null,
+    level: acceptance.level ?? null,
+    summary: acceptance.summary ?? null,
+    productionCandidateCount: Number(acceptance.productionCandidateCount ?? 0),
+    unsafeCount: Number(acceptance.unsafeCount ?? 0),
+    missingCount: Number(acceptance.missingCount ?? 0),
+    sourceReportBindingStatus: acceptance.sourceReportBindingStatus ?? null,
+    contactValidationStatus: createNativeCamContactValidationReadinessSummary(acceptance.contactValidationStatus),
+    targetMachineBoundaryStatus: acceptance.targetMachineBoundaryStatus ?? null,
+    apiArtifacts: acceptance.apiArtifacts ?? null
+  };
+}
+
+function createNativeCamContactValidationReadinessSummary(status) {
+  if (!status || typeof status !== "object") return null;
+  return {
+    schema: status.schema ?? "hediao3d.native-cam-contact-validation-status.v1",
+    status: status.status ?? null,
+    ready: Boolean(status.ready),
+    required: Boolean(status.required),
+    summary: status.summary ?? null,
+    pathCoverage: status.pathCoverage ? {
+      status: status.pathCoverage.status ?? null,
+      summary: status.pathCoverage.summary ?? null,
+      x: status.pathCoverage.x ? {
+        status: status.pathCoverage.x.status ?? null,
+        coverageRatio: status.pathCoverage.x.coverageRatio ?? null
+      } : null,
+      rotary: status.pathCoverage.rotary ? {
+        status: status.pathCoverage.rotary.status ?? null,
+        coverageRatio: status.pathCoverage.rotary.coverageRatio ?? null
+      } : null
+    } : null,
+    protectedZones: status.protectedZones ? {
+      status: status.protectedZones.status ?? null,
+      summary: status.protectedZones.summary ?? null,
+      violationCount: Number(status.protectedZones.violationCount ?? status.protectedZones.violations?.length ?? 0)
+    } : null
+  };
+}
+
+function createExternalCamHandoffsReadinessSummary(handoffs) {
+  if (!handoffs || typeof handoffs !== "object") return null;
+  const byEngine = {};
+  for (const [engine, item] of Object.entries(handoffs.byEngine ?? {})) {
+    if (!item || typeof item !== "object") continue;
+    byEngine[engine] = {
+      id: item.id ?? null,
+      status: item.status ?? null,
+      updatedAt: item.updatedAt ?? null,
+      selectedEngine: item.selectedEngine ?? null,
+      resultEngine: item.resultEngine ?? null,
+      source: item.source ?? null,
+      simulationEngine: item.simulationEngine ?? null,
+      simulationStatus: item.simulationStatus ?? null,
+      syntheticSimulation: Boolean(item.syntheticSimulation),
+      points: Number(item.points ?? 0),
+      postProcessorName: item.postProcessorName ?? null,
+      packageLevel: item.packageLevel ?? null,
+      artifacts: item.artifacts ? {
+        adapterReport: item.artifacts.adapterReport ?? null,
+        neutralToolpath: item.artifacts.neutralToolpath ?? null,
+        toolpath: item.artifacts.toolpath ?? null
+      } : null
+    };
+  }
+  return {
+    schema: handoffs.schema ?? "hediao3d.external-cam-handoffs.v1",
+    requiredEngines: Array.isArray(handoffs.requiredEngines) ? handoffs.requiredEngines : [],
+    completedEngines: Array.isArray(handoffs.completedEngines) ? handoffs.completedEngines : [],
+    byEngine
+  };
+}
+
+function createReadinessEvidenceDossierPublicSummary(dossier) {
+  if (!dossier || typeof dossier !== "object") return null;
+  const crossChecks = dossier.crossChecks && typeof dossier.crossChecks === "object" ? dossier.crossChecks : {};
+  const productionReadinessAudit = crossChecks.productionReadinessAudit && typeof crossChecks.productionReadinessAudit === "object"
+    ? crossChecks.productionReadinessAudit
+    : null;
+  return {
+    schema: dossier.schema ?? "hediao3d.production-evidence-dossier.v1",
+    jobId: dossier.jobId ?? null,
+    artifact: dossier.artifact ?? "production-evidence-dossier.json",
+    status: dossier.status ?? null,
+    summary: dossier.summary ?? null,
+    updatedAt: dossier.updatedAt ?? dossier.createdAt ?? null,
+    passedCount: Number(dossier.passedCount ?? 0),
+    reviewCount: Number(dossier.reviewCount ?? 0),
+    blockedCount: Number(dossier.blockedCount ?? 0),
+    crossChecks: {
+      ncStaticReady: Boolean(crossChecks.ncStaticReady),
+      controllerDialectReady: Boolean(crossChecks.controllerDialectReady),
+      neutralSourceBindingPass: Boolean(crossChecks.neutralSourceBindingPass),
+      neutralSourceBindingStatus: crossChecks.neutralSourceBindingStatus ?? null,
+      externalGcodeSourceBindingPass: Boolean(crossChecks.externalGcodeSourceBindingPass),
+      externalGcodeSourceBindingStatus: crossChecks.externalGcodeSourceBindingStatus ?? null,
+      realMaterialRemovalVerified: Boolean(crossChecks.realMaterialRemovalVerified),
+      camoticsInputIdentityStatus: crossChecks.camoticsInputIdentityStatus ?? "missing",
+      camoticsCliRunPackageBindingStatus: crossChecks.camoticsCliRunPackageBindingStatus ?? "missing",
+      camoticsMotionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
+      camoticsMachineContextStatus: crossChecks.camoticsMachineContextStatus ?? "missing",
+      camoticsArtifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
+      productionReadinessAudit: productionReadinessAudit ? {
+        schema: productionReadinessAudit.schema ?? "hediao3d.production-readiness-audit.v1",
+        status: productionReadinessAudit.status ?? null,
+        allowProductionPackage: Boolean(productionReadinessAudit.allowProductionPackage),
+        allowTrialPackage: Boolean(productionReadinessAudit.allowTrialPackage),
+        allowAirRunPackage: Boolean(productionReadinessAudit.allowAirRunPackage),
+        blockerCount: Number(productionReadinessAudit.blockerCount ?? productionReadinessAudit.blockers?.length ?? 0),
+        warningCount: Number(productionReadinessAudit.warningCount ?? productionReadinessAudit.warnings?.length ?? 0),
+        summary: productionReadinessAudit.summary ?? null
+      } : null
+    }
   };
 }
 
