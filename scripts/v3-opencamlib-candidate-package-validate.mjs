@@ -52,7 +52,8 @@ if (missing.length === 0) {
 const blockers = [
   ...missing.map((item) => `missing required file: ${item}`),
   ...(validatorRun && ![0, 3].includes(validatorRun.status) ? [`validator exited ${validatorRun.status}`] : []),
-  ...(contactValidation && contactValidation.level !== "ready" ? [`strict contact validation is ${contactValidation.level}`] : [])
+  ...(contactValidation && contactValidation.level !== "ready" ? [`strict contact validation is ${contactValidation.level} (${contactValidation.evidenceClass ?? "unknown-evidence"})`] : []),
+  ...(contactValidation?.evidenceClass === "experimental-real-api" ? ["experimental-real-api output is engineering evidence only, not a production candidate"] : [])
 ];
 const level = blockers.length ? "critical" : "ready";
 const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation });
@@ -132,6 +133,7 @@ function createContactValidationSummary(value) {
   return {
     schema: value.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
     level: value.level ?? "missing",
+    evidenceClass: value.evidenceClass ?? "unknown",
     productionCandidateEligible: Boolean(value.productionCandidateEligible),
     checkCount: checks.length,
     failedCheckCount: checks.filter((check) => check?.status === "fail").length,
@@ -154,6 +156,7 @@ function createArtifactManifest({ files, outPath, bundlePath, contactValidation 
   return {
     schema: "hediao3d.opencamlib-candidate-artifact-manifest.v1",
     readyForImport: contactValidation?.level === "ready" && entries.every((entry) => entry.required !== true || entry.exists),
+    evidenceClass: contactValidation?.evidenceClass ?? "missing",
     entries,
     missingRequired: entries.filter((entry) => entry.required && !entry.exists).map((entry) => entry.filename ?? entry.kind),
     productionBoundary: "These artifacts can enter HeDiao3D as CAM evidence only; they do not bypass material-removal simulation, air-run, trial feedback or machine acceptance."
@@ -175,9 +178,11 @@ function createManifestEntry(kind, identity, role, description) {
 }
 
 function createHandoffContract({ level, files, contactValidation }) {
+  const evidenceClass = contactValidation?.evidenceClass ?? "missing";
   return {
     schema: "hediao3d.opencamlib-neutral-handoff-contract.v1",
     status: level === "ready" ? "ready-for-hediao3d-import" : "blocked",
+    evidenceClass,
     importTarget: "OpenCAMLib neutral handoff -> HeDiao3D rotary-Y postprocess -> CAMotics/material-removal -> air-run/trial gate",
     requiredFiles: [
       "neutral-toolpath.json",
@@ -192,12 +197,17 @@ function createHandoffContract({ level, files, contactValidation }) {
     },
     strictAcceptance: {
       contactValidationLevel: contactValidation?.level ?? "not-run",
+      contactEvidenceClass: evidenceClass,
       productionCandidateEligible: Boolean(contactValidation?.productionCandidateEligible),
       neutralHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-neutral" && check.status === "pass")),
       planHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-plan" && check.status === "pass")),
       modelHashBound: Boolean(contactValidation?.checks?.some((check) => check.id === "identity-model" && check.status === "pass"))
     },
-    blockedReason: level === "ready" ? null : "Candidate output is missing required files or failed strict cutter-contact validation.",
+    blockedReason: level === "ready"
+      ? null
+      : evidenceClass === "experimental-real-api"
+        ? "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence."
+        : "Candidate output is missing required files or failed strict cutter-contact validation.",
     machineUse: "report-only-until-full-production-gates-pass"
   };
 }

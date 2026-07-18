@@ -64,6 +64,38 @@ try {
   assert(existsSync(join(blockedDir, "opencamlib-candidate-package-validation.json")), "blocked package should still write report");
   rmSync(blockedDir, { recursive: true, force: true });
 
+  const experimentalDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-experimental-"));
+  const experimentalModelPath = join(experimentalDir, "repaired-model.stl");
+  const experimentalPlanPath = join(experimentalDir, "opencamlib-kernel-plan.json");
+  const experimentalNeutralPath = join(experimentalDir, "neutral-toolpath.json");
+  const experimentalContactPath = join(experimentalDir, "opencamlib-cutter-contact-report.json");
+  writeFileSync(experimentalModelPath, createStl(), "utf8");
+  writeFileSync(experimentalPlanPath, JSON.stringify(createPlan(experimentalModelPath), null, 2), "utf8");
+  const experimentalNeutral = createExperimentalNeutral(experimentalContactPath);
+  const experimentalSha = sha256JsonWithoutContact(experimentalNeutral);
+  const experimentalContact = createExperimentalContact({
+    modelSha: sha256File(experimentalModelPath),
+    planSha: sha256File(experimentalPlanPath),
+    neutralSha: experimentalSha
+  });
+  experimentalNeutral.cutterContactReport = experimentalContact;
+  writeFileSync(experimentalNeutralPath, JSON.stringify(experimentalNeutral, null, 2), "utf8");
+  writeFileSync(experimentalContactPath, JSON.stringify(experimentalContact, null, 2), "utf8");
+  const experimental = spawnSync(node, [validator, "--root", experimentalDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(experimental.status === 3, `experimental package should fail strict production preflight, got ${experimental.status}: ${experimental.stdout}`);
+  const experimentalReport = JSON.parse(experimental.stdout);
+  assert(experimentalReport.level === "critical", "experimental package should be critical in strict candidate preflight");
+  assert(experimentalReport.contactValidation?.evidenceClass === "experimental-real-api", "experimental package should expose contact evidence class");
+  assert(experimentalReport.artifactManifest?.evidenceClass === "experimental-real-api", "experimental artifact manifest should expose evidence class");
+  assert(experimentalReport.handoffContract?.evidenceClass === "experimental-real-api", "experimental handoff contract should expose evidence class");
+  assert(experimentalReport.handoffContract?.blockedReason?.includes("experimental"), "experimental handoff should explain blocked reason");
+  assert(experimentalReport.blockers?.some((item) => /experimental-real-api/.test(item)), "experimental package blockers should name experimental-real-api");
+  rmSync(experimentalDir, { recursive: true, force: true });
+
   console.log(JSON.stringify({
     ok: true,
     readyLevel: readyReport.level,
@@ -117,6 +149,14 @@ function createNeutral(contactPath) {
   };
 }
 
+function createExperimentalNeutral(contactPath) {
+  return {
+    ...createNeutral(contactPath),
+    experimentalOpenCamLibPathDropCutter: true,
+    runner: { mode: "opencamlib-path-drop-cutter-experimental" }
+  };
+}
+
 function createContact({ modelSha, planSha, neutralSha }) {
   return {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
@@ -156,6 +196,38 @@ function createContact({ modelSha, planSha, neutralSha }) {
       previewScaffold: false,
       postprocessEligible: true,
       productionCandidate: true
+    }
+  };
+}
+
+function createExperimentalContact({ modelSha, planSha, neutralSha }) {
+  return {
+    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    jobId: "candidate-package-test",
+    engine: "opencamlib",
+    mode: "opencamlib-path-drop-cutter-experimental",
+    inputIdentity: {
+      modelSha256: modelSha,
+      planSha256: planSha,
+      neutralToolpathWithoutContactReportSha256: neutralSha,
+      sourceNeutralToolpathSha256: neutralSha
+    },
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      flatTipMm: 0.4,
+      angleDeg: 25
+    },
+    contactSampling: {
+      algorithm: "opencamlib-path-drop-cutter",
+      pointCount: 3,
+      contactPointCount: 3
+    },
+    quality: {
+      level: "experimental-real-api",
+      previewScaffold: false,
+      postprocessEligible: false,
+      productionCandidate: false
     }
   };
 }
