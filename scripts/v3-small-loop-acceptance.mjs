@@ -32,6 +32,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-native-cam-api-test.mjs")]
   },
   {
+    id: "opencamlib-small-loop",
+    label: "OpenCAMLib neutral toolpath small loop",
+    command: [process.execPath, join("scripts", "v3-real-neutral-handoff-test.mjs")]
+  },
+  {
     id: "camotics-cli-package-api",
     label: "CAMotics Linux package API",
     command: [process.execPath, join("scripts", "v3-camotics-cli-package-api-test.mjs")]

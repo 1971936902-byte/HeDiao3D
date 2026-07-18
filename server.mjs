@@ -14196,6 +14196,10 @@ function summarizeCommandProbeFailures(failed = []) {
   return details.length ? `命令探测失败：${details.join("; ")}` : "本机未检测到该引擎命令；可在服务器安装后由 Orchestrator 调用。";
 }
 
+function firstLine(text) {
+  return String(text ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
+}
+
 function selectCamEngine(engines, requestedEngine, settings = {}) {
   if (requestedEngine && requestedEngine !== "auto") {
     return engines.find((engine) => engine.id === requestedEngine) ?? engines.find((engine) => engine.id === "internal-mesh-cam");

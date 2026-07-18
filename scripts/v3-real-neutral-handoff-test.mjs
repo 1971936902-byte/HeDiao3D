@@ -3,9 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+import { once } from "node:events";
 
-const port = Number(process.env.V3_REAL_NEUTRAL_HANDOFF_PORT ?? 8792);
-const baseUrl = `http://127.0.0.1:${port}`;
+const configuredPort = process.env.V3_REAL_NEUTRAL_HANDOFF_PORT ? Number(process.env.V3_REAL_NEUTRAL_HANDOFF_PORT) : null;
+let baseUrl;
 const importedModelName = `v3-real-neutral-heightfield-${Date.now()}.stl`;
 const importedModelPath = resolve("public", "imported-models", importedModelName);
 const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? `/imported-models/${importedModelName}`;
@@ -55,6 +57,8 @@ const settings = {
 let server;
 
 async function main() {
+  const port = configuredPort ?? await getFreePort();
+  baseUrl = `http://127.0.0.1:${port}`;
   writeImportedHeightfieldModel(importedModelPath);
   writeCamoticsFixture(camoticsFixturePath);
 
@@ -295,6 +299,18 @@ function assert(condition, message) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getFreePort() {
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  server.close();
+  await once(server, "close");
+  if (!port) throw new Error("Could not allocate a local API port.");
+  return port;
 }
 
 main()

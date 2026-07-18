@@ -14,6 +14,7 @@
     "test:v3": "node scripts/v3-smoke-test.mjs",
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
     "test:v3:neutral-adapter": "node scripts/v3-neutral-adapter-orchestrator-test.mjs",
+    "test:v3:opencamlib-small-loop": "node scripts/v3-real-neutral-handoff-test.mjs",
     "test:v3:real-neutral-handoff": "node scripts/v3-real-neutral-handoff-test.mjs",
     "test:v3:closed-neutral-handoff": "node scripts/v3-closed-neutral-handoff-test.mjs",
     "test:v3:glb-cam-input": "node scripts/v3-glb-cam-input-conversion-test.mjs",
