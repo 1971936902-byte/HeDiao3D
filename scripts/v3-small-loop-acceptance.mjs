@@ -95,6 +95,11 @@ const steps = [
     id: "evidence-closed-loop",
     label: "Native CAM + CAMotics evidence closed loop",
     command: [process.execPath, join("scripts", "v3-evidence-closed-loop-test.mjs")]
+  },
+  {
+    id: "production-package-unlock",
+    label: "Production package unlock closed loop",
+    command: [process.execPath, join("scripts", "v3-production-package-unlock-test.mjs")]
   }
 ];
 

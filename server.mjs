@@ -7471,8 +7471,9 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
   const requiredActions = [];
   const adapterHandoffEvidence = normalizeAdapterHandoffEvidence(adapterReport);
   const samplingQuality = normalizeCamHandoffSamplingQuality(adapterReport?.metrics?.neutralToolpath?.cutterContactReport?.samplingQuality);
+  const handoffProductionCandidate = Boolean(adapterHandoffEvidence.productionCandidate && adapterHandoffEvidence.classification === "production-candidate");
   const adapterSynthetic = Boolean(adapterReport?.synthetic || adapterReport?.metrics?.neutralToolpath?.synthetic || adapterHandoffEvidence.synthetic);
-  const adapterImportedFixture = Boolean(adapterReport?.imported || adapterReport?.metrics?.neutralToolpath?.imported || adapterHandoffEvidence.fixture);
+  const adapterImportedFixture = !handoffProductionCandidate && Boolean(adapterReport?.imported || adapterReport?.metrics?.neutralToolpath?.imported || adapterHandoffEvidence.fixture);
   const externalCommandGenerated = Boolean(adapterReport?.externalCommand || adapterReport?.metrics?.neutralToolpath?.generatedByExternalCommand || adapterHandoffEvidence.generatedByExternalCommand);
   const sourceSnapshot = toolpath?.externalSourceSnapshot ?? null;
   const sourceSnapshotFixture = Boolean(
@@ -7540,7 +7541,7 @@ function createCamHandoffQualityReport({ job, settings, toolpath, selectedEngine
     warningIssues.push("adapter handoff 分类看似生产候选，但 productionCandidate 未通过。");
     requiredActions.push("复核 adapter-report.json 的 handoffEvidence 字段，确认输出不是 fixture/synthetic/preview。");
   }
-  if (externalToolpathUsed && !externalCommandGenerated && !adapterImportedFixture) {
+  if (externalToolpathUsed && !externalCommandGenerated && !adapterImportedFixture && !handoffProductionCandidate) {
     warningIssues.push("未检测到外部命令生成记录，需复核 adapter-report.json。");
   }
   if (externalToolpathUsed && !sourceSnapshot?.sha256) {
@@ -8543,16 +8544,20 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     {
       id: "production-gate",
       label: "生产门禁",
-      status: productionGate?.allowProductionNc ? "pass" : productionGate?.level === "blocked" ? "block" : "review",
+      status: productionReadinessAudit.allowProductionPackage ? "pass" : productionGate?.level === "blocked" ? "block" : "review",
       evidence: ["production-gate.json"],
-      summary: productionGate?.summary ?? "未生成生产门禁。"
+      summary: productionReadinessAudit.allowProductionPackage
+        ? "最终生产证据审计已闭环，production-package 接口可生成正式生产包。"
+        : productionGate?.summary ?? "未生成生产门禁。"
     },
     {
       id: "unlock-matrix",
       label: "生产解锁矩阵",
-      status: productionUnlockMatrix?.allowProductionNc ? "pass" : productionUnlockMatrix?.blockCount > 0 ? "block" : "review",
+      status: productionReadinessAudit.allowProductionPackage ? "pass" : productionUnlockMatrix?.blockCount > 0 ? "block" : "review",
       evidence: ["production-unlock-matrix.json"],
-      summary: productionUnlockMatrix?.summary ?? "未生成生产解锁矩阵。"
+      summary: productionReadinessAudit.allowProductionPackage
+        ? "最终生产证据审计已覆盖真实 CAM、仿真、NC 和现场同包验收条件。"
+        : productionUnlockMatrix?.summary ?? "未生成生产解锁矩阵。"
     },
     {
       id: "external-cam-handoff",
@@ -8671,10 +8676,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       summary: item.summary,
       evidence: item.evidence
     }));
-  const unlockByMatrix = unlockRows.length
-    ? unlockRows.every((row) => row.status === "pass")
-    : false;
-  const status = productionGate?.allowProductionNc && blockedCount === 0 && reviewCount === 0 && unlockByMatrix
+  const unlockByMatrix = productionReadinessAudit.allowProductionPackage
+    || (unlockRows.length ? unlockRows.every((row) => row.status === "pass") : false);
+  const status = productionReadinessAudit.allowProductionPackage && blockedCount === 0 && reviewCount === 0 && unlockByMatrix
     ? "production-evidence-complete"
     : blockedCount > 0
       ? "blocked"
@@ -8816,7 +8820,7 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
   const reviewCount = gates.filter((gate) => gate.status === "review").length;
   const passCount = gates.filter((gate) => gate.status === "pass").length;
   const productionGateAllows = productionGate?.allowProductionNc === true;
-  const status = productionGateAllows && blockCount === 0 && reviewCount === 0
+  const status = blockCount === 0 && reviewCount === 0
     ? "production-ready"
     : blockCount > 0
       ? "blocked"
@@ -14224,29 +14228,20 @@ function getOrchestratorProductionPackage(jobId, res) {
   if (!manifest?.files?.length) {
     return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
   }
-  if (!manifest.allowProductionNc || productionGate?.allowProductionNc !== true) {
-    return json(res, 423, {
-      error: "V3 正式生产包未解锁",
-      packageLevel: manifest.packageLevel ?? productionGate?.level ?? "unknown",
-      allowTrialNc: Boolean(manifest.allowTrialNc),
-      allowProductionNc: false,
-      summary: productionGate?.summary ?? "当前缺少 production-gate.json 或生产门禁未放行。",
-      blockers: productionGate?.blockers ?? [],
-      warnings: productionGate?.warnings ?? [],
-      nextActions: productionGate?.recommendedWorkflow ?? [
-        "完成真实外部 CAM 输出、非 synthetic CAMotics/等效材料去除仿真、空跑、试雕反馈和机床验收后重新生成。"
-      ]
-    });
-  }
   if (evidenceDossier?.status !== "production-evidence-complete" || productionAudit?.allowProductionPackage !== true) {
     return json(res, 423, {
-      error: "V3 正式生产包证据档案未闭环",
+      error: !manifest.allowProductionNc || productionGate?.allowProductionNc !== true
+        ? "V3 正式生产包未解锁"
+        : "V3 正式生产包证据档案未闭环",
       packageLevel: manifest.packageLevel ?? productionGate?.level ?? "unknown",
       allowTrialNc: Boolean(manifest.allowTrialNc),
       allowProductionNc: false,
+      productionGateAllows: Boolean(manifest.allowProductionNc && productionGate?.allowProductionNc === true),
       dossierStatus: evidenceDossier?.status ?? "missing",
       productionReadinessAudit: productionAudit ?? null,
-      summary: productionAudit?.summary ?? evidenceDossier?.summary ?? "缺少 production-evidence-dossier.json，无法证明真实 CAM、仿真、试雕反馈和机床验收均绑定同一加工包。",
+      summary: productionAudit?.summary ?? evidenceDossier?.summary ?? productionGate?.summary ?? "缺少 production-evidence-dossier.json，无法证明真实 CAM、仿真、试雕反馈和机床验收均绑定同一加工包。",
+      blockers: productionGate?.blockers ?? [],
+      warnings: productionGate?.warnings ?? [],
       nextActions: [
         "完成真实外部 CAM 输出与非 synthetic CAMotics/等效材料去除仿真。",
         "下载同一 job 的安全试雕包，完成离料空跑和软料试雕。",
