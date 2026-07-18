@@ -38,6 +38,8 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
   check(checks, "result-status", result.status === "completed", "result status must be completed.");
   check(checks, "result-non-synthetic", result.synthetic === false, "result.synthetic must be false.");
   check(checks, "result-risk-ready", result.riskLevel === "ready", "result.riskLevel must be ready.");
+  const simulator = normalizeSimulatorEvidence(result);
+  check(checks, "simulator-evidence", Boolean(simulator.name && simulator.version && simulator.sourceCommand), "result.simulator must record the CAMotics or equivalent material-removal simulator name, version and sourceCommand.", simulator);
   check(checks, "preferred-gcode-hash", Boolean(expectedGcode.sha256) && result.inputs?.preferredGcodeSha256 === expectedGcode.sha256, "result inputs.preferredGcodeSha256 must match run package preferred G-code SHA-256.", {
     expected: expectedGcode.sha256 ?? null,
     reported: result.inputs?.preferredGcodeSha256 ?? null
@@ -87,13 +89,14 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
       status: runPackage.status ?? null
     },
     checks,
+    simulator,
     missing: failed.map((item) => item.id),
     artifactEvidence,
     output: {
       localValidation: basename(outPath),
       uploadBundle: ok ? basename(bundlePath) : null
     },
-    safetyBoundary: "This validator only proves CAMotics/material-removal evidence identity and completeness. Production NC still requires external CAM proof, postprocess checks, air-run, trial feedback and machine acceptance in the same HeDiao3D job.",
+    safetyBoundary: "This validator only proves CAMotics/equivalent material-removal evidence identity and completeness. Production NC still requires external CAM proof, postprocess checks, air-run, trial feedback and machine acceptance in the same HeDiao3D job.",
     nextActions: ok
       ? [
         "Upload camotics-result-bundle.zip to the current HeDiao3D V3 job.",
@@ -104,8 +107,27 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
         "Keep production NC locked until non-synthetic material-removal evidence is hash-bound to the current run package."
       ],
     summary: ok
-      ? "CAMotics material-removal validation passed."
-      : `CAMotics material-removal validation failed: ${failed.map((item) => item.id).join(", ")}`
+      ? "CAMotics/equivalent material-removal validation passed."
+      : `CAMotics/equivalent material-removal validation failed: ${failed.map((item) => item.id).join(", ")}`
+  };
+}
+
+function normalizeSimulatorEvidence(result) {
+  const raw = result.simulator && typeof result.simulator === "object"
+    ? result.simulator
+    : {
+        name: result.engine ?? "camotics",
+        version: result.engineVersion ?? null,
+        sourceCommand: result.sourceCommand ?? null,
+        equivalentSimulator: false
+      };
+  return {
+    schema: "hediao3d.material-removal-simulator.v1",
+    name: typeof raw.name === "string" ? raw.name.trim() : "",
+    version: typeof raw.version === "string" ? raw.version.trim() : "",
+    sourceCommand: typeof raw.sourceCommand === "string" ? raw.sourceCommand.trim() : "",
+    equivalentSimulator: Boolean(raw.equivalentSimulator),
+    notes: raw.notes ?? null
   };
 }
 
@@ -169,7 +191,7 @@ function createResultBundle({ resultPath, validationPath, artifactEvidence }) {
     {
       name: "README-CAMOTICS-RESULT.md",
       content: Buffer.from([
-        "# HeDiao3D CAMotics Result Bundle",
+        "# HeDiao3D Material-Removal Result Bundle",
         "",
         "Upload this ZIP in the HeDiao3D V3 CAMotics result import panel.",
         "",
@@ -178,7 +200,7 @@ function createResultBundle({ resultPath, validationPath, artifactEvidence }) {
         "- camotics-result-local-validation.json",
         "- camotics-preview.png and/or camotics-material-removal.stl when available",
         "",
-        "This bundle is material-removal evidence only. It does not unlock production NC by itself.",
+        "This bundle is CAMotics/equivalent material-removal evidence only. It does not unlock production NC by itself.",
         ""
       ].join("\n"), "utf8")
     }

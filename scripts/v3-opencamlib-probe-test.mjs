@@ -27,6 +27,12 @@ try {
   assert(report.python?.executable, "probe should record python executable");
   assert(report.capabilitySummary?.schema === undefined, "capability summary should remain a plain embedded object");
   assert(typeof report.capabilitySummary?.dropCutterReady === "boolean", "probe should classify dropCutterReady boolean");
+  assert(report.recommendedBindings?.schema === "hediao3d.opencamlib-recommended-bindings.v1", "probe should expose recommended bindings schema");
+  assert(["missing-module", "candidate-incomplete", "candidate-complete"].includes(report.recommendedBindings?.status), "probe recommended binding status mismatch");
+  assert(report.runnerReadiness?.schema === "hediao3d.opencamlib-runner-readiness.v1", "probe should expose runner readiness schema");
+  assert(typeof report.runnerReadiness?.canAttemptRealContactSpike === "boolean", "probe should classify real contact spike readiness");
+  assert(Array.isArray(report.runnerReadiness?.requiredOutputFiles) && report.runnerReadiness.requiredOutputFiles.includes("opencamlib-cutter-contact-report.json"), "runner readiness should name strict contact output");
+  assert(Array.isArray(report.integrationPlan) && report.integrationPlan.some((step) => step.id === "real-contact-spike"), "probe should expose real contact spike integration plan");
   assert(Array.isArray(report.nextActions) && report.nextActions.length > 0, "probe should include next actions");
   assert(/must not/i.test(report.productionBoundary), "probe should state production boundary");
   const parsedStdout = JSON.parse(run.stdout);

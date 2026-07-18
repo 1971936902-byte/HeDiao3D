@@ -46,6 +46,8 @@ def create_probe_report() -> Dict[str, Any]:
     module_reports = [probe_module(name) for name in MODULE_CANDIDATES]
     selected = next((item for item in module_reports if item["imported"]), None)
     capability_summary = summarize_capabilities(selected)
+    recommended_bindings = create_recommended_bindings(selected)
+    runner_readiness = create_runner_readiness(selected, capability_summary, recommended_bindings)
     level = "ready" if capability_summary["dropCutterReady"] else "partial" if selected else "missing"
     blockers: List[str] = []
     warnings: List[str] = []
@@ -66,6 +68,9 @@ def create_probe_report() -> Dict[str, Any]:
         "modules": module_reports,
         "selectedModule": selected["name"] if selected else None,
         "capabilitySummary": capability_summary,
+        "recommendedBindings": recommended_bindings,
+        "runnerReadiness": runner_readiness,
+        "integrationPlan": create_integration_plan(level, selected, recommended_bindings),
         "blockers": blockers,
         "warnings": warnings,
         "nextActions": create_next_actions(level, selected, capability_summary),
@@ -103,6 +108,115 @@ def probe_module(name: str) -> Dict[str, Any]:
         "callableSamples": create_callable_samples(module, symbols),
     })
     return base
+
+
+def create_recommended_bindings(selected: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not selected:
+        return {
+            "schema": "hediao3d.opencamlib-recommended-bindings.v1",
+            "module": None,
+            "status": "missing-module",
+            "surface": None,
+            "cutter": None,
+            "dropCutter": None,
+            "waterline": None,
+            "notes": ["No importable OpenCAMLib/ocl module was found."],
+        }
+    candidates = selected.get("candidateSymbols") or {}
+    samples = {item.get("name"): item for item in selected.get("callableSamples") or []}
+    surface = choose_symbol(candidates.get("surfaces") or [], ["STLSurf", "STLSurface", "Surface", "Triangle"])
+    cutter = choose_symbol(candidates.get("cutters") or [], ["CylCutter", "BallCutter", "BullCutter", "ConeCutter", "FlatCutter"])
+    drop = choose_symbol(candidates.get("dropCutter") or [], ["BatchDropCutter", "DropCutter", "CLPoint", "CutterLocation", "Contact"])
+    waterline = choose_symbol(candidates.get("waterline") or [], ["Waterline", "Weave", "Fiber"])
+    required = [surface, cutter, drop]
+    status = "candidate-complete" if all(required) else "candidate-incomplete"
+    notes: List[str] = []
+    if not surface:
+        notes.append("No surface/STL mesh binding candidate found.")
+    if not cutter:
+        notes.append("No cutter geometry binding candidate found.")
+    if not drop:
+        notes.append("No drop-cutter/cutter-contact binding candidate found.")
+    if not waterline:
+        notes.append("No waterline binding candidate found; this is acceptable for the first drop-cutter finishing pass.")
+    return {
+        "schema": "hediao3d.opencamlib-recommended-bindings.v1",
+        "module": selected.get("name"),
+        "status": status,
+        "surface": describe_binding(surface, samples),
+        "cutter": describe_binding(cutter, samples),
+        "dropCutter": describe_binding(drop, samples),
+        "waterline": describe_binding(waterline, samples),
+        "notes": notes,
+    }
+
+
+def choose_symbol(symbols: List[str], preferred_patterns: List[str]) -> Optional[str]:
+    for pattern in preferred_patterns:
+        for symbol in symbols:
+            if re.search(pattern, symbol, re.I):
+                return symbol
+    return symbols[0] if symbols else None
+
+
+def describe_binding(symbol: Optional[str], samples: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not symbol:
+        return None
+    sample = samples.get(symbol) or {}
+    return {
+        "symbol": symbol,
+        "kind": sample.get("kind") or "unknown",
+        "signature": sample.get("signature"),
+        "doc": sample.get("doc"),
+    }
+
+
+def create_runner_readiness(selected: Optional[Dict[str, Any]], capability_summary: Dict[str, Any], recommended_bindings: Dict[str, Any]) -> Dict[str, Any]:
+    missing: List[str] = []
+    if not selected:
+        missing.append("module")
+    for key in ("surface", "cutter", "dropCutter"):
+        if not recommended_bindings.get(key):
+            missing.append(key)
+    level = "ready-for-runner-spike" if not missing and capability_summary.get("dropCutterReady") else "blocked" if not selected else "needs-api-mapping"
+    return {
+        "schema": "hediao3d.opencamlib-runner-readiness.v1",
+        "level": level,
+        "canAttemptRealContactSpike": level == "ready-for-runner-spike",
+        "missing": missing,
+        "requiredOutputFiles": [
+            "neutral-toolpath.json",
+            "opencamlib-cutter-contact-report.json",
+            "opencamlib-candidate-package-validation.json",
+        ],
+        "productionBoundary": "Even ready-for-runner-spike only permits a Linux experiment. Production remains locked until strict validator, CAMotics/material evidence and machine acceptance pass.",
+    }
+
+
+def create_integration_plan(level: str, selected: Optional[Dict[str, Any]], recommended_bindings: Dict[str, Any]) -> List[Dict[str, Any]]:
+    module = selected.get("name") if selected else None
+    return [
+        {
+            "id": "api-map",
+            "status": "ready" if recommended_bindings.get("status") == "candidate-complete" else "blocked",
+            "summary": f"Map {module or 'OpenCAMLib'} surface/cutter/drop-cutter symbols into adapters/opencamlib/opencamlib_runner.py.",
+        },
+        {
+            "id": "real-contact-spike",
+            "status": "ready" if level == "ready" else "blocked",
+            "summary": "Generate a tiny non-production neutral-toolpath and cutter-contact report from a closed STL using real OpenCAMLib calls.",
+        },
+        {
+            "id": "strict-validate",
+            "status": "pending",
+            "summary": "Run opencamlib-contact-output-validate.mjs and opencamlib-candidate-package-validate.mjs on the real output directory.",
+        },
+        {
+            "id": "orchestrator-import",
+            "status": "pending",
+            "summary": "Import validated neutral-toolpath into HeDiao3D, then keep trial/production locked until CAMotics and machine evidence are bound.",
+        },
+    ]
 
 
 def classify_symbols(symbols: List[str]) -> Dict[str, List[str]]:

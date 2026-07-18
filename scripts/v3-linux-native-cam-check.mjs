@@ -288,12 +288,12 @@ function createOpenSourceCamExecutionPlan(checks) {
       engineId: "freecad",
       title: "FreeCAD 标准三轴参考 CAM",
       phase: "external-cam-generator",
-      priority: "P0",
+      priority: "P1",
       input: "repaired-model.stl 或 cam-input-plan.json 选中的 STL/STEP/OBJ",
       output: "adapter-report.json + G-code source snapshot",
       acceptance: "npm run test:v3:freecad-external-handoff",
       handoff: "Orchestrator 摄取 FreeCAD G-code，再执行 NC 静态分析、CAMotics 仿真和 HeDiao3D 专用后处理复核。",
-      productionBoundary: "不能直接把 FreeCAD 默认后处理输出当成三轴控制器+Y旋转夹具最终 NC。"
+      productionBoundary: "FreeCAD 作为规则三轴/参考 CAM 路线保留，不能直接把 FreeCAD 默认后处理输出当成三轴控制器+Y旋转夹具最终 NC。"
     },
     {
       id: "opencamlib-neutral-core",
@@ -310,14 +310,14 @@ function createOpenSourceCamExecutionPlan(checks) {
     {
       id: "camotics-material-removal",
       engineId: "camotics",
-      title: "CAMotics 材料去除仿真",
+      title: "CAMotics/等效材料去除仿真",
       phase: "simulation",
       priority: "P0",
       input: "camotics-preview.nc + camotics-project-template.json + 当前 NC SHA-256",
       output: "hediao3d.camotics-result.v1 + screenshot/material-removal mesh",
       acceptance: "npm run test:v3:camotics-cli-package-api && npm run test:v3:camotics-material-validate && npm run test:v3:camotics-import",
-      handoff: "仿真结果回填 Orchestrator，进入 production-gate 和 evidence dossier。",
-      productionBoundary: "CAMotics 不生成刀路；synthetic 结果永远不能解锁生产。"
+      handoff: "CAMotics 或等效材料去除仿真结果回填 Orchestrator，进入 production-gate 和 evidence dossier。",
+      productionBoundary: "材料去除仿真不生成刀路；synthetic 结果永远不能解锁生产。Ubuntu 24.04 本机 CAMotics 旧依赖不可用时，可使用容器、旧系统或等效仿真器，但必须通过同一校验器。"
     },
     {
       id: "blendercam-artistic-mesh",

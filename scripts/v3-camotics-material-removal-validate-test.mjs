@@ -35,6 +35,8 @@ try {
   assert(readyReport.productionEvidenceEligible === true, "ready report should be production evidence eligible");
   assert(readyReport.checks.some((check) => check.id === "run-package-hash" && check.status === "pass"), "run package hash check missing");
   assert(readyReport.checks.some((check) => check.id === "machine-context" && check.status === "pass"), "machine context check missing");
+  assert(readyReport.checks.some((check) => check.id === "simulator-evidence" && check.status === "pass"), "simulator evidence check missing");
+  assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
   const bundlePath = join(workDir, "camotics-result-bundle.zip");
   assert(existsSync(bundlePath), "ready validator should write camotics-result-bundle.zip");
@@ -50,7 +52,7 @@ try {
     synthetic: true,
     riskLevel: "review",
     machineContext: { ...runPackage.preferredGcodeIdentity.machineContext, rotaryWrapAxis: "X" },
-    artifacts: { screenshot: "missing.png", materialMesh: "missing.stl" }
+    artifacts: { screenshot: "missing.png", materialMesh: "missing.stl", simulatorName: "", simulatorVersion: "", sourceCommand: "" }
   }));
   const blocked = spawnSync(node, [validator, "--result", resultPath, "--run-package", runPackagePath], {
     cwd: process.cwd(),
@@ -62,7 +64,7 @@ try {
   assert(blockedReport.ok === false, "blocked report should not be ok");
   assert(blockedReport.level === "critical", "blocked report level should be critical");
   assert(blockedReport.productionEvidenceEligible === false, "blocked report should not be production eligible");
-  for (const id of ["result-non-synthetic", "result-risk-ready", "run-package-hash", "machine-context", "visual-or-material-artifact"]) {
+  for (const id of ["result-non-synthetic", "result-risk-ready", "run-package-hash", "machine-context", "simulator-evidence", "visual-or-material-artifact"]) {
     assert(blockedReport.missing.includes(id), `blocked report missing ${id}`);
   }
 
@@ -109,6 +111,13 @@ function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel 
   return {
     schema: "hediao3d.camotics-result.v1",
     engine: "camotics",
+    simulator: {
+      schema: "hediao3d.material-removal-simulator.v1",
+      name: artifacts?.simulatorName ?? "CAMotics",
+      version: artifacts?.simulatorVersion ?? "1.2.0-test",
+      sourceCommand: artifacts?.sourceCommand ?? "camotics camotics-preview.nc",
+      equivalentSimulator: false
+    },
     status: "completed",
     synthetic,
     riskLevel,

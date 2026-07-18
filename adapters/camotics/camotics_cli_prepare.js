@@ -161,6 +161,12 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
       resultValidator: "camotics-result-validate.js",
       operatorChecklist: "camotics-linux-operator-checklist.md"
     },
+    simulatorEvidence: {
+      schema: "hediao3d.material-removal-simulator-evidence.v1",
+      acceptedEngines: ["camotics", "equivalent-material-removal-simulator"],
+      requiredFields: ["simulator.name", "simulator.version", "simulator.sourceCommand"],
+      note: "Ubuntu 24.04 may not run legacy CAMotics directly. Equivalent simulators are acceptable only when the same hash, motion, machine-context and artifact checks pass."
+    },
     importBack: {
       adapterCommand: `HEDIAO3D_CAMOTICS_EXPERIMENTAL_RUN=true HEDIAO3D_CAMOTICS_RESULT_JSON=${shellQuote(join(outputDir, expectedResult.resultJson ?? "camotics-result.json"))} node adapters/camotics/camotics_job.js ${shellQuote(join(jobDir, "camotics-job.json"))} ${shellQuote(join(jobDir, "camotics-adapter-report.json"))}`,
       apiEndpoint: "/api/orchestrator/jobs/:jobId/camotics-result",
@@ -171,14 +177,15 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
         "inputs.camoticsCliRunPackageSha256 等于 camotics-cli-run-package.json 的 SHA-256",
         "inputs.machineContext 与 preferredGcodeIdentity.machineContext 一致",
         "metrics.motionLineCount/zMin/zMax 与 preferredGcodeIdentity.motionProfile 匹配",
-        "至少提供 camotics-preview.png 或 camotics-material-removal.stl"
+        "至少提供 camotics-preview.png 或 camotics-material-removal.stl",
+        "simulator.name/version/sourceCommand 记录实际使用的 CAMotics 或等效材料去除仿真器"
       ]
     },
     checks,
     safetyLocks: {
       productionUnlockFromPreparePackage: false,
       syntheticResultAllowedForProduction: false,
-      note: "This package prepares a real CAMotics run; it never unlocks production NC by itself."
+      note: "This package prepares a real CAMotics/equivalent material-removal simulation run; it never unlocks production NC by itself."
     },
     operatorChecklist: {
       filename: "camotics-linux-operator-checklist.md",
@@ -203,10 +210,17 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
     schema: "hediao3d.camotics-result.v1",
     jobId: plan.jobId ?? null,
     engine: "camotics",
+    simulator: {
+      schema: "hediao3d.material-removal-simulator.v1",
+      name: "camotics",
+      version: null,
+      sourceCommand: "camotics camotics-preview.nc",
+      equivalentSimulator: false
+    },
     status: "completed",
     synthetic: false,
     riskLevel: "ready",
-    summary: "Fill this file with metrics from the real CAMotics material-removal run before importing it back to HeDiao3D.",
+    summary: "Fill this file with metrics from the real CAMotics or equivalent material-removal run before importing it back to HeDiao3D.",
     inputs: {
       preferredGcode: preferred.filename,
       preferredGcodeSha256: preferred.sha256,
@@ -228,6 +242,7 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
     notes: [
       "Before importing, run: node camotics-result-validate.js",
       "materialRemovedMm3 must come from the real CAMotics/material-removal run.",
+      "If CAMotics is not usable on this Linux host, record the equivalent simulator name/version/sourceCommand and keep synthetic=false only for real material-removal evidence.",
       "Do not import this template until the screenshot or material-removal STL exists.",
       "Synthetic or hand-edited fixture evidence must remain locked for production."
     ]

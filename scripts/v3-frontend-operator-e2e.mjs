@@ -55,6 +55,14 @@ class CdpClient {
     this.ws.send(JSON.stringify({ id: ++this.id, method, params }));
   }
 
+  close() {
+    try {
+      this.ws?.close();
+    } catch {
+      // Ignore shutdown errors for throwaway browser targets.
+    }
+  }
+
   async evaluate(fn, ...args) {
     const expression = `(${fn})(...${JSON.stringify(args)})`;
     const result = await this.send("Runtime.evaluate", {
@@ -243,23 +251,37 @@ async function shutdown() {
 
 async function openChromePage(port, url) {
   const startedAt = Date.now();
+  let lastError = null;
   while (Date.now() - startedAt < 30000) {
     try {
       await requestJson(`http://${host}:${port}/json/version`);
-      return createChromePage(port, url);
-    } catch {
+      return await createChromePage(port, url);
+    } catch (error) {
+      lastError = error;
       // Chrome may still be opening the debugging endpoint.
     }
-    await sleep(250);
+    await sleep(750);
   }
-  return createChromePage(port, url);
+  throw new Error(`Timed out opening Chrome app page: ${lastError instanceof Error ? lastError.message : lastError ?? "unknown error"}`);
 }
 
 async function createChromePage(port, url) {
   const target = await requestJson(`http://${host}:${port}/json/new?${url}`, { method: "PUT" });
   const ws = new CdpClient(target.webSocketDebuggerUrl);
-  await ws.open();
-  return ws;
+  try {
+    await ws.open();
+    await ws.send("Page.enable");
+    await ws.send("Runtime.enable");
+    const currentUrl = await ws.evaluate(() => location.href).catch(() => "");
+    if (!String(currentUrl).startsWith(url)) {
+      ws.fire("Page.navigate", { url });
+    }
+    await waitForCondition(ws, () => location.href.startsWith("http://127.0.0.1:"), 10000, "Chrome target navigation");
+    return ws;
+  } catch (error) {
+    ws.close();
+    throw error;
+  }
 }
 
 async function waitForPageReady(page) {
