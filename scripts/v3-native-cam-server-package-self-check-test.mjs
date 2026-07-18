@@ -41,6 +41,7 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-evidence-chain" && check.status === "pass"), "self-check should verify closed-loop evidence-chain support");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-opencamlib-coverage" && check.status === "pass"), "self-check should verify closed-loop OpenCAMLib coverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-opencamlib-protected-zones" && check.status === "pass"), "self-check should verify closed-loop OpenCAMLib protected-zone diagnostics");
+  assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-opencamlib-candidate-package" && check.status === "pass"), "self-check should verify closed-loop OpenCAMLib candidate package validation");
   assert(readyReport.checks?.some((check) => check.id === "command:camotics-material-run" && check.status === "pass"), "self-check should verify CAMotics material-removal runner command");
   assert(readyReport.checks?.some((check) => check.id === "camotics-runner-schema" && check.status === "pass"), "self-check should verify CAMotics runner schema");
   assert(readyReport.checks?.some((check) => check.id === "camotics-runner-fail-closed" && check.status === "pass"), "self-check should verify CAMotics runner fail-closed production lock");
@@ -91,6 +92,22 @@ try {
   assert(realCandidateReport.productionLocked === true, "real candidate runner must keep production locked");
   assert(realCandidateReport.blocking?.includes("opencamlib-production-candidate-not-proven"), "real candidate runner should block when production candidate is not proven");
   assert(existsSync(join(workDir, "opencamlib-real-candidate-run.json")), "real candidate runner should write JSON report");
+
+  createOpenCamLibCandidateFiles(workDir);
+  const candidateClosedLoop = spawnSync(node, [closedLoopPath, workDir], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(candidateClosedLoop.status === 3, `closed-loop should stay blocked without Native CAM/CAMotics evidence but still summarize OpenCAMLib candidate package, got ${candidateClosedLoop.status}: ${candidateClosedLoop.stderr || candidateClosedLoop.stdout}`);
+  const candidateClosedLoopReport = JSON.parse(candidateClosedLoop.stdout);
+  assert(candidateClosedLoopReport.productionLocked === true, "candidate closed-loop report must keep production locked");
+  const candidatePackageReport = JSON.parse(readFileSync(join(workDir, "opencamlib-candidate-package-validation.json"), "utf8"));
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", `closed-loop evidence chain should read candidate package validation level: ${JSON.stringify(candidatePackageReport, null, 2)}`);
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackageReadyForImport === true, "closed-loop evidence chain should mark candidate package ready for import");
+  assert(candidateClosedLoopReport.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "closed-loop cross-checks should expose candidate package validation step");
+  assert(candidateClosedLoopReport.blocking?.some((item) => item.id === "native-cam-real-output-check"), "closed-loop should still block missing Native CAM evidence");
+  assert(existsSync(join(workDir, "opencamlib-candidate-package-validation.json")), "closed-loop should write OpenCAMLib candidate package validation report");
 
   const camoticsRunnerPath = join(workDir, "camotics-material-removal-run.mjs");
   assert(existsSync(camoticsRunnerPath), "generated server package missing CAMotics material-removal runner");
@@ -207,6 +224,146 @@ function createCamoticsRunPackage() {
   };
 }
 
+function createOpenCamLibCandidateFiles(dir) {
+  const modelPath = join(dir, "repaired-model.stl");
+  const planPath = join(dir, "opencamlib-kernel-plan.json");
+  const neutralPath = join(dir, "neutral-toolpath.json");
+  const contactPath = join(dir, "opencamlib-cutter-contact-report.json");
+  writeFileSync(modelPath, createOpenCamLibStl(), "utf8");
+  writeJson(planPath, createOpenCamLibPlan(modelPath));
+  const neutral = createOpenCamLibNeutral(contactPath);
+  const neutralSha = sha256JsonWithoutContact(neutral);
+  const contact = createOpenCamLibContact({
+    modelSha: sha256File(modelPath),
+    planSha: sha256File(planPath),
+    neutralSha
+  });
+  neutral.cutterContactReport = contact;
+  writeJson(neutralPath, neutral);
+  writeJson(contactPath, contact);
+}
+
+function createOpenCamLibPlan(modelPath) {
+  return {
+    schema: "hediao3d.opencamlib-kernel-plan.v1",
+    jobId: "native-cam-closed-loop-candidate-test",
+    engine: "opencamlib",
+    model: {
+      path: modelPath,
+      format: "stl",
+      exists: true
+    },
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      flatTipMm: 0.4,
+      angleDeg: 25
+    },
+    sampling: {
+      recommendedPrimary: "unwrapped-rotary-drop-cutter",
+      axisMapping: { lengthAxis: "X", depthAxis: "Z", rotaryAxis: "Y" }
+    },
+    operations: [{ id: "finishing", enabled: true, strategy: "opencamlib-drop-cutter-contact" }]
+  };
+}
+
+function createOpenCamLibNeutral(contactPath) {
+  return {
+    schema: "hediao3d.neutral-toolpath.v1",
+    jobId: "native-cam-closed-loop-candidate-test",
+    engine: "opencamlib",
+    synthetic: false,
+    fixture: false,
+    generatedByExternalCommand: true,
+    coordinate: { lengthAxis: "X", rotaryAxis: "Y", depthAxis: "Z", rotaryUnit: "degree" },
+    cutterContactReportPath: contactPath,
+    points: [
+      { x: -10, a: 0, z: 21.5, depth: 0.5 },
+      { x: 0, a: 90, z: 21.2, depth: 0.8 },
+      { x: 10, a: 180, z: 21.6, depth: 0.4 }
+    ],
+    runner: { mode: "opencamlib-drop-cutter-contact" }
+  };
+}
+
+function createOpenCamLibContact({ modelSha, planSha, neutralSha }) {
+  return {
+    schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+    jobId: "native-cam-closed-loop-candidate-test",
+    engine: "opencamlib",
+    mode: "opencamlib-drop-cutter-contact",
+    inputIdentity: {
+      modelSha256: modelSha,
+      planSha256: planSha,
+      neutralToolpathWithoutContactReportSha256: neutralSha,
+      sourceNeutralToolpathSha256: neutralSha
+    },
+    tool: {
+      toolProfileId: "vflat-4mm-25deg",
+      diameterMm: 4,
+      flatTipMm: 0.4,
+      angleDeg: 25
+    },
+    contactSampling: {
+      algorithm: "opencamlib-drop-cutter-contact",
+      pointCount: 3,
+      contactPointCount: 3,
+      hitRate: 1,
+      stepToCutterRatio: 0.18,
+      pathCoverage: {
+        schema: "hediao3d.opencamlib-path-dropcutter-coverage.v1",
+        xCoverageRatio: 1,
+        crossCoverageRatio: 1,
+        sampledXSpanMm: 20,
+        sampledCrossSpanMm: 180,
+        modelXSpanMm: 20,
+        modelCrossSpanMm: 180
+      }
+    },
+    residualMaterial: {
+      maxGougeMm: 0.01,
+      maxUndercutMm: 0.03,
+      residualVolumeMm3: 0.4
+    },
+    tolerances: {
+      maxGougeMm: 0.03,
+      maxUndercutMm: 0.08
+    },
+    protectedZones: {
+      schema: "hediao3d.opencamlib-protected-zones.v1",
+      enabled: true,
+      leftHoldMm: 2,
+      rightHoldMm: 2,
+      endTransitionMm: 1.2,
+      safeMinX: -10,
+      safeMaxX: 10,
+      sampledMinX: -10,
+      sampledMaxX: 10,
+      violationCount: 0,
+      violations: []
+    },
+    quality: {
+      level: "validated-contact",
+      previewScaffold: false,
+      postprocessEligible: true,
+      productionCandidate: true
+    }
+  };
+}
+
+function createOpenCamLibStl() {
+  return `solid model
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 1 0 0
+      vertex 0 1 0
+    endloop
+  endfacet
+endsolid model
+`;
+}
+
 function createCamoticsResult(runPackage, runPackageSha) {
   return {
     schema: "hediao3d.camotics-result.v1",
@@ -290,4 +447,12 @@ function sha256File(path) {
 
 function sha256Text(text) {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function sha256JsonWithoutContact(value) {
+  const copy = { ...value };
+  delete copy.cutterContactReport;
+  delete copy.cutterContactReportPath;
+  delete copy.cutterEnvelopeReportPath;
+  return createHash("sha256").update(JSON.stringify(copy, null, 2)).digest("hex");
 }

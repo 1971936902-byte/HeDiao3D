@@ -1054,6 +1054,7 @@ check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocke
 check("closed-loop-check-evidence-chain", closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1") && closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop checker must summarize Native CAM/OpenCAMLib/CAMotics evidence chain and upstream binding.");
 check("closed-loop-check-opencamlib-coverage", closedLoopCheck.includes("contactPathCoverage") && closedLoopCheck.includes("candidatePackageBlockedReason"), "closed-loop checker must summarize OpenCAMLib path coverage and candidate package blockers.");
 check("closed-loop-check-opencamlib-protected-zones", closedLoopCheck.includes("protectedZones") && closedLoopCheck.includes("protectedZonesReady"), "closed-loop checker must summarize OpenCAMLib protected end-zone status.");
+check("closed-loop-check-opencamlib-candidate-package", closedLoopCheck.includes("opencamlib-candidate-package-validate") && closedLoopCheck.includes("opencamlib-candidate-package-validation.json") && closedLoopCheck.includes("candidatePackageStep"), "closed-loop checker must run and summarize OpenCAMLib candidate package validation when neutral output exists.");
 check("diagnostics-bundle-schema", diagnosticsBundle.includes("hediao3d.native-cam-diagnostics-bundle.v1"), "diagnostics bundle must emit the diagnostics schema.");
 check("diagnostics-bundle-zip", diagnosticsBundle.includes("native-cam-diagnostics-bundle.zip"), "diagnostics bundle must generate native-cam-diagnostics-bundle.zip.");
 
@@ -1152,6 +1153,17 @@ if (!selfCheckOnly) {
   } else {
     recordMissing("camotics-material-removal-validate", true, "camotics-result.json and camotics-cli-run-package.json");
   }
+
+  if (existsSync(join(root, "neutral-toolpath.json")) && existsSync(join(root, "opencamlib-candidate-package-validate.mjs"))) {
+    runStep({
+      id: "opencamlib-candidate-package-validate",
+      required: true,
+      command: "node",
+      args: ["opencamlib-candidate-package-validate.mjs", "--root", root],
+      outputJson: "opencamlib-candidate-package-validation.json",
+      passStatuses: [0, 3]
+    });
+  }
 }
 
 const blocking = steps.filter((step) => step.required && step.status !== "pass");
@@ -1183,7 +1195,7 @@ writeFileSync(join(root, "native-cam-closed-loop-check.json"), JSON.stringify(re
 console.log(JSON.stringify(report, null, 2));
 if (!report.ok) process.exitCode = selfCheckOnly ? 0 : 3;
 
-function runStep({ id, required, command, args, outputJson }) {
+function runStep({ id, required, command, args, outputJson, passStatuses = [0] }) {
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: "utf8",
@@ -1191,7 +1203,7 @@ function runStep({ id, required, command, args, outputJson }) {
     env: { ...process.env }
   });
   const parsed = outputJson ? readJsonIfExists(join(root, outputJson)) : null;
-  const status = result.status === 0 ? "pass" : "fail";
+  const status = passStatuses.includes(result.status) ? "pass" : "fail";
   steps.push({
     id,
     required,
@@ -1219,6 +1231,7 @@ function createEvidenceChain(root, steps) {
   const nativeAcceptance = readJsonIfExists(join(root, "native-cam-real-output-acceptance.json"));
   const realCandidate = readJsonIfExists(join(root, "opencamlib-real-candidate-run.json"));
   const contactValidation = readJsonIfExists(join(root, "opencamlib-contact-output-validation.json"));
+  const candidatePackage = readJsonIfExists(join(root, "opencamlib-candidate-package-validation.json"));
   const camoticsResult = readJsonIfExists(join(root, "camotics-result.json"));
   const camoticsLocalValidation = readJsonIfExists(join(root, "camotics-result-local-validation.json"));
   const camoticsRunPackage = readJsonIfExists(join(root, "camotics-cli-run-package.json"));
@@ -1226,6 +1239,7 @@ function createEvidenceChain(root, steps) {
   const camoticsBundle = inspectFile(join(root, "camotics-result-bundle.zip"));
   const nativeStep = steps.find((step) => step.id === "native-cam-real-output-check") ?? null;
   const camoticsStep = steps.find((step) => step.id === "camotics-material-removal-validate") ?? null;
+  const candidatePackageStep = steps.find((step) => step.id === "opencamlib-candidate-package-validate") ?? null;
   const upstreamRequired = camoticsRunPackage?.upstreamCamEvidence?.required === true;
   const upstreamStatus = camoticsLocalValidation?.upstreamCamEvidence?.status
     ?? camoticsResult?.evidenceQuality?.upstreamCamEvidence?.status
@@ -1253,15 +1267,19 @@ function createEvidenceChain(root, steps) {
   const candidatePackageLevel = realCandidate?.candidatePackage?.level
     ?? realCandidate?.candidatePackageLevel
     ?? nativeAcceptance?.openCamLibRealCandidate?.candidatePackageLevel
+    ?? candidatePackage?.level
     ?? "missing";
   const candidatePackageReadyForImport = Boolean(
     realCandidate?.candidatePackage?.readyForImport
     ?? realCandidate?.candidateReadyForImport
     ?? nativeAcceptance?.openCamLibRealCandidate?.candidateReadyForImport
+    ?? (candidatePackage?.handoffContract?.status === "ready-for-hediao3d-import")
   );
   const candidatePackageBlockedReason = realCandidate?.candidatePackage?.blockedReason
     ?? realCandidate?.candidatePackageBlockedReason
     ?? nativeAcceptance?.openCamLibRealCandidate?.candidatePackageBlockedReason
+    ?? candidatePackage?.blockedReason
+    ?? candidatePackage?.handoffContract?.blockedReason
     ?? null;
   const camoticsReady = camoticsLocalValidation?.ok === true
     && camoticsLocalValidation?.productionEvidenceEligible === true
@@ -1275,6 +1293,9 @@ function createEvidenceChain(root, steps) {
   }
   if (!selfCheckOnly && camoticsStep?.required && camoticsStep.status === "pass" && !camoticsReady) {
     blocking.push({ id: "camotics-material-removal-ready", required: true, status: camoticsLocalValidation?.level ?? "missing", summary: "CAMotics local validation is not productionEvidenceEligible or upstream evidence is not matched." });
+  }
+  if (!selfCheckOnly && candidatePackageStep?.required && candidatePackageStep.status === "pass" && !candidatePackageReadyForImport) {
+    blocking.push({ id: "opencamlib-candidate-package-ready", required: true, status: candidatePackageLevel, summary: candidatePackageBlockedReason || "OpenCAMLib candidate package validation is not ready for HeDiao3D import." });
   }
   return {
     schema: "hediao3d.native-cam-linux-evidence-chain.v1",
@@ -1301,6 +1322,7 @@ function createEvidenceChain(root, steps) {
       candidatePackageLevel,
       candidatePackageReadyForImport,
       candidatePackageBlockedReason,
+      candidatePackage: summarizeJson("opencamlib-candidate-package-validation.json", candidatePackage),
       contactValidation: summarizeJson("opencamlib-contact-output-validation.json", contactValidation)
     },
     camotics: {
@@ -1316,6 +1338,7 @@ function createEvidenceChain(root, steps) {
     crossChecks: {
       nativeRealOutputStep: nativeStep?.status ?? "missing",
       camoticsValidationStep: camoticsStep?.status ?? "missing",
+      candidatePackageStep: candidatePackageStep?.status ?? "missing",
       camoticsUpstreamEvidenceMatched: !upstreamRequired || upstreamStatus === "matched",
       materialRemovalBoundToUpstreamCam: camoticsReady
     },

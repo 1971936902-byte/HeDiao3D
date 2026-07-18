@@ -9,7 +9,10 @@ const root = resolve(String(args.root ?? process.cwd()));
 const strict = parseBool(args.strict ?? "true");
 const outPath = resolvePath(args.out, join(root, "opencamlib-candidate-package-validation.json"));
 const bundlePath = resolvePath(args.bundle, join(root, "opencamlib-candidate-package-bundle.zip"));
-const validatorPath = resolvePath(args.validator, resolve("scripts", "v3-opencamlib-contact-output-validate.mjs"));
+const defaultValidatorPath = existsSync(join(root, "opencamlib-contact-output-validate.mjs"))
+  ? join(root, "opencamlib-contact-output-validate.mjs")
+  : resolve("scripts", "v3-opencamlib-contact-output-validate.mjs");
+const validatorPath = resolvePath(args.validator, defaultValidatorPath);
 const neutralPath = resolvePath(args.neutral, join(root, "neutral-toolpath.json"));
 const planPath = resolvePath(args.plan, join(root, "opencamlib-kernel-plan.json"));
 const contactPath = resolvePath(args.contact, join(root, "opencamlib-cutter-contact-report.json"));
