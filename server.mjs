@@ -2805,7 +2805,9 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       protectedZonesReady: Boolean(chain.openCamLib?.protectedZonesReady),
       candidatePackageLevel: chain.openCamLib?.candidatePackageLevel ?? "missing",
       candidatePackageReadyForImport: Boolean(chain.openCamLib?.candidatePackageReadyForImport),
-      candidatePackageBlockedReason: chain.openCamLib?.candidatePackageBlockedReason ?? null
+      candidatePackageBlockedReason: chain.openCamLib?.candidatePackageBlockedReason ?? null,
+      candidatePackageStep: chain.crossChecks?.candidatePackageStep ?? "missing",
+      candidatePackage: chain.openCamLib?.candidatePackage ?? null
     },
     camotics: {
       productionEvidenceEligible: Boolean(chain.camotics?.productionEvidenceEligible),
@@ -2815,6 +2817,7 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
     crossChecks: {
       nativeRealOutputStep: chain.crossChecks?.nativeRealOutputStep ?? "missing",
       camoticsValidationStep: chain.crossChecks?.camoticsValidationStep ?? "missing",
+      candidatePackageStep: chain.crossChecks?.candidatePackageStep ?? "missing",
       camoticsUpstreamEvidenceMatched: Boolean(chain.crossChecks?.camoticsUpstreamEvidenceMatched),
       materialRemovalBoundToUpstreamCam: Boolean(chain.crossChecks?.materialRemovalBoundToUpstreamCam)
     }

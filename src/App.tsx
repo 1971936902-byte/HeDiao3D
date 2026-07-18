@@ -1640,6 +1640,17 @@ type V3ReadinessSummary = {
           candidatePackageLevel?: string;
           candidatePackageReadyForImport?: boolean;
           candidatePackageBlockedReason?: string | null;
+          candidatePackageStep?: string;
+          candidatePackage?: {
+            filename?: string;
+            exists?: boolean;
+            level?: string | null;
+            status?: string | null;
+            sha256?: string | null;
+          } | null;
+        };
+        crossChecks?: {
+          candidatePackageStep?: string;
         };
       } | null;
       files?: Array<{
@@ -8683,8 +8694,19 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const protectedZones = `端部保护 ${formatOpenCamLibProtectedZonesStatus(protectedZonesStatus)}`;
   const packageLevel = openCamLib?.candidatePackageLevel ?? "missing";
   const packageStatus = `候选包 ${packageLevel}${openCamLib?.candidatePackageReadyForImport ? "/可导入" : ""}`;
+  const packageStep = openCamLib?.candidatePackageStep ?? openCamLib?.candidatePackage?.status ?? "";
+  const packageStepStatus = packageStep ? `预检 ${formatLinuxEvidenceStepStatus(packageStep)}` : "";
+  const packageFile = openCamLib?.candidatePackage?.exists ? "证据JSON已回填" : "";
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
-  return [candidate, coverage, protectedZones, packageStatus, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+  return [candidate, coverage, protectedZones, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+}
+
+function formatLinuxEvidenceStepStatus(status?: string) {
+  if (status === "pass") return "通过";
+  if (status === "fail") return "失败";
+  if (status === "missing") return "缺失";
+  if (status === "missing-input") return "缺输入";
+  return status ?? "未知";
 }
 
 function formatOpenCamLibCoverageStatus(status?: string) {
