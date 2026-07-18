@@ -1246,6 +1246,7 @@ function createEvidenceChain(root, steps) {
   const upstreamStatus = camoticsLocalValidation?.upstreamCamEvidence?.status
     ?? camoticsResult?.evidenceQuality?.upstreamCamEvidence?.status
     ?? (upstreamRequired ? "missing" : "not-required");
+  const upstreamEvidenceSummary = summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsResult, camoticsRunPackage });
   const nativeReady = nativeAcceptance?.level === "ready";
   const contactReady = nativeAcceptance?.contactValidation?.level === "ready"
     || nativeAcceptance?.contactValidationStatus?.status === "ready"
@@ -1335,6 +1336,7 @@ function createEvidenceChain(root, steps) {
       productionEvidenceEligible: Boolean(camoticsLocalValidation?.productionEvidenceEligible),
       upstreamEvidenceRequired: upstreamRequired,
       upstreamEvidenceStatus: upstreamStatus,
+      upstreamEvidence: upstreamEvidenceSummary,
       simulator: camoticsLocalValidation?.simulator ?? camoticsResult?.simulator ?? null
     },
     crossChecks: {
@@ -1345,6 +1347,46 @@ function createEvidenceChain(root, steps) {
       materialRemovalBoundToUpstreamCam: camoticsReady
     },
     blocking
+  };
+}
+
+function summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsResult, camoticsRunPackage }) {
+  const expected = camoticsRunPackage?.upstreamCamEvidence && typeof camoticsRunPackage.upstreamCamEvidence === "object"
+    ? camoticsRunPackage.upstreamCamEvidence
+    : null;
+  const imported = camoticsResult?.inputs?.upstreamCamEvidence && typeof camoticsResult.inputs.upstreamCamEvidence === "object"
+    ? camoticsResult.inputs.upstreamCamEvidence
+    : null;
+  const validation = camoticsLocalValidation?.upstreamCamEvidence && typeof camoticsLocalValidation.upstreamCamEvidence === "object"
+    ? camoticsLocalValidation.upstreamCamEvidence
+    : null;
+  const required = expected?.required === true;
+  const status = validation?.status ?? (required ? "missing" : "not-required");
+  const expectedFiles = Array.isArray(expected?.files) ? expected.files.filter((file) => file.exists && file.sha256) : [];
+  const importedFiles = Array.isArray(imported?.files) ? imported.files : [];
+  const files = expectedFiles.map((expectedFile) => {
+    const actual = importedFiles.find((file) => file.key === expectedFile.key || file.filename === expectedFile.filename);
+    return {
+      key: expectedFile.key ?? null,
+      filename: expectedFile.filename ?? null,
+      expectedSha256: expectedFile.sha256 ?? null,
+      importedSha256: actual?.sha256 ?? null,
+      matched: Boolean(actual && actual.exists !== false && actual.sha256 === expectedFile.sha256)
+    };
+  });
+  const matchedCount = files.filter((file) => file.matched).length;
+  const hasMatchedKey = (key) => files.some((file) => file.key === key && file.matched);
+  return {
+    required,
+    status,
+    source: validation ? "camotics-result-local-validation.json" : imported ? "camotics-result.json" : expected ? "camotics-cli-run-package.json" : "missing",
+    expectedCount: expectedFiles.length,
+    importedCount: importedFiles.length,
+    matchedCount,
+    mismatchCount: Math.max(files.length - matchedCount, 0),
+    candidatePackageValidationBound: hasMatchedKey("opencamlibCandidatePackageValidation"),
+    candidatePackageBundleBound: hasMatchedKey("opencamlibCandidatePackageBundle"),
+    files
   };
 }
 

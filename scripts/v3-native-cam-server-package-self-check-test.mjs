@@ -152,6 +152,17 @@ try {
   assert(camoticsProvidedRunnerReport.validation?.productionEvidenceEligible === true, "CAMotics runner should expose production-eligible material-removal validation");
   assert(camoticsProvidedRunnerReport.validation?.upstreamCamEvidence?.status === "matched", "CAMotics runner should preserve upstream CAM evidence binding");
   assert(existsSync(join(workDir, "camotics-result-bundle.zip")), "CAMotics runner should write import bundle for valid provided result");
+  const camoticsBoundClosedLoop = spawnSync(node, [closedLoopPath, workDir], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(camoticsBoundClosedLoop.status === 3, `closed-loop should stay blocked without Native CAM acceptance but summarize CAMotics upstream binding, got ${camoticsBoundClosedLoop.status}: ${camoticsBoundClosedLoop.stderr || camoticsBoundClosedLoop.stdout}`);
+  const camoticsBoundClosedLoopReport = JSON.parse(camoticsBoundClosedLoop.stdout);
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.status === "matched", "closed-loop should summarize matched CAMotics upstream evidence");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "closed-loop should show CAMotics is bound to OpenCAMLib candidate package validation");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "closed-loop should show CAMotics is bound to OpenCAMLib candidate package bundle");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.matchedCount >= 4, "closed-loop should count matched upstream CAM evidence files");
 
   const diagnosticsPath = join(workDir, "native-cam-diagnostics-bundle.mjs");
   assert(existsSync(diagnosticsPath), "generated server package missing diagnostics bundle script");
@@ -435,6 +446,22 @@ function createUpstreamCamEvidence() {
         exists: true,
         sizeBytes: 42,
         sha256: sha256Text("contact-validation-fixture")
+      },
+      {
+        key: "opencamlibCandidatePackageValidation",
+        label: "OpenCAMLib 候选包预检",
+        filename: "opencamlib-candidate-package-validation.json",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("candidate-package-validation-fixture")
+      },
+      {
+        key: "opencamlibCandidatePackageBundle",
+        label: "OpenCAMLib 候选包证据包",
+        filename: "opencamlib-candidate-package-bundle.zip",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("candidate-package-bundle-fixture")
       }
     ],
     summary: "Fixture upstream CAM evidence for CAMotics runner self-check."
