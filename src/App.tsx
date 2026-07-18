@@ -994,6 +994,21 @@ type V3OrchestratorJob = {
         reviewCount: number;
         blockedCount: number;
         summary: string;
+        missingEvidenceCount?: number;
+        missingEvidenceTop?: Array<{
+          id: string;
+          label: string;
+          status: "pass" | "review" | "block";
+          summary: string;
+          evidence: string[];
+        }>;
+        fieldEvidenceGaps?: Array<{
+          id: string;
+          label: string;
+          status: "pass" | "review" | "block";
+          summary: string;
+          evidence: string[];
+        }>;
         crossChecks?: {
           unlockMatrixPass?: boolean;
           realMaterialRemovalVerified?: boolean;
@@ -6703,7 +6718,19 @@ export function App() {
                     复核 {v3Job.result.summary.productionEvidenceDossier.reviewCount}
                     {" · "}
                     阻断 {v3Job.result.summary.productionEvidenceDossier.blockedCount}
+                    {v3Job.result.summary.productionEvidenceDossier.missingEvidenceCount
+                      ? ` · 缺口 ${v3Job.result.summary.productionEvidenceDossier.missingEvidenceCount}`
+                      : ""}
                   </small>
+                  {v3Job.result.summary.productionEvidenceDossier.fieldEvidenceGaps?.length ? (
+                    <small className="v3-inline-warning">
+                      现场证据缺口：
+                      {v3Job.result.summary.productionEvidenceDossier.fieldEvidenceGaps
+                        .slice(0, 4)
+                        .map((item) => item.label)
+                        .join("、")}
+                    </small>
+                  ) : null}
                   {v3Job.result.summary.productionEvidenceDossier.evidenceItems?.length ? (
                     <div className="v3-evidence-grid compact">
                       {v3Job.result.summary.productionEvidenceDossier.evidenceItems.slice(0, 6).map((item) => (
@@ -9790,11 +9817,11 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const camoticsInput = summary?.camoticsInput;
   const camoticsSimulationPlan = summary?.camoticsSimulationPlan;
   const camoticsCliPackage = summary?.camoticsCliPackage;
+  const packageIndex = summary?.machiningPackageIndex;
   const camoticsExecutionPreflight = summary?.camoticsExecutionPreflight ?? packageIndex?.camotics?.executionPreflight;
   const simulation = summary?.simulation;
   const camoticsAdapter = simulation?.camoticsAdapter;
   const camoticsEvidenceQuality = gate?.simulationEvidence?.evidenceQuality ?? camoticsAdapter?.evidenceQuality;
-  const packageIndex = summary?.machiningPackageIndex;
   const packageIntegrity = summary?.packageIntegrity;
   const operatorRunbook = summary?.operatorRunbook;
   const trialFeedbackTemplate = summary?.trialFeedbackTemplate;
@@ -9823,6 +9850,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
     "矩阵报告: production-unlock-matrix.json",
     `证据档案: ${productionEvidenceDossier?.status ?? "未生成"} / 通过 ${productionEvidenceDossier?.passedCount ?? "-"} / 复核 ${productionEvidenceDossier?.reviewCount ?? "-"} / 阻断 ${productionEvidenceDossier?.blockedCount ?? "-"}`,
+    `现场证据缺口: ${productionEvidenceDossier?.fieldEvidenceGaps?.length ? productionEvidenceDossier.fieldEvidenceGaps.map((item) => item.label).join("、") : "无"}`,
     "证据档案报告: production-evidence-dossier.json",
     "",
     "### 生产交叉校验",
