@@ -104,6 +104,11 @@ try {
   assert(neutral.points.every((point) => point.cutterRadiusMm === 2), "all rotary points should echo 4mm cutter radius");
   assert(neutral.points.some((point) => point.envelopeSampleCount > 1), "rotary points should include multi-sample cutter envelope");
   assert(neutral.points.some((point) => point.cutterEnvelopeLiftMm > 0), "rotary cutter envelope should lift at least one valley sample");
+  assert(neutral.cutterContactReport?.schema === "hediao3d.opencamlib-cutter-contact-report.v1", "neutral should embed cutter contact report");
+  assert(neutral.cutterContactReport.quality?.previewScaffold === true, "heightfield contact report must stay preview scaffold");
+  assert(neutral.cutterContactReport.quality?.productionCandidate === false, "heightfield contact report must not be production candidate");
+  assert(neutral.cutterContactReport.inputIdentity?.sourceNeutralToolpathSha256, "contact report should bind neutral hash");
+  assert(existsSync(neutral.cutterContactReportPath), "cutter contact report file should be written");
   assert(existsSync(neutral.runner.heightfield.cutterEnvelopeReport), "rotary cutter envelope report should be written");
   const envelopeReport = JSON.parse(readFileSync(neutral.runner.heightfield.cutterEnvelopeReport, "utf8"));
   assert(envelopeReport.mode === "stl-rotary-heightfield-preview", "envelope report should echo rotary heightfield mode");

@@ -66,11 +66,17 @@ def main() -> int:
             print("STL heightfield output requested, but no valid surface samples could be generated.", file=sys.stderr)
             return 5
         envelope_path = output_path.with_name("opencamlib-cutter-envelope-report.json")
+        contact_path = output_path.with_name("opencamlib-cutter-contact-report.json")
         neutral["runner"]["heightfield"]["cutterEnvelopeReport"] = str(envelope_path)
+        neutral["cutterEnvelopeReportPath"] = str(envelope_path)
+        contact_report = create_cutter_contact_report(job, plan, neutral, detection, geometry, plan_path)
+        neutral["cutterContactReport"] = contact_report
+        neutral["cutterContactReportPath"] = str(contact_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
         envelope_report = create_cutter_envelope_report(job, plan, neutral, detection, geometry, plan_path, output_path)
         envelope_path.write_text(json.dumps(envelope_report, ensure_ascii=False, indent=2), encoding="utf-8")
+        contact_path.write_text(json.dumps(contact_report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({
             "ok": True,
             "mode": "stl-heightfield-preview",
@@ -78,6 +84,7 @@ def main() -> int:
             "points": len(neutral["points"]),
             "missCount": neutral["runner"]["heightfield"]["missCount"],
             "cutterEnvelopeReport": str(envelope_path),
+            "cutterContactReport": str(contact_path),
             "output": str(output_path),
             "opencamlibAvailable": detection["available"],
         }, ensure_ascii=False))
@@ -669,6 +676,70 @@ def create_cutter_envelope_report(job: Dict[str, Any], plan: Dict[str, Any], neu
     }
 
 
+def create_cutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
+    points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
+    heightfield = ((neutral.get("runner") or {}).get("heightfield") or {})
+    mode = str(((neutral.get("runner") or {}).get("mode") or "stl-heightfield-preview"))
+    rotary_envelope = bool(heightfield.get("rotaryEnvelope"))
+    point_count = len(points)
+    miss_count = int(heightfield.get("missCount") or 0)
+    total_sites = point_count + miss_count
+    hit_rate = point_count / total_sites if total_sites else 0
+    preview_scaffold = "preview" in mode.lower() or bool(neutral.get("experimentalHeightfield")) or bool(neutral.get("experimentalRotaryHeightfield"))
+    neutral_without_contact_sha = sha256_json_without_contact_report(neutral)
+    return {
+        "schema": "hediao3d.opencamlib-cutter-contact-report.v1",
+        "jobId": job.get("jobId"),
+        "engine": "opencamlib",
+        "mode": mode,
+        "createdBy": "adapters/opencamlib/opencamlib_runner.py",
+        "inputIdentity": {
+            "modelSha256": sha256_file(Path(str((plan.get("model") or {}).get("path") or ""))),
+            "planSha256": sha256_file(plan_path),
+            "sourceNeutralToolpathSha256": neutral_without_contact_sha,
+            "neutralToolpathWithoutContactReportSha256": neutral_without_contact_sha,
+        },
+        "opencamlib": detection,
+        "model": {
+            "format": (plan.get("model") or {}).get("format"),
+            "geometry": geometry,
+        },
+        "tool": {
+            "toolProfileId": ((plan.get("tool") or {}).get("toolProfileId") or (job.get("settings") or {}).get("toolProfileId")),
+            "diameterMm": (plan.get("tool") or {}).get("diameterMm") or (job.get("settings") or {}).get("toolDiameter"),
+            "flatTipMm": (plan.get("tool") or {}).get("flatTipMm"),
+            "angleDeg": (plan.get("tool") or {}).get("angleDeg"),
+            "previewCutterRadiusMm": heightfield.get("cutterRadiusMm"),
+        },
+        "contactSampling": {
+            "algorithm": "rotary-ray-heightfield-envelope-preview" if rotary_envelope else "projected-heightfield-envelope-preview",
+            "rows": heightfield.get("rows"),
+            "cols": heightfield.get("cols"),
+            "pointCount": point_count,
+            "missCount": miss_count,
+            "hitRate": round(hit_rate, 6),
+            "rotaryEnvelope": rotary_envelope,
+            "cutterEnvelope": bool(heightfield.get("cutterEnvelope")),
+            "cutterEnvelopeSampleCount": heightfield.get("cutterSampleCount") or heightfield.get("cutterEnvelopeSampleCount"),
+            "cutterEnvelopeLiftMaxMm": heightfield.get("cutterEnvelopeLiftMaxMm"),
+            "cutterEnvelopeLiftAvgMm": heightfield.get("cutterEnvelopeLiftAvgMm"),
+        },
+        "quality": {
+            "level": "preview-scaffold" if preview_scaffold else "review",
+            "previewScaffold": preview_scaffold,
+            "postprocessEligible": False,
+            "productionCandidate": False,
+            "summary": "OpenCAMLib contact-report contract is present and hash-bound, but current output is still heightfield preview scaffold rather than validated drop-cutter/cutter-contact output.",
+            "requiredUpgrade": "Replace this preview contact sampler with OpenCAMLib drop-cutter/cutter-contact calculation and independent material-removal simulation before production unlock.",
+        },
+        "productionBoundary": [
+            "This contact report proves adapter-to-Orchestrator identity binding only.",
+            "It intentionally remains non-production while the runner mode is preview/scaffold.",
+            "Production still requires validated cutter-contact output, CAMotics/equivalent material removal evidence, air-run, trial feedback and machine acceptance.",
+        ],
+    }
+
+
 def is_number(value: Any) -> bool:
     try:
         float(value)
@@ -682,6 +753,14 @@ def sha256_file(path: Path) -> Optional[str]:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except (OSError, TypeError, ValueError):
         return None
+
+
+def sha256_json_without_contact_report(value: Dict[str, Any]) -> str:
+    copy = dict(value)
+    copy.pop("cutterContactReport", None)
+    copy.pop("cutterContactReportPath", None)
+    copy.pop("cutterEnvelopeReportPath", None)
+    return hashlib.sha256(json.dumps(copy, ensure_ascii=False, indent=2).encode("utf-8")).hexdigest()
 
 
 def sample_cutter_envelope_surface_z(triangles: List[List[List[float]]], x: float, y: float, fallback_radius: float, cutter_radius: float) -> Optional[Dict[str, Any]]:

@@ -384,6 +384,7 @@ def run_external_neutral_command(job: Dict[str, Any], plan: Dict[str, Any], job_
     fixture = bool(neutral.get("fixture")) or "fixture" in runner_mode.lower()
     contact_report = evaluate_cutter_contact_report(neutral_path, neutral, {
         "neutralToolpathSha256": [external_output_sha256, normalized_output_sha256],
+        "neutralToolpathWithoutContactReportSha256": sha256_json_without_contact_report(neutral),
         "planSha256": sha256_file(plan_path),
         "modelSha256": sha256_file(Path(str((plan.get("model") or {}).get("path") or ""))),
     })
@@ -463,6 +464,7 @@ def try_import_neutral_toolpath(job: Dict[str, Any]) -> Optional[Dict[str, Any]]
     contact_report = evaluate_cutter_contact_report(neutral_path, neutral, {
         "sourceNeutralToolpathSha256": source_neutral_sha256,
         "neutralToolpathSha256": [source_neutral_sha256, sha256_file(neutral_path)],
+        "neutralToolpathWithoutContactReportSha256": sha256_json_without_contact_report(neutral),
     })
     return {
         "status": "completed",
@@ -602,10 +604,14 @@ def evaluate_contact_report_input_identity(report: Dict[str, Any], expected_iden
     source_expected = expected_identity.get("sourceNeutralToolpathSha256")
     if source_expected:
         acceptable_neutral_hashes.add(str(source_expected))
+    without_contact_expected = expected_identity.get("neutralToolpathWithoutContactReportSha256")
+    if without_contact_expected:
+        acceptable_neutral_hashes.add(str(without_contact_expected))
 
     reported_neutral_hashes = [
         identity.get("neutralToolpathSha256"),
         identity.get("sourceNeutralToolpathSha256"),
+        identity.get("neutralToolpathWithoutContactReportSha256"),
         identity.get("externalNeutralToolpathSha256"),
     ]
     neutral_match = any(str(value) in acceptable_neutral_hashes for value in reported_neutral_hashes if value)
@@ -661,6 +667,14 @@ def sha256_file(path: Path) -> Optional[str]:
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sha256_json_without_contact_report(value: Dict[str, Any]) -> str:
+    copy = dict(value)
+    copy.pop("cutterContactReport", None)
+    copy.pop("cutterContactReportPath", None)
+    copy.pop("cutterEnvelopeReportPath", None)
+    return hashlib.sha256(json.dumps(copy, ensure_ascii=False, indent=2).encode("utf-8")).hexdigest()
 
 
 def write_synthetic_neutral_toolpath(job: Dict[str, Any], plan: Dict[str, Any]) -> str:

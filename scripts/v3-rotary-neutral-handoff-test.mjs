@@ -111,6 +111,10 @@ async function main() {
   assert(neutral.runner?.heightfield?.cutterEnvelope === true, "neutral should include cutter envelope");
   assert(neutral.runner?.heightfield?.cutterRadiusMm === 2, "4mm cutter should use 2mm radius");
   assert(neutral.runner?.heightfield?.missCount === 0, `rotary model should have no misses, got ${neutral.runner?.heightfield?.missCount}`);
+  assert(neutral.cutterContactReport?.schema === "hediao3d.opencamlib-cutter-contact-report.v1", "neutral should embed OpenCAMLib contact report");
+  assert(neutral.cutterContactReport.quality?.previewScaffold === true, "rotary heightfield contact report must stay preview scaffold");
+  assert(neutral.cutterContactReport.quality?.productionCandidate === false, "rotary heightfield contact report must not be production candidate");
+  assert(neutral.cutterContactReport.inputIdentity?.sourceNeutralToolpathSha256, "contact report should bind neutral hash");
   assert(Array.isArray(neutral.points) && neutral.points.length === 231, `expected 231 rotary neutral points, got ${neutral.points?.length}`);
 
   const envelope = await getArtifactJson(job.id, "opencamlib-cutter-envelope-report.json");
@@ -118,6 +122,9 @@ async function main() {
   assert(envelope.sampling?.rotaryEnvelope === true, "envelope report should mark rotary envelope");
   assert(envelope.rotaryEnvelope?.cutterEnvelopeLiftMaxMm > 0, "envelope report should expose cutter lift");
   assert(envelope.quality?.productionCandidate === false, "rotary preview envelope must not be production candidate");
+  const contact = await getArtifactJson(job.id, "opencamlib-cutter-contact-report.json");
+  assert(contact.quality?.previewScaffold === true, "contact artifact should classify preview scaffold");
+  assert(contact.quality?.productionCandidate === false, "contact artifact must not be production candidate");
 
   const toolpathSummary = await getArtifactJson(job.id, "toolpath-summary.json");
   assert(toolpathSummary.source === "external-adapter", "toolpath should come from external adapter");
@@ -132,6 +139,7 @@ async function main() {
   const machineFit = await getArtifactJson(job.id, "neutral-toolpath-import-validation.json");
   assert(machineFit.machineFit?.coverage?.rotarySpanDeg >= 340, "machine-fit should cover near full revolution");
   assert(machineFit.machineFit?.targetMachine?.rotaryOutputAxis === "Y", "machine-fit should target Y rotary fixture");
+  assert(machineFit.cutterContactReport?.status === "preview-scaffold", "preview contact report should not become production candidate");
 
   const gcode = await getArtifactText(job.id, "toolpath.nc");
   assert(gcode.includes("ROTARY_WRAP_AXIS=Y"), "machine NC should declare Y rotary wrap");
