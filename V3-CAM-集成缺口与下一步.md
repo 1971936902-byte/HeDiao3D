@@ -114,6 +114,8 @@ npm run test:v3:opencamlib-contact-validate
 
 Native CAM 真实输出回填已经与该门槛绑定：`native-cam-real-output-bundle.zip` 可随包携带 `opencamlib-contact-output-validation.json`，导入端会生成 `contactValidationStatus`；OpenCAMLib production-candidate 若缺少 ready strict contact 验证，会被降级为 critical，不能作为生产证据。
 
+OpenCAMLib adapter 自身也已同步收紧：`opencamlib_job.py` 的 handoff 分类现在要求 contact report 具备 strict evidence，包含真实算法族、刀具几何、采样命中率、步距/刀径比例和残料误差字段；生成的 `opencamlib-run-template.py` 会固定写入 `tool`、`contactSampling`、`residualMaterial` 和 `tolerances`，避免 Linux 侧实现真实点位后因报告字段不完整而无法通过 Native CAM 验收。
+
 该验证器现在要求真实 OpenCAMLib contact report 同时满足：
 
 - `contactSampling.algorithm` 属于 `drop-cutter` / `cutter-contact` / `waterline`，且不含 `preview` / `heightfield` / `scaffold`。

@@ -152,6 +152,28 @@ writeFileSync(candidateContactReportPath, JSON.stringify({
   inputIdentity: {
     sourceNeutralToolpathSha256: sha256File(candidateImportedPath)
   },
+  tool: {
+    toolProfileId: "vflat-4mm-25deg",
+    diameterMm: 4,
+    flatTipMm: 0.4,
+    angleDeg: 25
+  },
+  contactSampling: {
+    algorithm: "opencamlib-drop-cutter-contact",
+    pointCount: 3,
+    contactPointCount: 3,
+    hitRate: 1,
+    stepToCutterRatio: 0.18
+  },
+  residualMaterial: {
+    maxGougeMm: 0.01,
+    maxUndercutMm: 0.03,
+    residualVolumeMm3: 0.4
+  },
+  tolerances: {
+    maxGougeMm: 0.03,
+    maxUndercutMm: 0.08
+  },
   quality: {
     level: "ready",
     productionCandidate: true,
@@ -183,6 +205,7 @@ assert(candidateRun.status === 0, `candidate adapter exited ${candidateRun.statu
 const candidateReport = JSON.parse(readFileSync(candidateResultPath, "utf8"));
 assert(candidateReport.status === "completed", `candidate adapter report expected completed, got ${candidateReport.status}: ${candidateReport.error}`);
 assert(candidateReport.metrics?.neutralToolpath?.cutterContactReport?.status === "production-candidate", "candidate contact report should be production-candidate");
+assert(candidateReport.metrics.neutralToolpath.cutterContactReport.strictEvidence?.status === "ready", "candidate contact report should expose ready strict contact evidence");
 assert(candidateReport.metrics.neutralToolpath.cutterContactReport.inputIdentityBinding?.status === "bound", "candidate contact report should bind to source neutral hash");
 assert(candidateReport.metrics?.handoffEvidence?.classification === "production-candidate", `validated contact report should classify as production-candidate, got ${candidateReport.metrics?.handoffEvidence?.classification}`);
 assert(candidateReport.metrics?.handoffEvidence?.productionCandidate === true, "validated contact report should allow production candidate classification");

@@ -4,6 +4,8 @@ dist/
 .env
 *.log
 *.local
+__pycache__/
+*.py[cod]
 meshy-test-result.json
 public/imported-models/
 public/import-previews/

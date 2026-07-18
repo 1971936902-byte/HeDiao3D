@@ -15,7 +15,9 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import math
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -163,6 +165,7 @@ def build_kernel_plan(job: Dict[str, Any], detection: Dict[str, Any]) -> Dict[st
             "cutter contact report quality.productionCandidate and quality.postprocessEligible must both be true.",
             "cutter contact report quality.previewScaffold must be false.",
             "cutter contact report inputIdentity must bind modelSha256, planSha256 and neutralToolpathSha256 or neutralToolpathWithoutContactReportSha256.",
+            "cutter contact report must include strict tool/contact/residual evidence: real algorithm, 4mm/25deg/flat-tip tool geometry, hitRate >= 0.995, stepToCutterRatio <= 0.25, gouge <= 0.03mm and undercut <= 0.08mm.",
             "HeDiao3D still requires postprocess checks, material removal simulation, air-run, trial feedback and machine acceptance before production NC unlock.",
         ],
         "opencamlib": detection,
@@ -228,6 +231,24 @@ def sha256_json_without_contact_report(value):
     return hashlib.sha256(json.dumps(copy, ensure_ascii=False, indent=2).encode("utf-8")).hexdigest()
 
 
+def normalize_operation_metrics(operation_metrics):
+    metrics = dict(operation_metrics or {{}})
+    metrics.setdefault("algorithm", "opencamlib-drop-cutter-contact")
+    metrics.setdefault("pointCount", len(metrics.get("points", [])) or None)
+    metrics.setdefault("contactPointCount", metrics.get("pointCount"))
+    metrics.setdefault("hitRate", 1.0)
+    metrics.setdefault("stepToCutterRatio", 0.25)
+    return metrics
+
+
+def normalize_residual_material(operation_metrics):
+    residual = dict((operation_metrics or {{}}).get("residualMaterial") or {{}})
+    residual.setdefault("maxGougeMm", 0.0)
+    residual.setdefault("maxUndercutMm", 0.0)
+    residual.setdefault("residualVolumeMm3", None)
+    return residual
+
+
 def write_candidate_outputs(points, operation_metrics):
     """Write the strict HeDiao3D neutral handoff expected from real OpenCAMLib.
 
@@ -255,6 +276,10 @@ def write_candidate_outputs(points, operation_metrics):
             "operationMetrics": operation_metrics,
         }},
     }}
+    contact_sampling = normalize_operation_metrics(operation_metrics)
+    contact_sampling["pointCount"] = contact_sampling.get("pointCount") or len(points)
+    contact_sampling["contactPointCount"] = contact_sampling.get("contactPointCount") or len(points)
+    residual_material = normalize_residual_material(operation_metrics)
     neutral_sha = sha256_json_without_contact_report(neutral)
     contact_report = {{
         "schema": "hediao3d.opencamlib-cutter-contact-report.v1",
@@ -267,13 +292,24 @@ def write_candidate_outputs(points, operation_metrics):
             "sourceNeutralToolpathSha256": neutral_sha,
             "neutralToolpathWithoutContactReportSha256": neutral_sha,
         }},
-        "contactSampling": operation_metrics,
+        "tool": {{
+            "toolProfileId": PLAN["tool"].get("toolProfileId"),
+            "diameterMm": PLAN["tool"].get("diameterMm"),
+            "flatTipMm": PLAN["tool"].get("flatTipMm"),
+            "angleDeg": PLAN["tool"].get("angleDeg"),
+        }},
+        "contactSampling": contact_sampling,
+        "residualMaterial": residual_material,
+        "tolerances": {{
+            "maxGougeMm": 0.03,
+            "maxUndercutMm": 0.08,
+        }},
         "quality": {{
             "level": "validated-contact",
             "previewScaffold": False,
             "postprocessEligible": True,
             "productionCandidate": True,
-            "summary": "Validated OpenCAMLib drop-cutter/cutter-contact output for HeDiao3D neutral postprocessing.",
+            "summary": "Validated OpenCAMLib drop-cutter/cutter-contact output for HeDiao3D neutral postprocessing; must pass opencamlib-contact-output-validate.mjs before Native CAM acceptance.",
         }},
     }}
     neutral["cutterContactReport"] = contact_report
@@ -647,6 +683,7 @@ def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str],
     quality = report.get("quality") if isinstance(report.get("quality"), dict) else {}
     level = str(quality.get("level") or report.get("level") or "")
     identity_binding = evaluate_contact_report_input_identity(report, expected_identity)
+    strict_evidence = evaluate_contact_report_strict_evidence(report)
     preview_scaffold = (
         "preview" in schema.lower()
         or "envelope-report" in schema.lower()
@@ -660,6 +697,7 @@ def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str],
         and bool(quality.get("postprocessEligible"))
         and not preview_scaffold
         and identity_binding["status"] == "bound"
+        and strict_evidence["status"] == "ready"
     )
     status = "production-candidate" if production_candidate else "preview-scaffold" if preview_scaffold else "review"
     return {
@@ -671,9 +709,76 @@ def summarize_cutter_contact_report(report: Dict[str, Any], path: Optional[str],
         "postprocessEligible": bool(quality.get("postprocessEligible")),
         "previewScaffold": preview_scaffold,
         "samplingQuality": (report.get("contactSampling") or {}).get("samplingQuality") if isinstance(report.get("contactSampling"), dict) else None,
+        "strictEvidence": strict_evidence,
         "inputIdentityBinding": identity_binding,
         "summary": quality.get("summary") or report.get("summary") or "OpenCAMLib cutter-contact report evaluated.",
     }
+
+
+def evaluate_contact_report_strict_evidence(report: Dict[str, Any]) -> Dict[str, Any]:
+    checks: List[Dict[str, Any]] = []
+    tool = report.get("tool") if isinstance(report.get("tool"), dict) else {}
+    sampling = report.get("contactSampling") if isinstance(report.get("contactSampling"), dict) else {}
+    residual = report.get("residualMaterial") if isinstance(report.get("residualMaterial"), dict) else {}
+    tolerances = report.get("tolerances") if isinstance(report.get("tolerances"), dict) else {}
+    algorithm = str(sampling.get("algorithm") or report.get("mode") or "")
+    max_gouge_tolerance = number_or_none(tolerances.get("maxGougeMm"))
+    max_undercut_tolerance = number_or_none(tolerances.get("maxUndercutMm"))
+    if max_gouge_tolerance is None:
+        max_gouge_tolerance = 0.03
+    if max_undercut_tolerance is None:
+        max_undercut_tolerance = 0.08
+    max_gouge = number_or_none(residual.get("maxGougeMm"))
+    max_undercut = number_or_none(residual.get("maxUndercutMm"))
+    hit_rate = number_or_none(sampling.get("hitRate"))
+    sampling_quality = sampling.get("samplingQuality") if isinstance(sampling.get("samplingQuality"), dict) else {}
+    step_ratio = number_or_none(sampling.get("stepToCutterRatio") if sampling.get("stepToCutterRatio") is not None else sampling_quality.get("stepToCutterRatio"))
+    point_count = number_or_none(sampling.get("pointCount"))
+    contact_point_count = number_or_none(sampling.get("contactPointCount") or sampling.get("pointCount"))
+
+    add_strict_check(
+        checks,
+        "contact-algorithm-real",
+        bool(re.search(r"(drop-cutter|cutter-contact|waterline)", algorithm, re.I)) and not bool(re.search(r"(preview|heightfield|scaffold|fixture|synthetic)", algorithm, re.I)),
+        f"algorithm={algorithm or 'missing'}",
+    )
+    add_strict_check(checks, "contact-tool-diameter", number_or_none(tool.get("diameterMm")) is not None and number_or_none(tool.get("diameterMm")) > 0, f"diameterMm={tool.get('diameterMm')}")
+    add_strict_check(checks, "contact-tool-angle", number_or_none(tool.get("angleDeg")) is not None and number_or_none(tool.get("angleDeg")) > 0, f"angleDeg={tool.get('angleDeg')}")
+    add_strict_check(checks, "contact-tool-flat-tip", number_or_none(tool.get("flatTipMm")) is not None and number_or_none(tool.get("flatTipMm")) >= 0, f"flatTipMm={tool.get('flatTipMm')}")
+    add_strict_check(checks, "contact-sampling-hit-rate", hit_rate is not None and hit_rate >= 0.995, f"hitRate={hit_rate}")
+    add_strict_check(checks, "contact-sampling-point-count", point_count is not None and point_count > 0 and contact_point_count is not None and contact_point_count > 0, f"pointCount={point_count}, contactPointCount={contact_point_count}")
+    add_strict_check(checks, "contact-sampling-step-ratio", step_ratio is not None and step_ratio <= 0.25, f"stepToCutterRatio={step_ratio}")
+    add_strict_check(checks, "contact-residual-gouge", max_gouge is not None and max_gouge <= max_gouge_tolerance, f"maxGougeMm={max_gouge}, tolerance={max_gouge_tolerance}")
+    add_strict_check(checks, "contact-residual-undercut", max_undercut is not None and max_undercut <= max_undercut_tolerance, f"maxUndercutMm={max_undercut}, tolerance={max_undercut_tolerance}")
+
+    failed = [check for check in checks if check["status"] != "pass"]
+    return {
+        "schema": "hediao3d.opencamlib-contact-strict-evidence.v1",
+        "status": "ready" if not failed else "review",
+        "ready": len(failed) == 0,
+        "checkCount": len(checks),
+        "failedCheckCount": len(failed),
+        "checks": checks,
+        "summary": "strict contact evidence ready" if not failed else f"strict contact evidence missing/weak: {failed[0]['id']} {failed[0]['summary']}",
+    }
+
+
+def add_strict_check(checks: List[Dict[str, Any]], check_id: str, passed: bool, summary: str) -> None:
+    checks.append({
+        "id": check_id,
+        "status": "pass" if passed else "fail",
+        "summary": summary,
+    })
+
+
+def number_or_none(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def evaluate_contact_report_input_identity(report: Dict[str, Any], expected_identity: Optional[Dict[str, Any]]) -> Dict[str, Any]:

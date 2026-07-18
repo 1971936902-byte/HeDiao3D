@@ -120,10 +120,14 @@ try {
       const kernelPlan = JSON.parse(readFileSync(report.metrics.opencamlibPlan.planPath, "utf8"));
       assert(kernelPlan.outputs?.cutterContactReport === "opencamlib-cutter-contact-report.json", "opencamlib plan should declare contact report output");
       assert(kernelPlan.productionCandidateCriteria?.some((item) => /material removal simulation/i.test(item)), "opencamlib plan should keep simulation in production criteria");
+      assert(kernelPlan.productionCandidateCriteria?.some((item) => /hitRate.*0\.995/i.test(item)), "opencamlib plan should declare strict contact sampling criteria");
       const runTemplate = readFileSync(report.metrics.opencamlibPlan.runTemplatePath, "utf8");
       assert(runTemplate.includes("write_candidate_outputs"), "opencamlib template should expose candidate output writer");
       assert(runTemplate.includes("hediao3d.opencamlib-cutter-contact-report.v1"), "opencamlib template should write contact report schema");
       assert(runTemplate.includes("neutralToolpathWithoutContactReportSha256"), "opencamlib template should bind neutral-without-contact hash");
+      assert(runTemplate.includes('"tool"'), "opencamlib template should write tool geometry into the contact report");
+      assert(runTemplate.includes('"residualMaterial"'), "opencamlib template should write residual material metrics into the contact report");
+      assert(runTemplate.includes('"tolerances"'), "opencamlib template should write validation tolerances into the contact report");
       assert(runTemplate.includes("Template is fail-closed"), "opencamlib template should fail closed until real contact is implemented");
     }
     results.push({
