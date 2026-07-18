@@ -517,6 +517,11 @@ function writeNativeCamServerPackageArtifacts(report) {
         description: "Linux 服务端一键闭环检查入口，串联服务包自检、真实 CAM 输出验收和 CAMotics 材料去除验收，并输出 native-cam-closed-loop-check.json。"
       },
       {
+        filename: "native-cam-diagnostics-bundle.mjs",
+        role: "server-diagnostics-bundle",
+        description: "Linux 服务端诊断证据打包入口，不要求真实 CAM 输出；运行服务包自检、OpenCAMLib runtime probe 和本机 CAM 命令探测，生成 native-cam-diagnostics-bundle.zip。"
+      },
+      {
         filename: "opencamlib-contact-output-validate.mjs",
         role: "opencamlib-contact-output-validator",
         description: "验证真实 OpenCAMLib neutral-toolpath 与 cutter-contact report 的 schema、哈希绑定和 production-candidate 条件。"
@@ -552,6 +557,7 @@ function writeNativeCamServerPackageArtifacts(report) {
       "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
       "cp native-cam-env.template .env.cam",
       "node native-cam-server-package-self-check.mjs",
+      "node native-cam-diagnostics-bundle.mjs",
       "node native-cam-closed-loop-check.mjs",
       "npm run test:v3:native-cam",
       "npm run test:v3:freecad-proof-handoff",
@@ -572,6 +578,7 @@ function writeNativeCamServerPackageArtifacts(report) {
   writeFileSync(join(outputRoot, "native-cam-real-output-check.sh"), createNativeCamRealOutputCheckShell(report), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-server-package-self-check.mjs"), createNativeCamServerPackageSelfCheckScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "native-cam-closed-loop-check.mjs"), createNativeCamClosedLoopCheckScript(), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(join(outputRoot, "native-cam-diagnostics-bundle.mjs"), createNativeCamDiagnosticsBundleScript(), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-contact-output-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-contact-output-validate.mjs")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-probe.py"), readFileSync(join(root, "adapters", "opencamlib", "opencamlib_probe.py")), { encoding: "utf8", mode: 0o755 });
   writeFileSync(join(outputRoot, "opencamlib-candidate-package-validate.mjs"), readFileSync(join(root, "scripts", "v3-opencamlib-candidate-package-validate.mjs")), { encoding: "utf8", mode: 0o755 });
@@ -587,6 +594,7 @@ function createLinuxCamClosedLoopHandoff(report) {
     "DRY_RUN=0 bash native-cam-server-bootstrap.sh",
     "cp native-cam-env.template .env.cam",
     "node native-cam-server-package-self-check.mjs",
+    "node native-cam-diagnostics-bundle.mjs",
     "node native-cam-closed-loop-check.mjs",
     "npm run test:v3:native-cam",
     "npm run test:v3:freecad-proof-handoff",
@@ -685,6 +693,7 @@ const requiredFiles = [
   "native-cam-real-output-check.sh",
   "native-cam-server-package-self-check.mjs",
   "native-cam-closed-loop-check.mjs",
+  "native-cam-diagnostics-bundle.mjs",
   "opencamlib-probe.py",
   "opencamlib-contact-output-validate.mjs",
   "opencamlib-candidate-package-validate.mjs",
@@ -705,6 +714,7 @@ for (const filename of requiredFiles) {
 const commands = Array.isArray(manifest?.commands) ? manifest.commands.join("\\n") : "";
 check("command:self-check", commands.includes("native-cam-server-package-self-check.mjs"), "manifest.commands must include the self-check command.");
 check("command:closed-loop-check", commands.includes("native-cam-closed-loop-check.mjs"), "manifest.commands must include the closed-loop check command.");
+check("command:diagnostics-bundle", commands.includes("native-cam-diagnostics-bundle.mjs"), "manifest.commands must include the diagnostics bundle command.");
 check("command:opencamlib-probe", commands.includes("opencamlib-probe.py"), "manifest.commands must include OpenCAMLib runtime probe.");
 check("command:opencamlib-contact", commands.includes("opencamlib-contact-output-validate.mjs"), "manifest.commands must include OpenCAMLib contact validation.");
 check("command:opencamlib-candidate-package", commands.includes("opencamlib-candidate-package-validate.mjs"), "manifest.commands must include OpenCAMLib candidate package validation.");
@@ -723,6 +733,7 @@ const openCamProbe = readTextIfExists(join(root, "opencamlib-probe.py"));
 const camoticsValidator = readTextIfExists(join(root, "camotics-material-removal-validate.mjs"));
 const realOutputCheck = readTextIfExists(join(root, "native-cam-real-output-check.sh"));
 const closedLoopCheck = readTextIfExists(join(root, "native-cam-closed-loop-check.mjs"));
+const diagnosticsBundle = readTextIfExists(join(root, "native-cam-diagnostics-bundle.mjs"));
 check("opencamlib-probe-schema", openCamProbe.includes("hediao3d.opencamlib-runtime-probe.v1"), "OpenCAMLib probe must emit the runtime probe schema.");
 check("opencamlib-probe-boundary", openCamProbe.includes("must not be used as cutter-contact output"), "OpenCAMLib probe must keep the production boundary explicit.");
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
@@ -736,6 +747,8 @@ check("real-output-contact-ready-gate", realOutputCheck.includes("strict contact
 check("real-output-target-boundary", realOutputCheck.includes("target-machine-boundary.json"), "real output checker must write target-machine-boundary.json.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
+check("diagnostics-bundle-schema", diagnosticsBundle.includes("hediao3d.native-cam-diagnostics-bundle.v1"), "diagnostics bundle must emit the diagnostics schema.");
+check("diagnostics-bundle-zip", diagnosticsBundle.includes("native-cam-diagnostics-bundle.zip"), "diagnostics bundle must generate native-cam-diagnostics-bundle.zip.");
 
 const failed = checks.filter((item) => !item.ok);
 const report = {
@@ -1277,6 +1290,250 @@ echo "- $OUT_DIR/v3-external-adapter-validation.md"
 echo "- $ACCEPTANCE_REPORT"
 echo "- $ACCEPTANCE_BUNDLE"
 echo "[HeDiao3D] If this script exits 0 with production-candidate output, continue with CAMotics import, V3 readiness, air-run and machine acceptance."
+`;
+}
+
+function createNativeCamDiagnosticsBundleScript() {
+  return `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+
+const root = resolve(process.argv[2] ?? process.cwd());
+const steps = [];
+
+runStep({
+  id: "package-self-check",
+  required: true,
+  command: "node",
+  args: ["native-cam-server-package-self-check.mjs", root],
+  outputJson: "native-cam-server-package-self-check.json"
+});
+
+if (existsSync(join(root, "opencamlib-probe.py"))) {
+  const python = findCommand(["python3", "python"]);
+  if (python) {
+    runStep({
+      id: "opencamlib-runtime-probe",
+      required: false,
+      command: python,
+      args: ["opencamlib-probe.py", "--out", "opencamlib-runtime-probe.json"],
+      outputJson: "opencamlib-runtime-probe.json"
+    });
+  } else {
+    recordMissing("opencamlib-runtime-probe", false, "python3/python");
+  }
+} else {
+  recordMissing("opencamlib-runtime-probe", false, "opencamlib-probe.py");
+}
+
+for (const probe of [
+  { id: "freecad-command", commands: ["FreeCADCmd", "freecadcmd", "freecad.cmd", "freecad"], args: ["--version"] },
+  { id: "blender-command", commands: ["blender"], args: ["--version"] },
+  { id: "camotics-command", commands: ["camotics-cli", "camotics"], args: ["--version"] },
+  { id: "node-command", commands: ["node"], args: ["--version"] }
+]) {
+  const command = findCommand(probe.commands);
+  if (command) {
+    runStep({ id: probe.id, required: false, command, args: probe.args });
+  } else {
+    recordMissing(probe.id, false, probe.commands.join(" or "));
+  }
+}
+
+const manifest = readJsonIfExists(join(root, "native-cam-server-package.json"));
+const runtimeProbe = readJsonIfExists(join(root, "opencamlib-runtime-probe.json"));
+const packageSelfCheck = readJsonIfExists(join(root, "native-cam-server-package-self-check.json"));
+const failedRequired = steps.filter((step) => step.required && step.status !== "pass");
+const report = {
+  schema: "hediao3d.native-cam-diagnostics-bundle.v1",
+  createdAt: new Date().toISOString(),
+  root,
+  host: {
+    platform: process.platform,
+    release: os.release(),
+    arch: os.arch(),
+    hostname: os.hostname(),
+    node: process.version
+  },
+  ok: failedRequired.length === 0,
+  level: failedRequired.length ? "critical" : runtimeProbe?.level ?? "diagnostic",
+  productionLocked: true,
+  productionBoundary: "This diagnostic bundle only captures Linux CAM server readiness evidence. It does not contain production CAM output and must not unlock production NC.",
+  targetMachineBoundary: manifest?.targetMachineBoundary ?? null,
+  packageSelfCheck: {
+    level: packageSelfCheck?.level ?? null,
+    ok: packageSelfCheck?.ok ?? null
+  },
+  opencamlibRuntimeProbe: runtimeProbe ? {
+    level: runtimeProbe.level,
+    selectedModule: runtimeProbe.selectedModule,
+    dropCutterReady: Boolean(runtimeProbe.capabilitySummary?.dropCutterReady),
+    summary: runtimeProbe.capabilitySummary?.summary ?? null
+  } : null,
+  steps,
+  nextActions: createNextActions(runtimeProbe, steps)
+};
+
+writeFileSync(join(root, "native-cam-diagnostics.json"), JSON.stringify(report, null, 2), "utf8");
+writeFileSync(join(root, "native-cam-diagnostics.md"), createMarkdown(report), "utf8");
+const bundlePath = join(root, "native-cam-diagnostics-bundle.zip");
+writeFileSync(bundlePath, createZip([
+  { name: "native-cam-diagnostics.json", content: JSON.stringify(report, null, 2) },
+  { name: "native-cam-diagnostics.md", content: createMarkdown(report) },
+  ...optionalFile("native-cam-server-package.json"),
+  ...optionalFile("native-cam-server-package-self-check.json"),
+  ...optionalFile("opencamlib-runtime-probe.json")
+]));
+
+console.log(JSON.stringify({
+  ok: report.ok,
+  schema: report.schema,
+  level: report.level,
+  bundle: bundlePath,
+  productionLocked: report.productionLocked,
+  failedRequired: failedRequired.map((step) => step.id)
+}, null, 2));
+if (!report.ok) process.exitCode = 2;
+
+function runStep({ id, required, command, args, outputJson }) {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: false,
+    env: { ...process.env }
+  });
+  const parsed = outputJson ? readJsonIfExists(join(root, outputJson)) : null;
+  steps.push({
+    id,
+    required,
+    status: result.status === 0 ? "pass" : "fail",
+    command: [command, ...args].join(" "),
+    exitCode: result.status,
+    outputJson: outputJson ?? null,
+    parsedSchema: parsed?.schema ?? null,
+    stdoutTail: tail(result.stdout),
+    stderrTail: tail(result.stderr)
+  });
+}
+
+function recordMissing(id, required, summary) {
+  steps.push({ id, required, status: "missing", summary });
+}
+
+function findCommand(commands) {
+  for (const command of commands) {
+    const result = spawnSync(command, ["--version"], { encoding: "utf8", shell: false });
+    if (!result.error) return command;
+  }
+  return null;
+}
+
+function optionalFile(filename) {
+  const path = join(root, filename);
+  return existsSync(path) ? [{ name: filename, content: readFileSync(path) }] : [];
+}
+
+function readJsonIfExists(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function createNextActions(runtimeProbe, probeSteps) {
+  const actions = [];
+  if (!runtimeProbe) actions.push("Run python3 opencamlib-probe.py --out opencamlib-runtime-probe.json.");
+  else if (!runtimeProbe.capabilitySummary?.dropCutterReady) actions.push("Install or map OpenCAMLib/ocl drop-cutter symbols before attempting production-candidate output.");
+  if (probeSteps.some((step) => step.id === "camotics-command" && step.status !== "pass")) actions.push("Install CAMotics or prepare an equivalent material-removal simulator before production evidence回填.");
+  if (probeSteps.some((step) => step.id === "freecad-command" && step.status !== "pass")) actions.push("Install FreeCADCmd/freecadcmd if the regular-solid CAM route is required.");
+  if (probeSteps.some((step) => step.id === "blender-command" && step.status !== "pass")) actions.push("Install Blender/FabexCNC if the artistic mesh route is required.");
+  if (actions.length === 0) actions.push("Proceed to real OpenCAMLib/FreeCAD/BlenderCAM output generation, then run native-cam-real-output-check.sh.");
+  return actions;
+}
+
+function createMarkdown(report) {
+  return [
+    "# HeDiao3D Native CAM Diagnostics",
+    "",
+    "- Schema: " + report.schema,
+    "- Level: " + report.level,
+    "- Production locked: " + report.productionLocked,
+    "- Host: " + report.host.platform + " " + report.host.release + " " + report.host.arch,
+    "",
+    "## Steps",
+    "",
+    ...report.steps.map((step) => "- " + step.id + ": " + step.status + (step.command ? " / \`" + step.command + "\`" : "")),
+    "",
+    "## Next Actions",
+    "",
+    ...report.nextActions.map((item) => "- " + item),
+    "",
+    "## Boundary",
+    "",
+    report.productionBoundary,
+    ""
+  ].join("\\n");
+}
+
+function createZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBytes = Buffer.from(file.name, "utf8");
+    const data = Buffer.isBuffer(file.content) ? file.content : Buffer.from(String(file.content), "utf8");
+    const crc = crc32(data);
+    const local = Buffer.concat([
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0),
+      nameBytes, data
+    ]);
+    chunks.push(local);
+    central.push(Buffer.concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes
+    ]));
+    offset += local.length;
+  }
+  const centralBuffer = Buffer.concat(central);
+  return Buffer.concat([
+    ...chunks,
+    centralBuffer,
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(centralBuffer.length), u32(offset), u16(0)
+  ]);
+}
+
+function u16(value) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(value & 0xffff, 0);
+  return b;
+}
+
+function u32(value) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(value >>> 0, 0);
+  return b;
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function tail(value) {
+  return String(value ?? "").slice(-1200);
+}
 `;
 }
 

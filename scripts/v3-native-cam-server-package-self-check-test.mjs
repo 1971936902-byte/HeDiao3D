@@ -37,8 +37,23 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "target-rotary-output-axis" && check.status === "pass"), "self-check should verify Y rotary output axis");
   assert(readyReport.checks?.some((check) => check.id === "camotics-validator-bundle" && check.status === "pass"), "self-check should verify CAMotics result bundle support");
   assert(readyReport.checks?.some((check) => check.id === "closed-loop-check-schema" && check.status === "pass"), "self-check should verify closed-loop check support");
+  assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-schema" && check.status === "pass"), "self-check should verify diagnostics bundle schema");
+  assert(readyReport.checks?.some((check) => check.id === "diagnostics-bundle-zip" && check.status === "pass"), "self-check should verify diagnostics bundle ZIP support");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
+
+  const diagnosticsPath = join(workDir, "native-cam-diagnostics-bundle.mjs");
+  assert(existsSync(diagnosticsPath), "generated server package missing diagnostics bundle script");
+  const diagnostics = spawnSync(node, [diagnosticsPath, workDir], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(diagnostics.status === 0, `diagnostics bundle should pass generated package: ${diagnostics.stderr || diagnostics.stdout}`);
+  const diagnosticsReport = JSON.parse(diagnostics.stdout);
+  assert(diagnosticsReport.schema === "hediao3d.native-cam-diagnostics-bundle.v1", "diagnostics bundle schema mismatch");
+  assert(diagnosticsReport.productionLocked === true, "diagnostics bundle must keep production locked");
+  assert(existsSync(join(workDir, "native-cam-diagnostics-bundle.zip")), "diagnostics bundle should write ZIP");
 
   unlinkSync(join(workDir, "camotics-material-removal-validate.mjs"));
   const blocked = spawnSync(node, [selfCheckPath, workDir], {
@@ -57,7 +72,8 @@ try {
     ok: true,
     readyLevel: readyReport.level,
     blockedLevel: blockedReport.level,
-    checks: readyReport.checks.length
+    checks: readyReport.checks.length,
+    diagnosticsLevel: diagnosticsReport.level
   }, null, 2));
 } finally {
   rmSync(workDir, { recursive: true, force: true });

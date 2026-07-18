@@ -120,6 +120,7 @@ async function main() {
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-real-output-check.sh"), "native CAM package manifest missing real output check");
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-server-package-self-check.mjs"), "native CAM package manifest missing package self-check");
   assert(packageManifest.files?.some((file) => file.filename === "native-cam-closed-loop-check.mjs"), "native CAM package manifest missing closed-loop check");
+  assert(packageManifest.files?.some((file) => file.filename === "native-cam-diagnostics-bundle.mjs"), "native CAM package manifest missing diagnostics bundle");
   assert(packageManifest.files?.some((file) => file.filename === "opencamlib-probe.py"), "native CAM package manifest missing OpenCAMLib runtime probe");
   assert(packageManifest.files?.some((file) => file.filename === "opencamlib-contact-output-validate.mjs"), "native CAM package manifest missing OpenCAMLib contact validator");
   assert(packageManifest.files?.some((file) => file.filename === "camotics-material-removal-validate.mjs"), "native CAM package manifest missing CAMotics material-removal validator");
@@ -127,6 +128,7 @@ async function main() {
   assert(packageManifest.commands?.some((command) => command.includes("opencamlib-contact-output-validate.mjs")), "native CAM package manifest should include contact validator command");
   assert(packageManifest.commands?.some((command) => command.includes("native-cam-server-package-self-check.mjs")), "native CAM package manifest should include package self-check command");
   assert(packageManifest.commands?.some((command) => command.includes("native-cam-closed-loop-check.mjs")), "native CAM package manifest should include closed-loop check command");
+  assert(packageManifest.commands?.some((command) => command.includes("native-cam-diagnostics-bundle.mjs")), "native CAM package manifest should include diagnostics bundle command");
   assert(packageManifest.commands?.some((command) => command.includes("camotics-material-removal-validate.mjs")), "native CAM package manifest should include CAMotics material-removal validator command");
   assert(packageManifest.files?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "native CAM package manifest missing closed-loop handoff");
   assert(packageManifest.targetMachineBoundary?.machineProfileId === "desktop-3axis-rotary-y", "native CAM package manifest missing target machine boundary");
@@ -141,6 +143,7 @@ async function main() {
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-real-output-check.sh"), "native CAM zip missing real output check");
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-server-package-self-check.mjs"), "native CAM zip missing package self-check");
   assert(zipNames.includes("hediao3d-native-cam-server/native-cam-closed-loop-check.mjs"), "native CAM zip missing closed-loop check");
+  assert(zipNames.includes("hediao3d-native-cam-server/native-cam-diagnostics-bundle.mjs"), "native CAM zip missing diagnostics bundle");
   assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-probe.py"), "native CAM zip missing OpenCAMLib runtime probe");
   assert(zipNames.includes("hediao3d-native-cam-server/opencamlib-contact-output-validate.mjs"), "native CAM zip missing OpenCAMLib contact validator");
   assert(zipNames.includes("hediao3d-native-cam-server/camotics-material-removal-validate.mjs"), "native CAM zip missing CAMotics material-removal validator");
@@ -148,6 +151,7 @@ async function main() {
   assert(zipNames.includes("hediao3d-native-cam-server/README-NATIVE-CAM.md"), "native CAM zip missing README");
   const readme = await readZipText(packageZip.bytes, "hediao3d-native-cam-server/README-NATIVE-CAM.md");
   assert(readme.includes("native-cam-server-package-self-check.mjs"), "native CAM ZIP README should instruct package self-check");
+  assert(readme.includes("native-cam-diagnostics-bundle.mjs"), "native CAM ZIP README should instruct diagnostics bundle");
   assert(readme.includes("native-cam-closed-loop-check.mjs"), "native CAM ZIP README should instruct closed-loop check");
 
   console.log(JSON.stringify({

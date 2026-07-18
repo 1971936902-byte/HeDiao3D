@@ -107,7 +107,7 @@ try {
     `--remote-debugging-port=${debugPort}`,
     `--user-data-dir=${userDataDir}`,
     "--window-size=1440,960",
-    pageUrl
+    "about:blank"
   ], process.env);
   const page = await openChromePage(debugPort, pageUrl);
   await page.send("Page.enable");
@@ -245,24 +245,18 @@ async function openChromePage(port, url) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 30000) {
     try {
-      const targets = await requestJson(`http://${host}:${port}/json/list`);
-      const target = targets.find((item) => item.type === "page" && item.url?.startsWith(url))
-        ?? targets.find((item) => item.type === "page" && item.webSocketDebuggerUrl);
-      if (target?.webSocketDebuggerUrl) {
-        const ws = new CdpClient(target.webSocketDebuggerUrl);
-        await ws.open();
-        return ws;
-      }
+      await requestJson(`http://${host}:${port}/json/version`);
+      return createChromePage(port, url);
     } catch {
       // Chrome may still be opening the debugging endpoint.
     }
     await sleep(250);
   }
-  throw new Error(`Timed out waiting for Chrome page target: ${url}`);
+  return createChromePage(port, url);
 }
 
 async function createChromePage(port, url) {
-  const target = await requestJson(`http://${host}:${port}/json/new?${encodeURIComponent(url)}`, { method: "PUT" });
+  const target = await requestJson(`http://${host}:${port}/json/new?${url}`, { method: "PUT" });
   const ws = new CdpClient(target.webSocketDebuggerUrl);
   await ws.open();
   return ws;
@@ -338,12 +332,20 @@ async function waitForCondition(page, fn, limitMs, label) {
     await sleep(500);
   }
   let pageText = "";
+  let pageState = "";
   try {
-    pageText = await page.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 1600));
+    const diagnostic = await page.evaluate(() => ({
+      href: location.href,
+      readyState: document.readyState,
+      hasRoot: Boolean(document.querySelector("#root")),
+      text: document.body?.innerText?.replace(/\s+/g, " ").slice(0, 1600) ?? ""
+    }));
+    pageState = `\nPage state: ${JSON.stringify({ href: diagnostic.href, readyState: diagnostic.readyState, hasRoot: diagnostic.hasRoot })}`;
+    pageText = diagnostic.text;
   } catch {
     // Ignore diagnostic failures.
   }
-  throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ""}${pageText ? `\nPage text: ${pageText}` : ""}`);
+  throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ""}${pageState}${pageText ? `\nPage text: ${pageText}` : ""}`);
 }
 
 async function waitForHttp(url, limitMs, label) {

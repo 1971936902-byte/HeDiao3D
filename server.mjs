@@ -3525,7 +3525,7 @@ function createNativeCamReadinessPublicSummary(report, checkId) {
     packageArtifacts: report.artifacts ? {
       schema: report.artifacts.schema ?? null,
       files: Array.isArray(report.artifacts.files)
-        ? report.artifacts.files.slice(0, 12).map((file) => ({
+        ? report.artifacts.files.map((file) => ({
           filename: file.filename,
           role: file.role,
           description: file.description,
@@ -3561,6 +3561,7 @@ function createNativeCamReadinessArtifactLinks(checkId) {
     realOutputCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-real-output-check.sh`,
     packageSelfCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package-self-check.mjs`,
     closedLoopCheck: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-closed-loop-check.mjs`,
+    diagnosticsBundle: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-diagnostics-bundle.mjs`,
     packageManifest: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/native-cam-server-package.json`,
     packageZip: `/api/orchestrator/native-cam/${encodeURIComponent(checkId)}/server-package.zip`
   };
