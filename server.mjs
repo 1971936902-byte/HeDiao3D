@@ -9422,6 +9422,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camoticsMachineContextStatus: camoticsIdentity.machineContextStatus,
       camoticsArtifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       camoticsUpstreamCamEvidenceStatus: camoticsIdentity.upstreamCamEvidenceStatus,
+      camoticsUpstreamCamEvidence: camoticsIdentity.upstreamCamEvidence,
       camHandoffReady: camHandoffQuality?.level === "ready",
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       neutralSourceBindingPass: !neutralBinding.required || neutralBinding.status === "pass",
@@ -9695,17 +9696,64 @@ function createAirRunEvidence(machineRecord) {
 
 function summarizeCamoticsEvidenceIdentity(simulationEvidence) {
   const evidenceQuality = simulationEvidence?.evidenceQuality ?? null;
+  const upstreamCamEvidence = summarizeCamoticsUpstreamCamEvidenceForReports(evidenceQuality?.upstreamCamEvidence);
   return {
     inputIdentityStatus: evidenceQuality?.inputIdentity?.status ?? "missing",
     cliRunPackageBindingStatus: evidenceQuality?.inputIdentity?.cliRunPackage?.status ?? "not-required",
     motionConsistencyStatus: evidenceQuality?.motionConsistency?.status ?? "missing",
     machineContextStatus: evidenceQuality?.machineContext?.status ?? "missing",
     upstreamCamEvidenceStatus: evidenceQuality?.upstreamCamEvidence?.status ?? "not-required",
+    upstreamCamEvidence,
     artifactEvidenceStatus: evidenceQuality?.artifactEvidence?.complete === true || evidenceQuality?.artifactEvidenceComplete === true
       ? "complete"
       : Array.isArray(evidenceQuality?.missing) && evidenceQuality.missing.some((item) => /screenshot|material|artifact|截图|网格/i.test(String(item)))
         ? "missing"
         : evidenceQuality?.status ?? "unknown"
+  };
+}
+
+function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
+  if (!upstream || typeof upstream !== "object") {
+    return {
+      required: false,
+      status: "not-required",
+      expectedCount: 0,
+      matchedCount: 0,
+      mismatchCount: 0,
+      candidatePackageValidationBound: false,
+      candidatePackageBundleBound: false,
+      summary: "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
+    };
+  }
+  const status = upstream.status ?? (upstream.ok === true ? "matched" : upstream.required ? "missing" : "not-required");
+  const files = Array.isArray(upstream.files) ? upstream.files : Array.isArray(upstream.matches) ? upstream.matches : [];
+  const normalizedFiles = files.slice(0, 12).map((file) => ({
+    key: file.key ?? null,
+    filename: file.filename ?? null,
+    matched: Boolean(file.matched ?? file.ok),
+    expectedSha256: file.expectedSha256 ?? file.sha256 ?? null,
+    importedSha256: file.importedSha256 ?? file.actualSha256 ?? file.sha256 ?? null
+  }));
+  const expectedCount = Number(upstream.expectedCount ?? normalizedFiles.length ?? 0);
+  const matchedCount = Number(upstream.matchedCount ?? normalizedFiles.filter((file) => file.matched).length ?? 0);
+  const mismatchCount = Number(upstream.mismatchCount ?? Math.max(expectedCount - matchedCount, 0));
+  const hasMatchedKey = (key) => normalizedFiles.some((file) => file.key === key && file.matched);
+  const candidatePackageValidationBound = Boolean(upstream.candidatePackageValidationBound ?? hasMatchedKey("opencamlibCandidatePackageValidation"));
+  const candidatePackageBundleBound = Boolean(upstream.candidatePackageBundleBound ?? hasMatchedKey("opencamlibCandidatePackageBundle"));
+  return {
+    required: Boolean(upstream.required),
+    status,
+    expectedCount,
+    matchedCount,
+    mismatchCount,
+    candidatePackageValidationBound,
+    candidatePackageBundleBound,
+    files: normalizedFiles,
+    summary: status === "matched"
+      ? `CAMotics 材料去除结果已绑定上游 CAM/OpenCAMLib 证据 ${matchedCount}/${expectedCount}。`
+      : status === "not-required"
+        ? "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
+        : `CAMotics 上游 CAM/OpenCAMLib 证据未匹配：${matchedCount}/${expectedCount}，mismatch=${mismatchCount}。`
   };
 }
 
@@ -9720,6 +9768,7 @@ function createProductionEvidenceDossierPublicSummary(dossier) {
     blockedCount: dossier.blockedCount,
     summary: dossier.summary,
     crossChecks: dossier.crossChecks ?? null,
+    camoticsUpstreamCamEvidence: dossier.crossChecks?.camoticsUpstreamCamEvidence ?? null,
     missingEvidenceCount: Array.isArray(dossier.missingEvidence) ? dossier.missingEvidence.length : 0,
     missingEvidenceTop: Array.isArray(dossier.missingEvidence)
       ? dossier.missingEvidence.slice(0, 6).map((item) => ({
@@ -9884,6 +9933,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
   const runbookResult = readLatestV3RunbookResultSummary();
   const linuxOpenCamLibEvidence = createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRealOutputAcceptance);
   const nativeCamBoundaryStatus = nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus ?? null;
+  const camoticsUpstreamEvidence = productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidence ?? null;
   const blockedRows = Array.isArray(productionUnlockMatrix?.rows)
     ? productionUnlockMatrix.rows.filter((row) => row.status === "block" || row.blocksProduction)
     : [];
@@ -9913,6 +9963,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
     "",
     `- 生产门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
     `- 仿真证据: ${productionGate?.simulationEvidence?.level ?? "missing"} / ${productionGate?.simulationEvidence?.summary ?? "未生成"}`,
+    `- CAMotics上游绑定: ${formatCamoticsUpstreamEvidenceLine(camoticsUpstreamEvidence)}`,
     `- Native CAM机型边界: ${nativeCamBoundaryStatus?.status ?? "missing"} / ${nativeCamBoundaryStatus?.summary ?? "未回填 native-cam-real-output-bundle.zip，尚未证明真实 CAM 输出适配当前三轴控制器 + Y轴旋转夹具。"}`,
     `- Linux OpenCAMLib: ${formatLinuxOpenCamLibEvidenceOfflineLine(linuxOpenCamLibEvidence)}`,
     `- 解锁矩阵: 通过 ${productionUnlockMatrix?.passCount ?? "-"} / 复核 ${productionUnlockMatrix?.reviewCount ?? "-"} / 阻断 ${productionUnlockMatrix?.blockCount ?? "-"}`,
@@ -11188,6 +11239,15 @@ function createCamoticsRunbook(camoticsInput) {
   return `${lines.join("\n")}\n`;
 }
 
+function formatCamoticsUpstreamEvidenceLine(evidence) {
+  if (!evidence) return "missing / 未生成 CAMotics 上游证据摘要。";
+  const status = evidence.status ?? "missing";
+  const matched = `${Number(evidence.matchedCount ?? 0)}/${Number(evidence.expectedCount ?? 0)}`;
+  const candidateValidation = evidence.candidatePackageValidationBound ? "候选包预检已绑定" : "候选包预检未绑定";
+  const candidateBundle = evidence.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
+  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}`;
+}
+
 function createCamoticsPreviewGcode(points, settings, estimatedMinutes) {
   const postProcessor = settings.postProcessor ?? "generic";
   const rotaryAxis = settings.camMode === "rotaryWrap"
@@ -11484,6 +11544,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
           }))
         : [],
       crossChecks: productionEvidenceDossier.crossChecks ?? null,
+      camoticsUpstreamCamEvidence: productionEvidenceDossier.crossChecks?.camoticsUpstreamCamEvidence ?? null,
       artifact: "production-evidence-dossier.json"
     } : null,
     controllerDialect: {
@@ -11603,6 +11664,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       motionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
       machineContextStatus: camoticsIdentity.machineContextStatus,
       artifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
+      upstreamEvidenceStatus: camoticsIdentity.upstreamCamEvidenceStatus,
+      upstreamEvidence: camoticsIdentity.upstreamCamEvidence,
       productionUnlockEligible: productionGate.simulationEvidence?.productionUnlockEligible ?? false,
       limitation: "CAMotics 仅用于展开三轴检查；旋转夹具真实材料去除仍需专业仿真或机床控制软件复核。"
     },

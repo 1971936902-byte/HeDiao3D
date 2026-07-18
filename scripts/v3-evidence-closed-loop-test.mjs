@@ -101,11 +101,14 @@ async function main() {
   assert(dossier.crossChecks?.camoticsMotionConsistencyStatus === "matched", "CAMotics motion consistency should be matched");
   assert(dossier.crossChecks?.camoticsMachineContextStatus === "matched", "CAMotics machine context should be matched");
   assert(["matched", "not-required"].includes(dossier.crossChecks?.camoticsUpstreamCamEvidenceStatus), "CAMotics upstream CAM evidence should be matched or not required");
+  assert(dossier.crossChecks?.camoticsUpstreamCamEvidence?.status === dossier.crossChecks?.camoticsUpstreamCamEvidenceStatus, "dossier should expose CAMotics upstream evidence detail status");
+  assert(typeof dossier.crossChecks?.camoticsUpstreamCamEvidence?.summary === "string", "dossier should expose CAMotics upstream evidence summary");
   assert(dossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "production package must remain locked without field acceptance and real external handoff");
   assert(dossier.status !== "production-evidence-complete", "dossier must remain incomplete before field evidence");
 
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next-action checklist should show verified CAMotics evidence");
+  assert(nextActionChecklist.includes("CAMotics上游绑定:"), "next-action checklist should show CAMotics upstream binding");
   assert(nextActionChecklist.includes("Native CAM机型边界: matched"), "next-action checklist should show matched native CAM machine boundary");
   assert(nextActionChecklist.includes("Linux OpenCAMLib:"), "next-action checklist should show Linux OpenCAMLib offline evidence");
   assert(nextActionChecklist.includes("覆盖率 ready"), "next-action checklist should show ready OpenCAMLib path coverage");
@@ -123,6 +126,9 @@ async function main() {
   assert(packageIndex.linuxOpenCamLibEvidence.candidatePackageBlockedReason === null, "package index should preserve OpenCAMLib candidate blocker reason");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "package index should expose refreshed CAMotics cross-checks");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "package index should expose refreshed CAMotics machine context");
+  assert(packageIndex.productionEvidenceDossier?.camoticsUpstreamCamEvidence?.status === packageIndex.productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidenceStatus, "package index should expose production dossier CAMotics upstream detail");
+  assert(packageIndex.camotics?.upstreamEvidenceStatus === packageIndex.productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidenceStatus, "package index should expose CAMotics upstream status in camotics section");
+  assert(packageIndex.camotics?.upstreamEvidence?.status === packageIndex.camotics?.upstreamEvidenceStatus, "package index should expose CAMotics upstream detail in camotics section");
   assert(packageIndex.productionEvidenceDossier.crossChecks.productionReadinessAudit?.allowProductionPackage === false, "package index must keep production package locked");
   assert(packageIndex.productionEvidenceDossier?.missingEvidenceCount > 0, "package index should expose remaining production evidence gaps");
   assert(packageIndex.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose remaining field evidence gaps");
