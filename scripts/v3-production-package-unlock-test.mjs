@@ -57,6 +57,23 @@ async function main() {
   assert(lockedBeforeEvidence.operatorGuidance?.evidenceReviewPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/evidence-review-package`), "locked package should expose evidence review package URL before evidence is complete");
   assert(lockedBeforeEvidence.operatorGuidance?.productionPackageUrl?.includes(`/api/orchestrator/jobs/${job.id}/production-package`), "locked package should expose production package recheck URL before evidence is complete");
 
+  const wrongToolNeutral = createCandidateNeutral({
+    tool: {
+      toolProfileId: "vbit-3mm-20deg",
+      diameterMm: 3,
+      flatTipMm: 0,
+      angleDeg: 20
+    }
+  });
+  const wrongToolImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
+    sourceName: "production-package-wrong-tool-neutral.json",
+    engine: "opencamlib",
+    neutralToolpath: wrongToolNeutral
+  });
+  assert(wrongToolImport.validation?.cutterContactReport?.strictEvidence?.status === "review", "wrong tool contact report should fail strict evidence");
+  assert(wrongToolImport.validation?.cutterContactReport?.strictEvidence?.checks?.some((check) => check.id === "contact-tool-diameter" && check.status === "fail"), "wrong tool should fail diameter check");
+  assert(wrongToolImport.validation?.handoffEvidence?.classification !== "production-candidate", "wrong tool neutral must not classify as production-candidate");
+
   const candidateNeutral = createCandidateNeutral();
   const imported = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/neutral-toolpath`, {
     sourceName: "production-package-candidate-neutral.json",
@@ -152,7 +169,7 @@ async function main() {
   }, null, 2));
 }
 
-function createCandidateNeutral() {
+function createCandidateNeutral(options = {}) {
   const points = [];
   for (const a of [0, 90, 180, 270, 360]) {
     for (let index = 0; index < 25; index += 1) {
@@ -184,6 +201,12 @@ function createCandidateNeutral() {
     points
   };
   const neutralHash = sha256Json(neutral);
+  const tool = options.tool ?? {
+    toolProfileId: "vflat-4mm-25deg",
+    diameterMm: 4,
+    flatTipMm: 0.4,
+    angleDeg: 25
+  };
   neutral.cutterContactReport = {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     mode: "opencamlib-drop-cutter-contact",
@@ -191,12 +214,7 @@ function createCandidateNeutral() {
       neutralToolpathWithoutContactReportSha256: neutralHash,
       sourceNeutralToolpathSha256: neutralHash
     },
-    tool: {
-      toolProfileId: "vflat-4mm-25deg",
-      diameterMm: 4,
-      flatTipMm: 0.4,
-      angleDeg: 25
-    },
+    tool,
     contactSampling: {
       algorithm: "opencamlib-drop-cutter-contact",
       pointCount: neutral.points.length,

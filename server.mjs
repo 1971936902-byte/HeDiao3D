@@ -4898,7 +4898,8 @@ function createNeutralToolpathImportValidation(neutral, settings, source = {}) {
   );
   const cutterContactReport = evaluateNeutralImportCutterContactReport(neutral, {
     sourceNeutralToolpathSha256: source.sourceBinding?.submitted?.sha256 ?? null,
-    neutralToolpathWithoutContactReportSha256: sha256NeutralWithoutContactReport(neutral)
+    neutralToolpathWithoutContactReportSha256: sha256NeutralWithoutContactReport(neutral),
+    settings
   });
 
   if (neutral?.schema !== "hediao3d.neutral-toolpath.v1") {
@@ -5056,7 +5057,7 @@ function evaluateNeutralImportCutterContactReport(neutral, expectedIdentity = {}
   const level = String(quality.level ?? report.level ?? "");
   const previewScaffold = /preview|scaffold/i.test(schema) || /preview|scaffold/i.test(level) || Boolean(quality.previewScaffold);
   const inputIdentityBinding = createNeutralImportContactIdentityBinding(report.inputIdentity, expectedIdentity);
-  const strictEvidence = evaluateNeutralImportContactStrictEvidence(report);
+  const strictEvidence = evaluateNeutralImportContactStrictEvidence(report, expectedIdentity.settings ?? {});
   const productionCandidate = schema === "hediao3d.opencamlib-cutter-contact-report.v1"
     && Boolean(quality.productionCandidate)
     && Boolean(quality.postprocessEligible)
@@ -5076,7 +5077,7 @@ function evaluateNeutralImportCutterContactReport(neutral, expectedIdentity = {}
   };
 }
 
-function evaluateNeutralImportContactStrictEvidence(report) {
+function evaluateNeutralImportContactStrictEvidence(report, settings = {}) {
   const checks = [];
   const tool = report?.tool && typeof report.tool === "object" ? report.tool : {};
   const sampling = report?.contactSampling && typeof report.contactSampling === "object" ? report.contactSampling : {};
@@ -5104,8 +5105,12 @@ function evaluateNeutralImportContactStrictEvidence(report) {
   const protectedBoundsReady = safeMinX !== null && safeMaxX !== null && sampledMinX !== null && sampledMaxX !== null && safeMinX <= safeMaxX && sampledMinX >= safeMinX - 0.001 && sampledMaxX <= safeMaxX + 0.001;
 
   addNeutralImportStrictCheck(checks, "contact-algorithm-real", /(drop-cutter|cutter-contact|waterline)/i.test(algorithm) && !/(preview|heightfield|scaffold|fixture|synthetic)/i.test(algorithm), `algorithm=${algorithm || "missing"}`);
-  addNeutralImportStrictCheck(checks, "contact-tool-diameter", finiteNumberOrNull(tool.diameterMm) > 0, `diameterMm=${tool.diameterMm ?? "missing"}`);
-  addNeutralImportStrictCheck(checks, "contact-tool-angle", finiteNumberOrNull(tool.angleDeg) > 0, `angleDeg=${tool.angleDeg ?? "missing"}`);
+  const expectedToolDiameter = finiteNumberOrNull(settings.toolDiameter ?? settings.toolDiameterMm) ?? 4;
+  const expectedToolAngle = finiteNumberOrNull(settings.toolAngleDeg ?? settings.toolAngle ?? settings.angleDeg) ?? 25;
+  const expectedToolProfileId = settings.toolProfileId ?? "vflat-4mm-25deg";
+  addNeutralImportStrictCheck(checks, "contact-tool-profile", tool.toolProfileId === expectedToolProfileId, `toolProfileId=${tool.toolProfileId ?? "missing"}, expected=${expectedToolProfileId}`);
+  addNeutralImportStrictCheck(checks, "contact-tool-diameter", numbersClose(finiteNumberOrNull(tool.diameterMm), expectedToolDiameter, 0.001), `diameterMm=${tool.diameterMm ?? "missing"}, expected=${expectedToolDiameter}`);
+  addNeutralImportStrictCheck(checks, "contact-tool-angle", numbersClose(finiteNumberOrNull(tool.angleDeg), expectedToolAngle, 0.001), `angleDeg=${tool.angleDeg ?? "missing"}, expected=${expectedToolAngle}`);
   addNeutralImportStrictCheck(checks, "contact-tool-flat-tip", finiteNumberOrNull(tool.flatTipMm) >= 0, `flatTipMm=${tool.flatTipMm ?? "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-sampling-hit-rate", hitRate !== null && hitRate >= 0.995, `hitRate=${hitRate ?? "missing"}`);
   addNeutralImportStrictCheck(checks, "contact-sampling-point-count", pointCount !== null && pointCount > 0 && contactPointCount !== null && contactPointCount > 0, `pointCount=${pointCount ?? "missing"}, contactPointCount=${contactPointCount ?? "missing"}`);
