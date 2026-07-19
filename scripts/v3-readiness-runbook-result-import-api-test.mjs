@@ -86,7 +86,12 @@ async function main() {
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidateMachineFit?.coverage?.rotarySpanDeg === 360, "Linux evidence chain should preserve machine-fit rotary coverage");
   assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "Linux evidence chain should preserve CAMotics binding to candidate package validation");
   assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "Linux evidence chain should preserve CAMotics binding to candidate package bundle");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamMaterialReadinessStatus === "matched", "Linux evidence chain should preserve CAMotics upstream material readiness status");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamMaterialReadyForSimulation === true, "Linux evidence chain should preserve CAMotics upstream material simulation readiness");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamMaterialResidualEvidenceReady === false, "Linux evidence chain should preserve residual production boundary");
+  assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.materialRemovalReadiness?.status === "matched", "Linux evidence chain should preserve material readiness detail");
   assert(linuxEvidenceArtifact.evidenceChain?.camotics?.upstreamEvidence?.matchedCount === 4, "Linux evidence chain should preserve CAMotics upstream matched file count");
+  assert(linuxEvidenceArtifact.evidenceChain?.crossChecks?.camoticsUpstreamMaterialReadinessMatched === true, "Linux evidence chain should preserve material readiness cross-check");
   assert(linuxEvidenceArtifact.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "Linux evidence chain should preserve candidate package validation step");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "native-cam-closed-loop-check.json" && file.status === "imported"), "Linux evidence should preserve closed-loop check");
   assert(linuxEvidenceArtifact.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.status === "imported"), "Linux evidence should preserve CAMotics validation");
@@ -104,12 +109,18 @@ async function main() {
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidateMachineFit?.riskCounts?.missingRotaryCount === 0, "latest runbook result should summarize machine-fit risk counts");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "latest runbook result should summarize CAMotics candidate package validation binding");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "latest runbook result should summarize CAMotics candidate package bundle binding");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamMaterialReadinessStatus === "matched", "latest runbook result should summarize CAMotics material readiness");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamMaterialReadyForSimulation === true, "latest runbook result should summarize material simulation readiness");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.materialRemovalReadiness?.status === "matched", "latest runbook result should summarize material readiness detail");
   assert(latest.latest.linuxEvidence?.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "latest runbook result should summarize OpenCAMLib candidate package validation step");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.crossChecks?.camoticsUpstreamMaterialReadinessMatched === true, "latest runbook result should summarize material readiness cross-check");
 
   const readinessAfterImport = await postJson("/api/orchestrator/readiness", {});
   assert(readinessAfterImport.runbookResult?.readinessReportId === readiness.id, "readiness should include latest imported runbook result");
   assert(readinessAfterImport.runbookResult?.identityValid === true, "readiness should see identity-valid runbook result");
   assert(readinessAfterImport.runbookResult?.productionSafe === true, "readiness should preserve runbook productionSafe flag");
+  assert(readinessAfterImport.runbookResult?.linuxEvidence?.evidenceChain?.camotics?.upstreamMaterialReadinessStatus === "matched", "readiness should preserve runbook material readiness status");
+  assert(readinessAfterImport.runbookResult?.linuxEvidence?.evidenceChain?.camotics?.upstreamMaterialReadyForSimulation === true, "readiness should preserve runbook material simulation readiness");
   assert(readinessAfterImport.gates.allowProductionNc === false, "runbook import alone must not unlock production NC");
 
   console.log(JSON.stringify({
@@ -214,6 +225,9 @@ function createClosedLoopEvidenceChainFixture() {
       productionEvidenceEligible: true,
       upstreamEvidenceRequired: true,
       upstreamEvidenceStatus: "matched",
+      upstreamMaterialReadinessStatus: "matched",
+      upstreamMaterialReadyForSimulation: true,
+      upstreamMaterialResidualEvidenceReady: false,
       upstreamEvidence: {
         required: true,
         status: "matched",
@@ -224,6 +238,15 @@ function createClosedLoopEvidenceChainFixture() {
         mismatchCount: 0,
         candidatePackageValidationBound: true,
         candidatePackageBundleBound: true,
+        materialRemovalReadiness: {
+          required: true,
+          status: "matched",
+          level: "ready-for-camotics-or-equivalent",
+          readyForMaterialRemovalSimulation: true,
+          productionResidualEvidenceReady: false,
+          missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
+          summary: "Fixture upstream material readiness is ready for CAMotics/equivalent simulation."
+        },
         files: [
           { key: "opencamlibRealCandidateRun", filename: "opencamlib-real-candidate-run.json", matched: true, expectedSha256: "real-candidate-sha", importedSha256: "real-candidate-sha" },
           { key: "opencamlibContactValidation", filename: "opencamlib-contact-output-validation.json", matched: true, expectedSha256: "contact-validation-sha", importedSha256: "contact-validation-sha" },
@@ -237,6 +260,7 @@ function createClosedLoopEvidenceChainFixture() {
       camoticsValidationStep: "pass",
       candidatePackageStep: "pass",
       camoticsUpstreamEvidenceMatched: true,
+      camoticsUpstreamMaterialReadinessMatched: true,
       materialRemovalBoundToUpstreamCam: true
     },
     blocking: []
