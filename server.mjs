@@ -5477,7 +5477,9 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
   const proofIssues = Array.isArray(camOutputProof?.issues) ? camOutputProof.issues : [];
   const sourceMatchesSnapshot = sourceSha256 === toolpath.externalSourceSnapshot.sha256;
   const finalMatchesSource = finalSha256 === sourceSha256;
-  const productionCandidate = Boolean(normalizedEvidence.productionCandidate && camOutputProof?.productionCandidate);
+  const jobSpecSettings = readJsonFile(join(job.workDir, "job.json"))?.settings ?? {};
+  const gcodeMachineBoundary = analyzeExternalGcodeMachineBoundary(finalBytes.toString("utf8"), jobSpecSettings, toolpath.externalSourceSnapshot.gcode);
+  const productionCandidate = Boolean(normalizedEvidence.productionCandidate && camOutputProof?.productionCandidate && gcodeMachineBoundary.productionCandidateCompatible);
   const reviewIssues = [];
   const criticalIssues = [];
   const requiredActions = [];
@@ -5494,6 +5496,13 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
   } else if (!camOutputProof.productionCandidate) {
     reviewIssues.push(`CAM output proof 未通过生产候选校验：${proofIssues[0] ?? camOutputProof.status ?? "需要复核"}`);
     requiredActions.push("复核 .cam-proof.json 的 gcodeSha256、modelSha256、planSha256、fixture/scaffold 和 postprocessEligible 字段。");
+  }
+  if (gcodeMachineBoundary.status === "critical") {
+    criticalIssues.push(gcodeMachineBoundary.summary);
+    requiredActions.push(...gcodeMachineBoundary.requiredActions);
+  } else if (!gcodeMachineBoundary.productionCandidateCompatible) {
+    reviewIssues.push(gcodeMachineBoundary.summary);
+    requiredActions.push(...gcodeMachineBoundary.requiredActions);
   }
   if (normalizedEvidence.fixture) {
     reviewIssues.push("外部 G-code 被标记为 fixture/合约测试输出。");
@@ -5547,6 +5556,7 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
     },
     adapterHandoffEvidence: normalizedEvidence,
     camOutputProof,
+    gcodeMachineBoundary,
     metrics: {
       motionLineCount: toolpath.externalSourceSnapshot.gcode?.motionLineCount ?? null,
       parsedPointCount: toolpath.externalSourceSnapshot.gcode?.parsedPointCount ?? null,
@@ -5559,6 +5569,7 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
     requiredActions,
     productionBoundary: [
       "该报告只证明外部 G-code 摄取链路和哈希绑定状态。",
+      "外部 G-code 若要作为生产候选，必须声明 ROTARY_WRAP_AXIS=Y、ROTARY_WRAP_PER_REV_MM=100、LENGTH_AXIS=X，包含 Y 旋转夹具运动且不包含 A 轴运动。",
       "生产 NC 仍需非 fixture/scaffold 的 CAM output proof、真实材料去除仿真、NC 静态分析、空跑、软料试雕和机床验收。"
     ],
     summary: criticalIssues.length
@@ -5583,6 +5594,96 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
   await writeFile(join(job.workDir, "adapter-report.json"), JSON.stringify(nextAdapterReport, null, 2), "utf8");
   pushIfArtifactExists(job, "external-gcode-import-validation.json");
   return { validation, adapterReport: nextAdapterReport };
+}
+
+function analyzeExternalGcodeMachineBoundary(gcodeText, settings = {}, gcodeSnapshot = {}) {
+  const text = String(gcodeText ?? "");
+  const expectedAxis = String(settings.rotaryOutputAxis ?? "Y").toUpperCase();
+  const expectedWrap = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const expectedLengthAxis = expectedAxis === "X" ? "Y" : "X";
+  const headerAxis = matchGcodeHeader(text, "ROTARY_WRAP_AXIS");
+  const headerWrap = finiteNumberOrNull(matchGcodeHeader(text, "ROTARY_WRAP_PER_REV_MM"));
+  const headerLengthAxis = matchGcodeHeader(text, "LENGTH_AXIS");
+  const axisCounts = countGcodeAxisWords(text);
+  const mismatches = [];
+  const review = [];
+  const requiredActions = [];
+
+  if (!headerAxis) {
+    review.push("缺少 ROTARY_WRAP_AXIS 头部声明。");
+  } else if (String(headerAxis).toUpperCase() !== expectedAxis) {
+    mismatches.push(`ROTARY_WRAP_AXIS: expected ${expectedAxis}, got ${headerAxis}`);
+  }
+  if (headerWrap === null) {
+    review.push("缺少 ROTARY_WRAP_PER_REV_MM 头部声明。");
+  } else if (!numbersClose(headerWrap, expectedWrap, 0.001)) {
+    mismatches.push(`ROTARY_WRAP_PER_REV_MM: expected ${expectedWrap}, got ${headerWrap}`);
+  }
+  if (!headerLengthAxis) {
+    review.push("缺少 LENGTH_AXIS 头部声明。");
+  } else if (String(headerLengthAxis).toUpperCase() !== expectedLengthAxis) {
+    mismatches.push(`LENGTH_AXIS: expected ${expectedLengthAxis}, got ${headerLengthAxis}`);
+  }
+  if (expectedAxis === "Y" && axisCounts.A > 0) {
+    mismatches.push(`A-axis words are forbidden for wrapY: count=${axisCounts.A}`);
+  }
+  if (expectedAxis === "Y" && axisCounts.Y === 0) {
+    review.push("wrapY G-code 未检测到 Y 轴旋转夹具运动。");
+  }
+  if (gcodeSnapshot?.containsRotaryMarker === false) {
+    review.push("source snapshot 未检测到旋转包裹标记。");
+  }
+
+  if (mismatches.length) {
+    requiredActions.push("重新让外部 CAM 输出符合 HeDiao3D wrapY 后处理边界的 G-code，或改走 neutral-toolpath 交由 HeDiao3D 后处理。");
+  }
+  if (review.length) {
+    requiredActions.push("在外部 G-code 头部加入 ROTARY_WRAP_AXIS=Y、ROTARY_WRAP_PER_REV_MM=100、LENGTH_AXIS=X，并确认 Y 是旋转夹具轴。");
+  }
+  const status = mismatches.length ? "critical" : review.length ? "review" : "matched";
+  return {
+    schema: "hediao3d.external-gcode-machine-boundary.v1",
+    status,
+    productionCandidateCompatible: status === "matched",
+    expected: {
+      controllerClass: "3axis-controller-with-rotary-fixture",
+      rotaryOutputAxis: expectedAxis,
+      rotaryWrapPerRevolutionMm: expectedWrap,
+      lengthAxis: expectedLengthAxis,
+      forbiddenAxis: expectedAxis === "Y" ? "A" : null
+    },
+    actual: {
+      rotaryOutputAxis: headerAxis ? String(headerAxis).toUpperCase() : null,
+      rotaryWrapPerRevolutionMm: headerWrap,
+      lengthAxis: headerLengthAxis ? String(headerLengthAxis).toUpperCase() : null,
+      axisCounts
+    },
+    mismatches,
+    review,
+    requiredActions,
+    summary: status === "matched"
+      ? "外部 G-code 机床边界匹配 wrapY：X=长度、Y=旋转夹具、Z=刀深，未检测到 A 轴。"
+      : status === "critical"
+        ? `外部 G-code 机床边界与 wrapY 不匹配：${mismatches.slice(0, 3).join("；")}`
+        : `外部 G-code 机床边界需复核：${review.slice(0, 3).join("；")}`
+  };
+}
+
+function matchGcodeHeader(text, key) {
+  const match = String(text ?? "").match(new RegExp(`${key}\\s*=\\s*([^\\s)]+)`, "i"));
+  return match ? match[1] : null;
+}
+
+function countGcodeAxisWords(text) {
+  const counts = { X: 0, Y: 0, Z: 0, A: 0 };
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.replace(/\([^)]*\)/g, "").toUpperCase();
+    for (const axis of Object.keys(counts)) {
+      const matches = line.match(new RegExp(`\\b${axis}\\s*-?\\d`, "g"));
+      counts[axis] += matches ? matches.length : 0;
+    }
+  }
+  return counts;
 }
 
 function normalizeNeutralToolpathPoints(neutral, settings) {

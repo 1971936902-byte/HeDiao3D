@@ -121,6 +121,9 @@ async function main() {
   assert(gcodeImportValidation.adapterHandoffEvidence?.classification === "fixture-contract", "BlenderCAM G-code validation should preserve fixture classification");
   assert(gcodeImportValidation.productionCandidate === false, "fixture BlenderCAM G-code validation must not be production candidate");
   assert(gcodeImportValidation.camOutputProof?.status === "missing-cam-proof", "fixture BlenderCAM G-code should require a companion CAM proof");
+  assert(gcodeImportValidation.gcodeMachineBoundary?.status === "matched", `BlenderCAM G-code should match wrapY machine boundary, got ${gcodeImportValidation.gcodeMachineBoundary?.status}`);
+  assert(gcodeImportValidation.gcodeMachineBoundary?.actual?.rotaryOutputAxis === "Y", "BlenderCAM G-code boundary should declare Y rotary output");
+  assert((gcodeImportValidation.gcodeMachineBoundary?.actual?.axisCounts?.A ?? 0) === 0, "BlenderCAM wrapY G-code boundary must not contain A-axis words");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowAirRun === true, "BlenderCAM external G-code should allow air-run");

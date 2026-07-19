@@ -27,7 +27,7 @@ const settings = {
   stepoverMm: 0.28,
   toolProfileId: "vflat-4mm-25deg",
   materialProfileId: "olive-core",
-  machineProfileId: "desktop-3axis-relief",
+  machineProfileId: "desktop-3axis-generic",
   camMode: "3axis",
   rotaryOutputAxis: "Y",
   maxCutDepth: 0.45,
@@ -112,10 +112,14 @@ async function main() {
   assert(gcodeImportValidation.adapterHandoffEvidence?.classification === "fixture-contract", "FreeCAD G-code validation should preserve fixture classification");
   assert(gcodeImportValidation.productionCandidate === false, "fixture FreeCAD G-code validation must not be production candidate");
   assert(gcodeImportValidation.camOutputProof?.status === "missing-cam-proof", "fixture FreeCAD G-code should require a companion CAM proof");
+  assert(gcodeImportValidation.gcodeMachineBoundary?.status === "review", `FreeCAD fixture G-code should require wrapY boundary review, got ${gcodeImportValidation.gcodeMachineBoundary?.status}`);
+  assert(gcodeImportValidation.gcodeMachineBoundary?.productionCandidateCompatible === false, "FreeCAD fixture G-code without wrapY headers must not be production-candidate compatible");
+  assert(gcodeImportValidation.gcodeMachineBoundary?.review?.some((item) => /ROTARY_WRAP_AXIS/.test(item)), "FreeCAD fixture G-code boundary should name missing rotary header");
 
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.allowAirRun === true, "FreeCAD external G-code should allow air-run");
-  assert(productionGate.allowTrialNc === true, `FreeCAD external G-code should allow trial NC; blockers: ${(productionGate.blockers ?? []).join("; ")}`);
+  assert(productionGate.allowTrialNc === false, "FreeCAD 3-axis relief route should stay out of the rotary-Y trial package mainline");
+  assert(productionGate.blockers?.some((item) => /Y=旋转夹具|目标机床边界/.test(item)), "FreeCAD 3-axis route should explain rotary-Y target boundary blocker");
   assert(productionGate.allowProductionNc === false, "fixture FreeCAD output must not unlock production NC");
 
   console.log(JSON.stringify({
