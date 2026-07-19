@@ -2103,6 +2103,7 @@ if (existsSync(neutralPath) && existsSync(join(root, "opencamlib-candidate-packa
 }
 
 const contactValidation = readJsonIfExists(contactValidationPath);
+const contactReport = readJsonIfExists(contactPath);
 const candidatePackage = readJsonIfExists(join(root, "opencamlib-candidate-package-validation.json"));
 const requiredFailures = steps.filter((step) => step.required && step.status !== "pass");
 const productionCandidate = Boolean(
@@ -2140,6 +2141,12 @@ const report = {
     failedCheckCount: Array.isArray(contactValidation.checks) ? contactValidation.checks.filter((check) => check.status === "fail").length : null,
     pathCoverage: createContactPathCoverageSummary(contactValidation),
     protectedZones: createProtectedZonesSummary(contactValidation)
+  } : null,
+  openCamLibContactReport: contactReport ? {
+    schema: contactReport.schema ?? null,
+    mode: contactReport.mode ?? null,
+    candidateMachineFit: summarizeMachineFit(contactReport.candidateMachineFit),
+    materialRemovalReadiness: summarizeMaterialRemovalReadiness(contactReport.materialRemovalReadiness)
   } : null,
   candidatePackage: candidatePackage ? {
     level: candidatePackage.level,
@@ -2208,6 +2215,58 @@ function readJsonIfExists(path) {
   } catch {
     return null;
   }
+}
+
+function summarizeMachineFit(machineFit) {
+  if (!machineFit || typeof machineFit !== "object") return null;
+  return {
+    schema: machineFit.schema ?? "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+    level: machineFit.level ?? "missing",
+    summary: machineFit.summary ?? null,
+    targetMachine: machineFit.targetMachine ? {
+      controllerClass: machineFit.targetMachine.controllerClass ?? null,
+      rotaryOutputAxis: machineFit.targetMachine.rotaryOutputAxis ?? null,
+      wrapPerRevolutionMm: machineFit.targetMachine.wrapPerRevolutionMm ?? null,
+      toolProfileId: machineFit.targetMachine.toolProfileId ?? null
+    } : null,
+    coverage: machineFit.coverage ? {
+      pointCount: Number(machineFit.coverage.pointCount ?? 0),
+      finitePointCount: Number(machineFit.coverage.finitePointCount ?? 0),
+      xSpanMm: numberOrNull(machineFit.coverage.xSpanMm),
+      rotarySampleCount: Number(machineFit.coverage.rotarySampleCount ?? 0),
+      rotarySpanDeg: numberOrNull(machineFit.coverage.rotarySpanDeg),
+      expectedRotaryCoverageDeg: numberOrNull(machineFit.coverage.expectedRotaryCoverageDeg),
+      rotaryCoverageRatio: numberOrNull(machineFit.coverage.rotaryCoverageRatio),
+      depthMax: numberOrNull(machineFit.coverage.depthMax)
+    } : null,
+    riskCounts: machineFit.riskCounts ? {
+      holdZonePointCount: Number(machineFit.riskCounts.holdZonePointCount ?? 0),
+      deepPointCount: Number(machineFit.riskCounts.deepPointCount ?? 0),
+      invalidPointCount: Number(machineFit.riskCounts.invalidPointCount ?? 0),
+      missingRotaryCount: Number(machineFit.riskCounts.missingRotaryCount ?? 0)
+    } : null,
+    checks: machineFit.checks ? {
+      rotaryCoordinatePresent: Boolean(machineFit.checks.rotaryCoordinatePresent),
+      protectedZoneClean: Boolean(machineFit.checks.protectedZoneClean),
+      depthWithinLimit: Boolean(machineFit.checks.depthWithinLimit)
+    } : null
+  };
+}
+
+function summarizeMaterialRemovalReadiness(readiness) {
+  if (!readiness || typeof readiness !== "object") return null;
+  return {
+    schema: readiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1",
+    level: readiness.level ?? "missing",
+    readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
+    productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
+    missingForProduction: Array.isArray(readiness.missingForProduction) ? readiness.missingForProduction.slice(0, 12) : [],
+    summary: readiness.summary ?? null
+  };
+}
+
+function numberOrNull(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
 function createContactPathCoverageSummary(report) {

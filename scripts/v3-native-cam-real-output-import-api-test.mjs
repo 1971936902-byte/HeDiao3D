@@ -200,6 +200,8 @@ async function main() {
   assert(zipImported.openCamLibRealCandidate?.firstBlocking === "opencamlib-production-candidate-not-proven", "zip import should preserve real candidate blocker summary");
   assert(zipImported.openCamLibRealCandidate?.contactValidationPathCoverage?.status === "ready", "zip import should preserve real candidate path coverage summary");
   assert(zipImported.openCamLibRealCandidate?.protectedZones?.status === "ready", "zip import should preserve real candidate protected-zone summary");
+  assert(zipImported.openCamLibRealCandidate?.candidateMachineFit?.level === "ok", "zip import should preserve real candidate machine-fit summary");
+  assert(zipImported.openCamLibRealCandidate?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "zip import should preserve real candidate material-removal readiness");
   assert(zipImported.openCamLibRealCandidate?.candidatePackageBlockedReason === "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.", "zip import should preserve candidate package blocked reason");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
@@ -211,6 +213,8 @@ async function main() {
   assert(zipArtifact.openCamLibRealCandidate?.sha256, "zip import artifact should preserve OpenCAMLib real candidate sha256");
   assert(zipArtifact.openCamLibRealCandidate?.contactValidationPathCoverage?.status === "ready", "zip import artifact should preserve OpenCAMLib real candidate path coverage summary");
   assert(zipArtifact.openCamLibRealCandidate?.protectedZones?.status === "ready", "zip import artifact should preserve OpenCAMLib real candidate protected-zone summary");
+  assert(zipArtifact.openCamLibRealCandidate?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "zip import artifact should preserve OpenCAMLib real candidate machine-fit");
+  assert(zipArtifact.openCamLibRealCandidate?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "zip import artifact should preserve OpenCAMLib material-removal production boundary");
   assert(zipArtifact.openCamLibRealCandidateStatus?.summary?.includes("OpenCAMLib one-command real candidate"), "zip import artifact should preserve OpenCAMLib real candidate status summary");
   const zipImportReport = await getJson(zipImported.apiArtifacts.importJson);
   assert(zipImportReport.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import report should preserve source bundle filename");
@@ -457,6 +461,50 @@ function createRealCandidateFixture() {
         summary: "OpenCAMLib path coverage checks passed."
       },
       protectedZones: createProtectedZonesFixture()
+    },
+    openCamLibContactReport: {
+      schema: "hediao3d.opencamlib-cutter-contact-report.v1",
+      mode: "opencamlib-path-drop-cutter-experimental",
+      candidateMachineFit: {
+        schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+        level: "ok",
+        summary: "Fixture contact matches the target rotary-Y machine boundary.",
+        targetMachine: {
+          controllerClass: "3axis-controller-with-rotary-fixture",
+          rotaryOutputAxis: "Y",
+          wrapPerRevolutionMm: 100,
+          toolProfileId: "vflat-4mm-25deg"
+        },
+        coverage: {
+          pointCount: 3,
+          finitePointCount: 3,
+          xSpanMm: 20,
+          rotarySampleCount: 3,
+          rotarySpanDeg: 360,
+          expectedRotaryCoverageDeg: 360,
+          rotaryCoverageRatio: 1,
+          depthMax: 0.8
+        },
+        riskCounts: {
+          holdZonePointCount: 0,
+          deepPointCount: 0,
+          invalidPointCount: 0,
+          missingRotaryCount: 0
+        },
+        checks: {
+          rotaryCoordinatePresent: true,
+          protectedZoneClean: true,
+          depthWithinLimit: true
+        }
+      },
+      materialRemovalReadiness: {
+        schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+        level: "ready-for-camotics-or-equivalent",
+        readyForMaterialRemovalSimulation: true,
+        productionResidualEvidenceReady: false,
+        missingForProduction: ["measured or swept-volume validated residual material metrics"],
+        summary: "Fixture is ready for engineering material-removal simulation but not production residual evidence."
+      }
     },
     candidatePackage: {
       level: "critical",

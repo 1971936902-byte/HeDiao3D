@@ -96,6 +96,17 @@ try {
   assert(existsSync(join(workDir, "opencamlib-real-candidate-run.json")), "real candidate runner should write JSON report");
 
   createOpenCamLibCandidateFiles(workDir);
+  const realCandidateWithContact = spawnSync(node, [realCandidatePath, workDir], {
+    cwd: workDir,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(realCandidateWithContact.status === 3, `real candidate runner should stay fail-closed without live OpenCAMLib runner but preserve contact evidence, got ${realCandidateWithContact.status}: ${realCandidateWithContact.stderr || realCandidateWithContact.stdout}`);
+  const realCandidateWithContactReport = JSON.parse(realCandidateWithContact.stdout);
+  assert(realCandidateWithContactReport.openCamLibContactReport?.candidateMachineFit?.level === "ok", "real candidate runner should summarize raw contact machine-fit evidence");
+  assert(realCandidateWithContactReport.openCamLibContactReport?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "real candidate runner should preserve raw contact machine-fit rotary axis");
+  assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "real candidate runner should summarize material-removal readiness");
+  assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.productionResidualEvidenceReady === true, "validated contact fixture should preserve production residual readiness summary");
   const candidateClosedLoop = spawnSync(node, [closedLoopPath, workDir], {
     cwd: workDir,
     encoding: "utf8",
@@ -357,6 +368,46 @@ function createOpenCamLibContact({ modelSha, planSha, neutralSha }) {
       sampledMaxX: 10,
       violationCount: 0,
       violations: []
+    },
+    candidateMachineFit: {
+      schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+      level: "ok",
+      summary: "Fixture contact matches the target rotary-Y machine boundary.",
+      targetMachine: {
+        controllerClass: "3axis-controller-with-rotary-fixture",
+        rotaryOutputAxis: "Y",
+        wrapPerRevolutionMm: 100,
+        toolProfileId: "vflat-4mm-25deg"
+      },
+      coverage: {
+        pointCount: 3,
+        finitePointCount: 3,
+        xSpanMm: 20,
+        rotarySampleCount: 3,
+        rotarySpanDeg: 360,
+        expectedRotaryCoverageDeg: 360,
+        rotaryCoverageRatio: 1,
+        depthMax: 0.8
+      },
+      riskCounts: {
+        holdZonePointCount: 0,
+        deepPointCount: 0,
+        invalidPointCount: 0,
+        missingRotaryCount: 0
+      },
+      checks: {
+        rotaryCoordinatePresent: true,
+        protectedZoneClean: true,
+        depthWithinLimit: true
+      }
+    },
+    materialRemovalReadiness: {
+      schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+      level: "ready-for-camotics-or-equivalent",
+      readyForMaterialRemovalSimulation: true,
+      productionResidualEvidenceReady: true,
+      missingForProduction: [],
+      summary: "Fixture contact has swept-volume validated residual metrics and can enter material-removal validation."
     },
     quality: {
       level: "validated-contact",

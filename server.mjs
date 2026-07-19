@@ -2190,6 +2190,8 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       contactEvidenceClass: report.openCamLibRealCandidate.contactEvidenceClass ?? null,
       contactValidationPathCoverage: report.openCamLibRealCandidate.contactValidationPathCoverage ?? null,
       protectedZones: report.openCamLibRealCandidate.protectedZones ?? null,
+      candidateMachineFit: report.openCamLibRealCandidate.candidateMachineFit ?? null,
+      materialRemovalReadiness: report.openCamLibRealCandidate.materialRemovalReadiness ?? null,
       candidatePackageLevel: report.openCamLibRealCandidate.candidatePackageLevel ?? null,
       candidatePackageBlockedReason: report.openCamLibRealCandidate.candidatePackageBlockedReason ?? null,
       candidateReadyForImport: Boolean(report.openCamLibRealCandidate.candidateReadyForImport),
@@ -2267,6 +2269,8 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   const blockingCount = Number(report.blockingCount ?? (Array.isArray(report.blocking) ? report.blocking.length : 0));
   const contactValidationPathCoverage = report.contactValidationPathCoverage ?? null;
   const protectedZones = report.protectedZones ?? null;
+  const candidateMachineFit = report.candidateMachineFit ?? null;
+  const materialRemovalReadiness = report.materialRemovalReadiness ?? null;
   return {
     schema: "hediao3d.opencamlib-real-candidate-status.v1",
     status: ready ? "ready" : report.level === "blocked" ? "blocked" : "review",
@@ -2278,6 +2282,8 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     contactEvidenceClass: report.contactEvidenceClass ?? null,
     contactValidationPathCoverage,
     protectedZones,
+    candidateMachineFit,
+    materialRemovalReadiness,
     candidatePackageLevel: report.candidatePackageLevel ?? null,
     candidatePackageBlockedReason: report.candidatePackageBlockedReason ?? null,
     candidateReadyForImport: Boolean(report.candidateReadyForImport),
@@ -2345,6 +2351,10 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     ?? nativeCandidate?.candidateMachineFit
     ?? chainOpenCamLib?.candidateMachineFit
     ?? null;
+  const materialRemovalReadiness = nativeCandidateStatus?.materialRemovalReadiness
+    ?? nativeCandidate?.materialRemovalReadiness
+    ?? chainOpenCamLib?.materialRemovalReadiness
+    ?? null;
   const status = realCandidateReady && contactPathCoverage?.ready && protectedZones?.ready && candidatePackageReadyForImport
     ? "ready-for-review"
     : realCandidateKnown || contactPathCoverage?.status !== "missing" || candidatePackageLevel !== "missing"
@@ -2372,6 +2382,7 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     candidatePackageReadyForImport,
     candidatePackageBlockedReason,
     candidateMachineFit,
+    materialRemovalReadiness,
     firstBlocking: blocker,
     summary: status === "ready-for-review"
       ? "Linux OpenCAMLib 真实候选链路已具备可回填复核证据；仍需同 job 的材料去除、空跑和试雕证据后才可生产解锁。"
@@ -2606,6 +2617,7 @@ function createOpenCamLibRunnerReadinessSummary(report, rawBytes = null) {
 function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
   const blocking = Array.isArray(report?.blocking) ? report.blocking : [];
   const contactValidation = report?.contactValidation && typeof report.contactValidation === "object" ? report.contactValidation : null;
+  const contactReport = report?.openCamLibContactReport && typeof report.openCamLibContactReport === "object" ? report.openCamLibContactReport : null;
   const candidatePackage = report?.candidatePackage && typeof report.candidatePackage === "object" ? report.candidatePackage : null;
   const contactValidationPathCoverage = contactValidation
     ? createOpenCamLibContactPathCoverageSummary(contactValidation)
@@ -2627,6 +2639,8 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
       ready: false,
       summary: "OpenCAMLib one-command real candidate 缺少 contact validation，无法判断端部保护区。"
     };
+  const candidateMachineFit = candidatePackage?.machineFit ?? contactReport?.candidateMachineFit ?? null;
+  const materialRemovalReadiness = contactReport?.materialRemovalReadiness ?? null;
   return {
     schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
     sourceSchema: report?.schema ?? null,
@@ -2638,6 +2652,8 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     contactEvidenceClass: contactValidation?.evidenceClass ?? null,
     contactValidationPathCoverage,
     protectedZones,
+    candidateMachineFit,
+    materialRemovalReadiness,
     candidatePackageLevel: candidatePackage?.level ?? null,
     candidatePackageBlockedReason: candidatePackage?.blockedReason ?? null,
     candidateReadyForImport: Boolean(candidatePackage?.readyForImport),
