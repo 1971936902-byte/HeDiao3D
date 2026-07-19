@@ -17239,6 +17239,10 @@ async function getOrchestratorLinuxCamJobPackage(jobId, res) {
     content: createLinuxCamJobPackageReadme(manifest)
   });
   files.push({
+    name: `${root}/OPERATOR-LINUX-CAM-CHECKLIST.md`,
+    content: createLinuxCamJobOperatorChecklist(manifest)
+  });
+  files.push({
     name: `${root}/run-linux-cam-job.sh`,
     content: createLinuxCamJobRunScript(manifest)
   });
@@ -17996,6 +18000,7 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
       dependencyInstallReportOutput: "linux-cam-deps-install-report.json",
       preflight: "preflight-linux-cam-job.mjs",
       preflightOutput: "linux-cam-job-preflight.json",
+      operatorChecklist: "OPERATOR-LINUX-CAM-CHECKLIST.md",
       localValidator: "validate-linux-cam-job.mjs",
       evidenceUploader: "upload-linux-cam-evidence.mjs",
       localValidationOutput: "linux-cam-job-local-validation.json",
@@ -18074,6 +18079,7 @@ function createLinuxCamJobPackageReadme(manifest) {
     "- 本包不是安全试雕包，也不是正式生产包。",
     "- 本包内的 `camotics-preview.nc` 只用于展开三轴仿真，禁止上机。",
     "- 正式上机文件只能来自 HeDiao3D `production-package` 总门禁放行后的生产包。",
+    "- 现场执行前请先打开 `OPERATOR-LINUX-CAM-CHECKLIST.md`，逐项确认依赖、真实 CAM、材料去除仿真和回填状态。",
     "",
     "## 推荐执行顺序",
     "",
@@ -18122,6 +18128,8 @@ function createLinuxCamJobPackageReadme(manifest) {
     "",
     "脚本会先回填 `linux-cam-job-local-validation.json`，再把 `native-cam-real-output-bundle.zip` 和 `camotics-result-bundle.zip` 发送到统一入口 `linux-cam-evidence-bundle`。该上传动作不会直接解锁生产 NC。",
     "",
+    "如果上传中断或失败，查看 `linux-cam-evidence-upload-report.json` 中的 `phase`、`completedCount`、`failedUpload` 和 `retryCommand`。修复问题后重复运行同一上传命令即可；重复上传只作为审计证据，不会直接解锁生产。",
+    "",
     "## 文件清单",
     "",
     "### Native CAM 输入",
@@ -18135,6 +18143,67 @@ function createLinuxCamJobPackageReadme(manifest) {
     "### 参考证据",
     "",
     references,
+    ""
+  ].join("\n");
+}
+
+function createLinuxCamJobOperatorChecklist(manifest) {
+  return [
+    "# HeDiao3D V3 Linux CAM 现场操作清单",
+    "",
+    `Job ID: ${manifest.jobId}`,
+    `目标机床: ${manifest.policy.machineModel}`,
+    `轴映射: ${manifest.policy.axisMapping}`,
+    `生产 NC 放行: ${manifest.allowProductionNc ? "异常：该整单包仍不应作为生产包" : "否，必须保持锁定"}`,
+    "",
+    "## 0. 禁止事项",
+    "",
+    "- [ ] 已确认本包不是正式生产包。",
+    "- [ ] 已确认 `camotics/camotics-preview.nc`、`air-run.nc`、`rotary-calibration-airrun.nc` 不能当作正式生产文件直接上机。",
+    "- [ ] 已确认上传 Linux 证据只更新 Orchestrator 证据链，不会直接解锁生产 NC。",
+    "",
+    "## 1. 解压与依赖",
+    "",
+    "- [ ] 在 Linux CAM 服务器解压本包。",
+    "- [ ] 执行 `bash install-linux-cam-deps.sh` 查看 dry-run 计划。",
+    "- [ ] 如需真实安装，执行 `HEDIAO3D_INSTALL_DEPS=1 bash install-linux-cam-deps.sh`。",
+    "- [ ] 执行 `node preflight-linux-cam-job.mjs .` 并查看 `linux-cam-job-preflight.json`。",
+    "- [ ] 如果预检 blocked，先按 `installPlan.commands` 和 `resourceProfile` 修复环境。",
+    "",
+    "## 2. Native CAM / OpenCAMLib",
+    "",
+    "- [ ] 已准备 `HEDIAO3D_NATIVE_CAM_SERVER_DIR` 指向 Native CAM server-package 解压目录。",
+    "- [ ] 已把 `native-cam/opencamlib-candidate-inputs` 输入复制到 Native CAM 服务目录，或直接执行 `bash run-linux-cam-job.sh` 自动复制。",
+    "- [ ] 已运行 Native CAM 自检、OpenCAMLib 真实候选、真实输出验收。",
+    `- [ ] 已生成 \`${manifest.nativeCam.expectedUpload}\`。`,
+    "",
+    "## 3. CAMotics / 等效材料去除仿真",
+    "",
+    "- [ ] 已运行 `bash camotics/run/camotics-linux-run.sh` 或等效材料去除仿真。",
+    "- [ ] 已填写真实 `camotics-result.json`，并确保 `synthetic=false`。",
+    "- [ ] 已运行 `node camotics/run/camotics-result-validate.js camotics-result.json`。",
+    `- [ ] 已生成 \`${manifest.camotics.expectedUpload}\`。`,
+    "",
+    "## 4. 本地校验与上传",
+    "",
+    "- [ ] 执行 `node validate-linux-cam-job.mjs .`。",
+    "- [ ] 确认 `linux-cam-job-local-validation.json` 的 `level=ready-for-v3-upload`。",
+    "- [ ] 设置 `HEDIAO3D_V3_API_BASE=http://你的V3服务器:8787`。",
+    "- [ ] 执行 `node upload-linux-cam-evidence.mjs .`。",
+    "- [ ] 如果失败，查看 `linux-cam-evidence-upload-report.json` 的 `phase`、`failedUpload`、`retryCommand`，修复后重复上传。",
+    "",
+    "## 5. 回到 HeDiao3D",
+    "",
+    "- [ ] 重新生成 V3 readiness。",
+    "- [ ] 确认真实 CAM、材料去除仿真、空跑、软料试雕、机床验收全部绑定同一个 job。",
+    "- [ ] 只有 production-package 总门禁明确放行后，才允许下载正式生产 NC。",
+    "",
+    "## 当前包导入端点",
+    "",
+    `- 统一证据入口: ${manifest.importBack.unifiedEndpoint}`,
+    `- 本地校验入口: ${manifest.importBack.linuxCamJobValidationEndpoint}`,
+    `- 上传报告入口: ${manifest.importBack.linuxCamEvidenceUploadReportEndpoint}`,
+    `- 生产包入口: ${manifest.importBack.productionPackageEndpoint}`,
     ""
   ].join("\n");
 }
@@ -18680,6 +18749,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "const checks = [",
     "  fileSummary('linux-cam-job-package-manifest.json'),",
     "  fileSummary('README-LINUX-CAM-JOB.md'),",
+    "  fileSummary('OPERATOR-LINUX-CAM-CHECKLIST.md'),",
     "  fileSummary('install-linux-cam-deps.sh'),",
     "  fileSummary('linux-cam-deps-install-report.json', false),",
     "  fileSummary('preflight-linux-cam-job.mjs'),",
