@@ -244,6 +244,8 @@ async function main() {
   assert(linuxCamJobManifest.references?.some((file) => file.name === "hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should hash Native CAM snapshot reference");
   const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
+  assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-evidence-status.v1"), "Linux CAM job validator missing evidence status schema");
+  assert(linuxCamJobValidator.includes("ready-for-upload") && linuxCamJobValidator.includes("missingUploads"), "Linux CAM job validator should summarize upload readiness");
   assert(linuxCamJobValidator.includes("present-hash-matched"), "Linux CAM job validator should verify manifest file hashes");
   assert(linuxCamJobValidator.includes("native-cam-real-output-bundle.zip") && linuxCamJobValidator.includes("camotics-result-bundle.zip"), "Linux CAM job validator should name expected upload bundles");
   const linuxCamJobExtractDir = join(tmpdir(), `hediao3d-linux-cam-job-${job.id}`);
@@ -260,6 +262,12 @@ async function main() {
   assert(localValidation.schema === "hediao3d.v3-linux-cam-job-local-validation.v1", "Linux CAM job local validation schema mismatch");
   assert(localValidation.level === "waiting-for-linux-evidence", `Linux CAM job local validation should wait for real evidence, got ${localValidation.level}`);
   assert(localValidation.packageIntegrityOk === true, "Linux CAM job local validation should verify manifest hashes");
+  assert(localValidation.evidenceStatus?.phase === "waiting-for-linux-evidence", "Linux CAM job local validation should expose evidence waiting phase");
+  assert(localValidation.evidenceStatus?.packageIntegrityOk === true, "Linux CAM job evidence status should preserve package integrity");
+  assert(localValidation.evidenceStatus?.nativeCamBundle === "missing", "Linux CAM job evidence status should require Native CAM bundle");
+  assert(localValidation.evidenceStatus?.camoticsBundle === "missing", "Linux CAM job evidence status should require CAMotics bundle");
+  assert(localValidation.evidenceStatus?.missingUploads?.includes("native-cam-real-output-bundle.zip"), "Linux CAM job evidence status should list Native CAM upload");
+  assert(localValidation.evidenceStatus?.missingUploads?.includes("camotics-result-bundle.zip"), "Linux CAM job evidence status should list CAMotics upload");
   assert(Array.isArray(localValidation.hashMismatches) && localValidation.hashMismatches.length === 0, "Linux CAM job local validation should not report hash mismatches");
   assert(localValidation.productionUnlockEligible === false, "Linux CAM job local validation must not unlock production");
   assert(localValidation.expectedUploads?.nativeCam === "native-cam-real-output-bundle.zip", "Linux CAM job local validation missing Native CAM expected upload");
@@ -271,11 +279,13 @@ async function main() {
   assert(importedLinuxCamJobValidation.ok === true, "Linux CAM job validation import should succeed");
   assert(importedLinuxCamJobValidation.productionUnlockEligible === false, "Linux CAM job validation import must not unlock production");
   assert(importedLinuxCamJobValidation.validation?.level === "waiting-for-linux-evidence", "Linux CAM job validation import should preserve level");
+  assert(importedLinuxCamJobValidation.validation?.evidenceStatus?.phase === "waiting-for-linux-evidence", "Linux CAM job validation import should preserve evidence phase");
   assert(importedLinuxCamJobValidation.artifacts?.validation?.endsWith("linux-cam-job-local-validation.json"), "Linux CAM job validation import should expose validation artifact");
   assert(importedLinuxCamJobValidation.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "Linux CAM job validation response missing production closure audit");
   assert(importedLinuxCamJobValidation.productionClosureAudit.steps?.some((step) => step.id === "native-cam-real-output"), "Linux CAM job validation closure audit should include external CAM step");
   const reloadedAfterLinuxCamJobValidation = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloadedAfterLinuxCamJobValidation.result?.summary?.linuxCamJobValidation?.level === "waiting-for-linux-evidence", "job summary should expose Linux CAM job validation");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.evidenceStatus?.nativeCamBundle === "missing", "job summary should expose Linux CAM job evidence status");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.productionUnlockEligible === false, "job summary Linux CAM job validation must not unlock production");
   assert(reloadedAfterLinuxCamJobValidation.result?.summary?.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary missing production closure audit after Linux CAM job validation import");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.productionClosureAudit.steps?.some((step) => step.id === "native-cam-real-output"), "job summary closure audit should include external CAM step after Linux validation import");
@@ -286,6 +296,8 @@ async function main() {
   assert(reloadedAfterLinuxCamJobValidation.result.summary.packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity should hash production closure audit after Linux validation import");
   const importedLinuxCamJobValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/linux-cam-job-local-validation.json`);
   assert(importedLinuxCamJobValidationArtifact.importedVia === "api-linux-cam-job-validation", "Linux CAM job validation artifact should record API import");
+  const importedLinuxCamJobValidationAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/linux-cam-job-validation-import.json`);
+  assert(importedLinuxCamJobValidationAudit.evidenceStatus?.camoticsBundle === "missing", "Linux CAM job validation audit should expose evidence status");
 
   console.log(JSON.stringify({
     ok: true,

@@ -3309,6 +3309,7 @@ export function App() {
             linuxCamJobValidation: {
               level: data.validation?.level ?? "unknown",
               summary: data.validation?.summary ?? null,
+              evidenceStatus: data.validation?.evidenceStatus ?? null,
               expectedUploads: data.validation?.expectedUploads ?? null,
               productionUnlockEligible: false,
               artifact: "linux-cam-job-local-validation.json",
@@ -7188,10 +7189,17 @@ export function App() {
                       </div>
                     )}
                     {(v3Job.result.summary as any).linuxCamJobValidation && (
-                      <small className={(v3Job.result.summary as any).linuxCamJobValidation.level === "ready-for-v3-upload" ? "v3-inline-ok" : "v3-inline-warning"}>
-                        Linux整单校验：{(v3Job.result.summary as any).linuxCamJobValidation.level}
-                        {(v3Job.result.summary as any).linuxCamJobValidation.summary ? ` · ${(v3Job.result.summary as any).linuxCamJobValidation.summary}` : ""}
-                      </small>
+                      <>
+                        <small className={(v3Job.result.summary as any).linuxCamJobValidation.level === "ready-for-v3-upload" ? "v3-inline-ok" : "v3-inline-warning"}>
+                          Linux整单校验：{(v3Job.result.summary as any).linuxCamJobValidation.level}
+                          {(v3Job.result.summary as any).linuxCamJobValidation.summary ? ` · ${(v3Job.result.summary as any).linuxCamJobValidation.summary}` : ""}
+                        </small>
+                        {(v3Job.result.summary as any).linuxCamJobValidation.evidenceStatus && (
+                          <small className={(v3Job.result.summary as any).linuxCamJobValidation.evidenceStatus.readyForUpload ? "v3-inline-ok" : "v3-inline-warning"}>
+                            Linux证据进度：{formatLinuxCamJobEvidenceStatus((v3Job.result.summary as any).linuxCamJobValidation.evidenceStatus)}
+                          </small>
+                        )}
+                      </>
                     )}
                     <label>
                       <span>整单校验JSON</span>
@@ -9356,6 +9364,23 @@ function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<N
   const candidateBundle = evidence?.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
   const mismatches = evidence?.mismatchCount ? `不匹配 ${evidence.mismatchCount}` : "";
   return [statusText, `哈希 ${matched}`, candidateValidation, candidateBundle, mismatches].filter(Boolean).join(" · ");
+}
+
+function formatLinuxCamJobEvidenceStatus(status: any) {
+  if (!status || typeof status !== "object") return "未回填";
+  const phase = status.phase === "ready-for-upload"
+    ? "已可回填"
+    : status.phase === "invalid-package"
+      ? "整单包缺文件"
+      : status.phase === "package-hash-mismatch"
+        ? "哈希不匹配"
+        : "等待Linux证据";
+  const packageFiles = status.requiredFileCount
+    ? `文件 ${status.presentRequiredFileCount ?? 0}/${status.requiredFileCount}`
+    : "";
+  const nativeCam = status.nativeCamBundle === "present" ? "Native CAM已生成" : "缺Native CAM包";
+  const camotics = status.camoticsBundle === "present" ? "CAMotics已生成" : "缺CAMotics包";
+  return [phase, packageFiles, nativeCam, camotics].filter(Boolean).join(" · ");
 }
 
 function formatLockedProductionPackageGuidance(data: any) {
