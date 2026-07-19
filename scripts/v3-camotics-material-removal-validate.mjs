@@ -55,6 +55,7 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
   const upstreamCamEvidence = evaluateUpstreamCamEvidenceBinding(result.inputs?.upstreamCamEvidence, runPackage.upstreamCamEvidence);
   check(checks, "upstream-cam-evidence", upstreamCamEvidence.ok, upstreamCamEvidence.summary, upstreamCamEvidence);
   check(checks, "upstream-machine-fit", upstreamCamEvidence.machineFit.ok, upstreamCamEvidence.machineFit.summary, upstreamCamEvidence.machineFit);
+  check(checks, "upstream-material-readiness", upstreamCamEvidence.materialRemovalReadiness.ok, upstreamCamEvidence.materialRemovalReadiness.summary, upstreamCamEvidence.materialRemovalReadiness);
   check(checks, "motion-line-count", Number(result.metrics?.motionLineCount) === Number(expectedMotion.motionLineCount), "result metrics.motionLineCount must match run package motion profile.", {
     expected: expectedMotion.motionLineCount ?? null,
     reported: result.metrics?.motionLineCount ?? null
@@ -129,6 +130,12 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
         required: false,
         summary: "No upstream candidate machine-fit preflight was captured in the run package."
       },
+      materialRemovalReadiness: {
+        ok: true,
+        status: "not-required",
+        required: false,
+        summary: "No upstream OpenCAMLib material-removal readiness was captured in the run package."
+      },
       summary: "No upstream CAM/OpenCAMLib evidence was captured in the run package, so upstream binding is not required for this validator run."
     };
   }
@@ -150,7 +157,8 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
     })
     .filter((item) => !item.matched);
   const machineFit = evaluateUpstreamMachineFit(imported?.candidateMachineFit, expected?.candidateMachineFit);
-  const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1" && expectedFiles.length > 0 && mismatches.length === 0 && machineFit.ok;
+  const materialRemovalReadiness = evaluateUpstreamMaterialRemovalReadiness(imported?.materialRemovalReadiness, expected?.materialRemovalReadiness);
+  const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1" && expectedFiles.length > 0 && mismatches.length === 0 && machineFit.ok && materialRemovalReadiness.ok;
   return {
     ok,
     status: ok ? "matched" : "mismatch",
@@ -159,11 +167,14 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
     importedCount: importedFiles.length,
     mismatches,
     machineFit,
+    materialRemovalReadiness,
     summary: ok
       ? "CAMotics result is hash-bound to the upstream Native CAM/OpenCAMLib evidence captured by the run package."
-      : machineFit.ok
+      : machineFit.ok && materialRemovalReadiness.ok
         ? "CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
-        : `CAMotics upstream candidate machine-fit is not acceptable: ${machineFit.summary}`
+        : !machineFit.ok
+          ? `CAMotics upstream candidate machine-fit is not acceptable: ${machineFit.summary}`
+          : `CAMotics upstream material-removal readiness is not acceptable: ${materialRemovalReadiness.summary}`
   };
 }
 
@@ -199,6 +210,46 @@ function evaluateUpstreamMachineFit(importedMachineFit, expectedMachineFit) {
     summary: ok
       ? `Upstream OpenCAMLib candidate machine-fit is ${importedLevel} and matches the run package.`
       : `Expected machineFit level=${expectedLevel}, axis=${expectedMachineFit?.targetMachine?.rotaryOutputAxis ?? "missing"}; got level=${importedLevel}, axis=${importedMachineFit?.targetMachine?.rotaryOutputAxis ?? "missing"}.`
+  };
+}
+
+function evaluateUpstreamMaterialRemovalReadiness(importedReadiness, expectedReadiness) {
+  if (!expectedReadiness) {
+    return {
+      ok: true,
+      status: "not-required",
+      required: false,
+      summary: "No upstream OpenCAMLib material-removal readiness was captured in the run package."
+    };
+  }
+  const expectedSchema = expectedReadiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1";
+  const importedSchema = importedReadiness?.schema ?? null;
+  const expectedLevel = expectedReadiness.level ?? "missing";
+  const importedLevel = importedReadiness?.level ?? "missing";
+  const schemaOk = importedSchema === expectedSchema;
+  const levelOk = importedLevel === expectedLevel;
+  const readyForSimulation = Boolean(importedReadiness?.readyForMaterialRemovalSimulation) === true;
+  const expectedReadyForSimulation = Boolean(expectedReadiness.readyForMaterialRemovalSimulation) === true;
+  const readyMatches = readyForSimulation === expectedReadyForSimulation;
+  const ok = schemaOk && levelOk && readyMatches && readyForSimulation;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    required: true,
+    expectedLevel,
+    importedLevel,
+    schemaOk,
+    levelOk,
+    expectedReadyForMaterialRemovalSimulation: expectedReadyForSimulation,
+    importedReadyForMaterialRemovalSimulation: readyForSimulation,
+    readyMatches,
+    productionResidualEvidenceReady: Boolean(importedReadiness?.productionResidualEvidenceReady),
+    missingForProduction: Array.isArray(importedReadiness?.missingForProduction)
+      ? importedReadiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12)
+      : [],
+    summary: ok
+      ? `Upstream OpenCAMLib material-removal readiness is ${importedLevel} and can enter CAMotics/equivalent simulation.`
+      : `Expected material readiness level=${expectedLevel}, readyForSimulation=${expectedReadyForSimulation}; got level=${importedLevel}, readyForSimulation=${readyForSimulation}.`
   };
 }
 

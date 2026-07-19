@@ -38,8 +38,11 @@ try {
   assert(readyReport.checks.some((check) => check.id === "simulator-evidence" && check.status === "pass"), "simulator evidence check missing");
   assert(readyReport.checks.some((check) => check.id === "upstream-cam-evidence" && check.ok && check.status === "matched"), "upstream CAM evidence check missing");
   assert(readyReport.checks.some((check) => check.id === "upstream-machine-fit" && check.ok && check.status === "matched"), "upstream machine-fit check missing");
+  assert(readyReport.checks.some((check) => check.id === "upstream-material-readiness" && check.ok && check.status === "matched"), "upstream material readiness check missing");
   assert(readyReport.upstreamCamEvidence?.status === "matched", "ready report should expose matched upstream CAM evidence");
   assert(readyReport.upstreamCamEvidence?.machineFit?.status === "matched", "ready report should expose matched upstream machine-fit");
+  assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.status === "matched", "ready report should expose matched upstream material readiness");
+  assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "ready report should preserve production residual boundary");
   assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
   const bundlePath = join(workDir, "camotics-result-bundle.zip");
@@ -107,6 +110,29 @@ try {
   assert(criticalMachineFitReport.missing.includes("upstream-cam-evidence"), "critical machine-fit should fail upstream CAM evidence");
   assert(criticalMachineFitReport.missing.includes("upstream-machine-fit"), "critical machine-fit should list upstream-machine-fit");
   assert(criticalMachineFitReport.upstreamCamEvidence?.machineFit?.importedLevel === "critical", "critical machine-fit report should expose imported critical level");
+
+  const blockedReadinessRunPackagePath = join(workDir, "blocked-readiness-camotics-cli-run-package.json");
+  const blockedReadinessRunPackage = createRunPackage({
+    upstreamCamEvidence: createUpstreamCamEvidence({
+      materialRemovalReadiness: createMaterialRemovalReadiness({ readyForMaterialRemovalSimulation: false, level: "blocked" })
+    })
+  });
+  writeJsonWithHash(blockedReadinessRunPackagePath, blockedReadinessRunPackage);
+  const blockedReadinessRunPackageSha = sha256File(blockedReadinessRunPackagePath);
+  writeJsonWithHash(resultPath, createResult({
+    runPackage: blockedReadinessRunPackage,
+    runPackageSha: blockedReadinessRunPackageSha
+  }));
+  const blockedReadiness = spawnSync(node, [validator, "--result", resultPath, "--run-package", blockedReadinessRunPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(blockedReadiness.status === 3, "blocked upstream material readiness should fail material-removal validation");
+  const blockedReadinessReport = JSON.parse(blockedReadiness.stdout);
+  assert(blockedReadinessReport.missing.includes("upstream-cam-evidence"), "blocked material readiness should fail upstream CAM evidence");
+  assert(blockedReadinessReport.missing.includes("upstream-material-readiness"), "blocked material readiness should list upstream-material-readiness");
+  assert(blockedReadinessReport.upstreamCamEvidence?.materialRemovalReadiness?.importedReadyForMaterialRemovalSimulation === false, "blocked material readiness report should expose imported readiness=false");
 
   console.log(JSON.stringify({
     ok: true,
@@ -188,6 +214,7 @@ function createUpstreamCamEvidence(overrides = {}) {
     required: true,
     presentCount: 2,
     candidateMachineFit: overrides.candidateMachineFit ?? createCandidateMachineFit(),
+    materialRemovalReadiness: overrides.materialRemovalReadiness ?? createMaterialRemovalReadiness(),
     files: [
       {
         key: "opencamlibRealCandidateRun",
@@ -207,6 +234,19 @@ function createUpstreamCamEvidence(overrides = {}) {
       }
     ],
     summary: "Fixture upstream CAM evidence."
+  };
+}
+
+function createMaterialRemovalReadiness({ level = "ready-for-camotics-or-equivalent", readyForMaterialRemovalSimulation = true, productionResidualEvidenceReady = false } = {}) {
+  return {
+    schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+    level,
+    readyForMaterialRemovalSimulation,
+    productionResidualEvidenceReady,
+    missingForProduction: productionResidualEvidenceReady ? [] : ["residual-stock-map", "verified-material-removal-volume"],
+    summary: readyForMaterialRemovalSimulation
+      ? "Fixture contact evidence is ready for CAMotics/equivalent simulation."
+      : "Fixture contact evidence is blocked before material-removal simulation."
   };
 }
 

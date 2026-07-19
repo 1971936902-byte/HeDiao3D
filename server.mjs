@@ -10305,6 +10305,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
       candidatePackageValidationBound: false,
       candidatePackageBundleBound: false,
       machineFit: summarizeCamoticsUpstreamMachineFit(null),
+      materialRemovalReadiness: summarizeCamoticsUpstreamMaterialRemovalReadiness(null),
       summary: "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
     };
   }
@@ -10324,6 +10325,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
   const candidatePackageValidationBound = Boolean(upstream.candidatePackageValidationBound ?? hasMatchedKey("opencamlibCandidatePackageValidation"));
   const candidatePackageBundleBound = Boolean(upstream.candidatePackageBundleBound ?? hasMatchedKey("opencamlibCandidatePackageBundle"));
   const machineFit = summarizeCamoticsUpstreamMachineFit(upstream.machineFit ?? upstream.candidateMachineFit);
+  const materialRemovalReadiness = summarizeCamoticsUpstreamMaterialRemovalReadiness(upstream.materialRemovalReadiness);
   return {
     required: Boolean(upstream.required),
     status,
@@ -10333,12 +10335,46 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
     candidatePackageValidationBound,
     candidatePackageBundleBound,
     machineFit,
+    materialRemovalReadiness,
     files: normalizedFiles,
     summary: status === "matched"
       ? `CAMotics 材料去除结果已绑定上游 CAM/OpenCAMLib 证据 ${matchedCount}/${expectedCount}。`
       : status === "not-required"
         ? "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
         : `CAMotics 上游 CAM/OpenCAMLib 证据未匹配：${matchedCount}/${expectedCount}，mismatch=${mismatchCount}。`
+  };
+}
+
+function summarizeCamoticsUpstreamMaterialRemovalReadiness(readiness) {
+  if (!readiness || typeof readiness !== "object") {
+    return {
+      required: false,
+      status: "not-required",
+      level: "missing",
+      readyForMaterialRemovalSimulation: false,
+      productionResidualEvidenceReady: false,
+      missingForProduction: [],
+      summary: "CAMotics 材料去除结果未要求绑定 OpenCAMLib 材料去除准备度。"
+    };
+  }
+  const imported = readiness.imported && typeof readiness.imported === "object" ? readiness.imported : null;
+  const expected = readiness.expected && typeof readiness.expected === "object" ? readiness.expected : null;
+  const level = readiness.importedLevel ?? imported?.level ?? readiness.level ?? "missing";
+  const missingForProduction = Array.isArray(readiness.missingForProduction)
+    ? readiness.missingForProduction
+    : Array.isArray(imported?.missingForProduction)
+      ? imported.missingForProduction
+      : [];
+  return {
+    required: Boolean(readiness.required),
+    status: readiness.status ?? (readiness.ok === true ? "matched" : "mismatch"),
+    level,
+    expectedLevel: readiness.expectedLevel ?? expected?.level ?? null,
+    importedLevel: readiness.importedLevel ?? imported?.level ?? null,
+    readyForMaterialRemovalSimulation: Boolean(readiness.importedReadyForMaterialRemovalSimulation ?? imported?.readyForMaterialRemovalSimulation ?? readiness.readyForMaterialRemovalSimulation),
+    productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady ?? imported?.productionResidualEvidenceReady),
+    missingForProduction: missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 8),
+    summary: readiness.summary ?? `CAMotics 上游材料去除准备度：${level}。`
   };
 }
 

@@ -70,6 +70,14 @@ async function main() {
       targetMachine: { controllerClass: "3axis-controller-with-rotary-fixture", rotaryOutputAxis: "Y", wrapPerRevolutionMm: 100, toolProfileId: "vflat-4mm-25deg" },
       coverage: { pointCount: 231, rotarySpanDeg: 360, expectedRotaryCoverageDeg: 360, rotaryCoverageRatio: 1, depthMax: 0.8 },
       riskCounts: { holdZonePointCount: 0, deepPointCount: 0, invalidPointCount: 0, missingRotaryCount: 0 }
+    },
+    materialRemovalReadiness: {
+      schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+      level: "ready-for-camotics-or-equivalent",
+      readyForMaterialRemovalSimulation: true,
+      productionResidualEvidenceReady: false,
+      missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
+      summary: "Fixture OpenCAMLib contact output is ready for CAMotics/equivalent material-removal simulation."
     }
   }, null, 2);
   const candidatePackageBundleText = "PK fixture candidate package bundle";
@@ -118,6 +126,9 @@ async function main() {
   assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.productionUnlockEligible === false, "Native CAM snapshot summary must not unlock production");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "run package should carry OpenCAMLib candidate machine-fit");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "run package should carry machine-fit rotary axis");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.schema === "hediao3d.opencamlib-material-removal-readiness.v1", "run package should carry OpenCAMLib material readiness");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "run package material readiness should allow CAMotics/equivalent simulation");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "run package material readiness should preserve production residual boundary");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.exists && file.sha256 === nativeSnapshotSha), "run package should hash-bind job-local Native CAM snapshot");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.exists && file.sha256 === candidatePackageValidationSha), "run package should hash-bind OpenCAMLib candidate package validation");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.exists && file.sha256 === candidatePackageBundleSha), "run package should hash-bind OpenCAMLib candidate package bundle");
@@ -135,6 +146,8 @@ async function main() {
   assert(template.inputs?.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.schema === "hediao3d.native-cam-real-output-snapshot.v1", "result template should carry Native CAM snapshot summary");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "result template should carry Native CAM snapshot evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "result template should carry candidate machine-fit evidence");
+  assert(template.inputs?.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "result template should carry material readiness evidence");
+  assert(template.inputs?.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "result template should preserve material residual boundary");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
@@ -158,6 +171,7 @@ async function main() {
   assert(validatorScript.includes("nativeCamRealOutputSnapshot"), "validator should bind CAMotics results to job-local Native CAM snapshot evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageValidation"), "validator should bind CAMotics results to candidate package validation evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageBundle"), "validator should bind CAMotics results to candidate package bundle evidence");
+  assert(validatorScript.includes("upstream-material-readiness"), "validator should check upstream material-removal readiness");
   const camoticsResultBundleDataUrl = runLocalValidatorFixture({
     jobId: job.id,
     validatorScript,
