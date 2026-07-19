@@ -136,6 +136,16 @@ try {
   assert(pathDropContact.protectedZones?.violationCount === 0, "PathDropCutter sampling must stay outside protected end zones");
   assert(Math.min(...pathDrop.points.map((point) => point.x)) >= pathDropContact.protectedZones.safeMinX - 0.001, "PathDropCutter neutral X min should stay inside safe zone");
   assert(Math.max(...pathDrop.points.map((point) => point.x)) <= pathDropContact.protectedZones.safeMaxX + 0.001, "PathDropCutter neutral X max should stay inside safe zone");
+  assert(pathDropContact.candidateMachineFit?.schema === "hediao3d.opencamlib-candidate-machine-fit-preflight.v1", "PathDropCutter contact report should embed target machine-fit preflight");
+  assert(pathDropContact.candidateMachineFit?.targetMachine?.controllerClass === "3axis-controller-with-rotary-fixture", "PathDropCutter machine-fit should target the user's rotary fixture class");
+  assert(pathDropContact.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "PathDropCutter machine-fit should preserve Y rotary fixture output");
+  assert(pathDropContact.candidateMachineFit?.checks?.rotaryCoordinatePresent === true, "PathDropCutter machine-fit should confirm rotary coordinates");
+  assert(pathDropContact.candidateMachineFit?.checks?.protectedZoneClean === true, "PathDropCutter machine-fit should confirm protected zones");
+  assert(pathDropContact.candidateMachineFit?.riskCounts?.holdZonePointCount === 0, "PathDropCutter machine-fit should expose protected-zone risk counts");
+  assert(pathDropContact.materialRemovalReadiness?.schema === "hediao3d.opencamlib-material-removal-readiness.v1", "PathDropCutter contact report should expose material-removal readiness");
+  assert(pathDropContact.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "PathDropCutter output should be eligible for CAMotics/equivalent engineering simulation");
+  assert(pathDropContact.materialRemovalReadiness?.productionResidualEvidenceReady === false, "PathDropCutter residual evidence must remain unready for production");
+  assert(pathDropContact.materialRemovalReadiness?.missingForProduction?.some((item) => /residual/i.test(item)), "PathDropCutter material-removal readiness should name missing residual evidence");
   assert(pathDropContact.tolerances?.maxGougeMm === 0.03, "PathDropCutter contact report should expose gouge tolerance");
   assert(pathDropContact.quality?.productionCandidate === false, "PathDropCutter contact report must not be production candidate yet");
   assert(pathDropContact.quality?.level === "experimental-real-api", "PathDropCutter contact report level mismatch");

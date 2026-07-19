@@ -989,6 +989,8 @@ def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, A
         },
         "residualMaterial": metrics["residualMaterial"],
         "protectedZones": metrics["protectedZones"],
+        "candidateMachineFit": metrics["candidateMachineFit"],
+        "materialRemovalReadiness": metrics["materialRemovalReadiness"],
         "tolerances": metrics["tolerances"],
         "quality": {
             "level": "experimental-real-api",
@@ -1065,6 +1067,17 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
         blockers.append("protected-zones-not-enabled")
     if int(protected_zones.get("violationCount") or 0) > 0:
         blockers.append("protected-zone-sampling-violations")
+    candidate_machine_fit = create_path_dropcutter_machine_fit_summary(job, plan, points, protected_zones)
+    material_removal_readiness = create_path_dropcutter_material_removal_readiness(
+        point_count=point_count,
+        hit_rate=hit_rate,
+        step_to_cutter_ratio=step_to_cutter_ratio,
+        path_coverage=path_coverage,
+        residual_evidence_class="engineering-estimate",
+        protected_zones=protected_zones,
+        candidate_machine_fit=candidate_machine_fit,
+        blockers=blockers,
+    )
     return {
         "hitRate": round(hit_rate, 6),
         "xStepMm": round(x_step, 6) if x_step is not None else None,
@@ -1088,8 +1101,144 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
             "productionUse": "blocked-until-measured-or-swept-volume-validated",
         },
         "protectedZones": protected_zones,
+        "candidateMachineFit": candidate_machine_fit,
+        "materialRemovalReadiness": material_removal_readiness,
         "blockers": blockers,
         "warnings": warnings,
+    }
+
+
+def create_path_dropcutter_machine_fit_summary(job: Dict[str, Any], plan: Dict[str, Any], points: List[Dict[str, Any]], protected_zones: Dict[str, Any]) -> Dict[str, Any]:
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    sampling = plan.get("sampling") if isinstance(plan.get("sampling"), dict) else {}
+    axis_mapping = sampling.get("axisMapping") if isinstance(sampling.get("axisMapping"), dict) else {}
+    stock = plan.get("stock") if isinstance(plan.get("stock"), dict) else {}
+    tool = plan.get("tool") if isinstance(plan.get("tool"), dict) else {}
+    rotary_axis = str(axis_mapping.get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y").upper()
+    wrap_per_rev = read_positive_number(axis_mapping.get("rotaryWrapPerRevolutionMm"), settings.get("rotaryWrapPerRevolutionMm"), 100)
+    length_mm = read_positive_number(stock.get("lengthMm"), settings.get("lengthMm"), protected_zones.get("outputLengthMm"), 1)
+    safe_z = read_positive_number(settings.get("safeZ"), 22)
+    depth_limit = read_positive_number(settings.get("depthMm"), settings.get("maxCutDepth"), sampling.get("depthLimitMm"), 3)
+    expected_rotary_coverage = read_positive_number(sampling.get("expectedRotaryCoverageDeg"), sampling.get("reliefAngleDeg"), 360)
+    finite_points = [point for point in points if is_number(point.get("x")) and is_number(point.get("z"))]
+    xs = [float(point["x"]) for point in finite_points]
+    angles = [float(point["a"]) for point in finite_points if is_number(point.get("a"))]
+    depths = [
+        float(point.get("depth")) if is_number(point.get("depth")) else max(0.0, safe_z - float(point["z"]))
+        for point in finite_points
+    ]
+    missing_rotary = len(finite_points) - len(angles)
+    hold_zone_count = int(protected_zones.get("violationCount") or 0)
+    deep_count = len([depth for depth in depths if depth > depth_limit])
+    rotary_min = min(angles) if angles else None
+    rotary_max = max(angles) if angles else None
+    rotary_span = max(0.0, rotary_max - rotary_min) if rotary_min is not None and rotary_max is not None else 0.0
+    rotary_ratio = min(1.0, rotary_span / expected_rotary_coverage) if expected_rotary_coverage > 0 else None
+    warnings: List[str] = []
+    errors: List[str] = []
+    if not finite_points:
+        errors.append("PathDropCutter output has no finite X/Z points.")
+    if missing_rotary > 0:
+        errors.append(f"{missing_rotary} cutter-location points are missing rotary angle A.")
+    if hold_zone_count > 0:
+        errors.append(f"{hold_zone_count} cutter-location points violate protected end zones.")
+    if deep_count > 0:
+        warnings.append(f"{deep_count} cutter-location points exceed the configured depth limit.")
+    if expected_rotary_coverage >= 300 and angles and rotary_span < expected_rotary_coverage * 0.72:
+        warnings.append(f"rotary coverage is {rotary_span:.1f}deg, below expected {expected_rotary_coverage:.1f}deg.")
+    level = "critical" if errors else "review" if warnings else "ok"
+    return {
+        "schema": "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+        "level": level,
+        "summary": "PathDropCutter neutral output matches the target rotary-Y machine boundary for engineering review." if level == "ok" else "PathDropCutter neutral output still needs machine-boundary review before import.",
+        "targetMachine": {
+            "controllerClass": "3axis-controller-with-rotary-fixture",
+            "axisMapping": f"X=length, {rotary_axis}=rotary fixture, Z=depth/safe height",
+            "rotaryOutputAxis": rotary_axis,
+            "wrapPerRevolutionMm": round(wrap_per_rev, 6),
+            "toolProfileId": tool.get("toolProfileId") or settings.get("toolProfileId"),
+        },
+        "stockEnvelope": {
+            "lengthMm": round(length_mm, 6),
+            "safeMinX": protected_zones.get("safeMinX"),
+            "safeMaxX": protected_zones.get("safeMaxX"),
+            "leftHoldMm": protected_zones.get("leftHoldMm"),
+            "rightHoldMm": protected_zones.get("rightHoldMm"),
+            "endTransitionMm": protected_zones.get("endTransitionMm"),
+            "depthLimitMm": round(depth_limit, 6),
+        },
+        "coverage": {
+            "pointCount": len(points),
+            "finitePointCount": len(finite_points),
+            "xMin": round(min(xs), 6) if xs else None,
+            "xMax": round(max(xs), 6) if xs else None,
+            "xSpanMm": round(max(xs) - min(xs), 6) if len(xs) >= 2 else 0,
+            "rotarySampleCount": len(angles),
+            "rotaryMinDeg": round(rotary_min, 6) if rotary_min is not None else None,
+            "rotaryMaxDeg": round(rotary_max, 6) if rotary_max is not None else None,
+            "rotarySpanDeg": round(rotary_span, 6),
+            "expectedRotaryCoverageDeg": round(expected_rotary_coverage, 6),
+            "rotaryCoverageRatio": round(rotary_ratio, 6) if rotary_ratio is not None else None,
+            "depthMax": round(max(depths), 6) if depths else None,
+        },
+        "riskCounts": {
+            "holdZonePointCount": hold_zone_count,
+            "deepPointCount": deep_count,
+            "invalidPointCount": max(0, len(points) - len(finite_points)),
+            "missingRotaryCount": max(0, missing_rotary),
+        },
+        "checks": {
+            "rotaryCoordinatePresent": bool(angles) and missing_rotary == 0,
+            "protectedZoneClean": hold_zone_count == 0,
+            "depthWithinLimit": deep_count == 0,
+        },
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def create_path_dropcutter_material_removal_readiness(
+    *,
+    point_count: int,
+    hit_rate: float,
+    step_to_cutter_ratio: Optional[float],
+    path_coverage: Dict[str, Any],
+    residual_evidence_class: str,
+    protected_zones: Dict[str, Any],
+    candidate_machine_fit: Dict[str, Any],
+    blockers: List[str],
+) -> Dict[str, Any]:
+    missing = []
+    if point_count <= 0:
+        missing.append("non-empty OpenCAMLib cutter-location points")
+    if hit_rate < 0.995:
+        missing.append("contact hitRate >= 0.995")
+    if step_to_cutter_ratio is None or step_to_cutter_ratio > 0.25:
+        missing.append("stepToCutterRatio <= 0.25")
+    if float(path_coverage.get("xCoverageRatio") or 0) < 0.98 or float(path_coverage.get("crossCoverageRatio") or 0) < 0.98:
+        missing.append("X/cross path coverage >= 0.98")
+    if residual_evidence_class != "measured-or-validated":
+        missing.append("measured or swept-volume validated residual material metrics")
+    if not protected_zones.get("enabled") or int(protected_zones.get("violationCount") or 0) > 0:
+        missing.append("clean protected end-zone sampling")
+    if candidate_machine_fit.get("level") == "critical":
+        missing.append("target machine-fit preflight not critical")
+    ready_for_simulation = point_count > 0 and candidate_machine_fit.get("level") != "critical" and not any(
+        item in blockers for item in ["path-dropcutter-no-contact-points", "protected-zone-sampling-violations"]
+    )
+    return {
+        "schema": "hediao3d.opencamlib-material-removal-readiness.v1",
+        "level": "ready-for-camotics-or-equivalent" if ready_for_simulation else "blocked",
+        "readyForMaterialRemovalSimulation": ready_for_simulation,
+        "productionResidualEvidenceReady": residual_evidence_class == "measured-or-validated",
+        "requiredSimulatorEvidence": [
+            "camotics-result.json or equivalent material-removal result",
+            "simulator.name/version/sourceCommand",
+            "inputIdentity matched to this neutral/contact/plan/model package",
+            "materialRemoval = verified",
+        ],
+        "missingForProduction": missing,
+        "summary": "This OpenCAMLib output can proceed to material-removal simulation as engineering evidence, but production remains locked until residual/material-removal, air-run and machine acceptance are bound.",
     }
 
 
