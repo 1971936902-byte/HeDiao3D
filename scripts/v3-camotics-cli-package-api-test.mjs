@@ -229,6 +229,7 @@ async function main() {
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md"), "Linux CAM job package missing README");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"), "Linux CAM job package missing manifest");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/run-linux-cam-job.sh"), "Linux CAM job package missing one-command run script");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/install-linux-cam-deps.sh"), "Linux CAM job package missing dependency installer");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/preflight-linux-cam-job.mjs"), "Linux CAM job package missing preflight script");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs"), "Linux CAM job package missing local validation script");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/upload-linux-cam-evidence.mjs"), "Linux CAM job package missing evidence upload script");
@@ -242,6 +243,7 @@ async function main() {
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/package-integrity.json"), "Linux CAM job package missing package integrity reference");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json"), "Linux CAM job package missing Native CAM snapshot reference");
   const linuxCamJobManifest = JSON.parse(readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"));
+  assert(linuxCamJobManifest.packageScripts?.dependencyInstaller === "install-linux-cam-deps.sh", "Linux CAM job manifest should expose dependency installer");
   assert(linuxCamJobManifest.packageScripts?.preflight === "preflight-linux-cam-job.mjs", "Linux CAM job manifest should expose preflight script");
   assert(linuxCamJobManifest.packageScripts?.preflightOutput === "linux-cam-job-preflight.json", "Linux CAM job manifest should expose preflight output");
   assert(linuxCamJobManifest.packageScripts?.evidenceUploader === "upload-linux-cam-evidence.mjs", "Linux CAM job manifest should expose evidence uploader script");
@@ -254,7 +256,9 @@ async function main() {
   const linuxCamJobReadme = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md");
   assert(linuxCamJobReadme.includes("upload-linux-cam-evidence.mjs"), "Linux CAM job README should document evidence uploader");
   assert(linuxCamJobReadme.includes("preflight-linux-cam-job.mjs"), "Linux CAM job README should document preflight");
+  assert(linuxCamJobReadme.includes("install-linux-cam-deps.sh") && linuxCamJobReadme.includes("HEDIAO3D_INSTALL_DEPS=1"), "Linux CAM job README should document dependency installer dry-run boundary");
   assert(linuxCamJobReadme.includes("linux-cam-evidence-bundle"), "Linux CAM job README should mention unified evidence endpoint");
+  const linuxCamJobInstaller = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/install-linux-cam-deps.sh");
   const linuxCamJobPreflight = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/preflight-linux-cam-job.mjs");
   const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");
   const linuxCamJobUploader = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/upload-linux-cam-evidence.mjs");
@@ -262,6 +266,8 @@ async function main() {
   assert(linuxCamJobPreflight.includes("HEDIAO3D_NATIVE_CAM_SERVER_DIR"), "Linux CAM job preflight should check Native CAM server dir");
   assert(linuxCamJobPreflight.includes("opencamlib-python") && linuxCamJobPreflight.includes("camotics-cli"), "Linux CAM job preflight should check OpenCAMLib and CAMotics");
   assert(linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-resource-profile.v1") && linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-install-plan.v1"), "Linux CAM job preflight should emit resource profile and install plan");
+  assert(linuxCamJobPreflight.includes("install-linux-cam-deps.sh"), "Linux CAM job preflight install plan should reference dependency installer");
+  assert(linuxCamJobInstaller.includes("HEDIAO3D_INSTALL_DEPS") && linuxCamJobInstaller.includes("dry-run") && linuxCamJobInstaller.includes("production NC"), "Linux CAM dependency installer should be dry-run by default and keep production boundary");
   assert(linuxCamJobReadme.includes("installPlan") && linuxCamJobReadme.includes("resourceProfile"), "Linux CAM job README should direct operators to installPlan/resourceProfile");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-evidence-status.v1"), "Linux CAM job validator missing evidence status schema");
@@ -294,6 +300,7 @@ async function main() {
   assert(preflightReport.resourceProfile?.recommended?.memoryGb === 8, "Linux CAM job preflight should recommend 8GB RAM");
   assert(preflightReport.installPlan?.schema === "hediao3d.v3-linux-cam-install-plan.v1", "Linux CAM job preflight should include install plan");
   assert(preflightReport.installPlan?.commands?.some((command) => command.includes("apt-get install")), "Linux CAM job preflight install plan should include apt install guidance");
+  assert(preflightReport.installPlan?.commands?.some((command) => command.includes("install-linux-cam-deps.sh")), "Linux CAM job preflight install plan should include dependency installer guidance");
   const importedPreflight = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-job-preflight`, {
     preflight: preflightReport,
     sourceName: "linux-cam-job-preflight.json"

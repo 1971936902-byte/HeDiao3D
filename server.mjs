@@ -17021,6 +17021,10 @@ async function getOrchestratorLinuxCamJobPackage(jobId, res) {
     content: createLinuxCamJobPreflightScript(manifest)
   });
   files.push({
+    name: `${root}/install-linux-cam-deps.sh`,
+    content: createLinuxCamJobDependencyInstallScript(manifest)
+  });
+  files.push({
     name: `${root}/validate-linux-cam-job.mjs`,
     content: createLinuxCamJobLocalValidatorScript(manifest)
   });
@@ -17762,6 +17766,7 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
     sourcePackageIntegrity: packageIntegrity?.schema ? "references/package-integrity.json" : null,
     packageScripts: {
       runScript: "run-linux-cam-job.sh",
+      dependencyInstaller: "install-linux-cam-deps.sh",
       preflight: "preflight-linux-cam-job.mjs",
       preflightOutput: "linux-cam-job-preflight.json",
       localValidator: "validate-linux-cam-job.mjs",
@@ -17845,10 +17850,12 @@ function createLinuxCamJobPackageReadme(manifest) {
     "## 推荐执行顺序",
     "",
     "先运行预检；如果 `linux-cam-job-preflight.json` 显示 blocked，优先查看其中的 `installPlan` 和 `resourceProfile`。",
+    "依赖安装脚本默认 dry-run：先运行 `bash install-linux-cam-deps.sh` 查看计划，确认后再运行 `HEDIAO3D_INSTALL_DEPS=1 bash install-linux-cam-deps.sh`。",
     "",
     "最快路径：",
     "",
     "```bash",
+    "bash install-linux-cam-deps.sh",
     "export HEDIAO3D_NATIVE_CAM_SERVER_DIR=/path/to/hediao3d-native-cam-server",
     "node preflight-linux-cam-job.mjs .",
     "bash run-linux-cam-job.sh",
@@ -18070,6 +18077,8 @@ function createLinuxCamJobPreflightScript(manifest) {
     "  if (missing('native:native-cam-server-package-self-check.mjs') || missing('native:opencamlib-real-candidate-run.mjs') || missing('native:native-cam-real-output-check.sh')) manual.push('Download/extract HeDiao3D Native CAM server package and export HEDIAO3D_NATIVE_CAM_SERVER_DIR=/path/to/hediao3d-native-cam-server');",
     "  const resourceActions = resourceProfile.checks.filter((check) => check.status === 'low').map((check) => `${check.id}: ${check.summary}`);",
     "  const commands = [",
+    "    'bash install-linux-cam-deps.sh  # dry-run first',",
+    "    'HEDIAO3D_INSTALL_DEPS=1 bash install-linux-cam-deps.sh  # execute after review',",
     "    `sudo apt-get update && sudo apt-get install -y ${Array.from(new Set(aptPackages)).join(' ')}`,",
     "    ...manual",
     "  ];",
@@ -18138,6 +18147,58 @@ function createLinuxCamJobPreflightScript(manifest) {
     "writeFileSync(join(root, 'linux-cam-job-preflight.json'), JSON.stringify(report, null, 2));",
     "console.log(JSON.stringify(report, null, 2));",
     "if (blockers.length) process.exitCode = 2;",
+    ""
+  ].join("\n");
+}
+
+function createLinuxCamJobDependencyInstallScript(manifest) {
+  return [
+    "#!/usr/bin/env bash",
+    "set -u",
+    "",
+    `JOB_ID=${JSON.stringify(manifest.jobId)}`,
+    "EXECUTE=\"${HEDIAO3D_INSTALL_DEPS:-0}\"",
+    "SUDO=\"\"",
+    "if [[ \"$(id -u)\" != \"0\" ]]; then SUDO=\"sudo\"; fi",
+    "APT_PACKAGES=(nodejs npm python3 python3-pip python3-venv zip unzip camotics freecad blender)",
+    "",
+    "log() { printf '[HeDiao3D deps] %s\\n' \"$*\"; }",
+    "run() {",
+    "  if [[ \"$EXECUTE\" == \"1\" ]]; then",
+    "    log \"+ $*\"",
+    "    \"$@\"",
+    "  else",
+    "    log \"dry-run: $*\"",
+    "  fi",
+    "}",
+    "",
+    "log \"Linux CAM dependency helper for job $JOB_ID\"",
+    "log \"Default mode is dry-run. Set HEDIAO3D_INSTALL_DEPS=1 to execute.\"",
+    "log \"This helper installs runtime dependencies only; it never unlocks production NC.\"",
+    "",
+    "if command -v apt-get >/dev/null 2>&1; then",
+    "  run $SUDO apt-get update",
+    "  run $SUDO apt-get install -y \"${APT_PACKAGES[@]}\"",
+    "else",
+    "  log \"apt-get not found. Use linux-cam-job-preflight.json installPlan and adapt packages for this distro.\"",
+    "fi",
+    "",
+    "if command -v python3 >/dev/null 2>&1; then",
+    "  run python3 -m pip install --user opencamlib",
+    "  if [[ \"$EXECUTE\" == \"1\" ]]; then",
+    "    python3 - <<'PY' || python3 -m pip install --user ocl || true",
+    "import ocl",
+    "print('OpenCAMLib/ocl import ok')",
+    "PY",
+    "  else",
+    "    log \"dry-run: python3 -m pip install --user ocl  # fallback if opencamlib package does not expose ocl\"",
+    "  fi",
+    "else",
+    "  log \"python3 missing; install Python before OpenCAMLib/ocl.\"",
+    "fi",
+    "",
+    "log \"After installation, rerun: node preflight-linux-cam-job.mjs .\"",
+    "log \"Then set HEDIAO3D_NATIVE_CAM_SERVER_DIR and run: bash run-linux-cam-job.sh\"",
     ""
   ].join("\n");
 }
@@ -18318,6 +18379,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "const checks = [",
     "  fileSummary('linux-cam-job-package-manifest.json'),",
     "  fileSummary('README-LINUX-CAM-JOB.md'),",
+    "  fileSummary('install-linux-cam-deps.sh'),",
     "  fileSummary('preflight-linux-cam-job.mjs'),",
     "  fileSummary('linux-cam-job-preflight.json', false),",
     "  fileSummary('native-cam/opencamlib-candidate-inputs/job.json'),",
