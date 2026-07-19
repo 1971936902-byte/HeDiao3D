@@ -94,7 +94,7 @@ const checks = [
   },
   {
     id: "linux-cam-job-validation-import",
-    ok: source.includes("handleImportV3LinuxCamJobValidation") && source.includes("linux-cam-job-validation") && source.includes("linux-cam-job-local-validation.json") && source.includes("整单校验JSON") && source.includes("回填整单校验") && source.includes("Linux证据进度") && source.includes("formatLinuxCamJobEvidenceStatus") && source.includes("Linux上传计划") && source.includes("formatLinuxCamJobUploadPlan"),
+    ok: source.includes("handleImportV3LinuxCamJobValidation") && source.includes("linux-cam-job-validation") && source.includes("linux-cam-job-local-validation.json") && source.includes("整单校验JSON") && source.includes("回填整单校验") && source.includes("Linux证据进度") && source.includes("formatLinuxCamJobEvidenceStatus") && source.includes("Linux上传计划") && source.includes("formatLinuxCamJobUploadPlan") && source.includes("handleImportV3LinuxCamEvidenceBundle") && source.includes("智能回填结果包"),
     summary: "Focused operator UI should accept Linux CAM job local validation evidence after running the unified package."
   },
   {

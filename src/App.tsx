@@ -2376,12 +2376,14 @@ export function App() {
   const [isV3MachineAcceptanceSyncing, setIsV3MachineAcceptanceSyncing] = useState(false);
   const [isV3CamoticsImporting, setIsV3CamoticsImporting] = useState(false);
   const [isV3LinuxCamJobValidationImporting, setIsV3LinuxCamJobValidationImporting] = useState(false);
+  const [isV3LinuxCamEvidenceBundleImporting, setIsV3LinuxCamEvidenceBundleImporting] = useState(false);
   const [isV3CamoticsPackagePreparing, setIsV3CamoticsPackagePreparing] = useState(false);
   const [v3CamoticsResultFile, setV3CamoticsResultFile] = useState<File | null>(null);
   const [v3CamoticsResultZipFile, setV3CamoticsResultZipFile] = useState<File | null>(null);
   const [v3CamoticsScreenshotFile, setV3CamoticsScreenshotFile] = useState<File | null>(null);
   const [v3CamoticsMaterialMeshFile, setV3CamoticsMaterialMeshFile] = useState<File | null>(null);
   const [v3LinuxCamJobValidationFile, setV3LinuxCamJobValidationFile] = useState<File | null>(null);
+  const [v3LinuxCamEvidenceBundleFile, setV3LinuxCamEvidenceBundleFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceFile, setV3NativeCamAcceptanceFile] = useState<File | null>(null);
   const [v3NativeCamAcceptanceZipFile, setV3NativeCamAcceptanceZipFile] = useState<File | null>(null);
   const [v3RunbookResultFile, setV3RunbookResultFile] = useState<File | null>(null);
@@ -3344,6 +3346,74 @@ export function App() {
       });
     } finally {
       setIsV3LinuxCamJobValidationImporting(false);
+    }
+  };
+
+  const handleImportV3LinuxCamEvidenceBundle = async () => {
+    if (!v3LinuxCamEvidenceBundleFile) {
+      setV3Status("请先选择 Linux 回传的 native-cam-real-output-bundle.zip 或 camotics-result-bundle.zip。");
+      return;
+    }
+    const filename = v3LinuxCamEvidenceBundleFile.name;
+    const lowerName = filename.toLowerCase();
+    const isNativeBundle = lowerName.includes("native-cam-real-output") || lowerName.includes("native-cam");
+    const isCamoticsBundle = lowerName.includes("camotics-result") || lowerName.includes("camotics");
+    if (!isNativeBundle && !isCamoticsBundle) {
+      setV3Status("无法识别结果包类型，请确认文件名包含 native-cam-real-output-bundle 或 camotics-result-bundle。");
+      return;
+    }
+    if (isCamoticsBundle && !v3Job?.id) {
+      setV3Status("CAMotics 结果包必须绑定当前 V3 任务，请先运行或恢复一个 V3 任务。");
+      return;
+    }
+    setIsV3LinuxCamEvidenceBundleImporting(true);
+    try {
+      const bundleDataUrl = await fileToDataUrl(v3LinuxCamEvidenceBundleFile);
+      const endpoint = isNativeBundle
+        ? "/api/orchestrator/native-cam/real-output-acceptance"
+        : `/api/orchestrator/jobs/${encodeURIComponent(v3Job!.id)}/camotics-result`;
+      const body = isNativeBundle
+        ? { acceptanceZipDataUrl: bundleDataUrl, sourceName: filename }
+        : { resultZipDataUrl: bundleDataUrl, sourceName: filename };
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error ?? (isNativeBundle ? "真实 CAM 输出包回填失败" : "CAMotics 结果包回填失败"));
+      }
+      const title = isNativeBundle ? "智能回填真实 CAM 输出包" : "智能回填 CAMotics 材料去除包";
+      const detail = isNativeBundle
+        ? `${filename} / ${data.summary ?? data.level ?? "unknown"}`
+        : `${filename} / ${data.simulationEvidence?.level ?? data.status ?? "unknown"}`;
+      setV3Status(`${title}完成：${detail}`);
+      setV3UserNotice({
+        level: data.simulationEvidence?.productionUnlockEligible || data.level === "ready" ? "ok" : "info",
+        title,
+        detail: `${detail}；生产 NC 仍由总门禁统一判定。`
+      });
+      recordTask({
+        category: "cam",
+        status: data.simulationEvidence?.productionUnlockEligible || data.level === "ready" ? "ok" : "warning",
+        title,
+        detail
+      });
+      setV3LinuxCamEvidenceBundleFile(null);
+      await refreshV3Readiness();
+      if (v3Job?.id) await handleLoadV3Job(v3Job.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Linux CAM 结果包回填失败";
+      setV3Status(message);
+      recordTask({
+        category: "cam",
+        status: "error",
+        title: "智能回填 Linux CAM 结果包失败",
+        detail: message
+      });
+    } finally {
+      setIsV3LinuxCamEvidenceBundleImporting(false);
     }
   };
 
@@ -7207,6 +7277,28 @@ export function App() {
                         )}
                       </>
                     )}
+                    <div className="v3-server-package">
+                      <strong>智能回填结果包</strong>
+                      <small>选择 Linux 回传的 native-cam-real-output-bundle.zip 或 camotics-result-bundle.zip，系统按文件名自动导入到对应门禁。</small>
+                      <label className="v3-file-picker">
+                        <UploadCloud size={16} />
+                        <span>{v3LinuxCamEvidenceBundleFile ? v3LinuxCamEvidenceBundleFile.name : "选择Linux结果ZIP"}</span>
+                        <input
+                          accept=".zip,application/zip"
+                          type="file"
+                          onChange={(event) => setV3LinuxCamEvidenceBundleFile(event.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                      <button
+                        className="demo-action package-action"
+                        type="button"
+                        onClick={handleImportV3LinuxCamEvidenceBundle}
+                        disabled={!v3LinuxCamEvidenceBundleFile || isV3LinuxCamEvidenceBundleImporting}
+                      >
+                        <ClipboardCheck size={17} />
+                        {isV3LinuxCamEvidenceBundleImporting ? "识别回填中..." : "智能回填结果包"}
+                      </button>
+                    </div>
                     <label>
                       <span>整单校验JSON</span>
                       <input
