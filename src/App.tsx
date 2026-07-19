@@ -3310,6 +3310,7 @@ export function App() {
               level: data.validation?.level ?? "unknown",
               summary: data.validation?.summary ?? null,
               evidenceStatus: data.validation?.evidenceStatus ?? null,
+              uploadPlan: data.validation?.uploadPlan ?? null,
               expectedUploads: data.validation?.expectedUploads ?? null,
               productionUnlockEligible: false,
               artifact: "linux-cam-job-local-validation.json",
@@ -7199,6 +7200,11 @@ export function App() {
                             Linux证据进度：{formatLinuxCamJobEvidenceStatus((v3Job.result.summary as any).linuxCamJobValidation.evidenceStatus)}
                           </small>
                         )}
+                        {(v3Job.result.summary as any).linuxCamJobValidation.uploadPlan && (
+                          <small className={(v3Job.result.summary as any).linuxCamJobValidation.uploadPlan.readyForUpload ? "v3-inline-ok" : "v3-inline-warning"}>
+                            Linux上传计划：{formatLinuxCamJobUploadPlan((v3Job.result.summary as any).linuxCamJobValidation.uploadPlan)}
+                          </small>
+                        )}
                       </>
                     )}
                     <label>
@@ -9381,6 +9387,18 @@ function formatLinuxCamJobEvidenceStatus(status: any) {
   const nativeCam = status.nativeCamBundle === "present" ? "Native CAM已生成" : "缺Native CAM包";
   const camotics = status.camoticsBundle === "present" ? "CAMotics已生成" : "缺CAMotics包";
   return [phase, packageFiles, nativeCam, camotics].filter(Boolean).join(" · ");
+}
+
+function formatLinuxCamJobUploadPlan(plan: any) {
+  if (!plan || typeof plan !== "object") return "未生成";
+  const ready = `${plan.readyCount ?? 0}/${plan.itemCount ?? plan.items?.length ?? 0}`;
+  const items = Array.isArray(plan.items)
+    ? plan.items
+        .slice(0, 2)
+        .map((item: any) => `${item.label ?? item.id}: ${item.status === "present" ? "已就绪" : "缺失"}`)
+        .join(" · ")
+    : "";
+  return [`回填包 ${ready}`, items].filter(Boolean).join(" · ");
 }
 
 function formatLockedProductionPackageGuidance(data: any) {

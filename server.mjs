@@ -13967,6 +13967,7 @@ async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
     level: validation.level,
     productionUnlockEligible: false,
     evidenceStatus: validation.evidenceStatus ?? null,
+    uploadPlan: validation.uploadPlan ?? null,
     expectedUploads: validation.expectedUploads ?? null,
     nextActions: validation.nextActions ?? [],
     summary: validation.summary ?? "Linux CAM job local validation imported."
@@ -13991,6 +13992,7 @@ async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
       level: validation.level,
       summary: validation.summary ?? null,
       evidenceStatus: validation.evidenceStatus ?? null,
+      uploadPlan: validation.uploadPlan ?? null,
       expectedUploads: validation.expectedUploads ?? null,
       nextActions: Array.isArray(validation.nextActions) ? validation.nextActions.slice(0, 6) : [],
       productionUnlockEligible: false,
@@ -14956,6 +14958,7 @@ function normalizeLinuxCamJobLocalValidation(value) {
     summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null,
     productionUnlockEligible: false,
     evidenceStatus: normalizeLinuxCamJobEvidenceStatus(value.evidenceStatus),
+    uploadPlan: normalizeLinuxCamJobUploadPlan(value.uploadPlan),
     expectedUploads: value.expectedUploads && typeof value.expectedUploads === "object"
       ? {
           nativeCam: typeof value.expectedUploads.nativeCam === "string" ? value.expectedUploads.nativeCam.slice(0, 120) : null,
@@ -14975,6 +14978,31 @@ function normalizeLinuxCamJobLocalValidation(value) {
     nextActions: Array.isArray(value.nextActions)
       ? value.nextActions.slice(0, 10).map((item) => String(item).slice(0, 300))
       : []
+  };
+}
+
+function normalizeLinuxCamJobUploadPlan(value) {
+  if (!value || typeof value !== "object") return null;
+  const items = Array.isArray(value.items)
+    ? value.items.slice(0, 8).map((item) => ({
+        id: typeof item?.id === "string" ? item.id.slice(0, 80) : null,
+        label: typeof item?.label === "string" ? item.label.slice(0, 120) : null,
+        filename: typeof item?.filename === "string" ? item.filename.slice(0, 160) : null,
+        status: typeof item?.status === "string" ? item.status.slice(0, 80) : null,
+        required: Boolean(item?.required),
+        endpoint: typeof item?.endpoint === "string" ? item.endpoint.slice(0, 240) : null,
+        method: typeof item?.method === "string" ? item.method.slice(0, 20) : "POST",
+        inputField: typeof item?.inputField === "string" ? item.inputField.slice(0, 80) : null,
+        summary: typeof item?.summary === "string" ? item.summary.slice(0, 500) : null
+      }))
+    : [];
+  return {
+    schema: "hediao3d.v3-linux-cam-job-upload-plan.v1",
+    readyForUpload: Boolean(value.readyForUpload),
+    itemCount: Number.isFinite(Number(value.itemCount)) ? Number(value.itemCount) : items.length,
+    readyCount: Number.isFinite(Number(value.readyCount)) ? Number(value.readyCount) : items.filter((item) => item.status === "present").length,
+    items,
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
   };
 }
 
@@ -17493,6 +17521,40 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "      ? `Package inputs verified; missing upload bundle(s): ${missingUploads.join(', ') || 'none'}.`",
     "      : 'Package integrity must be fixed before running Linux CAM evidence.'",
     "};",
+    "const uploadPlanItems = [",
+    "  {",
+    "    id: 'native-cam-real-output',",
+    "    label: 'Native CAM真实输出包',",
+    "    filename: 'native-cam-real-output-bundle.zip',",
+    "    status: nativeBundle?.exists ? 'present' : 'missing',",
+    "    required: true,",
+    "    method: 'POST',",
+    "    endpoint: '/api/orchestrator/native-cam/real-output-acceptance',",
+    "    inputField: 'zipDataUrl',",
+    "    summary: nativeBundle?.exists ? 'Ready to upload to the Native CAM real-output acceptance endpoint.' : 'Run native-cam-real-output-check.sh to create this bundle.'",
+    "  },",
+    "  {",
+    "    id: 'camotics-material-removal',",
+    "    label: 'CAMotics材料去除包',",
+    "    filename: 'camotics-result-bundle.zip',",
+    "    status: camoticsBundle?.exists ? 'present' : 'missing',",
+    "    required: true,",
+    "    method: 'POST',",
+    "    endpoint: `/api/orchestrator/jobs/${manifest.jobId}/camotics-result`,",
+    "    inputField: 'resultZipDataUrl',",
+    "    summary: camoticsBundle?.exists ? 'Ready to upload to the current job CAMotics result endpoint.' : 'Run CAMotics/equivalent material-removal validation to create this bundle.'",
+    "  }",
+    "];",
+    "const uploadPlan = {",
+    "  schema: 'hediao3d.v3-linux-cam-job-upload-plan.v1',",
+    "  readyForUpload: productionEvidenceReady,",
+    "  itemCount: uploadPlanItems.length,",
+    "  readyCount: uploadPlanItems.filter((item) => item.status === 'present').length,",
+    "  items: uploadPlanItems,",
+    "  summary: productionEvidenceReady",
+    "    ? 'Both Linux evidence bundles are ready to upload back to HeDiao3D V3.'",
+    "    : `Upload bundle readiness: ${uploadPlanItems.filter((item) => item.status === 'present').length}/${uploadPlanItems.length}.`",
+    "};",
     "const report = {",
     "  schema: 'hediao3d.v3-linux-cam-job-local-validation.v1',",
     "  jobId: manifest.jobId,",
@@ -17508,6 +17570,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "      : 'Package inputs are present, but one or more Linux evidence bundles are still missing.',",
     "  packageIntegrityOk,",
     "  evidenceStatus,",
+    "  uploadPlan,",
     "  hashMismatches,",
     "  expectedUploads: {",
     "    nativeCam: 'native-cam-real-output-bundle.zip',",
