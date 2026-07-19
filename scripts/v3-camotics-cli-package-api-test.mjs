@@ -298,6 +298,9 @@ async function main() {
   assert(linuxCamJobUploader.includes("linux-cam-deps-install-report"), "Linux CAM job uploader should upload dependency install report when present");
   assert(linuxCamJobUploader.includes("linux-cam-job-preflight"), "Linux CAM job uploader should upload preflight report when present");
   assert(linuxCamJobUploader.includes("linux-cam-evidence-upload-report"), "Linux CAM job uploader should upload its own report");
+  assert(linuxCamJobUploader.includes("retryCommand") && linuxCamJobUploader.includes("resumeSafe"), "Linux CAM job uploader should expose retry/resume diagnostics");
+  assert(linuxCamJobUploader.includes("completedCount") && linuxCamJobUploader.includes("failedUpload"), "Linux CAM job uploader should expose partial upload diagnostics");
+  assert(linuxCamJobUploader.includes("partial-upload-failed") && linuxCamJobUploader.includes("upload-failed-before-first-request"), "Linux CAM job uploader should classify upload failure phases");
   const linuxCamJobExtractDir = join(tmpdir(), `hediao3d-linux-cam-job-${job.id}`);
   rmSync(linuxCamJobExtractDir, { recursive: true, force: true });
   mkdirSync(linuxCamJobExtractDir, { recursive: true });
@@ -407,6 +410,22 @@ async function main() {
   assert(readyValidation.uploadPlan?.items?.every((item) => item.status === "present"), "ready Linux CAM job upload plan should mark all items present");
   assert(readyValidation.productionUnlockEligible === false, "ready-for-upload Linux CAM job validation must still not unlock production");
 
+  const missingApiUpload = spawnSync(process.execPath, ["upload-linux-cam-evidence.mjs", "."], {
+    cwd: linuxCamJobRoot,
+    encoding: "utf8",
+    env: { ...process.env, HEDIAO3D_V3_API_BASE: "", V3_API_BASE: "" }
+  });
+  assert(missingApiUpload.status === 1, `Linux CAM job upload without API base should fail clearly: ${missingApiUpload.stderr || missingApiUpload.stdout}`);
+  const missingApiReport = JSON.parse(readFileSync(join(linuxCamJobRoot, "linux-cam-evidence-upload-report.json"), "utf8"));
+  assert(missingApiReport.ok === false, "Linux CAM missing API upload report should fail");
+  assert(missingApiReport.phase === "upload-failed-before-first-request", `Linux CAM missing API upload should classify failure phase, got ${missingApiReport.phase}`);
+  assert(missingApiReport.failedUpload?.id === "linux-cam-deps-install-report", "Linux CAM missing API upload should name the first failed upload");
+  assert(missingApiReport.completedCount === 0, "Linux CAM missing API upload should have zero completed uploads");
+  assert(missingApiReport.retryCommand?.includes("HEDIAO3D_V3_API_BASE"), "Linux CAM missing API upload should include retry command");
+  assert(missingApiReport.resumeSafe === true, "Linux CAM missing API upload should mark rerun as safe");
+  assert(missingApiReport.productionUnlockEligible === false, "Linux CAM missing API upload must not unlock production");
+  assert(missingApiReport.nextActions?.some((action) => action.includes("rerun")), "Linux CAM missing API upload should include recovery action");
+
   const dryRunUpload = spawnSync(process.execPath, ["upload-linux-cam-evidence.mjs", ".", "--dry-run"], {
     cwd: linuxCamJobRoot,
     encoding: "utf8"
@@ -415,6 +434,12 @@ async function main() {
   const uploadDryRunReport = JSON.parse(readFileSync(join(linuxCamJobRoot, "linux-cam-evidence-upload-report.json"), "utf8"));
   assert(uploadDryRunReport.schema === "hediao3d.v3-linux-cam-evidence-upload-report.v1", "Linux CAM job upload dry-run report schema mismatch");
   assert(uploadDryRunReport.dryRun === true, "Linux CAM job upload dry-run should mark dryRun");
+  assert(uploadDryRunReport.phase === "dry-run-ready", "Linux CAM job upload dry-run should expose ready phase");
+  assert(uploadDryRunReport.completedCount === 0, "Linux CAM job upload dry-run should not count planned uploads as completed");
+  assert(uploadDryRunReport.failedUpload === null, "Linux CAM job upload dry-run should not contain failed upload");
+  assert(uploadDryRunReport.retryCommand?.includes("HEDIAO3D_V3_API_BASE"), "Linux CAM job upload dry-run should include retry command");
+  assert(uploadDryRunReport.resumeSafe === true, "Linux CAM job upload dry-run should mark rerun as safe");
+  assert(uploadDryRunReport.nextActions?.some((action) => action.includes("HEDIAO3D_V3_API_BASE")), "Linux CAM job upload dry-run should include API base guidance");
   assert(uploadDryRunReport.uploadPlan?.readyForUpload === true, "Linux CAM job upload dry-run should see ready files");
   assert(uploadDryRunReport.uploadPlan?.files?.depsInstallReport?.exists === true, "Linux CAM job upload dry-run should include dependency install report file status");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.depsInstallReport === `/api/orchestrator/jobs/${job.id}/linux-cam-deps-install-report`, "Linux CAM job upload dry-run should plan dependency install report endpoint");
