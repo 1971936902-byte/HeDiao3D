@@ -10052,6 +10052,38 @@ function createProductionEvidenceDossierPublicSummary(dossier) {
   };
 }
 
+function createProductionClosureAuditPublicSummary(audit) {
+  if (!audit) return null;
+  return {
+    schema: audit.schema,
+    artifact: "production-closure-audit.json",
+    markdown: "production-closure-audit.md",
+    status: audit.status,
+    packageLevel: audit.packageLevel,
+    allowProductionNc: Boolean(audit.allowProductionNc),
+    allowTrialNc: Boolean(audit.allowTrialNc),
+    passCount: audit.passCount,
+    reviewCount: audit.reviewCount,
+    blockCount: audit.blockCount,
+    summary: audit.summary,
+    machine: audit.machine ?? null,
+    packageBinding: audit.packageBinding ?? null,
+    nextActions: Array.isArray(audit.nextActions) ? audit.nextActions.slice(0, 8) : [],
+    steps: Array.isArray(audit.steps)
+      ? audit.steps.map((step) => ({
+        id: step.id,
+        layer: step.layer,
+        title: step.title,
+        status: step.status,
+        summary: step.summary,
+        operatorAction: step.operatorAction,
+        commandOrEndpoint: step.commandOrEndpoint,
+        requiredArtifacts: Array.isArray(step.requiredArtifacts) ? step.requiredArtifacts : []
+      }))
+      : []
+  };
+}
+
 function createProductionClosureAudit({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, camoticsCliPackage, camoticsExecutionPreflight, machineControllerProfile, machineFilePolicy, packageIntegrity }) {
   const readiness = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
   const readinessGates = Array.isArray(readiness?.gates) ? readiness.gates : [];
@@ -12698,7 +12730,9 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-download-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
-  return { deliveryManifest, packageIntegrity };
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.md"));
+  return { deliveryManifest, packageIntegrity, productionClosureAudit };
 }
 
 async function refreshNextActionChecklistArtifact(job) {
@@ -12743,6 +12777,7 @@ async function refreshMachiningPackageIndexArtifact(job) {
   const machineControllerProfile = readJsonFile(join(workDir, "machine-controller-profile.json"));
   const ncStaticAnalysis = readJsonFile(join(workDir, "nc-static-analysis.json"));
   const controllerDialectReport = readJsonFile(join(workDir, "controller-dialect-report.json"));
+  const productionClosureAudit = readJsonFile(join(workDir, "production-closure-audit.json"));
   const machineFilePolicy = await ensureMachineFilePolicyArtifact(job, {
     deliveryManifest,
     productionGate,
@@ -12764,7 +12799,7 @@ async function refreshMachiningPackageIndexArtifact(job) {
     postprocessTraceReport: readJsonFile(join(workDir, "postprocess-trace-report.json")),
     camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
     productionEvidenceDossier: readJsonFile(join(workDir, "production-evidence-dossier.json")),
-    productionClosureAudit: readJsonFile(join(workDir, "production-closure-audit.json")),
+    productionClosureAudit,
     ncStaticAnalysis,
     nativeCamReadiness: readJsonFile(join(workDir, "native-cam-readiness.json")),
     camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
@@ -12773,7 +12808,6 @@ async function refreshMachiningPackageIndexArtifact(job) {
     machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
     controllerDialectReport,
     machineFilePolicy,
-    productionClosureAudit,
     deliveryManifest
   });
   await writeFile(join(workDir, "machining-package-index.json"), JSON.stringify(index, null, 2), "utf8");
@@ -13273,7 +13307,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
         downloadableCount: refreshedAfterIndex.packageIntegrity.downloadableCount,
         missingDownloadableCount: refreshedAfterIndex.packageIntegrity.missingDownloadableCount,
         totalBytes: refreshedAfterIndex.packageIntegrity.totalBytes
-      }
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedAfterIndex.productionClosureAudit)
     } : {}),
     ...(productionEvidenceDossier ? {
       productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(productionEvidenceDossier)
@@ -13302,7 +13337,8 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
       artifact: publicArtifactUrl(safeJobId, "trial-feedback-log.json")
     },
     optimizationPlan,
-    productionEvidenceDossier
+    productionEvidenceDossier,
+    productionClosureAudit: refreshedAfterIndex?.productionClosureAudit ?? null
   });
 }
 
@@ -13385,7 +13421,8 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
         downloadableCount: refreshedAfterIndex.packageIntegrity.downloadableCount,
         missingDownloadableCount: refreshedAfterIndex.packageIntegrity.missingDownloadableCount,
         totalBytes: refreshedAfterIndex.packageIntegrity.totalBytes
-      }
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedAfterIndex.productionClosureAudit)
     } : {}),
     ...(productionEvidenceDossier ? {
       productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(productionEvidenceDossier)
@@ -13414,7 +13451,8 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
       latestAllRequiredPassed: updatedLog.latestAllRequiredPassed,
       artifact: publicArtifactUrl(safeJobId, "machine-acceptance-log.json")
     },
-    productionEvidenceDossier
+    productionEvidenceDossier,
+    productionClosureAudit: refreshedAfterIndex?.productionClosureAudit ?? null
   });
 }
 
@@ -13499,6 +13537,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     productionGate: refreshed.productionGate,
     productionUnlockMatrix: refreshed.productionUnlockMatrix,
     productionEvidenceDossier: refreshed.productionEvidenceDossier ? createProductionEvidenceDossierPublicSummary(refreshed.productionEvidenceDossier) : job.result.summary?.productionEvidenceDossier,
+    productionClosureAudit: refreshed.productionClosureAudit ? createProductionClosureAuditPublicSummary(refreshed.productionClosureAudit) : job.result.summary?.productionClosureAudit,
     machiningPackageIndex: refreshed.machiningPackageIndex ?? job.result.summary?.machiningPackageIndex,
     deliveryManifest: refreshed.deliveryManifest ?? job.result.summary?.deliveryManifest,
     packageIntegrity: refreshed.packageIntegrity ? {
@@ -13545,6 +13584,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     productionGate: refreshed.productionGate,
     productionUnlockMatrix: refreshed.productionUnlockMatrix,
     productionEvidenceDossier: refreshed.productionEvidenceDossier,
+    productionClosureAudit: refreshed.productionClosureAudit,
     artifacts: {
       result: publicArtifactUrl(safeJobId, "camotics-result.json"),
       adapterReport: publicArtifactUrl(safeJobId, "camotics-adapter-report.json"),
@@ -14686,7 +14726,8 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
     productionEvidenceDossier,
     machiningPackageIndex,
     deliveryManifest: refreshedAfterIndex?.deliveryManifest ?? deliveryManifest,
-    packageIntegrity: refreshedAfterIndex?.packageIntegrity ?? refreshedDelivery?.packageIntegrity
+    packageIntegrity: refreshedAfterIndex?.packageIntegrity ?? refreshedDelivery?.packageIntegrity,
+    productionClosureAudit: refreshedAfterIndex?.productionClosureAudit ?? refreshedDelivery?.productionClosureAudit ?? readJsonFile(join(workDir, "production-closure-audit.json"))
   };
 }
 

@@ -158,6 +158,9 @@ async function main() {
   assert(acceptance.productionEvidenceDossier.crossChecks?.airRunEvidence?.status === "pass", "evidence dossier should expose passing air-run evidence");
   assert(acceptance.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "machine-acceptance" && item.status === "pass"), "machine acceptance evidence item should pass");
   assert(acceptance.productionEvidenceDossier.evidenceItems?.some((item) => item.id === "air-run-evidence" && item.status === "pass"), "air-run evidence item should pass");
+  assert(acceptance.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "machine acceptance response missing production closure audit");
+  assert(acceptance.productionClosureAudit.steps?.some((step) => step.id === "air-run-and-rotary-calibration"), "machine acceptance closure audit should include air-run step");
+  assert(acceptance.productionClosureAudit.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "machine acceptance closure audit should include field acceptance step");
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.machineAcceptanceLog?.schema === "hediao3d.machine-acceptance-log.v1", "job summary missing machine acceptance log");
@@ -165,6 +168,8 @@ async function main() {
   assert(reloaded.result.summary.machineAcceptanceLog.allRequiredPassed === true, "job summary should mark required steps passed");
   assert(reloaded.result.summary.machineAcceptanceLog.downloadIntegrityBound === "matched", "job summary should expose package integrity binding");
   assert(reloaded.result.summary.machineAcceptanceLog.rotaryCalibrationStatus === "pass", "job summary should expose rotary calibration pass status");
+  assert(reloaded.result?.summary?.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary missing production closure audit after machine acceptance");
+  assert(reloaded.result.summary.productionClosureAudit.steps?.some((step) => step.id === "air-run-and-rotary-calibration"), "job summary closure audit should include air-run step");
 
   const recordArtifact = await getArtifactJson(job.id, "machine-acceptance-record.json");
   assert(recordArtifact.id === acceptance.record.id, "record artifact id mismatch");
@@ -182,6 +187,9 @@ async function main() {
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "rotary-calibration-evidence" && item.status === "pass"), "dossier should include passed rotary calibration evidence item");
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "air-run-evidence" && item.status === "pass"), "dossier should include passed air-run evidence item");
   assert(dossierArtifact.crossChecks?.fieldEvidencePackageBinding?.status === "partial", "dossier should mark field package binding partial before trial feedback");
+  const closureAuditArtifact = await getArtifactJson(job.id, "production-closure-audit.json");
+  assert(closureAuditArtifact.steps?.some((step) => step.id === "air-run-and-rotary-calibration"), "closure audit artifact should include air-run and calibration step");
+  assert(closureAuditArtifact.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "closure audit artifact should include feedback and acceptance step");
 
   const feedback = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
     id: "machine-acceptance-api-test-feedback",
@@ -203,6 +211,7 @@ async function main() {
   });
   assert(feedback.productionEvidenceDossier?.crossChecks?.fieldEvidencePackageBinding?.status === "matched", "trial feedback and machine acceptance should bind the same package files");
   assert(feedback.productionEvidenceDossier.crossChecks.fieldEvidencePackageBinding.sharedFiles?.some((file) => file.filename === "toolpath.nc" && file.status === "matched"), "field package binding should include matched toolpath.nc");
+  assert(feedback.productionClosureAudit?.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "feedback response should refresh production closure audit after field evidence binding");
 
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.downloadable), "delivery manifest should expose machine acceptance record");
@@ -210,6 +219,7 @@ async function main() {
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   assert(packageIntegrity.files?.some((file) => file.filename === "machine-acceptance-record.json" && file.sha256), "package integrity missing machine acceptance record hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "machine-acceptance-log.json" && file.sha256), "package integrity missing machine acceptance log hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity missing production closure audit hash");
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.airRunEvidence?.status === "pass", "package index should expose passing air-run evidence");
 

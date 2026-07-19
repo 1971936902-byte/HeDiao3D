@@ -81,11 +81,15 @@ async function main() {
   assert(completeImport.simulationEvidence?.level === "material-removal-verified", `expected material-removal-verified, got ${completeImport.simulationEvidence?.level}`);
   assert(completeImport.simulationEvidence?.productionUnlockEligible === true, "complete CAMotics import should be production evidence eligible");
   assert(completeImport.productionUnlockMatrix?.rows?.some((row) => row.id === "simulation-evidence" && row.status === "pass"), "unlock matrix should mark simulation row pass");
+  assert(completeImport.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "complete import response missing production closure audit");
+  assert(completeImport.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "complete import closure audit should include CAMotics material-removal step");
 
   const reloaded = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloaded.result?.summary?.simulation?.engine === "camotics", "job summary should expose camotics simulation");
   assert(reloaded.result.summary.productionGate.simulationEvidence.productionUnlockEligible === true, "job summary production gate should expose imported evidence");
   assert(reloaded.result.summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "material-removal-simulation" && item.status === "pass"), "job summary evidence dossier should expose passing material-removal item");
+  assert(reloaded.result.summary.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary should expose refreshed production closure audit");
+  assert(reloaded.result.summary.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "job summary closure audit should include CAMotics material-removal step");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "evidence dossier should expose matched CAMotics input identity");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsCliRunPackageBindingStatus === "matched", "evidence dossier should expose matched CAMotics CLI package binding");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsMotionConsistencyStatus === "matched", "evidence dossier should expose matched CAMotics motion consistency");
@@ -101,6 +105,7 @@ async function main() {
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.sha256), "package integrity should hash local validation report");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-import.json" && file.sha256), "package integrity should hash CAMotics import audit");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "next-action-checklist.md" && file.sha256), "package integrity should hash refreshed next action checklist");
+  assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity should hash refreshed production closure audit");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
   const localValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-local-validation.json`);
   const importAuditArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);

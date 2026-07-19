@@ -102,6 +102,8 @@ async function main() {
   assert(feedback.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "feedback response missing evidence dossier");
   assert(feedback.productionEvidenceDossier.crossChecks?.trialFeedbackRecords >= 2, "evidence dossier should count feedback records");
   assert(feedback.record.downloadIntegrity?.packageBinding?.status === "matched", "review feedback should bind current package");
+  assert(feedback.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "feedback response missing production closure audit");
+  assert(feedback.productionClosureAudit.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "feedback response closure audit should include field feedback step");
 
   const matchedSuccess = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/trial-feedback`, {
     id: "trial-feedback-api-test-success",
@@ -129,6 +131,8 @@ async function main() {
   assert(reloaded.result.summary.trialFeedbackLog.latestDownloadIntegrityBound === "matched", "job summary should expose latest feedback package binding");
   assert(reloaded.result?.summary?.processOptimizationPlan?.schema === "hediao3d.process-optimization-plan.v1", "job summary missing optimization plan");
   assert(reloaded.result?.summary?.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "job summary missing evidence dossier");
+  assert(reloaded.result?.summary?.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary missing production closure audit");
+  assert(reloaded.result.summary.productionClosureAudit.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "job summary closure audit missing feedback step");
 
   const recordArtifact = await getArtifactJson(job.id, "trial-feedback-record.json");
   assert(recordArtifact.id === matchedSuccess.record.id, "record artifact id mismatch");
@@ -143,6 +147,8 @@ async function main() {
   const dossierArtifact = await getArtifactJson(job.id, "production-evidence-dossier.json");
   assert(dossierArtifact.evidenceItems?.some((item) => item.id === "trial-feedback" && item.status === "pass" && item.summary.includes("3 条")), "dossier missing feedback evidence item");
   assert(dossierArtifact.crossChecks?.trialFeedbackIntegrityBound === true, "dossier should expose feedback package binding");
+  const closureAuditArtifact = await getArtifactJson(job.id, "production-closure-audit.json");
+  assert(closureAuditArtifact.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "closure audit artifact should include feedback and acceptance step");
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(deliveryManifest.files?.some((file) => file.filename === "trial-feedback-record.json" && file.downloadable), "delivery manifest should expose trial feedback record");
   assert(deliveryManifest.files?.some((file) => file.filename === "trial-feedback-log.json" && file.downloadable), "delivery manifest should expose trial feedback log");
@@ -150,6 +156,7 @@ async function main() {
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   assert(packageIntegrity.files?.some((file) => file.filename === "trial-feedback-record.json" && file.sha256), "package integrity missing feedback record hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "process-optimization-plan.json" && file.sha256), "package integrity missing optimization plan hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity missing production closure audit hash");
 
   console.log(JSON.stringify({
     ok: true,
