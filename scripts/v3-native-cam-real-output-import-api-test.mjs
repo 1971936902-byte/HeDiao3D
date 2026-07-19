@@ -175,15 +175,16 @@ async function main() {
   assert(wrongToolBoundary.targetMachineBoundaryStatus?.mismatches?.some((item) => /rotaryWrapPerRevolutionMm/.test(item)), "wrong boundary should name wrap distance mismatch");
   assert(wrongToolBoundary.targetMachineBoundaryStatus?.mismatches?.some((item) => /toolDiameterMm/.test(item)), "wrong boundary should name tool diameter mismatch");
 
+  const nativeCamRealOutputBundleDataUrl = toZipDataUrl({
+    "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256, { includeContactValidation: false }), null, 2),
+    "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2),
+    "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2),
+    "opencamlib-runner-readiness.json": JSON.stringify(createRunnerReadinessFixture(), null, 2),
+    "opencamlib-real-candidate-run.json": JSON.stringify(createRealCandidateFixture(), null, 2)
+  });
   const zipImported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-bundle.zip",
-    acceptanceZipDataUrl: toZipDataUrl({
-      "native-cam-real-output-acceptance.json": JSON.stringify(createAcceptanceFixture(validationReportSha256, { includeContactValidation: false }), null, 2),
-      "v3-external-adapter-validation.json": JSON.stringify(validationReport, null, 2),
-      "opencamlib-contact-output-validation.json": JSON.stringify(createContactValidationFixture(), null, 2),
-      "opencamlib-runner-readiness.json": JSON.stringify(createRunnerReadinessFixture(), null, 2),
-      "opencamlib-real-candidate-run.json": JSON.stringify(createRealCandidateFixture(), null, 2)
-    })
+    acceptanceZipDataUrl: nativeCamRealOutputBundleDataUrl
   });
   assert(zipImported.schema === "hediao3d.native-cam-real-output-acceptance.v1", "zip imported acceptance schema mismatch");
   assert(zipImported.sourceReportBindingStatus === "matched", "zip imported acceptance should bind validation report");
@@ -253,21 +254,30 @@ async function main() {
   const created = await postJson("/api/orchestrator/jobs", { modelUrl, settings, engine: "auto" });
   const job = await waitForJob(created.id);
   assert(job.status === "completed", `job did not complete: ${job.status}`);
+  const unifiedZipImported = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-evidence-bundle`, {
+    sourceName: "native-cam-real-output-bundle.zip",
+    bundleDataUrl: nativeCamRealOutputBundleDataUrl
+  });
+  assert(unifiedZipImported.schema === "hediao3d.native-cam-real-output-acceptance.v1", "unified Linux CAM evidence endpoint should route Native CAM bundle to acceptance import");
+  assert(unifiedZipImported.sourceReportBindingStatus === "matched", "unified Native CAM bundle import should bind validation report");
+  assert(unifiedZipImported.targetMachineBoundaryStatus?.status === "matched", "unified Native CAM bundle import should preserve target machine boundary");
+  assert(unifiedZipImported.contactValidationStatus?.status === "ready", "unified Native CAM bundle import should preserve contact validation");
+  assert(unifiedZipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "unified Native CAM bundle import should expose source bundle artifact");
   const prepared = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-cli-package`, {});
   assert(prepared.ok === true, "CAMotics package prepare should refresh job-local Native CAM snapshot");
   const snapshot = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/native-cam-real-output-snapshot.json`);
   assert(snapshot.schema === "hediao3d.native-cam-real-output-snapshot.v1", "job-local Native CAM snapshot schema mismatch");
-  assert(snapshot.acceptance?.id === zipImported.id, "job-local Native CAM snapshot should bind latest imported acceptance id");
+  assert(snapshot.acceptance?.id === unifiedZipImported.id, "job-local Native CAM snapshot should bind latest imported acceptance id");
   assert(snapshot.gateHints?.canSupportProductionCandidateReview === true, "job-local Native CAM snapshot should expose production candidate review support");
   const reloadedJob = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloadedJob.result?.summary?.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "native-cam-real-output-snapshot" && item.status === "pass"), "job evidence dossier should include passing Native CAM snapshot item");
-  assert(reloadedJob.result.summary.productionEvidenceDossier.crossChecks?.nativeCamRealOutputSnapshot?.acceptanceId === zipImported.id, "job evidence dossier should expose Native CAM snapshot acceptance id");
+  assert(reloadedJob.result.summary.productionEvidenceDossier.crossChecks?.nativeCamRealOutputSnapshot?.acceptanceId === unifiedZipImported.id, "job evidence dossier should expose Native CAM snapshot acceptance id");
   assert(reloadedJob.result.summary.deliveryManifest.files?.some((file) => file.filename === "native-cam-real-output-snapshot.json" && file.exists), "delivery manifest should expose Native CAM snapshot");
   assert(reloadedJob.result.summary.packageIntegrity.files?.some((file) => file.filename === "native-cam-real-output-snapshot.json" && file.sha256), "package integrity should hash Native CAM snapshot");
 
   console.log(JSON.stringify({
     ok: true,
-    importId: zipImported.id,
+    importId: unifiedZipImported.id,
     readinessId: readiness.id,
     level: readiness.nativeCamRealOutputAcceptance.level,
     candidates: readiness.nativeCamRealOutputAcceptance.productionCandidateCount,
