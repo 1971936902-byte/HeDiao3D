@@ -2071,9 +2071,26 @@ async function ensureNativeCamRealOutputSnapshotArtifact(job) {
         && latest.contactValidationStatus?.status === "ready"
     }
   };
-  await writeFile(join(job.workDir, "native-cam-real-output-snapshot.json"), JSON.stringify(snapshot, null, 2), "utf8");
+  const snapshotPath = join(job.workDir, "native-cam-real-output-snapshot.json");
+  const existing = readJsonFileSafe(snapshotPath);
+  if (nativeCamRealOutputSnapshotBindingMatches(existing, snapshot)) {
+    pushUnique(job.artifacts, publicArtifactUrl(job.id, "native-cam-real-output-snapshot.json"));
+    return existing;
+  }
+  await writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "native-cam-real-output-snapshot.json"));
   return snapshot;
+}
+
+function nativeCamRealOutputSnapshotBindingMatches(existing, next) {
+  if (!existing || typeof existing !== "object") return false;
+  if (existing.schema !== "hediao3d.native-cam-real-output-snapshot.v1") return false;
+  if (existing.jobId !== next.jobId) return false;
+  if (existing.source !== next.source) return false;
+  if (existing.productionUnlockEligible !== false) return false;
+  return JSON.stringify(existing.acceptance ?? null) === JSON.stringify(next.acceptance ?? null)
+    && JSON.stringify(existing.artifacts ?? null) === JSON.stringify(next.artifacts ?? null)
+    && JSON.stringify(existing.gateHints ?? null) === JSON.stringify(next.gateHints ?? null);
 }
 
 function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) {
@@ -13792,6 +13809,7 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
     return json(res, 409, { error: "当前任务缺少 camotics-cli-execution-plan.json，无法生成 Linux CAMotics 准备包。" });
   }
 
+  await refreshEvidenceDeliveryArtifacts(job);
   const report = await prepareCamoticsCliPackageForJob(job, workDir);
   if (!report || report.status === "failed") {
     pushIfArtifactExists(job, "camotics-cli-package-report.json");
@@ -16001,6 +16019,7 @@ function getOrchestratorCamoticsLinuxPackage(jobId, res) {
     "rotary-wrap-preview-report.json",
     "postprocess-trace-report.json",
     "machine-controller-profile.json",
+    "native-cam-real-output-snapshot.json",
     "package-integrity.json"
   ];
   const missingCritical = criticalFilenames.filter((filename) => !existsSync(join(workDir, filename)));
@@ -16132,6 +16151,7 @@ async function getOrchestratorLinuxCamJobPackage(jobId, res) {
     "postprocess-profile.json",
     "postprocess-trace-report.json",
     "rotary-wrap-preview-report.json",
+    "native-cam-real-output-snapshot.json",
     "toolpath.nc",
     "air-run.nc",
     "rotary-calibration-airrun.nc",
@@ -16865,6 +16885,7 @@ function createCamoticsLinuxPackageFile(workDir, filename, required) {
     "rotary-wrap-preview-report.json",
     "postprocess-trace-report.json",
     "machine-controller-profile.json",
+    "native-cam-real-output-snapshot.json",
     "package-integrity.json",
     "camotics-execution-preflight.json",
     "camotics-execution-preflight.md"
@@ -17138,6 +17159,25 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "  return { relativePath, required, exists: true, status: 'present', sizeBytes: statSync(fullPath).size, sha256: createHash('sha256').update(bytes).digest('hex') };",
     "}",
     "",
+    "function normalizeManifestPath(name) {",
+    "  const prefix = 'hediao3d-v3-linux-cam-job/';",
+    "  return String(name ?? '').startsWith(prefix) ? String(name).slice(prefix.length) : String(name ?? '');",
+    "}",
+    "",
+    "function manifestFileCheck(file) {",
+    "  const relativePath = normalizeManifestPath(file?.name);",
+    "  const summary = fileSummary(relativePath, true);",
+    "  if (!summary.exists) return { ...summary, id: `manifest:${relativePath}`, expectedSha256: file?.sha256 ?? null, hashMatches: false };",
+    "  const hashMatches = Boolean(file?.sha256) && summary.sha256 === file.sha256;",
+    "  return { ...summary, id: `manifest:${relativePath}`, status: hashMatches ? 'present-hash-matched' : 'hash-mismatch', expectedSha256: file?.sha256 ?? null, hashMatches };",
+    "}",
+    "",
+    "const manifestFileChecks = [",
+    "  ...(manifest.nativeCam?.files ?? []),",
+    "  ...(manifest.camotics?.files ?? []),",
+    "  ...(manifest.references ?? [])",
+    "].map(manifestFileCheck);",
+    "",
     "const checks = [",
     "  fileSummary('linux-cam-job-package-manifest.json'),",
     "  fileSummary('README-LINUX-CAM-JOB.md'),",
@@ -17150,24 +17190,31 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "  fileSummary('camotics/run/camotics-result-validate.js'),",
     "  fileSummary('native-cam-real-output-bundle.zip', false),",
     "  fileSummary('camotics-result-bundle.zip', false),",
-    "  fileSummary('camotics-work/camotics-result-local-validation.json', false)",
+    "  fileSummary('camotics-work/camotics-result-local-validation.json', false),",
+    "  ...manifestFileChecks",
     "];",
     "",
     "const missingRequired = checks.filter((check) => check.required && !check.exists);",
+    "const hashMismatches = checks.filter((check) => check.hashMatches === false && check.expectedSha256);",
     "const nativeBundle = checks.find((check) => check.relativePath === 'native-cam-real-output-bundle.zip');",
     "const camoticsBundle = checks.find((check) => check.relativePath === 'camotics-result-bundle.zip');",
-    "const productionEvidenceReady = Boolean(nativeBundle?.exists && camoticsBundle?.exists);",
+    "const packageIntegrityOk = missingRequired.length === 0 && hashMismatches.length === 0;",
+    "const productionEvidenceReady = Boolean(packageIntegrityOk && nativeBundle?.exists && camoticsBundle?.exists);",
     "const report = {",
     "  schema: 'hediao3d.v3-linux-cam-job-local-validation.v1',",
     "  jobId: manifest.jobId,",
     "  checkedAt: new Date().toISOString(),",
-    "  level: missingRequired.length ? 'invalid-package' : productionEvidenceReady ? 'ready-for-v3-upload' : 'waiting-for-linux-evidence',",
+    "  level: missingRequired.length ? 'invalid-package' : hashMismatches.length ? 'package-hash-mismatch' : productionEvidenceReady ? 'ready-for-v3-upload' : 'waiting-for-linux-evidence',",
     "  productionUnlockEligible: false,",
     "  summary: missingRequired.length",
     "    ? `Package is missing ${missingRequired.length} required files.`",
+    "    : hashMismatches.length",
+    "      ? `Package has ${hashMismatches.length} manifest hash mismatch(es).`",
     "    : productionEvidenceReady",
     "      ? 'Native CAM and CAMotics upload bundles are present; upload them to HeDiao3D V3 for gate evaluation.'",
     "      : 'Package inputs are present, but one or more Linux evidence bundles are still missing.',",
+    "  packageIntegrityOk,",
+    "  hashMismatches,",
     "  expectedUploads: {",
     "    nativeCam: 'native-cam-real-output-bundle.zip',",
     "    camotics: 'camotics-result-bundle.zip'",
@@ -17180,7 +17227,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "",
     "writeFileSync(join(root, 'linux-cam-job-local-validation.json'), JSON.stringify(report, null, 2));",
     "console.log(JSON.stringify(report, null, 2));",
-    "if (missingRequired.length) process.exitCode = 2;",
+    "if (missingRequired.length || hashMismatches.length) process.exitCode = 2;",
     ""
   ].join("\n");
 }
@@ -17355,6 +17402,7 @@ function createCamoticsLinuxPackageManifest(jobId, runPackage, deliveryManifest,
       preferredGcodeSha256: runPackage?.preferredGcodeIdentity?.sha256 ?? null,
       motionProfile: runPackage?.preferredGcodeIdentity?.motionProfile ?? null,
       expectedOutputs: runPackage?.expectedOutputs ?? null,
+      upstreamCamEvidence: runPackage?.upstreamCamEvidence ?? null,
       safetyLocks: runPackage?.safetyLocks ?? null
     },
     files: files.map((file) => ({

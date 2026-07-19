@@ -93,7 +93,7 @@ async function main() {
   writeFileSync(join(jobDir, "native-cam-real-output-snapshot.json"), nativeSnapshotText, "utf8");
   writeFileSync(join(jobDir, "opencamlib-candidate-package-validation.json"), candidatePackageValidationText, "utf8");
   writeFileSync(join(jobDir, "opencamlib-candidate-package-bundle.zip"), candidatePackageBundleText, "utf8");
-  const nativeSnapshotSha = createHash("sha256").update(nativeSnapshotText).digest("hex");
+  let nativeSnapshotSha = createHash("sha256").update(nativeSnapshotText).digest("hex");
   const candidatePackageValidationSha = createHash("sha256").update(candidatePackageValidationText).digest("hex");
   const candidatePackageBundleSha = createHash("sha256").update(candidatePackageBundleText).digest("hex");
 
@@ -104,6 +104,8 @@ async function main() {
   assert(prepared.report?.preferredGcodeIdentity?.motionProfile?.motionLineCount === previewMotionProfile.motionLineCount, "API report motion count mismatch");
   assert(prepared.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "prepare package response missing production closure audit");
   assert(prepared.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "prepare package closure audit should include CAMotics material-removal step");
+  const actualNativeSnapshotText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/native-cam-real-output-snapshot.json`);
+  nativeSnapshotSha = createHash("sha256").update(actualNativeSnapshotText).digest("hex");
 
   const runPackage = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
   assert(runPackage.schema === "hediao3d.camotics-cli-run-package.v1", "run package schema mismatch");
@@ -112,7 +114,7 @@ async function main() {
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMin === previewMotionProfile.zMin, "run package zMin mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMax === previewMotionProfile.zMax, "run package zMax mismatch");
   assert(runPackage.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "run package should expose upstream CAM evidence binding");
-  assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.acceptanceId === "native-cam-snapshot-fixture", "run package should summarize job-local Native CAM snapshot");
+  assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.schema === "hediao3d.native-cam-real-output-snapshot.v1", "run package should summarize job-local Native CAM snapshot");
   assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.productionUnlockEligible === false, "Native CAM snapshot summary must not unlock production");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "run package should carry OpenCAMLib candidate machine-fit");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "run package should carry machine-fit rotary axis");
@@ -130,7 +132,7 @@ async function main() {
   assert(template.inputs?.machineContext?.rotaryWrapAxis === "Y", "result template should bind Y rotary machine context");
   assert(template.inputs?.machineContext?.rotaryWrapPerRevolutionMm === 100, "result template should bind rotary wrap distance");
   assert(template.inputs?.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "result template should include upstream CAM evidence binding");
-  assert(template.inputs?.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.acceptanceId === "native-cam-snapshot-fixture", "result template should carry Native CAM snapshot summary");
+  assert(template.inputs?.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.schema === "hediao3d.native-cam-real-output-snapshot.v1", "result template should carry Native CAM snapshot summary");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "result template should carry Native CAM snapshot evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "result template should carry candidate machine-fit evidence");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
@@ -205,7 +207,10 @@ async function main() {
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-validate.js"), "CAMotics Linux package missing result validator");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-linux-operator-checklist.md"), "CAMotics Linux package missing operator checklist");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/references/camotics-execution-preflight.json"), "CAMotics Linux package missing execution preflight report");
+  assert(linuxZipNames.includes("hediao3d-v3-camotics/references/native-cam-real-output-snapshot.json"), "CAMotics Linux package missing Native CAM snapshot reference");
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-template.json"), "CAMotics Linux package missing result template");
+  const camoticsLinuxManifest = JSON.parse(readStoredZipEntry(linuxPackage.bytes, "hediao3d-v3-camotics/camotics-linux-package-manifest.json"));
+  assert(camoticsLinuxManifest.runPackage?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "CAMotics Linux manifest should expose Native CAM snapshot evidence hash");
 
   const openCamLibInputsPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/opencamlib-candidate-inputs.zip`);
   assert(openCamLibInputsPackage.bytes[0] === 0x50 && openCamLibInputsPackage.bytes[1] === 0x4b, "OpenCAMLib candidate input package should be a ZIP file");
@@ -233,8 +238,13 @@ async function main() {
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/camotics/run/camotics-result-validate.js"), "Linux CAM job package missing CAMotics validator");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/linux-cam-closed-loop-handoff.md"), "Linux CAM job package missing closed-loop handoff reference");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/package-integrity.json"), "Linux CAM job package missing package integrity reference");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json"), "Linux CAM job package missing Native CAM snapshot reference");
+  const linuxCamJobManifest = JSON.parse(readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"));
+  assert(linuxCamJobManifest.camotics?.runPackage?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should expose Native CAM snapshot evidence hash");
+  assert(linuxCamJobManifest.references?.some((file) => file.name === "hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should hash Native CAM snapshot reference");
   const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
+  assert(linuxCamJobValidator.includes("present-hash-matched"), "Linux CAM job validator should verify manifest file hashes");
   assert(linuxCamJobValidator.includes("native-cam-real-output-bundle.zip") && linuxCamJobValidator.includes("camotics-result-bundle.zip"), "Linux CAM job validator should name expected upload bundles");
   const linuxCamJobExtractDir = join(tmpdir(), `hediao3d-linux-cam-job-${job.id}`);
   rmSync(linuxCamJobExtractDir, { recursive: true, force: true });
@@ -249,6 +259,8 @@ async function main() {
   const localValidation = JSON.parse(readFileSync(join(linuxCamJobRoot, "linux-cam-job-local-validation.json"), "utf8"));
   assert(localValidation.schema === "hediao3d.v3-linux-cam-job-local-validation.v1", "Linux CAM job local validation schema mismatch");
   assert(localValidation.level === "waiting-for-linux-evidence", `Linux CAM job local validation should wait for real evidence, got ${localValidation.level}`);
+  assert(localValidation.packageIntegrityOk === true, "Linux CAM job local validation should verify manifest hashes");
+  assert(Array.isArray(localValidation.hashMismatches) && localValidation.hashMismatches.length === 0, "Linux CAM job local validation should not report hash mismatches");
   assert(localValidation.productionUnlockEligible === false, "Linux CAM job local validation must not unlock production");
   assert(localValidation.expectedUploads?.nativeCam === "native-cam-real-output-bundle.zip", "Linux CAM job local validation missing Native CAM expected upload");
   assert(localValidation.expectedUploads?.camotics === "camotics-result-bundle.zip", "Linux CAM job local validation missing CAMotics expected upload");
