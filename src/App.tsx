@@ -3355,37 +3355,28 @@ export function App() {
       return;
     }
     const filename = v3LinuxCamEvidenceBundleFile.name;
-    const lowerName = filename.toLowerCase();
-    const isNativeBundle = lowerName.includes("native-cam-real-output") || lowerName.includes("native-cam");
-    const isCamoticsBundle = lowerName.includes("camotics-result") || lowerName.includes("camotics");
-    if (!isNativeBundle && !isCamoticsBundle) {
-      setV3Status("无法识别结果包类型，请确认文件名包含 native-cam-real-output-bundle 或 camotics-result-bundle。");
-      return;
-    }
-    if (isCamoticsBundle && !v3Job?.id) {
-      setV3Status("CAMotics 结果包必须绑定当前 V3 任务，请先运行或恢复一个 V3 任务。");
+    if (!v3Job?.id) {
+      setV3Status("Linux CAM 结果包必须绑定当前 V3 任务，请先运行或恢复一个 V3 任务。");
       return;
     }
     setIsV3LinuxCamEvidenceBundleImporting(true);
     try {
       const bundleDataUrl = await fileToDataUrl(v3LinuxCamEvidenceBundleFile);
-      const endpoint = isNativeBundle
-        ? "/api/orchestrator/native-cam/real-output-acceptance"
-        : `/api/orchestrator/jobs/${encodeURIComponent(v3Job!.id)}/camotics-result`;
-      const body = isNativeBundle
-        ? { acceptanceZipDataUrl: bundleDataUrl, sourceName: filename }
-        : { resultZipDataUrl: bundleDataUrl, sourceName: filename };
-      const response = await fetch(endpoint, {
+      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/linux-cam-evidence-bundle`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
+        body: JSON.stringify({
+          bundleDataUrl,
+          sourceName: filename
+        })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data.error ?? (isNativeBundle ? "真实 CAM 输出包回填失败" : "CAMotics 结果包回填失败"));
+        throw new Error(data.error ?? "Linux CAM 结果包回填失败");
       }
-      const title = isNativeBundle ? "智能回填真实 CAM 输出包" : "智能回填 CAMotics 材料去除包";
-      const detail = isNativeBundle
+      const importedNative = Boolean(data.sourceReportBindingStatus || data.targetMachineBoundaryStatus || data.apiArtifacts?.json?.includes("native-cam-real-output"));
+      const title = importedNative ? "智能回填真实 CAM 输出包" : "智能回填 CAMotics 材料去除包";
+      const detail = importedNative
         ? `${filename} / ${data.summary ?? data.level ?? "unknown"}`
         : `${filename} / ${data.simulationEvidence?.level ?? data.status ?? "unknown"}`;
       setV3Status(`${title}完成：${detail}`);

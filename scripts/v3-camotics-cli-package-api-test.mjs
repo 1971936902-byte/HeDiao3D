@@ -158,7 +158,7 @@ async function main() {
   assert(validatorScript.includes("nativeCamRealOutputSnapshot"), "validator should bind CAMotics results to job-local Native CAM snapshot evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageValidation"), "validator should bind CAMotics results to candidate package validation evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageBundle"), "validator should bind CAMotics results to candidate package bundle evidence");
-  runLocalValidatorFixture({
+  const camoticsResultBundleDataUrl = runLocalValidatorFixture({
     jobId: job.id,
     validatorScript,
     previewSha256,
@@ -329,6 +329,15 @@ async function main() {
   assert(importedLinuxCamJobValidationAudit.evidenceStatus?.camoticsBundle === "present", "Linux CAM job validation audit should expose evidence status");
   assert(importedLinuxCamJobValidationAudit.uploadPlan?.readyForUpload === true, "Linux CAM job validation audit should expose upload plan");
 
+  const unifiedCamoticsImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-evidence-bundle`, {
+    bundleDataUrl: camoticsResultBundleDataUrl,
+    sourceName: "camotics-result-bundle.zip"
+  });
+  assert(unifiedCamoticsImport.adapterReport?.importedViaApi === true, "unified Linux CAM evidence endpoint should route CAMotics bundle to CAMotics import");
+  assert(unifiedCamoticsImport.adapterReport?.importBundle?.zipBundle === "imported-camotics-result-bundle.zip", "unified Linux CAM evidence endpoint should preserve CAMotics source bundle");
+  assert(unifiedCamoticsImport.simulationEvidence?.productionUnlockEligible === true, "unified Linux CAM evidence endpoint should preserve eligible CAMotics evidence");
+  assert(unifiedCamoticsImport.productionGate?.allowProductionNc === false, "unified Linux CAM evidence endpoint must not bypass production gate");
+
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
@@ -381,6 +390,7 @@ function matchHeader(text, key) {
 function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPackageSha256, previewMotionProfile, upstreamCamEvidence }) {
   const dir = join(tmpdir(), `hediao3d-camotics-validator-${Date.now()}`);
   mkdirSync(dir, { recursive: true });
+  let passingBundleDataUrl = null;
   try {
     const validatorPath = join(dir, "camotics-result-validate.js");
     const resultPath = join(dir, "camotics-result.json");
@@ -430,7 +440,9 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(report.checks?.some((check) => check.id === "visual-or-material-artifact" && check.ok), "validator should check visual/material artifact");
     const bundlePath = join(dir, "camotics-result-bundle.zip");
     assert(existsSync(bundlePath), "validator should write camotics-result-bundle.zip for passing fixture");
-    const bundleNames = listZipFilenames(readFileSync(bundlePath));
+    const bundleBytes = readFileSync(bundlePath);
+    passingBundleDataUrl = `data:application/zip;base64,${bundleBytes.toString("base64")}`;
+    const bundleNames = listZipFilenames(bundleBytes);
     assert(bundleNames.includes("camotics-result.json"), "CAMotics result bundle missing result JSON");
     assert(bundleNames.includes("camotics-result-local-validation.json"), "CAMotics result bundle missing local validation");
     assert(bundleNames.includes("camotics-result-bundle-manifest.json"), "CAMotics result bundle missing bundle manifest");
@@ -477,6 +489,7 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(failedReport.missing?.includes("machine-context"), "failed validator should list machine-context");
     assert(failedReport.missing?.includes("visual-or-material-artifact"), "failed validator should list missing artifact evidence");
     assert(/failed/.test(failedReport.summary), "failed validator should include failed summary");
+    return passingBundleDataUrl;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

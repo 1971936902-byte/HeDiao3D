@@ -133,6 +133,11 @@ const server = createServer(async (req, res) => {
       return importOrchestratorCamoticsResult(req, orchestratorCamoticsResultMatch[1], res);
     }
 
+    const orchestratorLinuxCamEvidenceBundleMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-evidence-bundle$/);
+    if (req.method === "POST" && orchestratorLinuxCamEvidenceBundleMatch) {
+      return importOrchestratorLinuxCamEvidenceBundle(req, orchestratorLinuxCamEvidenceBundleMatch[1], res);
+    }
+
     const orchestratorLinuxCamJobValidationMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-job-validation$/);
     if (req.method === "POST" && orchestratorLinuxCamJobValidationMatch) {
       return importOrchestratorLinuxCamJobValidation(req, orchestratorLinuxCamJobValidationMatch[1], res);
@@ -13934,6 +13939,96 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
       materialMesh: existsSync(join(workDir, "camotics-material-removal.stl")) ? publicArtifactUrl(safeJobId, "camotics-material-removal.stl") : null
     }
   });
+}
+
+async function importOrchestratorLinuxCamEvidenceBundle(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const input = await readJson(req, 35_000_000).catch((error) => ({ error }));
+  if (input.error) {
+    return json(res, 400, { error: input.error instanceof Error ? input.error.message : "Linux CAM 结果包 JSON 无法解析" });
+  }
+  const bundleDataUrl = input.bundleDataUrl ?? input.zipDataUrl ?? input.resultZipDataUrl ?? input.acceptanceZipDataUrl;
+  if (typeof bundleDataUrl !== "string" || !bundleDataUrl) {
+    return json(res, 400, { error: "请提供 bundleDataUrl，内容为 Linux 回传的 native-cam-real-output-bundle.zip 或 camotics-result-bundle.zip。" });
+  }
+  let classification;
+  try {
+    classification = classifyLinuxCamEvidenceBundle(bundleDataUrl, input.sourceName);
+  } catch (error) {
+    return json(res, 400, { error: error instanceof Error ? error.message : "Linux CAM 结果包无法识别" });
+  }
+  if (classification.kind === "native-cam-real-output") {
+    return importNativeCamRealOutputAcceptance(createSyntheticJsonRequest({
+      acceptanceZipDataUrl: bundleDataUrl,
+      sourceName: input.sourceName ?? classification.sourceName
+    }), res);
+  }
+  if (classification.kind === "camotics-result") {
+    return importOrchestratorCamoticsResult(createSyntheticJsonRequest({
+      resultZipDataUrl: bundleDataUrl,
+      sourceName: input.sourceName ?? classification.sourceName
+    }), safeJobId, res);
+  }
+  return json(res, 400, {
+    error: "无法识别结果包类型，请确认 ZIP 内包含 native-cam-real-output-acceptance.json 或 camotics-result.json。",
+    classification
+  });
+}
+
+function classifyLinuxCamEvidenceBundle(value, sourceName) {
+  const buffer = decodeInlineFile(value);
+  const entries = extractZipEntries(buffer);
+  const names = entries.map((entry) => entry.name.replace(/\\/g, "/").toLowerCase());
+  const hasNativeAcceptance = names.some((name) => /(^|\/)native-cam-real-output-acceptance\.json$/.test(name));
+  const hasCamoticsResult = names.some((name) => /(^|\/)camotics-result\.json$/.test(name) && !/template/.test(name));
+  const fallbackName = String(sourceName ?? "").toLowerCase();
+  if (hasNativeAcceptance) {
+    return {
+      kind: "native-cam-real-output",
+      sourceName: sourceName ?? "native-cam-real-output-bundle.zip",
+      entryCount: entries.length
+    };
+  }
+  if (hasCamoticsResult) {
+    return {
+      kind: "camotics-result",
+      sourceName: sourceName ?? "camotics-result-bundle.zip",
+      entryCount: entries.length
+    };
+  }
+  if (/native-cam-real-output|native-cam/.test(fallbackName)) {
+    return {
+      kind: "native-cam-real-output",
+      sourceName: sourceName ?? "native-cam-real-output-bundle.zip",
+      entryCount: entries.length
+    };
+  }
+  if (/camotics-result|camotics/.test(fallbackName)) {
+    return {
+      kind: "camotics-result",
+      sourceName: sourceName ?? "camotics-result-bundle.zip",
+      entryCount: entries.length
+    };
+  }
+  return {
+    kind: "unknown",
+    sourceName: sourceName ?? "linux-cam-evidence-bundle.zip",
+    entryCount: entries.length,
+    entries: names.slice(0, 20)
+  };
+}
+
+function createSyntheticJsonRequest(input) {
+  const body = JSON.stringify(input ?? {});
+  return {
+    on(event, callback) {
+      if (event === "data") queueMicrotask(() => callback(body));
+      if (event === "end") queueMicrotask(callback);
+      return this;
+    },
+    destroy() {}
+  };
 }
 
 async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
