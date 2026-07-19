@@ -73,9 +73,27 @@ async function main() {
     }
   }, null, 2);
   const candidatePackageBundleText = "PK fixture candidate package bundle";
+  const nativeSnapshotText = JSON.stringify({
+    schema: "hediao3d.native-cam-real-output-snapshot.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    source: "test-fixture",
+    productionUnlockEligible: false,
+    acceptance: { id: "native-cam-snapshot-fixture", level: "ready" },
+    gateHints: {
+      level: "ready",
+      sourceReportBindingStatus: "matched",
+      targetMachineBoundaryStatus: "matched",
+      contactValidationStatus: "ready",
+      productionCandidateCount: 1,
+      canSupportProductionCandidateReview: true
+    }
+  }, null, 2);
   const jobDir = join(process.cwd(), "public", "orchestrator-jobs", job.id);
+  writeFileSync(join(jobDir, "native-cam-real-output-snapshot.json"), nativeSnapshotText, "utf8");
   writeFileSync(join(jobDir, "opencamlib-candidate-package-validation.json"), candidatePackageValidationText, "utf8");
   writeFileSync(join(jobDir, "opencamlib-candidate-package-bundle.zip"), candidatePackageBundleText, "utf8");
+  const nativeSnapshotSha = createHash("sha256").update(nativeSnapshotText).digest("hex");
   const candidatePackageValidationSha = createHash("sha256").update(candidatePackageValidationText).digest("hex");
   const candidatePackageBundleSha = createHash("sha256").update(candidatePackageBundleText).digest("hex");
 
@@ -94,8 +112,11 @@ async function main() {
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMin === previewMotionProfile.zMin, "run package zMin mismatch");
   assert(runPackage.preferredGcodeIdentity?.motionProfile?.zMax === previewMotionProfile.zMax, "run package zMax mismatch");
   assert(runPackage.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "run package should expose upstream CAM evidence binding");
+  assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.acceptanceId === "native-cam-snapshot-fixture", "run package should summarize job-local Native CAM snapshot");
+  assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.productionUnlockEligible === false, "Native CAM snapshot summary must not unlock production");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "run package should carry OpenCAMLib candidate machine-fit");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "run package should carry machine-fit rotary axis");
+  assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.exists && file.sha256 === nativeSnapshotSha), "run package should hash-bind job-local Native CAM snapshot");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.exists && file.sha256 === candidatePackageValidationSha), "run package should hash-bind OpenCAMLib candidate package validation");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.exists && file.sha256 === candidatePackageBundleSha), "run package should hash-bind OpenCAMLib candidate package bundle");
   assert(runPackage.safetyLocks?.productionUnlockFromPreparePackage === false, "run package must keep production locked");
@@ -109,6 +130,8 @@ async function main() {
   assert(template.inputs?.machineContext?.rotaryWrapAxis === "Y", "result template should bind Y rotary machine context");
   assert(template.inputs?.machineContext?.rotaryWrapPerRevolutionMm === 100, "result template should bind rotary wrap distance");
   assert(template.inputs?.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "result template should include upstream CAM evidence binding");
+  assert(template.inputs?.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.acceptanceId === "native-cam-snapshot-fixture", "result template should carry Native CAM snapshot summary");
+  assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "result template should carry Native CAM snapshot evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "result template should carry candidate machine-fit evidence");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
@@ -130,6 +153,7 @@ async function main() {
   assert(validatorScript.includes("machine-context"), "validator should check machine context");
   assert(validatorScript.includes(runPackageSha256), "validator should bind to current run package hash");
   assert(validatorScript.includes(previewSha256), "validator should bind to current preview G-code hash");
+  assert(validatorScript.includes("nativeCamRealOutputSnapshot"), "validator should bind CAMotics results to job-local Native CAM snapshot evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageValidation"), "validator should bind CAMotics results to candidate package validation evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageBundle"), "validator should bind CAMotics results to candidate package bundle evidence");
   runLocalValidatorFixture({

@@ -31,6 +31,7 @@ const requiredInputKeys = [
 const optionalInputKeys = [
   ["machineGcodeReferenceOnly", plan.inputs?.machineGcodeReferenceOnly ?? "toolpath.nc"],
   ["airRunReferenceOnly", plan.inputs?.airRunReferenceOnly ?? "air-run.nc"],
+  ["nativeCamRealOutputSnapshot", plan.inputs?.nativeCamRealOutputSnapshot ?? "native-cam-real-output-snapshot.json"],
   ["nativeCamRealOutputAcceptance", plan.inputs?.nativeCamRealOutputAcceptance ?? "native-cam-real-output-acceptance.json"],
   ["opencamlibContactValidation", plan.inputs?.opencamlibContactValidation ?? "opencamlib-contact-output-validation.json"],
   ["opencamlibRealCandidateRun", plan.inputs?.opencamlibRealCandidateRun ?? "opencamlib-real-candidate-run.json"],
@@ -205,8 +206,10 @@ function createRunPackage(plan, inspectedInputs, motionProfile, machineContext, 
 
 function createUpstreamCamEvidence(inspectedInputs) {
   const candidatePackageValidation = readJsonIfExists(inspectedInputs.opencamlibCandidatePackageValidation?.path);
+  const nativeSnapshot = readJsonIfExists(inspectedInputs.nativeCamRealOutputSnapshot?.path);
   const candidateMachineFit = summarizeCandidateMachineFit(candidatePackageValidation?.machineFit);
   const candidates = [
+    ["nativeCamRealOutputSnapshot", "native-cam-real-output-snapshot.json", "Job-local Native CAM 真实输出快照"],
     ["nativeCamRealOutputAcceptance", "native-cam-real-output-acceptance.json", "Native CAM 真实输出验收"],
     ["opencamlibContactValidation", "opencamlib-contact-output-validation.json", "OpenCAMLib strict contact 验收"],
     ["opencamlibRealCandidateRun", "opencamlib-real-candidate-run.json", "OpenCAMLib 一键真实候选链路"],
@@ -231,11 +234,26 @@ function createUpstreamCamEvidence(inspectedInputs) {
     status: present.length > 0 ? "hash-bound" : "missing",
     required: present.length > 0,
     presentCount: present.length,
+    nativeCamRealOutputSnapshot: summarizeNativeCamRealOutputSnapshot(nativeSnapshot),
     candidateMachineFit,
     files,
     summary: present.length > 0
       ? `CAMotics run package is hash-bound to ${present.length} upstream CAM/OpenCAMLib evidence file(s).`
       : "No upstream Native CAM/OpenCAMLib evidence file was present in this job folder when the CAMotics package was prepared."
+  };
+}
+
+function summarizeNativeCamRealOutputSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  return {
+    schema: snapshot.schema ?? "hediao3d.native-cam-real-output-snapshot.v1",
+    acceptanceId: snapshot.acceptance?.id ?? null,
+    level: snapshot.gateHints?.level ?? snapshot.acceptance?.level ?? null,
+    sourceReportBindingStatus: snapshot.gateHints?.sourceReportBindingStatus ?? null,
+    targetMachineBoundaryStatus: snapshot.gateHints?.targetMachineBoundaryStatus ?? null,
+    contactValidationStatus: snapshot.gateHints?.contactValidationStatus ?? null,
+    canSupportProductionCandidateReview: Boolean(snapshot.gateHints?.canSupportProductionCandidateReview),
+    productionUnlockEligible: false
   };
 }
 

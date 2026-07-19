@@ -11626,6 +11626,9 @@ function createCamoticsCliExecutionPlan(job, camoticsInput, camoticsSimulationPl
       simulationPlan: "camotics-simulation-plan.json",
       machineGcodeReferenceOnly: "toolpath.nc",
       airRunReferenceOnly: "air-run.nc",
+      nativeCamRealOutputSnapshot: existsSync(join(job.workDir, "native-cam-real-output-snapshot.json"))
+        ? "native-cam-real-output-snapshot.json"
+        : null,
       nativeCamRealOutputAcceptance: existsSync(join(job.workDir, "native-cam-real-output-acceptance.json"))
         ? "native-cam-real-output-acceptance.json"
         : null,
