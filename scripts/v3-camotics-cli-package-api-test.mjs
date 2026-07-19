@@ -268,6 +268,7 @@ async function main() {
   assert(linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-resource-profile.v1") && linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-install-plan.v1"), "Linux CAM job preflight should emit resource profile and install plan");
   assert(linuxCamJobPreflight.includes("install-linux-cam-deps.sh"), "Linux CAM job preflight install plan should reference dependency installer");
   assert(linuxCamJobInstaller.includes("HEDIAO3D_INSTALL_DEPS") && linuxCamJobInstaller.includes("dry-run") && linuxCamJobInstaller.includes("production NC"), "Linux CAM dependency installer should be dry-run by default and keep production boundary");
+  assert(linuxCamJobInstaller.includes("hediao3d.v3-linux-cam-deps-install-report.v1") && linuxCamJobInstaller.includes("linux-cam-deps-install-report.json"), "Linux CAM dependency installer should emit structured install report");
   assert(linuxCamJobReadme.includes("installPlan") && linuxCamJobReadme.includes("resourceProfile"), "Linux CAM job README should direct operators to installPlan/resourceProfile");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-evidence-status.v1"), "Linux CAM job validator missing evidence status schema");
@@ -319,6 +320,17 @@ async function main() {
   assert(reloadedAfterPreflight.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-preflight.json" && file.exists), "delivery manifest should expose Linux CAM job preflight");
   assert(reloadedAfterPreflight.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-preflight-import.json" && file.exists), "delivery manifest should expose Linux CAM job preflight import audit");
   assert(reloadedAfterPreflight.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-job-preflight.json" && file.sha256), "package integrity should hash Linux CAM job preflight");
+  writeFileSync(join(linuxCamJobRoot, "linux-cam-deps-install-report.json"), JSON.stringify({
+    schema: "hediao3d.v3-linux-cam-deps-install-report.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    mode: "0",
+    status: "dry-run",
+    productionUnlockEligible: false,
+    commands: ["bash install-linux-cam-deps.sh"],
+    results: ["dry-run:sudo apt-get install -y camotics freecad blender"],
+    summary: "Fixture dependency dry-run report for Linux CAM job validator."
+  }, null, 2));
   const localValidationRun = spawnSync(process.execPath, ["validate-linux-cam-job.mjs", "."], {
     cwd: linuxCamJobRoot,
     encoding: "utf8"
@@ -332,6 +344,7 @@ async function main() {
   assert(localValidation.evidenceStatus?.packageIntegrityOk === true, "Linux CAM job evidence status should preserve package integrity");
   assert(localValidation.evidenceStatus?.nativeCamBundle === "missing", "Linux CAM job evidence status should require Native CAM bundle");
   assert(localValidation.evidenceStatus?.camoticsBundle === "missing", "Linux CAM job evidence status should require CAMotics bundle");
+  assert(localValidation.evidenceStatus?.dependencyInstallReport?.status === "dry-run", "Linux CAM job evidence status should expose dependency install report");
   assert(localValidation.evidenceStatus?.missingUploads?.includes("native-cam-real-output-bundle.zip"), "Linux CAM job evidence status should list Native CAM upload");
   assert(localValidation.evidenceStatus?.missingUploads?.includes("camotics-result-bundle.zip"), "Linux CAM job evidence status should list CAMotics upload");
   assert(localValidation.uploadPlan?.readyForUpload === false, "Linux CAM job upload plan should start waiting");
@@ -372,6 +385,7 @@ async function main() {
   assert(uploadDryRunReport.schema === "hediao3d.v3-linux-cam-evidence-upload-report.v1", "Linux CAM job upload dry-run report schema mismatch");
   assert(uploadDryRunReport.dryRun === true, "Linux CAM job upload dry-run should mark dryRun");
   assert(uploadDryRunReport.uploadPlan?.readyForUpload === true, "Linux CAM job upload dry-run should see ready files");
+  assert(uploadDryRunReport.uploadPlan?.files?.depsInstallReport?.exists === true, "Linux CAM job upload dry-run should include dependency install report file status");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.preflight === `/api/orchestrator/jobs/${job.id}/linux-cam-job-preflight`, "Linux CAM job upload dry-run should plan preflight endpoint");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.evidenceBundle === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-bundle`, "Linux CAM job upload dry-run should plan unified endpoint");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.uploadReport === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-upload-report`, "Linux CAM job upload dry-run should plan upload report endpoint");
