@@ -2400,9 +2400,12 @@ function formatLinuxOpenCamLibEvidenceOfflineLine(summary) {
   const machineFitText = summary.candidateMachineFit
     ? ` / 机床适配 ${summary.candidateMachineFit.level ?? "missing"}`
     : "";
+  const materialReadiness = summary.materialRemovalReadiness
+    ? ` / 材料去除 ${summary.materialRemovalReadiness.level ?? "missing"} / ${summary.materialRemovalReadiness.readyForMaterialRemovalSimulation ? "可进仿真" : "仿真未就绪"}`
+    : "";
   const candidateText = `${summary.candidatePackageLevel ?? "missing"} / ${summary.candidatePackageReadyForImport ? "可导入复核" : "不可导入"}`;
   const blockerText = summary.candidatePackageBlockedReason ?? summary.firstBlocking ?? "无明确阻断原因";
-  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 端部保护 ${protectedZonesStatus}${machineFitText} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
+  return `${summary.status} / 真实候选 ${summary.realCandidateReady ? "ready" : summary.realCandidateKnown ? "review" : "missing"} / 覆盖率 ${coverageStatus} / 端部保护 ${protectedZonesStatus}${machineFitText}${materialReadiness} / 候选包 ${candidateText} / 阻断 ${blockerText} / ${coverageText}`;
 }
 
 function createOpenCamLibContactPathCoverageSummary(contact) {

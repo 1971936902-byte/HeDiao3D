@@ -1765,6 +1765,13 @@ type V3ReadinessSummary = {
               missingRotaryCount?: number;
             } | null;
           } | null;
+          materialRemovalReadiness?: {
+            level?: string;
+            readyForMaterialRemovalSimulation?: boolean;
+            productionResidualEvidenceReady?: boolean;
+            missingForProduction?: string[];
+            summary?: string | null;
+          } | null;
           candidatePackageStep?: string;
           candidatePackage?: {
             filename?: string;
@@ -9443,8 +9450,9 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const packageStepStatus = packageStep ? `预检 ${formatLinuxEvidenceStepStatus(packageStep)}` : "";
   const packageFile = openCamLib?.candidatePackage?.exists ? "证据JSON已回填" : "";
   const machineFit = formatLinuxOpenCamLibMachineFit(openCamLib?.candidateMachineFit);
+  const materialRemoval = formatLinuxOpenCamLibMaterialRemovalReadiness(openCamLib?.materialRemovalReadiness);
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
-  return [candidate, coverage, protectedZones, machineFit, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+  return [candidate, coverage, protectedZones, machineFit, materialRemoval, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
 }
 
 function formatLinuxOpenCamLibMachineFit(machineFit: NonNullable<NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["openCamLib"]>["candidateMachineFit"]) {
@@ -9464,6 +9472,17 @@ function formatLinuxOpenCamLibMachineFit(machineFit: NonNullable<NonNullable<Non
       ].filter(Boolean).join("/")
     : "";
   return `机床适配 ${level} · 旋转${rotarySpan}${target}${risks ? ` · 风险${risks}` : ""}`;
+}
+
+function formatLinuxOpenCamLibMaterialRemovalReadiness(readiness: NonNullable<NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["openCamLib"]>["materialRemovalReadiness"]) {
+  if (!readiness) return "";
+  const level = readiness.level ?? "missing";
+  const sim = readiness.readyForMaterialRemovalSimulation ? "可进仿真" : "仿真未就绪";
+  const residual = readiness.productionResidualEvidenceReady ? "残料证据ready" : "残料证据未闭合";
+  const missing = Array.isArray(readiness.missingForProduction) && readiness.missingForProduction.length
+    ? `缺 ${readiness.missingForProduction.length}项`
+    : "";
+  return [`材料去除 ${level}`, sim, residual, missing].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["camotics"]) {

@@ -54,8 +54,8 @@ const checks = [
   },
   {
     id: "linux-opencamlib-evidence-visible",
-    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage") && source.includes("protectedZones") && source.includes("端部保护") && source.includes("预检") && source.includes("证据JSON已回填"),
-    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, candidate package preflight step, evidence JSON, and blocker diagnostics."
+    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage") && source.includes("protectedZones") && source.includes("端部保护") && source.includes("materialRemovalReadiness") && source.includes("formatLinuxOpenCamLibMaterialRemovalReadiness") && source.includes("材料去除") && source.includes("预检") && source.includes("证据JSON已回填"),
+    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, material-removal readiness, candidate package preflight step, evidence JSON, and blocker diagnostics."
   },
   {
     id: "linux-camotics-upstream-binding-visible",
