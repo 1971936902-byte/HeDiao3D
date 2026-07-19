@@ -455,6 +455,13 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
     allowed_schemas = {"hediao3d.freecad-cam-output-report.v1", "hediao3d.external-cam-output-report.v1"}
     quality = proof.get("quality") if isinstance(proof.get("quality"), dict) else {}
     artifacts = proof.get("artifacts") if isinstance(proof.get("artifacts"), dict) else {}
+    settings = job.get("settings") if isinstance(job.get("settings"), dict) else {}
+    machine_boundary = proof.get("machineBoundary") if isinstance(proof.get("machineBoundary"), dict) else {}
+    target_boundary = proof.get("targetMachineBoundary") if isinstance(proof.get("targetMachineBoundary"), dict) else {}
+    proof_tool = proof.get("tool") if isinstance(proof.get("tool"), dict) else {}
+    quality_tool = quality.get("tool") if isinstance(quality.get("tool"), dict) else {}
+    boundary = {**machine_boundary, **target_boundary}
+    tool = {**proof_tool, **quality_tool}
     expected_hash = str(proof.get("gcodeSha256") or artifacts.get("gcodeSha256") or "").lower()
     actual_hash = hashlib.sha256(gcode.encode("utf-8")).hexdigest()
     expected_job_id = str(proof.get("jobId") or artifacts.get("jobId") or "")
@@ -484,6 +491,44 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
         issues.append("CAM output proof must include planSha256")
     if expected_plan_hash and expected_plan_hash != actual_plan_hash:
         issues.append("CAM output proof plan SHA-256 does not match current CAM plan")
+    expected_axis = str(settings.get("rotaryOutputAxis") or "Y").upper()
+    expected_wrap = float(settings.get("rotaryWrapPerRevolutionMm") or 100)
+    expected_length_axis = "Y" if expected_axis == "X" else "X"
+    proof_boundary_kind = proof.get("machineBoundary") if isinstance(proof.get("machineBoundary"), str) else None
+    declared_boundary_kind = str(proof_boundary_kind or boundary.get("machineBoundary") or boundary.get("boundary") or "").lower()
+    declared_owner = str(proof.get("postprocessOwner") or boundary.get("postprocessOwner") or "").lower()
+    if declared_owner != "hediao3d" and declared_boundary_kind != "wrapy":
+        issues.append("CAM output proof must declare postprocessOwner=HeDiao3D or machineBoundary=wrapY")
+    if str(boundary.get("controllerClass") or "") != "3axis-controller-with-rotary-fixture":
+        issues.append("CAM output proof must target 3axis-controller-with-rotary-fixture")
+    if str(boundary.get("camMode") or "").lower() not in {"rotarywrap", "rotary-wrap"}:
+        issues.append("CAM output proof must declare camMode=rotaryWrap")
+    if str(boundary.get("rotaryOutputAxis") or "").upper() != expected_axis:
+        issues.append(f"CAM output proof rotaryOutputAxis must be {expected_axis}")
+    try:
+        declared_wrap = float(boundary.get("rotaryWrapPerRevolutionMm"))
+    except (TypeError, ValueError):
+        declared_wrap = None
+    if declared_wrap is None or abs(declared_wrap - expected_wrap) > 0.001:
+        issues.append(f"CAM output proof rotaryWrapPerRevolutionMm must be {expected_wrap:g}")
+    if str(boundary.get("lengthAxis") or "").upper() != expected_length_axis:
+        issues.append(f"CAM output proof lengthAxis must be {expected_length_axis}")
+    if str(boundary.get("depthAxis") or "").upper() != "Z":
+        issues.append("CAM output proof depthAxis must be Z")
+    if str(tool.get("toolProfileId") or settings.get("toolProfileId") or "") != "vflat-4mm-25deg":
+        issues.append("CAM output proof toolProfileId must be vflat-4mm-25deg")
+    try:
+        declared_tool_diameter = float(tool.get("diameterMm"))
+    except (TypeError, ValueError):
+        declared_tool_diameter = None
+    if declared_tool_diameter is None or abs(declared_tool_diameter - 4.0) > 0.001:
+        issues.append("CAM output proof tool diameterMm must be 4")
+    try:
+        declared_tool_angle = float(tool.get("angleDeg"))
+    except (TypeError, ValueError):
+        declared_tool_angle = None
+    if declared_tool_angle is None or abs(declared_tool_angle - 25.0) > 0.001:
+        issues.append("CAM output proof tool angleDeg must be 25")
     if fixture or bool(proof.get("fixture")) or bool(quality.get("fixture")):
         issues.append("fixture output cannot be a production candidate")
     if preview_scaffold or bool(proof.get("previewScaffold")) or bool(quality.get("previewScaffold")):
@@ -508,6 +553,8 @@ def evaluate_cam_output_proof(proof: Optional[Dict[str, Any]], gcode: str, gcode
         "productionCandidate": production_candidate,
         "postprocessEligible": bool(quality.get("postprocessEligible")),
         "quality": quality,
+        "machineBoundary": boundary,
+        "tool": tool,
         "issues": issues,
     }
 

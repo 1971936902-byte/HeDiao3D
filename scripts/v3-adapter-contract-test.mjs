@@ -509,6 +509,7 @@ output_path.parent.mkdir(parents=True, exist_ok=True)
 gcode = "\\n".join([
     "(HeDiao3D ${engine} proof contract)",
     f"(JOB_ID={job.get('jobId')})",
+    "(ROTARY_WRAP_AXIS=Y ROTARY_WRAP_PER_REV_MM=100.000000 LENGTH_AXIS=X)",
     "G21",
     "G90",
     "G0 X0.0000 Y0.0000 Z22.0000",
@@ -527,6 +528,22 @@ if ${withProof ? "True" : "False"}:
         "gcodeSha256": hashlib.sha256(gcode.encode("utf-8")).hexdigest(),
         "modelSha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
         "planSha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+        "postprocessOwner": "HeDiao3D",
+        "machineBoundary": {
+            "machineBoundary": "wrapY",
+            "controllerClass": "3axis-controller-with-rotary-fixture",
+            "camMode": "rotaryWrap",
+            "rotaryOutputAxis": "Y",
+            "rotaryWrapPerRevolutionMm": 100,
+            "lengthAxis": "X",
+            "depthAxis": "Z"
+        },
+        "tool": {
+            "toolProfileId": "vflat-4mm-25deg",
+            "diameterMm": 4,
+            "angleDeg": 25,
+            "tip": "flat"
+        },
         "quality": {
             "productionCandidate": True,
             "postprocessEligible": True,

@@ -5479,7 +5479,13 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
   const finalMatchesSource = finalSha256 === sourceSha256;
   const jobSpecSettings = readJsonFile(join(job.workDir, "job.json"))?.settings ?? {};
   const gcodeMachineBoundary = analyzeExternalGcodeMachineBoundary(finalBytes.toString("utf8"), jobSpecSettings, toolpath.externalSourceSnapshot.gcode);
-  const productionCandidate = Boolean(normalizedEvidence.productionCandidate && camOutputProof?.productionCandidate && gcodeMachineBoundary.productionCandidateCompatible);
+  const proofMachineBoundary = analyzeExternalCamOutputProofBoundary(camOutputProof, jobSpecSettings);
+  const productionCandidate = Boolean(
+    normalizedEvidence.productionCandidate
+    && camOutputProof?.productionCandidate
+    && gcodeMachineBoundary.productionCandidateCompatible
+    && proofMachineBoundary.productionCandidateCompatible
+  );
   const reviewIssues = [];
   const criticalIssues = [];
   const requiredActions = [];
@@ -5503,6 +5509,13 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
   } else if (!gcodeMachineBoundary.productionCandidateCompatible) {
     reviewIssues.push(gcodeMachineBoundary.summary);
     requiredActions.push(...gcodeMachineBoundary.requiredActions);
+  }
+  if (proofMachineBoundary.status === "critical") {
+    criticalIssues.push(proofMachineBoundary.summary);
+    requiredActions.push(...proofMachineBoundary.requiredActions);
+  } else if (!proofMachineBoundary.productionCandidateCompatible) {
+    reviewIssues.push(proofMachineBoundary.summary);
+    requiredActions.push(...proofMachineBoundary.requiredActions);
   }
   if (normalizedEvidence.fixture) {
     reviewIssues.push("外部 G-code 被标记为 fixture/合约测试输出。");
@@ -5557,6 +5570,7 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
     adapterHandoffEvidence: normalizedEvidence,
     camOutputProof,
     gcodeMachineBoundary,
+    proofMachineBoundary,
     metrics: {
       motionLineCount: toolpath.externalSourceSnapshot.gcode?.motionLineCount ?? null,
       parsedPointCount: toolpath.externalSourceSnapshot.gcode?.parsedPointCount ?? null,
@@ -5570,6 +5584,7 @@ async function createExternalAdapterGcodeValidation(job, adapterReport, toolpath
     productionBoundary: [
       "该报告只证明外部 G-code 摄取链路和哈希绑定状态。",
       "外部 G-code 若要作为生产候选，必须声明 ROTARY_WRAP_AXIS=Y、ROTARY_WRAP_PER_REV_MM=100、LENGTH_AXIS=X，包含 Y 旋转夹具运动且不包含 A 轴运动。",
+      "外部 CAM proof 也必须声明 HeDiao3D/wrapY 目标边界、X/Y/Z 轴映射和 vflat-4mm-25deg 刀具，否则只允许复核或空跑。",
       "生产 NC 仍需非 fixture/scaffold 的 CAM output proof、真实材料去除仿真、NC 静态分析、空跑、软料试雕和机床验收。"
     ],
     summary: criticalIssues.length
@@ -5666,6 +5681,112 @@ function analyzeExternalGcodeMachineBoundary(gcodeText, settings = {}, gcodeSnap
       : status === "critical"
         ? `外部 G-code 机床边界与 wrapY 不匹配：${mismatches.slice(0, 3).join("；")}`
         : `外部 G-code 机床边界需复核：${review.slice(0, 3).join("；")}`
+  };
+}
+
+function analyzeExternalCamOutputProofBoundary(camOutputProof, settings = {}) {
+  const expectedAxis = String(settings.rotaryOutputAxis ?? "Y").toUpperCase();
+  const expectedWrap = Math.max(0.001, Number(settings.rotaryWrapPerRevolutionMm ?? 100));
+  const expectedLengthAxis = expectedAxis === "X" ? "Y" : "X";
+  const expectedToolProfileId = settings.toolProfileId ?? "vflat-4mm-25deg";
+  const proof = camOutputProof && typeof camOutputProof === "object" ? camOutputProof : null;
+  const proofBoundary = proof?.machineBoundary && typeof proof.machineBoundary === "object" ? proof.machineBoundary : {};
+  const targetBoundary = proof?.targetMachineBoundary && typeof proof.targetMachineBoundary === "object" ? proof.targetMachineBoundary : {};
+  const qualityBoundary = proof?.quality?.machineBoundary && typeof proof.quality.machineBoundary === "object" ? proof.quality.machineBoundary : {};
+  const boundary = { ...qualityBoundary, ...proofBoundary, ...targetBoundary };
+  const proofTool = proof?.tool && typeof proof.tool === "object" ? proof.tool : {};
+  const qualityTool = proof?.quality?.tool && typeof proof.quality.tool === "object" ? proof.quality.tool : {};
+  const tool = { ...qualityTool, ...proofTool };
+  const review = [];
+  const mismatches = [];
+  const requiredActions = [];
+
+  if (!proof?.present) {
+    review.push("缺少 CAM output proof，无法校验证明文件中的机床边界。");
+  } else {
+    const proofBoundaryKind = typeof proof.machineBoundary === "string" ? proof.machineBoundary : null;
+    const declaredBoundaryKind = String(proofBoundaryKind ?? boundary.machineBoundary ?? boundary.boundary ?? "").toLowerCase();
+    const declaredOwner = String(proof.postprocessOwner ?? boundary.postprocessOwner ?? "").toLowerCase();
+    if (declaredOwner !== "hediao3d" && declaredBoundaryKind !== "wrapy") {
+      mismatches.push("proof must declare postprocessOwner=HeDiao3D or machineBoundary=wrapY");
+    }
+    if (String(boundary.controllerClass ?? "") !== "3axis-controller-with-rotary-fixture") {
+      mismatches.push("controllerClass must be 3axis-controller-with-rotary-fixture");
+    }
+    if (!["rotarywrap", "rotary-wrap"].includes(String(boundary.camMode ?? "").toLowerCase())) {
+      mismatches.push("camMode must be rotaryWrap");
+    }
+    if (String(boundary.rotaryOutputAxis ?? "").toUpperCase() !== expectedAxis) {
+      mismatches.push(`rotaryOutputAxis: expected ${expectedAxis}, got ${boundary.rotaryOutputAxis ?? "missing"}`);
+    }
+    const declaredWrap = finiteNumberOrNull(boundary.rotaryWrapPerRevolutionMm);
+    if (declaredWrap === null || !numbersClose(declaredWrap, expectedWrap, 0.001)) {
+      mismatches.push(`rotaryWrapPerRevolutionMm: expected ${expectedWrap}, got ${boundary.rotaryWrapPerRevolutionMm ?? "missing"}`);
+    }
+    if (String(boundary.lengthAxis ?? "").toUpperCase() !== expectedLengthAxis) {
+      mismatches.push(`lengthAxis: expected ${expectedLengthAxis}, got ${boundary.lengthAxis ?? "missing"}`);
+    }
+    if (String(boundary.depthAxis ?? "").toUpperCase() !== "Z") {
+      mismatches.push(`depthAxis: expected Z, got ${boundary.depthAxis ?? "missing"}`);
+    }
+    if (String(tool.toolProfileId ?? "") !== expectedToolProfileId) {
+      mismatches.push(`toolProfileId: expected ${expectedToolProfileId}, got ${tool.toolProfileId ?? "missing"}`);
+    }
+    const toolDiameter = finiteNumberOrNull(tool.diameterMm);
+    if (toolDiameter === null || !numbersClose(toolDiameter, 4, 0.001)) {
+      mismatches.push(`tool diameterMm: expected 4, got ${tool.diameterMm ?? "missing"}`);
+    }
+    const toolAngle = finiteNumberOrNull(tool.angleDeg);
+    if (toolAngle === null || !numbersClose(toolAngle, 25, 0.001)) {
+      mismatches.push(`tool angleDeg: expected 25, got ${tool.angleDeg ?? "missing"}`);
+    }
+  }
+
+  if (mismatches.length) {
+    requiredActions.push("让外部 CAM proof 明确声明 HeDiao3D wrapY 目标边界、X/Y/Z 轴映射和 4mm 25度平底尖刀。");
+  }
+  if (review.length) {
+    requiredActions.push("随外部 G-code 一起输出 .cam-proof.json，并写入 machineBoundary/targetMachineBoundary 与 tool 字段。");
+  }
+  const status = mismatches.length ? "critical" : review.length ? "review" : "matched";
+  return {
+    schema: "hediao3d.external-cam-output-proof-boundary.v1",
+    status,
+    productionCandidateCompatible: status === "matched",
+    expected: {
+      postprocessOwner: "HeDiao3D",
+      machineBoundary: "wrapY",
+      controllerClass: "3axis-controller-with-rotary-fixture",
+      camMode: "rotaryWrap",
+      rotaryOutputAxis: expectedAxis,
+      rotaryWrapPerRevolutionMm: expectedWrap,
+      lengthAxis: expectedLengthAxis,
+      depthAxis: "Z",
+      toolProfileId: expectedToolProfileId,
+      toolDiameterMm: 4,
+      toolAngleDeg: 25
+    },
+    actual: {
+      postprocessOwner: proof?.postprocessOwner ?? boundary.postprocessOwner ?? null,
+      machineBoundary: typeof proof?.machineBoundary === "string" ? proof.machineBoundary : boundary.machineBoundary ?? boundary.boundary ?? null,
+      controllerClass: boundary.controllerClass ?? null,
+      camMode: boundary.camMode ?? null,
+      rotaryOutputAxis: boundary.rotaryOutputAxis ?? null,
+      rotaryWrapPerRevolutionMm: boundary.rotaryWrapPerRevolutionMm ?? null,
+      lengthAxis: boundary.lengthAxis ?? null,
+      depthAxis: boundary.depthAxis ?? null,
+      toolProfileId: tool.toolProfileId ?? null,
+      toolDiameterMm: tool.diameterMm ?? null,
+      toolAngleDeg: tool.angleDeg ?? null
+    },
+    mismatches,
+    review,
+    requiredActions,
+    summary: status === "matched"
+      ? "CAM output proof 已声明 HeDiao3D wrapY 目标边界和 4mm 25度平底尖刀。"
+      : status === "critical"
+        ? `CAM output proof 目标边界不匹配：${mismatches.slice(0, 3).join("；")}`
+        : `CAM output proof 目标边界需复核：${review.slice(0, 3).join("；")}`
   };
 }
 

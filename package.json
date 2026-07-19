@@ -29,6 +29,7 @@
     "test:v3:manufacturing-setup": "node scripts/v3-manufacturing-setup-report-test.mjs",
     "test:v3:freecad-external-handoff": "node scripts/v3-freecad-external-handoff-test.mjs",
     "test:v3:freecad-proof-handoff": "node scripts/v3-freecad-proof-handoff-test.mjs",
+    "test:v3:external-gcode-axis-boundary": "node scripts/v3-external-gcode-axis-boundary-test.mjs",
     "test:v3:blendercam-external-handoff": "node scripts/v3-blendercam-external-handoff-test.mjs",
     "test:v3:repair-artifact-handoff": "node scripts/v3-repair-artifact-handoff-test.mjs",
     "test:v3:opencamlib-runner": "node scripts/v3-opencamlib-runner-contract-test.mjs",

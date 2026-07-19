@@ -25,16 +25,18 @@ const settings = {
   safeZ: 22,
   toolDiameter: 4,
   stepoverMm: 0.28,
+  stepoverDeg: 5,
   toolProfileId: "vflat-4mm-25deg",
   materialProfileId: "olive-core",
-  machineProfileId: "desktop-3axis-relief",
-  camMode: "3axis",
+  machineProfileId: "desktop-3axis-rotary-y",
+  camMode: "rotaryWrap",
   rotaryOutputAxis: "Y",
+  rotaryWrapPerRevolutionMm: 100,
   maxCutDepth: 0.45,
   stockAllowance: 0.08,
   finishingStrategy: "x-scan",
   generationMode: "active",
-  postProcessor: "generic-3axis"
+  postProcessor: "wrapY"
 };
 
 let server;
@@ -99,6 +101,9 @@ async function main() {
   assert(gcodeImportValidation.camOutputProof?.declaredGcodeSha256 === gcodeImportValidation.camOutputProof?.gcodeSha256, "proof declared G-code hash should match actual hash");
   assert(gcodeImportValidation.camOutputProof?.declaredModelSha256 === gcodeImportValidation.camOutputProof?.modelSha256, "proof declared model hash should match actual model");
   assert(gcodeImportValidation.camOutputProof?.declaredPlanSha256 === gcodeImportValidation.camOutputProof?.planSha256, "proof declared plan hash should match actual plan");
+  assert(gcodeImportValidation.gcodeMachineBoundary?.status === "matched", `proof-backed G-code should match wrapY headers, got ${gcodeImportValidation.gcodeMachineBoundary?.status}`);
+  assert(gcodeImportValidation.proofMachineBoundary?.status === "matched", `proof-backed CAM proof should match target boundary, got ${gcodeImportValidation.proofMachineBoundary?.status}`);
+  assert(gcodeImportValidation.proofMachineBoundary?.actual?.toolProfileId === "vflat-4mm-25deg", "proof boundary should expose matching 4mm 25deg tool");
 
   const camHandoffQuality = await getArtifactJson(job.id, "cam-handoff-quality.json");
   assert(camHandoffQuality.adapterHandoffEvidence?.classification === "production-candidate", "CAM handoff should preserve proof-backed classification");
@@ -155,6 +160,7 @@ feed = int(float(settings.get("feedRate") or 180))
 gcode = "\\n".join([
     "(HeDiao3D FreeCAD proof-backed output)",
     f"(JOB_ID={job.get('jobId')})",
+    "(ROTARY_WRAP_AXIS=Y ROTARY_WRAP_PER_REV_MM=100.000000 LENGTH_AXIS=X)",
     "G21",
     "G90",
     f"G0 X0.0000 Y0.0000 Z{safe_z:.4f}",
@@ -174,6 +180,22 @@ proof = {
     "gcodeSha256": hashlib.sha256(gcode.encode("utf-8")).hexdigest(),
     "modelSha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
     "planSha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+    "postprocessOwner": "HeDiao3D",
+    "machineBoundary": {
+        "machineBoundary": "wrapY",
+        "controllerClass": "3axis-controller-with-rotary-fixture",
+        "camMode": "rotaryWrap",
+        "rotaryOutputAxis": "Y",
+        "rotaryWrapPerRevolutionMm": 100,
+        "lengthAxis": "X",
+        "depthAxis": "Z"
+    },
+    "tool": {
+        "toolProfileId": "vflat-4mm-25deg",
+        "diameterMm": 4,
+        "angleDeg": 25,
+        "tip": "flat"
+    },
     "quality": {
         "productionCandidate": True,
         "postprocessEligible": True,
