@@ -7163,8 +7163,15 @@ export function App() {
                   </button>
                   <div className="v3-camotics-import">
                     <div>
-                      <strong>CAMotics 真实仿真闭环</strong>
-                      <small>先生成 Linux 准备包，在 CAM 服务器执行材料去除仿真，再回填 camotics-result.json、截图或材料去除 STL。</small>
+                      <strong>Linux CAM 真实闭环</strong>
+                      <small>下载整单包到 Linux CAM 服务器，执行真实 OpenCAMLib/CAMotics，再把证据包回填到 Orchestrator。</small>
+                    </div>
+                    <div className="v3-server-package">
+                      <strong>Linux执行三步</strong>
+                      <small>1. 下载 Linux 整单包并解压，设置 HEDIAO3D_NATIVE_CAM_SERVER_DIR 指向 Native CAM 服务包。</small>
+                      <small>2. 运行 bash run-linux-cam-job.sh，再运行 node validate-linux-cam-job.mjs . 生成整单校验。</small>
+                      <small>3. 运行 HEDIAO3D_V3_API_BASE=http://你的V3服务器:8787 node upload-linux-cam-evidence.mjs .，自动回填两个结果 ZIP。</small>
+                      <small className="v3-inline-warning">上传证据只补齐门禁材料，不会直接解锁生产 NC。</small>
                     </div>
                     <button
                       className="demo-action package-action"
@@ -7270,7 +7277,7 @@ export function App() {
                     )}
                     <div className="v3-server-package">
                       <strong>智能回填结果包</strong>
-                      <small>选择 Linux 回传的 native-cam-real-output-bundle.zip 或 camotics-result-bundle.zip，系统按文件名自动导入到对应门禁。</small>
+                      <small>选择 Linux 回传的 native-cam-real-output-bundle.zip 或 camotics-result-bundle.zip，系统通过 Orchestrator 统一入口识别并导入到对应门禁。</small>
                       <label className="v3-file-picker">
                         <UploadCloud size={16} />
                         <span>{v3LinuxCamEvidenceBundleFile ? v3LinuxCamEvidenceBundleFile.name : "选择Linux结果ZIP"}</span>
