@@ -6198,6 +6198,14 @@ async function processOrchestratorJob(job, settings) {
     machineControllerProfile
   }), "utf8");
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
+  const machineFilePolicy = createMachineFilePolicy({
+    job,
+    deliveryManifest,
+    productionGate,
+    machineControllerProfile,
+    ncStaticAnalysis,
+    controllerDialectReport
+  });
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
     toolpath,
@@ -6220,10 +6228,12 @@ async function processOrchestratorJob(job, settings) {
     manufacturingSetupReport,
     machineAcceptanceChecklist,
     controllerDialectReport,
+    machineFilePolicy,
     deliveryManifest
   });
   await writeFile(join(job.workDir, "production-gate.json"), JSON.stringify(productionGate, null, 2), "utf8");
   await writeFile(join(job.workDir, "postprocess-profile.json"), JSON.stringify(postprocessProfile, null, 2), "utf8");
+  await writeFile(join(job.workDir, "machine-file-policy.json"), JSON.stringify(machineFilePolicy, null, 2), "utf8");
   await writeFile(join(job.workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
   await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
   await writeFile(join(job.workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n生成中，请以最终 package-integrity.json 为准。\n", "utf8");
@@ -6286,6 +6296,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "air-run.nc"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-gate.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "postprocess-profile.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-file-policy.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "machining-package-index.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-download-checklist.md"));
@@ -6367,6 +6378,7 @@ async function processOrchestratorJob(job, settings) {
       machineControllerProfile,
       machineAcceptanceChecklist,
       controllerDialectReport,
+      machineFilePolicy,
       machiningPackageIndex,
       deliveryManifest,
       packageIntegrity,
@@ -11524,7 +11536,7 @@ function toCamoticsPreviewPoint(point, settings, rotaryAxis, wrapPerRev, depthSc
   };
 }
 
-function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, postprocessTraceReport, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, manufacturingSetupReport, machineAcceptanceChecklist, controllerDialectReport, deliveryManifest }) {
+function createMachiningPackageIndex({ job, toolpath, productionGate, postprocessProfile, simulationSummary, camoticsInput, camoticsSimulationPlan, camoticsCliExecutionPlan, rotaryWrapPreviewReport, camHandoffQuality, postprocessTraceReport, camServerConfig, productionEvidenceDossier, ncStaticAnalysis, nativeCamReadiness, camEngineSelection, openSourceCamExecutionPlan, machineControllerProfile, manufacturingSetupReport, machineAcceptanceChecklist, controllerDialectReport, machineFilePolicy, deliveryManifest }) {
   const fileByName = new Map(deliveryManifest.files.map((file) => [file.filename, file]));
   const getFile = (filename) => fileByName.get(filename) ?? createDeliveryFile(job.id, filename, filename, "unknown", false, "未列入交付清单。");
   const externalGcodeImportValidation = readJsonFile(join(job.workDir, "external-gcode-import-validation.json"));
@@ -11571,6 +11583,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("toolpath-sequencing-report.json"),
         getFile("nc-static-analysis.json"),
         getFile("machine-controller-profile.json"),
+        getFile("machine-file-policy.json"),
         getFile("next-action-checklist.md"),
         getFile("linux-cam-closed-loop-handoff.md"),
         getFile("operator-runbook.md"),
@@ -11597,7 +11610,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "manufacturing-setup-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "manufacturing-setup-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "machine-file-policy.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -11669,6 +11682,16 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       warnings: productionGate.warnings,
       requiredActions: productionGate.requiredActions
     },
+    machineFilePolicy: machineFilePolicy ? {
+      schema: machineFilePolicy.schema,
+      artifact: "machine-file-policy.json",
+      level: machineFilePolicy.level,
+      summary: machineFilePolicy.summary,
+      machineRunnableFiles: machineFilePolicy.machineRunnableFiles.map((file) => file.filename),
+      airRunOnlyFiles: machineFilePolicy.airRunOnlyFiles.map((file) => file.filename),
+      neverRunOnMachine: machineFilePolicy.neverRunOnMachine.map((file) => file.filename),
+      productionLockedFiles: machineFilePolicy.productionLockedFiles.map((file) => file.filename)
+    } : null,
     ncStaticAnalysis: {
       level: ncStaticAnalysis?.level ?? "unknown",
       summary: ncStaticAnalysis?.summary ?? null
@@ -11949,6 +11972,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", true, "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", true, "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
+    createDeliveryFile(job.id, "machine-file-policy.json", "机床文件使用策略", "report", true, "机器可读地列出可空跑、可试雕/生产、永远禁止上机和需要门禁的文件。"),
     createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", true, "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
     createDeliveryFile(job.id, "linux-cam-closed-loop-handoff.md", "Linux CAM闭环交接说明", "report", true, "把 Native CAM、CAMotics、V3 回填、readiness 和安全试雕验收串成同一条执行顺序。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
@@ -12030,6 +12054,117 @@ function createDeliveryFile(jobId, filename, label, kind, downloadable, note) {
     machineUse: classifyDeliveryMachineUse(filename, kind, downloadable),
     note
   };
+}
+
+function createMachineFilePolicy({ job, deliveryManifest, productionGate, machineControllerProfile, ncStaticAnalysis, controllerDialectReport }) {
+  const files = deliveryManifest.files ?? [];
+  const axisInstruction = createOperatorAxisInstruction({
+    camMode: machineControllerProfile?.camMode,
+    coordinateMapping: machineControllerProfile?.axisMapping
+  });
+  const mapFile = (file) => ({
+    filename: file.filename,
+    label: file.label,
+    kind: file.kind,
+    downloadable: Boolean(file.downloadable),
+    exists: Boolean(file.exists),
+    machineUseClass: file.machineUse?.class ?? "unknown",
+    allowedOnMachine: Boolean(file.machineUse?.allowedOnMachine),
+    requiresGate: Boolean(file.machineUse?.requiresGate),
+    spindleExpected: Boolean(file.machineUse?.spindleExpected),
+    note: file.machineUse?.summary ?? file.note ?? ""
+  });
+  const machineRunnableFiles = files
+    .filter((file) => file.machineUse?.allowedOnMachine === true && file.machineUse?.class !== "air-run-no-cut")
+    .map(mapFile);
+  const airRunOnlyFiles = files
+    .filter((file) => file.machineUse?.class === "air-run-no-cut")
+    .map((file) => ({
+      ...mapFile(file),
+      enforcedRules: ["spindle-off", "safe-z-only", "no-cutting-contact"]
+    }));
+  const neverRunOnMachine = files
+    .filter((file) => file.machineUse?.allowedOnMachine === false)
+    .map(mapFile);
+  const productionLockedFiles = files
+    .filter((file) => file.filename === "toolpath.nc" && !productionGate.allowProductionNc)
+    .map((file) => ({
+      ...mapFile(file),
+      lockReason: productionGate.summary,
+      blockers: productionGate.blockers ?? []
+    }));
+
+  return {
+    schema: "hediao3d.machine-file-policy.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    level: productionGate.allowProductionNc ? "production-gated" : productionGate.allowTrialNc ? "trial-only" : "air-run-only",
+    summary: productionGate.allowProductionNc
+      ? "生产门禁已放行，但仍需按现场流程先空跑和确认哈希。"
+      : productionGate.allowTrialNc
+        ? "当前只允许空跑和试雕流程，生产 NC 未放行。"
+        : "当前只允许离料空跑，机床切削 NC 未放行。",
+    machine: {
+      profileArtifact: "machine-controller-profile.json",
+      profileId: machineControllerProfile?.id ?? null,
+      controllerClass: machineControllerProfile?.controllerClass ?? null,
+      axisInstruction,
+      allowedWords: machineControllerProfile?.dialect?.allowedWords ?? [],
+      forbiddenWords: machineControllerProfile?.dialect?.forbiddenWords ?? [],
+      expectedRotaryAxis: machineControllerProfile?.dialect?.expectedRotaryAxis ?? null
+    },
+    gates: {
+      productionGateArtifact: "production-gate.json",
+      allowProductionNc: Boolean(productionGate.allowProductionNc),
+      allowTrialNc: Boolean(productionGate.allowTrialNc),
+      allowAirRun: Boolean(productionGate.allowAirRun),
+      requiredBeforeProduction: [
+        "production-gate.json allowProductionNc=true",
+        "production-evidence-dossier.json production-ready",
+        "camotics-result.json real material-removal evidence bound to the current NC",
+        "machine-acceptance-record.json with air-run and trial feedback",
+        "package-integrity.json hash review"
+      ]
+    },
+    machineRunnableFiles,
+    airRunOnlyFiles,
+    neverRunOnMachine,
+    productionLockedFiles,
+    staticEvidence: {
+      ncStaticAnalysis: {
+        artifact: "nc-static-analysis.json",
+        level: ncStaticAnalysis?.level ?? "missing",
+        summary: ncStaticAnalysis?.summary ?? null
+      },
+      controllerDialect: {
+        artifact: "controller-dialect-report.json",
+        level: controllerDialectReport?.level ?? "missing",
+        summary: controllerDialectReport?.summary ?? null
+      }
+    },
+    operatorRules: [
+      "先读 machine-file-policy.json、machining-package-index.json、production-gate.json 和 operator-runbook.md。",
+      `确认机床接线为：${axisInstruction}。`,
+      "camotics-preview.nc 只给 CAMotics/展开仿真使用，永远不要传给机床控制器。",
+      "air-run.nc 与 rotary-calibration-airrun.nc 只能离料空跑，主轴必须关闭。",
+      "toolpath.nc 只有在 production-gate.json 放行后才可进入生产；未放行时只能按试雕流程处理。"
+    ]
+  };
+}
+
+async function ensureMachineFilePolicyArtifact(job, { deliveryManifest, productionGate, machineControllerProfile, ncStaticAnalysis, controllerDialectReport }) {
+  if (!job?.workDir || !deliveryManifest || !productionGate) return null;
+  const policy = createMachineFilePolicy({
+    job,
+    deliveryManifest,
+    productionGate,
+    machineControllerProfile,
+    ncStaticAnalysis,
+    controllerDialectReport
+  });
+  await writeFile(join(job.workDir, "machine-file-policy.json"), JSON.stringify(policy, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "machine-file-policy.json"));
+  return policy;
 }
 
 function classifyDeliveryMachineUse(filename, kind, downloadable) {
@@ -12186,7 +12321,7 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
     "",
     "## 上机前必须确认",
     "",
-    "- [ ] 已阅读 `machining-package-index.json`、`production-gate.json`、`operator-runbook.md`。",
+    "- [ ] 已阅读 `machine-file-policy.json`、`machining-package-index.json`、`production-gate.json`、`operator-runbook.md`。",
     "- [ ] 已阅读 `package-integrity.json`，并用本清单核对下载后的文件哈希。",
     `- [ ] 已确认机床接线与 \`machine-controller-profile.json\` 中的轴向一致：${axisInstruction}。`,
     "- [ ] 已确认刀具与 `tool-setup-sheet.json` 一致，尤其是 4mm 25度平底尖刀、进给、转速和最大切深。",
@@ -12283,6 +12418,18 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   for (const file of evidenceFiles) {
     deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, file);
   }
+  const productionGate = readJsonFile(join(job.workDir, "production-gate.json")) ?? { allowProductionNc: false, allowTrialNc: false, allowAirRun: true, summary: "生产门禁未生成。" };
+  const machineControllerProfile = readJsonFile(join(job.workDir, "machine-controller-profile.json"));
+  const machineFilePolicy = await ensureMachineFilePolicyArtifact(job, {
+    deliveryManifest,
+    productionGate,
+    machineControllerProfile,
+    ncStaticAnalysis: readJsonFile(join(job.workDir, "nc-static-analysis.json")),
+    controllerDialectReport: readJsonFile(join(job.workDir, "controller-dialect-report.json"))
+  });
+  if (machineFilePolicy) {
+    deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "machine-file-policy.json", "机床文件使用策略", "report", true, "机器可读地列出可空跑、可试雕/生产、永远禁止上机和需要门禁的文件。"));
+  }
   await writeFile(manifestPath, JSON.stringify(deliveryManifest, null, 2), "utf8");
   await writeFile(join(job.workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n更新中，请以最终 package-integrity.json 为准。\n", "utf8");
   let packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
@@ -12291,8 +12438,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     job,
     deliveryManifest,
     packageIntegrity,
-    productionGate: readJsonFile(join(job.workDir, "production-gate.json")) ?? { allowProductionNc: false },
-    machineControllerProfile: readJsonFile(join(job.workDir, "machine-controller-profile.json")),
+    productionGate,
+    machineControllerProfile,
     camHandoffQuality: readJsonFile(join(job.workDir, "cam-handoff-quality.json")),
     simulationSummary: readJsonFile(join(job.workDir, "simulation-summary.json")),
     productionEvidenceDossier: readJsonFile(join(job.workDir, "production-evidence-dossier.json"))
@@ -12344,6 +12491,16 @@ async function refreshMachiningPackageIndexArtifact(job) {
   const postprocessProfile = readJsonFile(join(workDir, "postprocess-profile.json"));
   const camoticsInput = readJsonFile(join(workDir, "camotics-input.json"));
   if (!deliveryManifest || !productionGate || !postprocessProfile || !camoticsInput) return null;
+  const machineControllerProfile = readJsonFile(join(workDir, "machine-controller-profile.json"));
+  const ncStaticAnalysis = readJsonFile(join(workDir, "nc-static-analysis.json"));
+  const controllerDialectReport = readJsonFile(join(workDir, "controller-dialect-report.json"));
+  const machineFilePolicy = await ensureMachineFilePolicyArtifact(job, {
+    deliveryManifest,
+    productionGate,
+    machineControllerProfile,
+    ncStaticAnalysis,
+    controllerDialectReport
+  });
   const index = createMachiningPackageIndex({
     job,
     toolpath: createToolpathStubForRefresh(job),
@@ -12358,13 +12515,14 @@ async function refreshMachiningPackageIndexArtifact(job) {
     postprocessTraceReport: readJsonFile(join(workDir, "postprocess-trace-report.json")),
     camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
     productionEvidenceDossier: readJsonFile(join(workDir, "production-evidence-dossier.json")),
-    ncStaticAnalysis: readJsonFile(join(workDir, "nc-static-analysis.json")),
+    ncStaticAnalysis,
     nativeCamReadiness: readJsonFile(join(workDir, "native-cam-readiness.json")),
     camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
     openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
-    machineControllerProfile: readJsonFile(join(workDir, "machine-controller-profile.json")),
+    machineControllerProfile,
     machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
-    controllerDialectReport: readJsonFile(join(workDir, "controller-dialect-report.json")),
+    controllerDialectReport,
+    machineFilePolicy,
     deliveryManifest
   });
   await writeFile(join(workDir, "machining-package-index.json"), JSON.stringify(index, null, 2), "utf8");
@@ -14220,6 +14378,18 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
   const camoticsCliExecutionPlan = readJsonFile(join(workDir, "camotics-cli-execution-plan.json"));
   const rotaryWrapPreviewReport = readJsonFile(join(workDir, "rotary-wrap-preview-report.json"));
   const postprocessTraceReport = readJsonFile(join(workDir, "postprocess-trace-report.json"));
+  const machineControllerProfile = readJsonFile(join(workDir, "machine-controller-profile.json"));
+  const ncStaticAnalysis = readJsonFile(join(workDir, "nc-static-analysis.json"));
+  const controllerDialectReport = readJsonFile(join(workDir, "controller-dialect-report.json"));
+  const machineFilePolicy = deliveryManifest
+    ? await ensureMachineFilePolicyArtifact(job, {
+      deliveryManifest,
+      productionGate,
+      machineControllerProfile,
+      ncStaticAnalysis,
+      controllerDialectReport
+    })
+    : null;
   const machiningPackageIndex = deliveryManifest && postprocessProfile && camoticsInput
     ? createMachiningPackageIndex({
       job,
@@ -14235,13 +14405,14 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
       camHandoffQuality: readJsonFile(join(workDir, "cam-handoff-quality.json")),
       camServerConfig: readJsonFile(join(workDir, "cam-server-config.json")),
       productionEvidenceDossier,
-      ncStaticAnalysis: readJsonFile(join(workDir, "nc-static-analysis.json")),
+      ncStaticAnalysis,
       nativeCamReadiness: readJsonFile(join(workDir, "native-cam-readiness.json")),
       camEngineSelection: readJsonFile(join(workDir, "cam-engine-selection.json")),
       openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
-      machineControllerProfile: readJsonFile(join(workDir, "machine-controller-profile.json")),
+      machineControllerProfile,
       machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
-      controllerDialectReport: readJsonFile(join(workDir, "controller-dialect-report.json")),
+      controllerDialectReport,
+      machineFilePolicy,
       deliveryManifest
     })
     : null;
@@ -14540,6 +14711,14 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   }
 
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
+  const machineFilePolicy = createMachineFilePolicy({
+    job,
+    deliveryManifest,
+    productionGate,
+    machineControllerProfile,
+    ncStaticAnalysis,
+    controllerDialectReport
+  });
   const machiningPackageIndex = createMachiningPackageIndex({
     job,
     toolpath,
@@ -14562,8 +14741,10 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
     manufacturingSetupReport,
     machineAcceptanceChecklist: readJsonFile(join(workDir, "machine-acceptance-checklist.json")),
     controllerDialectReport,
+    machineFilePolicy,
     deliveryManifest
   });
+  await writeFile(join(workDir, "machine-file-policy.json"), JSON.stringify(machineFilePolicy, null, 2), "utf8");
   await writeFile(join(workDir, "machining-package-index.json"), JSON.stringify(machiningPackageIndex, null, 2), "utf8");
   await writeFile(join(workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
   await writeFile(join(workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n更新中，请以最终 package-integrity.json 为准。\n", "utf8");
@@ -14605,6 +14786,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
       rotaryCalibrationSheet,
       productionUnlockMatrix,
       productionEvidenceDossier,
+      machineFilePolicy,
       openSourceCamExecutionPlan: readJsonFile(join(workDir, "open-source-cam-execution-plan.json")),
       machiningPackageIndex,
       deliveryManifest,

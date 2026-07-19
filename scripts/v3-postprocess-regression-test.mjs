@@ -162,6 +162,18 @@ async function main() {
   assert(profile.dialect?.allowedWords?.includes("Y"), "machine controller profile should allow Y word");
   assert(profile.dialect?.forbiddenWords?.includes("A"), "Y rotary machine profile should forbid A word");
 
+  const machineFilePolicy = await getArtifactJson(job.id, "machine-file-policy.json");
+  assert(machineFilePolicy.schema === "hediao3d.machine-file-policy.v1", "machine file policy schema mismatch");
+  assert(machineFilePolicy.level === "trial-only" || machineFilePolicy.level === "production-gated", `unexpected machine file policy level: ${machineFilePolicy.level}`);
+  assert(machineFilePolicy.machine?.controllerClass === "3axis-controller-with-rotary-fixture", "machine file policy should bind the rotary fixture controller class");
+  assert(machineFilePolicy.machine?.axisInstruction === "X=长度方向，Y=旋转夹具，Z=刀深/安全高度", "machine file policy should state exact wrapY axis mapping");
+  assert(machineFilePolicy.machine?.forbiddenWords?.includes("A"), "machine file policy should forbid A word for wrapY");
+  assert(machineFilePolicy.airRunOnlyFiles?.some((file) => file.filename === "air-run.nc" && file.enforcedRules?.includes("spindle-off")), "machine file policy should mark air-run.nc as spindle-off air-run");
+  assert(machineFilePolicy.airRunOnlyFiles?.some((file) => file.filename === "rotary-calibration-airrun.nc"), "machine file policy should include rotary calibration air-run");
+  assert(machineFilePolicy.neverRunOnMachine?.some((file) => file.filename === "camotics-preview.nc"), "machine file policy should forbid CAMotics preview on machine");
+  assert(machineFilePolicy.machineRunnableFiles?.some((file) => file.filename === "toolpath.nc" && file.requiresGate === true), "machine file policy should list toolpath.nc as gate-bound machine candidate");
+  assert(machineFilePolicy.gates?.requiredBeforeProduction?.includes("camotics-result.json real material-removal evidence bound to the current NC"), "machine file policy should require real CAMotics evidence before production");
+
   const productionGate = await getArtifactJson(job.id, "production-gate.json");
   assert(productionGate.checks?.postprocessTraceLevel === "ready", "production gate should include ready postprocess trace level");
   assert(productionGate.checks?.postprocessTraceFitRate >= 0.999, "production gate should expose postprocess trace fit rate");
@@ -171,6 +183,9 @@ async function main() {
 
   const packageIndex = await getArtifactJson(job.id, "machining-package-index.json");
   assert(packageIndex.postprocessTrace?.level === "ready", "package index should expose postprocess trace summary");
+  assert(packageIndex.machineFilePolicy?.artifact === "machine-file-policy.json", "package index should expose machine file policy artifact");
+  assert(packageIndex.machineFilePolicy?.neverRunOnMachine?.includes("camotics-preview.nc"), "package index machine policy should forbid CAMotics preview");
+  assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "machine-file-policy.json"), "readFirst should include machine file policy");
   assert(packageIndex.productionEvidenceDossier?.crossChecks, "package index should expose production evidence cross checks");
   assert(packageIndex.productionEvidenceDossier.crossChecks.ncStaticReady === true, "package index cross checks should mark NC static analysis ready");
   assert(packageIndex.productionEvidenceDossier.crossChecks.controllerDialectReady === true, "package index cross checks should mark controller dialect ready");
@@ -178,6 +193,10 @@ async function main() {
 
   const manifest = await getArtifactJson(job.id, "delivery-manifest.json");
   assert(manifest.files?.some((file) => file.filename === "postprocess-trace-report.json" && file.downloadable === true), "delivery manifest missing postprocess trace report");
+  assert(manifest.files?.some((file) => file.filename === "machine-file-policy.json" && file.downloadable === true), "delivery manifest missing machine file policy");
+
+  const operatorDownloadChecklist = await getArtifactText(job.id, "operator-download-checklist.md");
+  assert(operatorDownloadChecklist.includes("machine-file-policy.json"), "operator download checklist should require machine file policy review");
 
   console.log(JSON.stringify({
     ok: true,
@@ -186,6 +205,7 @@ async function main() {
     dialect: dialect.level,
     postprocessTrace: postprocessTrace.level,
     machineControllerProfile: profile.id,
+    machineFilePolicy: machineFilePolicy.level,
     rotaryWrapPreview: rotaryWrapPreview.level,
     machineAxes: machine.axisCounts,
     airRunZ: airRun.zRange,
