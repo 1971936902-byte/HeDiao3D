@@ -75,6 +75,19 @@ async function main() {
       schema: "hediao3d.opencamlib-material-removal-readiness.v1",
       level: "ready-for-camotics-or-equivalent",
       readyForMaterialRemovalSimulation: true,
+      simulationQuality: {
+        schema: "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+        level: "engineering-review",
+        engineeringSimulationAllowed: true,
+        productionEvidenceAllowed: false,
+        riskCount: 1,
+        risks: ["residual-material-estimate-only"],
+        stepToCutterRatio: 0.18,
+        hitRate: 1,
+        xCoverageRatio: 1,
+        crossCoverageRatio: 1,
+        summary: "Fixture simulation quality requires engineering review."
+      },
       productionResidualEvidenceReady: false,
       missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
       summary: "Fixture OpenCAMLib contact output is ready for CAMotics/equivalent material-removal simulation."
@@ -128,6 +141,9 @@ async function main() {
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "run package should carry machine-fit rotary axis");
   assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.schema === "hediao3d.opencamlib-material-removal-readiness.v1", "run package should carry OpenCAMLib material readiness");
   assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "run package material readiness should allow CAMotics/equivalent simulation");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.schema === "hediao3d.opencamlib-material-removal-simulation-quality.v1", "run package material readiness should carry simulation quality");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.productionEvidenceAllowed === false, "run package simulation quality should preserve production evidence boundary");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.risks?.includes("residual-material-estimate-only"), "run package simulation quality should preserve risk list");
   assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "run package material readiness should preserve production residual boundary");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.exists && file.sha256 === nativeSnapshotSha), "run package should hash-bind job-local Native CAM snapshot");
   assert(runPackage.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.exists && file.sha256 === candidatePackageValidationSha), "run package should hash-bind OpenCAMLib candidate package validation");
@@ -147,6 +163,7 @@ async function main() {
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "result template should carry Native CAM snapshot evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "result template should carry candidate machine-fit evidence");
   assert(template.inputs?.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "result template should carry material readiness evidence");
+  assert(template.inputs?.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.engineeringSimulationAllowed === true, "result template should carry simulation quality evidence");
   assert(template.inputs?.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "result template should preserve material residual boundary");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
@@ -269,6 +286,7 @@ async function main() {
   assert(linuxCamJobManifest.importBack?.linuxCamJobPreflightEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-job-preflight`, "Linux CAM job manifest should expose preflight endpoint");
   assert(linuxCamJobManifest.importBack?.linuxCamEvidenceUploadReportEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-upload-report`, "Linux CAM job manifest should expose evidence upload report endpoint");
   assert(linuxCamJobManifest.camotics?.runPackage?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should expose Native CAM snapshot evidence hash");
+  assert(linuxCamJobManifest.camotics?.runPackage?.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.riskCount === 1, "Linux CAM job manifest should preserve material simulation quality");
   assert(linuxCamJobManifest.references?.some((file) => file.name === "hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should hash Native CAM snapshot reference");
   const linuxCamJobReadme = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md");
   const linuxCamJobChecklist = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/OPERATOR-LINUX-CAM-CHECKLIST.md");

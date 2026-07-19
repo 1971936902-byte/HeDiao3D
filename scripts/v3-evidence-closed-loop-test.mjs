@@ -87,6 +87,7 @@ async function main() {
   const runPackage = JSON.parse(runPackageText);
   const runPackageSha256 = sha256(runPackageText);
   assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "run package should carry OpenCAMLib material readiness into CAMotics package");
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.productionEvidenceAllowed === false, "run package should preserve OpenCAMLib simulation quality production boundary");
 
   const camoticsImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({
@@ -392,6 +393,19 @@ function createMaterialRemovalReadinessFixture() {
     schema: "hediao3d.opencamlib-material-removal-readiness.v1",
     level: "ready-for-camotics-or-equivalent",
     readyForMaterialRemovalSimulation: true,
+    simulationQuality: {
+      schema: "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+      level: "engineering-review",
+      engineeringSimulationAllowed: true,
+      productionEvidenceAllowed: false,
+      riskCount: 1,
+      risks: ["residual-material-estimate-only"],
+      stepToCutterRatio: 0.18,
+      hitRate: 1,
+      xCoverageRatio: 1,
+      crossCoverageRatio: 1,
+      summary: "Fixture simulation quality requires engineering review."
+    },
     productionResidualEvidenceReady: false,
     missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
     summary: "OpenCAMLib contact evidence is ready for CAMotics/equivalent material-removal simulation; residual production evidence remains open."

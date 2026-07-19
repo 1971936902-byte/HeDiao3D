@@ -10394,6 +10394,11 @@ function summarizeCamoticsUpstreamMaterialRemovalReadiness(readiness) {
     : Array.isArray(imported?.missingForProduction)
       ? imported.missingForProduction
       : [];
+  const simulationQualitySource = readiness.simulationQuality && typeof readiness.simulationQuality === "object"
+    ? readiness.simulationQuality
+    : imported?.simulationQuality && typeof imported.simulationQuality === "object"
+      ? imported.simulationQuality
+      : null;
   return {
     required: Boolean(readiness.required),
     status: readiness.status ?? (readiness.ok === true ? "matched" : "mismatch"),
@@ -10401,6 +10406,15 @@ function summarizeCamoticsUpstreamMaterialRemovalReadiness(readiness) {
     expectedLevel: readiness.expectedLevel ?? expected?.level ?? null,
     importedLevel: readiness.importedLevel ?? imported?.level ?? null,
     readyForMaterialRemovalSimulation: Boolean(readiness.importedReadyForMaterialRemovalSimulation ?? imported?.readyForMaterialRemovalSimulation ?? readiness.readyForMaterialRemovalSimulation),
+    simulationQuality: simulationQualitySource ? {
+      schema: simulationQualitySource.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+      level: simulationQualitySource.level ?? null,
+      engineeringSimulationAllowed: Boolean(simulationQualitySource.engineeringSimulationAllowed),
+      productionEvidenceAllowed: Boolean(simulationQualitySource.productionEvidenceAllowed),
+      riskCount: Number.isFinite(Number(simulationQualitySource.riskCount)) ? Number(simulationQualitySource.riskCount) : null,
+      risks: Array.isArray(simulationQualitySource.risks) ? simulationQualitySource.risks.map((item) => String(item)).filter(Boolean).slice(0, 8) : [],
+      summary: simulationQualitySource.summary ?? null
+    } : null,
     productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady ?? imported?.productionResidualEvidenceReady),
     missingForProduction: missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 8),
     summary: readiness.summary ?? `CAMotics 上游材料去除准备度：${level}。`

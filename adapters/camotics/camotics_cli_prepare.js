@@ -264,10 +264,28 @@ function summarizeMaterialRemovalReadiness(readiness) {
   const missingForProduction = Array.isArray(readiness.missingForProduction)
     ? readiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12)
     : [];
+  const simulationQuality = readiness.simulationQuality && typeof readiness.simulationQuality === "object"
+    ? {
+        schema: readiness.simulationQuality.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+        level: readiness.simulationQuality.level ?? null,
+        engineeringSimulationAllowed: Boolean(readiness.simulationQuality.engineeringSimulationAllowed),
+        productionEvidenceAllowed: Boolean(readiness.simulationQuality.productionEvidenceAllowed),
+        riskCount: Number.isFinite(Number(readiness.simulationQuality.riskCount)) ? Number(readiness.simulationQuality.riskCount) : null,
+        risks: Array.isArray(readiness.simulationQuality.risks)
+          ? readiness.simulationQuality.risks.map((item) => String(item)).filter(Boolean).slice(0, 12)
+          : [],
+        stepToCutterRatio: Number.isFinite(Number(readiness.simulationQuality.stepToCutterRatio)) ? Number(readiness.simulationQuality.stepToCutterRatio) : null,
+        hitRate: Number.isFinite(Number(readiness.simulationQuality.hitRate)) ? Number(readiness.simulationQuality.hitRate) : null,
+        xCoverageRatio: Number.isFinite(Number(readiness.simulationQuality.xCoverageRatio)) ? Number(readiness.simulationQuality.xCoverageRatio) : null,
+        crossCoverageRatio: Number.isFinite(Number(readiness.simulationQuality.crossCoverageRatio)) ? Number(readiness.simulationQuality.crossCoverageRatio) : null,
+        summary: readiness.simulationQuality.summary ?? null
+      }
+    : null;
   return {
     schema: readiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1",
     level: readiness.level ?? (readiness.readyForMaterialRemovalSimulation ? "ready-for-camotics-or-equivalent" : "blocked"),
     readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
+    simulationQuality,
     productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
     missingForProduction,
     summary: readiness.summary ?? null
@@ -607,7 +625,22 @@ function upstreamMaterialReadinessMatches(importedReadiness, expectedReadiness) 
   return importedReadiness.schema === expectedSchema
     && importedReadiness.level === expectedReadiness.level
     && Boolean(importedReadiness.readyForMaterialRemovalSimulation) === Boolean(expectedReadiness.readyForMaterialRemovalSimulation)
-    && Boolean(importedReadiness.readyForMaterialRemovalSimulation);
+    && Boolean(importedReadiness.readyForMaterialRemovalSimulation)
+    && simulationQualityMatches(importedReadiness.simulationQuality, expectedReadiness.simulationQuality);
+}
+
+function simulationQualityMatches(importedQuality, expectedQuality) {
+  if (!expectedQuality) return true;
+  if (!importedQuality || typeof importedQuality !== "object") return false;
+  const importedRisks = Array.isArray(importedQuality.risks) ? importedQuality.risks.map((item) => String(item)).sort() : [];
+  const expectedRisks = Array.isArray(expectedQuality.risks) ? expectedQuality.risks.map((item) => String(item)).sort() : [];
+  return importedQuality.schema === (expectedQuality.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1")
+    && importedQuality.level === expectedQuality.level
+    && Boolean(importedQuality.engineeringSimulationAllowed) === Boolean(expectedQuality.engineeringSimulationAllowed)
+    && Boolean(importedQuality.productionEvidenceAllowed) === false
+    && Boolean(expectedQuality.productionEvidenceAllowed) === false
+    && importedRisks.length === expectedRisks.length
+    && importedRisks.every((risk, index) => risk === expectedRisks[index]);
 }
 
 console.log(JSON.stringify(report, null, 2));

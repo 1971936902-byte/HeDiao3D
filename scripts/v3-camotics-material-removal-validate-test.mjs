@@ -42,6 +42,8 @@ try {
   assert(readyReport.upstreamCamEvidence?.status === "matched", "ready report should expose matched upstream CAM evidence");
   assert(readyReport.upstreamCamEvidence?.machineFit?.status === "matched", "ready report should expose matched upstream machine-fit");
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.status === "matched", "ready report should expose matched upstream material readiness");
+  assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.status === "matched", "ready report should expose matched upstream simulation quality");
+  assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.productionEvidenceAllowed === false, "ready report should preserve simulation quality production boundary");
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "ready report should preserve production residual boundary");
   assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
@@ -133,6 +135,29 @@ try {
   assert(blockedReadinessReport.missing.includes("upstream-cam-evidence"), "blocked material readiness should fail upstream CAM evidence");
   assert(blockedReadinessReport.missing.includes("upstream-material-readiness"), "blocked material readiness should list upstream-material-readiness");
   assert(blockedReadinessReport.upstreamCamEvidence?.materialRemovalReadiness?.importedReadyForMaterialRemovalSimulation === false, "blocked material readiness report should expose imported readiness=false");
+
+  writeJsonWithHash(resultPath, createResult({
+    runPackage,
+    runPackageSha,
+    upstreamCamEvidence: createUpstreamCamEvidence({
+      materialRemovalReadiness: {
+        ...createMaterialRemovalReadiness(),
+        simulationQuality: {
+          ...createSimulationQuality(),
+          risks: ["tampered-risk"]
+        }
+      }
+    })
+  }));
+  const tamperedSimulationQuality = spawnSync(node, [validator, "--result", resultPath, "--run-package", runPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(tamperedSimulationQuality.status === 3, "tampered simulation quality should fail material-removal validation");
+  const tamperedSimulationQualityReport = JSON.parse(tamperedSimulationQuality.stdout);
+  assert(tamperedSimulationQualityReport.missing.includes("upstream-material-readiness"), "tampered simulation quality should fail upstream material readiness");
+  assert(tamperedSimulationQualityReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.status === "mismatch", "tampered simulation quality report should expose mismatch");
 
   console.log(JSON.stringify({
     ok: true,
@@ -242,11 +267,28 @@ function createMaterialRemovalReadiness({ level = "ready-for-camotics-or-equival
     schema: "hediao3d.opencamlib-material-removal-readiness.v1",
     level,
     readyForMaterialRemovalSimulation,
+    simulationQuality: createSimulationQuality(),
     productionResidualEvidenceReady,
     missingForProduction: productionResidualEvidenceReady ? [] : ["residual-stock-map", "verified-material-removal-volume"],
     summary: readyForMaterialRemovalSimulation
       ? "Fixture contact evidence is ready for CAMotics/equivalent simulation."
       : "Fixture contact evidence is blocked before material-removal simulation."
+  };
+}
+
+function createSimulationQuality() {
+  return {
+    schema: "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+    level: "engineering-review",
+    engineeringSimulationAllowed: true,
+    productionEvidenceAllowed: false,
+    riskCount: 1,
+    risks: ["residual-material-estimate-only"],
+    stepToCutterRatio: 0.18,
+    hitRate: 1,
+    xCoverageRatio: 1,
+    crossCoverageRatio: 1,
+    summary: "Fixture simulation quality requires engineering review."
   };
 }
 

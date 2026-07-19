@@ -1768,6 +1768,14 @@ type V3ReadinessSummary = {
           materialRemovalReadiness?: {
             level?: string;
             readyForMaterialRemovalSimulation?: boolean;
+            simulationQuality?: {
+              level?: string | null;
+              engineeringSimulationAllowed?: boolean;
+              productionEvidenceAllowed?: boolean;
+              riskCount?: number | null;
+              risks?: string[];
+              summary?: string | null;
+            } | null;
             productionResidualEvidenceReady?: boolean;
             missingForProduction?: string[];
             summary?: string | null;
@@ -9479,10 +9487,13 @@ function formatLinuxOpenCamLibMaterialRemovalReadiness(readiness: NonNullable<No
   const level = readiness.level ?? "missing";
   const sim = readiness.readyForMaterialRemovalSimulation ? "可进仿真" : "仿真未就绪";
   const residual = readiness.productionResidualEvidenceReady ? "残料证据ready" : "残料证据未闭合";
+  const simulationQuality = readiness.simulationQuality
+    ? `仿真质量 ${readiness.simulationQuality.level ?? "unknown"}${Number.isFinite(Number(readiness.simulationQuality.riskCount)) ? `/风险${readiness.simulationQuality.riskCount}` : ""}`
+    : "";
   const missing = Array.isArray(readiness.missingForProduction) && readiness.missingForProduction.length
     ? `缺 ${readiness.missingForProduction.length}项`
     : "";
-  return [`材料去除 ${level}`, sim, residual, missing].filter(Boolean).join(" · ");
+  return [`材料去除 ${level}`, sim, simulationQuality, residual, missing].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["camotics"]) {

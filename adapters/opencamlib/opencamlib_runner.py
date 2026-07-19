@@ -1209,27 +1209,59 @@ def create_path_dropcutter_material_removal_readiness(
     blockers: List[str],
 ) -> Dict[str, Any]:
     missing = []
+    simulation_risks = []
     if point_count <= 0:
         missing.append("non-empty OpenCAMLib cutter-location points")
+        simulation_risks.append("no-cutter-location-points")
     if hit_rate < 0.995:
         missing.append("contact hitRate >= 0.995")
+        simulation_risks.append("contact-hit-rate-below-99.5-percent")
     if step_to_cutter_ratio is None or step_to_cutter_ratio > 0.25:
         missing.append("stepToCutterRatio <= 0.25")
+        simulation_risks.append("sampling-step-above-cam-review-threshold")
     if float(path_coverage.get("xCoverageRatio") or 0) < 0.98 or float(path_coverage.get("crossCoverageRatio") or 0) < 0.98:
         missing.append("X/cross path coverage >= 0.98")
+        simulation_risks.append("path-coverage-below-98-percent")
     if residual_evidence_class != "measured-or-validated":
         missing.append("measured or swept-volume validated residual material metrics")
+        simulation_risks.append("residual-material-estimate-only")
     if not protected_zones.get("enabled") or int(protected_zones.get("violationCount") or 0) > 0:
         missing.append("clean protected end-zone sampling")
+        simulation_risks.append("protected-end-zone-risk")
     if candidate_machine_fit.get("level") == "critical":
         missing.append("target machine-fit preflight not critical")
+        simulation_risks.append("target-machine-fit-critical")
     ready_for_simulation = point_count > 0 and candidate_machine_fit.get("level") != "critical" and not any(
         item in blockers for item in ["path-dropcutter-no-contact-points", "protected-zone-sampling-violations"]
     )
+    confidence_level = "blocked"
+    if ready_for_simulation:
+        severe_risks = {
+            "contact-hit-rate-below-99.5-percent",
+            "path-coverage-below-98-percent",
+            "target-machine-fit-critical",
+            "protected-end-zone-risk",
+        }
+        confidence_level = "engineering-review" if severe_risks.intersection(simulation_risks) else "camotics-ready-with-production-gaps"
+        if step_to_cutter_ratio is not None and step_to_cutter_ratio > 0.25:
+            confidence_level = "engineering-review"
     return {
         "schema": "hediao3d.opencamlib-material-removal-readiness.v1",
         "level": "ready-for-camotics-or-equivalent" if ready_for_simulation else "blocked",
         "readyForMaterialRemovalSimulation": ready_for_simulation,
+        "simulationQuality": {
+            "schema": "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+            "level": confidence_level,
+            "engineeringSimulationAllowed": ready_for_simulation,
+            "productionEvidenceAllowed": False,
+            "riskCount": len(simulation_risks),
+            "risks": simulation_risks,
+            "stepToCutterRatio": round(step_to_cutter_ratio, 6) if step_to_cutter_ratio is not None else None,
+            "hitRate": round(hit_rate, 6),
+            "xCoverageRatio": path_coverage.get("xCoverageRatio"),
+            "crossCoverageRatio": path_coverage.get("crossCoverageRatio"),
+            "summary": "CAMotics/equivalent simulation can be run as engineering evidence, but risk flags must be reviewed before trial." if ready_for_simulation else "Material-removal simulation is blocked until basic OpenCAMLib output and machine-fit checks pass.",
+        },
         "productionResidualEvidenceReady": residual_evidence_class == "measured-or-validated",
         "requiredSimulatorEvidence": [
             "camotics-result.json or equivalent material-removal result",

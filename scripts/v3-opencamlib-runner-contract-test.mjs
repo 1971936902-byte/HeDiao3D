@@ -144,6 +144,11 @@ try {
   assert(pathDropContact.candidateMachineFit?.riskCounts?.holdZonePointCount === 0, "PathDropCutter machine-fit should expose protected-zone risk counts");
   assert(pathDropContact.materialRemovalReadiness?.schema === "hediao3d.opencamlib-material-removal-readiness.v1", "PathDropCutter contact report should expose material-removal readiness");
   assert(pathDropContact.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "PathDropCutter output should be eligible for CAMotics/equivalent engineering simulation");
+  assert(pathDropContact.materialRemovalReadiness?.simulationQuality?.schema === "hediao3d.opencamlib-material-removal-simulation-quality.v1", "PathDropCutter material-removal readiness should expose simulation quality");
+  assert(pathDropContact.materialRemovalReadiness?.simulationQuality?.engineeringSimulationAllowed === true, "PathDropCutter simulation quality should allow engineering simulation");
+  assert(pathDropContact.materialRemovalReadiness?.simulationQuality?.productionEvidenceAllowed === false, "PathDropCutter simulation quality must not allow production evidence by itself");
+  assert(pathDropContact.materialRemovalReadiness?.simulationQuality?.risks?.includes("residual-material-estimate-only"), "PathDropCutter simulation quality should flag residual estimate risk");
+  assert(Number.isFinite(pathDropContact.materialRemovalReadiness?.simulationQuality?.stepToCutterRatio), "PathDropCutter simulation quality should expose step ratio");
   assert(pathDropContact.materialRemovalReadiness?.productionResidualEvidenceReady === false, "PathDropCutter residual evidence must remain unready for production");
   assert(pathDropContact.materialRemovalReadiness?.missingForProduction?.some((item) => /residual/i.test(item)), "PathDropCutter material-removal readiness should name missing residual evidence");
   assert(pathDropContact.tolerances?.maxGougeMm === 0.03, "PathDropCutter contact report should expose gouge tolerance");

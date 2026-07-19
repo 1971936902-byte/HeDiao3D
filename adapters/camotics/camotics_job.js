@@ -714,7 +714,8 @@ function evaluateUpstreamMaterialRemovalReadiness(importedReadiness, expectedRea
   const schemaOk = importedReadiness?.schema === expectedSchema;
   const levelOk = importedLevel === expectedLevel;
   const readyMatches = importedReady === expectedReady;
-  const ok = schemaOk && levelOk && readyMatches && importedReady;
+  const simulationQuality = evaluateSimulationQuality(importedReadiness?.simulationQuality, expectedReadiness.simulationQuality);
+  const ok = schemaOk && levelOk && readyMatches && importedReady && simulationQuality.ok;
   return {
     ok,
     status: ok ? "matched" : "mismatch",
@@ -726,6 +727,7 @@ function evaluateUpstreamMaterialRemovalReadiness(importedReadiness, expectedRea
     expectedReadyForMaterialRemovalSimulation: expectedReady,
     importedReadyForMaterialRemovalSimulation: importedReady,
     readyMatches,
+    simulationQuality,
     productionResidualEvidenceReady: Boolean(importedReadiness?.productionResidualEvidenceReady),
     missingForProduction: Array.isArray(importedReadiness?.missingForProduction)
       ? importedReadiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12)
@@ -733,6 +735,31 @@ function evaluateUpstreamMaterialRemovalReadiness(importedReadiness, expectedRea
     summary: ok
       ? `Upstream OpenCAMLib material-removal readiness is ${importedLevel} and can enter CAMotics/equivalent simulation.`
       : `Expected material readiness level=${expectedLevel}, readyForSimulation=${expectedReady}; got level=${importedLevel}, readyForSimulation=${importedReady}.`
+  };
+}
+
+function evaluateSimulationQuality(importedQuality, expectedQuality) {
+  if (!expectedQuality) return { ok: true, required: false, status: "not-required" };
+  const importedRisks = Array.isArray(importedQuality?.risks) ? importedQuality.risks.map((item) => String(item)).sort() : [];
+  const expectedRisks = Array.isArray(expectedQuality.risks) ? expectedQuality.risks.map((item) => String(item)).sort() : [];
+  const risksMatch = importedRisks.length === expectedRisks.length && importedRisks.every((risk, index) => risk === expectedRisks[index]);
+  const ok = importedQuality?.schema === (expectedQuality.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1")
+    && importedQuality?.level === expectedQuality.level
+    && Boolean(importedQuality?.engineeringSimulationAllowed) === Boolean(expectedQuality.engineeringSimulationAllowed)
+    && Boolean(importedQuality?.productionEvidenceAllowed) === false
+    && Boolean(expectedQuality.productionEvidenceAllowed) === false
+    && risksMatch;
+  return {
+    ok,
+    required: true,
+    status: ok ? "matched" : "mismatch",
+    expectedLevel: expectedQuality.level ?? null,
+    importedLevel: importedQuality?.level ?? null,
+    engineeringSimulationAllowed: Boolean(importedQuality?.engineeringSimulationAllowed),
+    productionEvidenceAllowed: Boolean(importedQuality?.productionEvidenceAllowed),
+    risksMatch,
+    importedRisks,
+    expectedRisks
   };
 }
 
