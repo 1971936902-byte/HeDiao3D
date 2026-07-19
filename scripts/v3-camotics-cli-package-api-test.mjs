@@ -229,6 +229,7 @@ async function main() {
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md"), "Linux CAM job package missing README");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"), "Linux CAM job package missing manifest");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/run-linux-cam-job.sh"), "Linux CAM job package missing one-command run script");
+  assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/preflight-linux-cam-job.mjs"), "Linux CAM job package missing preflight script");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs"), "Linux CAM job package missing local validation script");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/upload-linux-cam-evidence.mjs"), "Linux CAM job package missing evidence upload script");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/native-cam/opencamlib-candidate-inputs/job.json"), "Linux CAM job package missing OpenCAMLib job spec");
@@ -241,6 +242,8 @@ async function main() {
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/package-integrity.json"), "Linux CAM job package missing package integrity reference");
   assert(linuxCamJobZipNames.includes("hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json"), "Linux CAM job package missing Native CAM snapshot reference");
   const linuxCamJobManifest = JSON.parse(readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/linux-cam-job-package-manifest.json"));
+  assert(linuxCamJobManifest.packageScripts?.preflight === "preflight-linux-cam-job.mjs", "Linux CAM job manifest should expose preflight script");
+  assert(linuxCamJobManifest.packageScripts?.preflightOutput === "linux-cam-job-preflight.json", "Linux CAM job manifest should expose preflight output");
   assert(linuxCamJobManifest.packageScripts?.evidenceUploader === "upload-linux-cam-evidence.mjs", "Linux CAM job manifest should expose evidence uploader script");
   assert(linuxCamJobManifest.packageScripts?.uploadReportOutput === "linux-cam-evidence-upload-report.json", "Linux CAM job manifest should expose upload report output");
   assert(linuxCamJobManifest.importBack?.unifiedEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-bundle`, "Linux CAM job manifest should expose unified evidence bundle endpoint");
@@ -249,9 +252,14 @@ async function main() {
   assert(linuxCamJobManifest.references?.some((file) => file.name === "hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should hash Native CAM snapshot reference");
   const linuxCamJobReadme = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md");
   assert(linuxCamJobReadme.includes("upload-linux-cam-evidence.mjs"), "Linux CAM job README should document evidence uploader");
+  assert(linuxCamJobReadme.includes("preflight-linux-cam-job.mjs"), "Linux CAM job README should document preflight");
   assert(linuxCamJobReadme.includes("linux-cam-evidence-bundle"), "Linux CAM job README should mention unified evidence endpoint");
+  const linuxCamJobPreflight = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/preflight-linux-cam-job.mjs");
   const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");
   const linuxCamJobUploader = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/upload-linux-cam-evidence.mjs");
+  assert(linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-job-preflight.v1"), "Linux CAM job preflight missing schema");
+  assert(linuxCamJobPreflight.includes("HEDIAO3D_NATIVE_CAM_SERVER_DIR"), "Linux CAM job preflight should check Native CAM server dir");
+  assert(linuxCamJobPreflight.includes("opencamlib-python") && linuxCamJobPreflight.includes("camotics-cli"), "Linux CAM job preflight should check OpenCAMLib and CAMotics");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-evidence-status.v1"), "Linux CAM job validator missing evidence status schema");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-upload-plan.v1"), "Linux CAM job validator missing upload plan schema");
@@ -268,6 +276,16 @@ async function main() {
   mkdirSync(linuxCamJobExtractDir, { recursive: true });
   extractStoredZip(linuxCamJobPackage.bytes, linuxCamJobExtractDir);
   const linuxCamJobRoot = join(linuxCamJobExtractDir, "hediao3d-v3-linux-cam-job");
+  const preflightRun = spawnSync(process.execPath, ["preflight-linux-cam-job.mjs", "."], {
+    cwd: linuxCamJobRoot,
+    encoding: "utf8"
+  });
+  assert([0, 2].includes(preflightRun.status), `Linux CAM job preflight should complete with ready or blocked status: ${preflightRun.stderr || preflightRun.stdout}`);
+  const preflightReport = JSON.parse(readFileSync(join(linuxCamJobRoot, "linux-cam-job-preflight.json"), "utf8"));
+  assert(preflightReport.schema === "hediao3d.v3-linux-cam-job-preflight.v1", "Linux CAM job preflight report schema mismatch");
+  assert(preflightReport.productionUnlockEligible === false, "Linux CAM job preflight must not unlock production");
+  assert(preflightReport.checks?.some((check) => check.id === "opencamlib-python"), "Linux CAM job preflight should report OpenCAMLib module check");
+  assert(preflightReport.checks?.some((check) => check.id === "camotics-cli"), "Linux CAM job preflight should report CAMotics check");
   const localValidationRun = spawnSync(process.execPath, ["validate-linux-cam-job.mjs", "."], {
     cwd: linuxCamJobRoot,
     encoding: "utf8"
@@ -305,6 +323,7 @@ async function main() {
   assert(readyValidation.evidenceStatus?.readyForUpload === true, "Linux CAM job evidence status should mark readyForUpload");
   assert(readyValidation.evidenceStatus?.nativeCamBundle === "present", "Linux CAM job evidence status should see Native CAM bundle");
   assert(readyValidation.evidenceStatus?.camoticsBundle === "present", "Linux CAM job evidence status should see CAMotics bundle");
+  assert(readyValidation.evidenceStatus?.preflight?.level, "Linux CAM job evidence status should include preflight summary when report exists");
   assert(Array.isArray(readyValidation.evidenceStatus?.missingUploads) && readyValidation.evidenceStatus.missingUploads.length === 0, "ready Linux CAM job evidence status should not list missing uploads");
   assert(readyValidation.uploadPlan?.readyForUpload === true, "ready Linux CAM job upload plan should be upload-ready");
   assert(readyValidation.uploadPlan?.readyCount === 2, "ready Linux CAM job upload plan should count both bundles");
