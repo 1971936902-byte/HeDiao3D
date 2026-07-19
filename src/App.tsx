@@ -113,6 +113,36 @@ type TaskJobLog = {
   message: string;
 };
 
+type V3ExternalBoundaryStatus = {
+  schema?: string;
+  status: "matched" | "review" | "critical" | string;
+  productionCandidateCompatible?: boolean;
+  summary?: string;
+  expected?: Record<string, unknown>;
+  actual?: {
+    rotaryOutputAxis?: string | null;
+    rotaryWrapPerRevolutionMm?: number | string | null;
+    lengthAxis?: string | null;
+    depthAxis?: string | null;
+    controllerClass?: string | null;
+    camMode?: string | null;
+    postprocessOwner?: string | null;
+    machineBoundary?: string | null;
+    toolProfileId?: string | null;
+    toolDiameterMm?: number | string | null;
+    toolAngleDeg?: number | string | null;
+    axisCounts?: {
+      X?: number;
+      Y?: number;
+      Z?: number;
+      A?: number;
+    };
+  };
+  mismatches?: string[];
+  review?: string[];
+  requiredActions?: string[];
+};
+
 type V3EngineStatus = {
   id: string;
   name: string;
@@ -665,6 +695,36 @@ type V3OrchestratorJob = {
         errors: string[];
         warnings: string[];
       };
+      externalGcodeImportValidation?: {
+        schema: string;
+        status: "bound-production-candidate" | "bound-review" | "critical" | string;
+        postprocessEligible: boolean;
+        productionCandidate: boolean;
+        engine?: string | null;
+        sourceName?: string | null;
+        summary: string;
+        sourceBinding?: {
+          schema?: string;
+          status?: string;
+          sourceSnapshot?: {
+            matchesSourceArtifact?: boolean;
+            matchesPostprocessArtifact?: boolean;
+            sha256?: string;
+          };
+        } | null;
+        camOutputProof?: {
+          status?: string;
+          productionCandidate?: boolean;
+          postprocessEligible?: boolean;
+          declaredGcodeSha256?: string | null;
+          gcodeSha256?: string | null;
+        } | null;
+        gcodeMachineBoundary?: V3ExternalBoundaryStatus | null;
+        proofMachineBoundary?: V3ExternalBoundaryStatus | null;
+        criticalIssues?: string[];
+        warningIssues?: string[];
+        requiredActions?: string[];
+      } | null;
       rotaryWrapPreviewReport?: {
         schema: string;
         level: "ready" | "review" | "critical";
@@ -7387,6 +7447,35 @@ export function App() {
                   试雕 {v3Job.result.summary.productionGate.allowTrialNc ? "可用" : "不可用"}
                 </small>
               )}
+              {v3Job?.result?.summary.externalGcodeImportValidation && (
+                <div className="v3-boundary-card">
+                  <div>
+                    <strong>外部G-code边界</strong>
+                    <span className={formatV3BoundaryStatusClass(v3Job.result.summary.externalGcodeImportValidation.status)}>
+                      {formatExternalGcodeValidationStatus(v3Job.result.summary.externalGcodeImportValidation.status)}
+                    </span>
+                  </div>
+                  <small>
+                    G-code头部：{formatV3BoundaryStatus(v3Job.result.summary.externalGcodeImportValidation.gcodeMachineBoundary)}
+                    {" · "}
+                    CAM proof：{formatV3BoundaryStatus(v3Job.result.summary.externalGcodeImportValidation.proofMachineBoundary)}
+                    {" · "}
+                    候选 {v3Job.result.summary.externalGcodeImportValidation.productionCandidate ? "yes" : "no"}
+                  </small>
+                  <small>
+                    {formatExternalGcodeBoundaryDetails(v3Job.result.summary.externalGcodeImportValidation.gcodeMachineBoundary)}
+                    {" · "}
+                    {formatExternalProofBoundaryDetails(v3Job.result.summary.externalGcodeImportValidation.proofMachineBoundary)}
+                  </small>
+                  {(v3Job.result.summary.externalGcodeImportValidation.criticalIssues?.[0] || v3Job.result.summary.externalGcodeImportValidation.warningIssues?.[0] || v3Job.result.summary.externalGcodeImportValidation.requiredActions?.[0]) && (
+                    <small className={v3Job.result.summary.externalGcodeImportValidation.criticalIssues?.length ? "v3-inline-critical" : "v3-inline-warning"}>
+                      {v3Job.result.summary.externalGcodeImportValidation.criticalIssues?.[0]
+                        ?? v3Job.result.summary.externalGcodeImportValidation.warningIssues?.[0]
+                        ?? v3Job.result.summary.externalGcodeImportValidation.requiredActions?.[0]}
+                    </small>
+                  )}
+                </div>
+              )}
               {v3Job?.result?.summary.productionUnlockMatrix && (
                 <small className={v3Job.result.summary.productionUnlockMatrix.allowProductionNc ? "v3-inline-ok" : v3Job.result.summary.productionUnlockMatrix.blockCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
                   解锁矩阵：通过 {v3Job.result.summary.productionUnlockMatrix.passCount}
@@ -9150,6 +9239,54 @@ function formatHandoffClassification(classification: string) {
   return classification;
 }
 
+function formatExternalGcodeValidationStatus(status: string) {
+  if (status === "bound-production-candidate") return "候选已绑定";
+  if (status === "bound-review") return "已绑定待复核";
+  if (status === "critical") return "存在阻断";
+  return status;
+}
+
+function formatV3BoundaryStatusClass(status?: string | null) {
+  if (status === "matched" || status === "bound-production-candidate" || status === "ready" || status === "pass") return "v3-inline-ok";
+  if (status === "critical" || status === "block" || status === "mismatch") return "v3-inline-critical";
+  return "v3-inline-warning";
+}
+
+function formatV3BoundaryStatus(boundary?: V3ExternalBoundaryStatus | null) {
+  if (!boundary) return "未生成";
+  if (boundary.status === "matched") return "匹配";
+  if (boundary.status === "critical") return "阻断";
+  if (boundary.status === "review") return "待复核";
+  return boundary.status;
+}
+
+function formatExternalGcodeBoundaryDetails(boundary?: V3ExternalBoundaryStatus | null) {
+  if (!boundary) return "NC头部未验证";
+  const actual = boundary.actual ?? {};
+  const axisCounts = actual.axisCounts ?? {};
+  const aCount = axisCounts.A ?? 0;
+  return [
+    `Y轴 ${axisCounts.Y ?? 0}`,
+    `A轴 ${aCount}`,
+    actual.rotaryOutputAxis ? `旋转=${actual.rotaryOutputAxis}` : "",
+    actual.lengthAxis ? `长度=${actual.lengthAxis}` : "",
+    actual.rotaryWrapPerRevolutionMm != null ? `一圈=${actual.rotaryWrapPerRevolutionMm}mm` : ""
+  ].filter(Boolean).join(" · ");
+}
+
+function formatExternalProofBoundaryDetails(boundary?: V3ExternalBoundaryStatus | null) {
+  if (!boundary) return "proof未验证";
+  const actual = boundary.actual ?? {};
+  return [
+    actual.postprocessOwner ? `owner=${actual.postprocessOwner}` : "",
+    actual.machineBoundary ? `边界=${actual.machineBoundary}` : "",
+    actual.camMode ? `模式=${actual.camMode}` : "",
+    actual.toolProfileId ? `刀具=${actual.toolProfileId}` : "",
+    actual.toolDiameterMm != null ? `直径=${actual.toolDiameterMm}mm` : "",
+    actual.toolAngleDeg != null ? `角度=${actual.toolAngleDeg}°` : ""
+  ].filter(Boolean).join(" · ") || boundary.summary || "proof字段待补齐";
+}
+
 function formatExternalCamHandoff(handoff?: V3ExternalHandoffSummary) {
   if (!handoff) return "未验证";
   const status = handoff.status === "completed" && handoff.simulationStatus === "completed"
@@ -10708,6 +10845,7 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
   const ncStaticAnalysis = summary?.ncStaticAnalysis;
   const camHandoffQuality = summary?.camHandoffQuality;
   const neutralToolpathImportValidation = summary?.neutralToolpathImportValidation;
+  const externalGcodeImportValidation = summary?.externalGcodeImportValidation;
   const neutralMachineFit = neutralToolpathImportValidation?.machineFit;
   const rotaryWrapPreviewReport = summary?.rotaryWrapPreviewReport;
   const postprocessTraceReport = summary?.postprocessTraceReport;
@@ -10766,6 +10904,11 @@ function createV3PackageReadme(job: V3OrchestratorJob) {
     `Neutral覆盖: X ${neutralMachineFit?.coverage?.xCoverageRatio !== undefined ? `${(neutralMachineFit.coverage.xCoverageRatio * 100).toFixed(1)}%` : "-"} / 旋转 ${neutralMachineFit?.coverage?.rotarySpanDeg !== undefined ? `${neutralMachineFit.coverage.rotarySpanDeg.toFixed(1)}°` : "-"} / 目标 ${neutralMachineFit?.coverage?.expectedRotaryCoverageDeg !== undefined ? `${neutralMachineFit.coverage.expectedRotaryCoverageDeg.toFixed(1)}°` : "-"}`,
     `Neutral风险: 端部 ${neutralMachineFit?.riskCounts?.holdZonePointCount ?? "-"} / 超深 ${neutralMachineFit?.riskCounts?.deepPointCount ?? "-"} / 越界 ${neutralMachineFit?.riskCounts?.outOfRangeCount ?? "-"}`,
     "Neutral导入校验报告: neutral-toolpath-import-validation.json",
+    `外部G-code导入校验: ${externalGcodeImportValidation?.status ?? "未生成"} / 候选 ${externalGcodeImportValidation?.productionCandidate ? "是" : externalGcodeImportValidation ? "否" : "-"}`,
+    `外部G-code边界: ${formatV3BoundaryStatus(externalGcodeImportValidation?.gcodeMachineBoundary)} / ${formatExternalGcodeBoundaryDetails(externalGcodeImportValidation?.gcodeMachineBoundary)}`,
+    `外部CAM proof边界: ${formatV3BoundaryStatus(externalGcodeImportValidation?.proofMachineBoundary)} / ${formatExternalProofBoundaryDetails(externalGcodeImportValidation?.proofMachineBoundary)}`,
+    `外部G-code处理建议: ${externalGcodeImportValidation?.requiredActions?.[0] ?? externalGcodeImportValidation?.criticalIssues?.[0] ?? externalGcodeImportValidation?.warningIssues?.[0] ?? "-"}`,
+    "外部G-code校验报告: external-gcode-import-validation.json",
     `旋转包裹预览: ${rotaryWrapPreviewReport?.level ?? "未生成"} / 机床覆盖 ${rotaryWrapPreviewReport?.metrics?.machineCoverage !== null && rotaryWrapPreviewReport?.metrics?.machineCoverage !== undefined ? `${(rotaryWrapPreviewReport.metrics.machineCoverage * 100).toFixed(1)}%` : "-"} / 线性化误差 ${rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== null && rotaryWrapPreviewReport?.metrics?.linearizationErrorRate !== undefined ? `${(rotaryWrapPreviewReport.metrics.linearizationErrorRate * 100).toFixed(2)}%` : "-"}`,
     "旋转包裹预览报告: rotary-wrap-preview-report.json",
     `后处理追溯: ${postprocessTraceReport?.level ?? "未生成"} / 匹配 ${postprocessTraceReport?.metrics?.fitRate !== null && postprocessTraceReport?.metrics?.fitRate !== undefined ? `${(postprocessTraceReport.metrics.fitRate * 100).toFixed(2)}%` : "-"} / 核对 ${postprocessTraceReport?.metrics?.matched ?? "-"}/${postprocessTraceReport?.metrics?.compared ?? "-"}`,

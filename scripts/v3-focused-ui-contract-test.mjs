@@ -98,6 +98,17 @@ const checks = [
     summary: "Focused operator UI should accept Linux CAM job local validation evidence after running the unified package."
   },
   {
+    id: "external-gcode-boundary-visible",
+    ok: source.includes("外部G-code边界")
+      && source.includes("externalGcodeImportValidation")
+      && source.includes("gcodeMachineBoundary")
+      && source.includes("proofMachineBoundary")
+      && source.includes("formatExternalGcodeBoundaryDetails")
+      && source.includes("formatExternalProofBoundaryDetails")
+      && source.includes("external-gcode-import-validation.json"),
+    summary: "Focused operator UI should expose imported external G-code machine boundary and CAM proof boundary status."
+  },
+  {
     id: "core-api-request-error-guidance",
     ok: source.includes("function requestJson")
       && source.includes("无法连接本地后端 API")

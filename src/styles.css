@@ -1984,6 +1984,33 @@ button:disabled {
   color: var(--rose);
 }
 
+.v3-boundary-card {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.v3-boundary-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.v3-boundary-card strong {
+  color: #f2f8f5;
+  font-size: 12px;
+}
+
+.v3-boundary-card span,
+.v3-boundary-card small {
+  overflow-wrap: anywhere;
+}
+
 .v3-handoff-audit-list {
   display: flex;
   flex-wrap: wrap;
