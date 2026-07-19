@@ -4,6 +4,7 @@ dist/
 .env
 *.log
 *.local
+reports/
 __pycache__/
 *.py[cod]
 meshy-test-result.json

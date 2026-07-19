@@ -15,6 +15,7 @@
     "test:v3:focused-ui": "node scripts/v3-focused-ui-contract-test.mjs",
     "test:v3:mvp-basic": "node scripts/v3-mvp-basic-acceptance.mjs",
     "test:v3:mvp-release": "node scripts/v3-mvp-release-check.mjs",
+    "test:v3:mvp-one-command": "node scripts/v3-mvp-one-command-acceptance.mjs",
     "test:v3:frontend-e2e": "node scripts/v3-frontend-operator-e2e.mjs",
     "test:v3:frontend-import-e2e": "node scripts/v3-frontend-operator-e2e.mjs --import-model",
     "test:v3:small-loop-acceptance": "node scripts/v3-small-loop-acceptance.mjs",
