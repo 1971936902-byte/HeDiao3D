@@ -14,6 +14,7 @@
 
 ```bash
 npm run test:v3:mvp-basic
+npm run test:v3:mvp-release
 ```
 
 ## 当前已实现
