@@ -12,6 +12,11 @@ const commands = [
     command: npmRun("test:v3:mvp-release")
   },
   {
+    id: "architecture-coverage",
+    title: "Requested V3 architecture coverage audit",
+    command: npmRun("test:v3:architecture")
+  },
+  {
     id: "mvp-basic",
     title: "Basic usable MVP acceptance",
     command: npmRun("test:v3:mvp-basic")

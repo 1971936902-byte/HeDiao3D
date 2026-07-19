@@ -13,6 +13,7 @@ const requiredFiles = [
   { path: "scripts/v3-mvp-basic-acceptance.mjs", purpose: "basic MVP acceptance" },
   { path: "scripts/v3-mvp-release-check.mjs", purpose: "release package self-check" },
   { path: "scripts/v3-mvp-one-command-acceptance.mjs", purpose: "one-command basic release acceptance" },
+  { path: "scripts/v3-architecture-coverage-audit.mjs", purpose: "requested V3 architecture coverage audit" },
   { path: "scripts/v3-small-loop-acceptance.mjs", purpose: "full engineering acceptance" },
   { path: "public/v3-fixtures/buddha-baseline.json", purpose: "fixed Buddha regression fixture" }
 ];
@@ -20,6 +21,7 @@ const requiredFiles = [
 const requiredScripts = [
   "dev:v3",
   "build",
+  "test:v3:architecture",
   "test:v3:mvp-basic",
   "test:v3:mvp-release",
   "test:v3:mvp-one-command",

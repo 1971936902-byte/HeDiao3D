@@ -12,6 +12,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "test:v3:buddha-fixture": "node scripts/v3-buddha-fixture-baseline-test.mjs",
     "test:v3:buddha-e2e": "node scripts/v3-buddha-e2e-api-test.mjs",
+    "test:v3:architecture": "node scripts/v3-architecture-coverage-audit.mjs",
     "test:v3:focused-ui": "node scripts/v3-focused-ui-contract-test.mjs",
     "test:v3:mvp-basic": "node scripts/v3-mvp-basic-acceptance.mjs",
     "test:v3:mvp-release": "node scripts/v3-mvp-release-check.mjs",
