@@ -139,6 +139,42 @@ async function main() {
   assert(missingBoundary.level === "review", "missing target machine boundary should downgrade ready acceptance to review");
   assert(missingBoundary.targetMachineBoundaryStatus?.status === "missing", "missing boundary import should expose missing status");
 
+  const aAxisBoundary = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
+    sourceName: "native-cam-real-output-acceptance-a-axis-boundary.json",
+    validationReport,
+    acceptance: createAcceptanceFixture(validationReportSha256, {
+      targetMachineBoundary: {
+        ...createTargetMachineBoundaryFixture(),
+        postProcessor: "wrapA",
+        rotaryOutputAxis: "A"
+      }
+    })
+  });
+  assert(aAxisBoundary.level === "review", "A-axis target boundary should not be accepted as ready for Y-rotary fixture");
+  assert(aAxisBoundary.targetMachineBoundaryStatus?.status === "mismatch", "A-axis target boundary should expose mismatch status");
+  assert(aAxisBoundary.targetMachineBoundaryStatus?.mismatches?.some((item) => /rotaryOutputAxis/.test(item)), "A-axis mismatch should name rotaryOutputAxis");
+
+  const wrongToolBoundary = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
+    sourceName: "native-cam-real-output-acceptance-wrong-tool-boundary.json",
+    validationReport,
+    acceptance: createAcceptanceFixture(validationReportSha256, {
+      targetMachineBoundary: {
+        ...createTargetMachineBoundaryFixture(),
+        rotaryWrapPerRevolutionMm: 80,
+        tool: {
+          toolProfileId: "vbit-3mm-20deg",
+          diameterMm: 3,
+          angleDeg: 20,
+          tip: "point"
+        }
+      }
+    })
+  });
+  assert(wrongToolBoundary.level === "review", "wrong rotary calibration/tool boundary should not be accepted as ready");
+  assert(wrongToolBoundary.targetMachineBoundaryStatus?.status === "mismatch", "wrong tool boundary should expose mismatch status");
+  assert(wrongToolBoundary.targetMachineBoundaryStatus?.mismatches?.some((item) => /rotaryWrapPerRevolutionMm/.test(item)), "wrong boundary should name wrap distance mismatch");
+  assert(wrongToolBoundary.targetMachineBoundaryStatus?.mismatches?.some((item) => /toolDiameterMm/.test(item)), "wrong boundary should name tool diameter mismatch");
+
   const zipImported = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-bundle.zip",
     acceptanceZipDataUrl: toZipDataUrl({
@@ -266,6 +302,7 @@ function createAcceptanceFixture(sourceReportSha256, options = {}) {
   const includeTargetMachineBoundary = options.includeTargetMachineBoundary !== false;
   const includeContactValidation = options.includeContactValidation !== false;
   const contactValidation = options.contactValidation ?? createContactValidationFixture();
+  const targetMachineBoundary = options.targetMachineBoundary ?? createTargetMachineBoundaryFixture();
   return {
     schema: "hediao3d.native-cam-real-output-acceptance.v1",
     createdAt: new Date().toISOString(),
@@ -279,7 +316,7 @@ function createAcceptanceFixture(sourceReportSha256, options = {}) {
     level: "ready",
     strict: true,
     expectProductionCandidate: true,
-    ...(includeTargetMachineBoundary ? { targetMachineBoundary: createTargetMachineBoundaryFixture() } : {}),
+    ...(includeTargetMachineBoundary ? { targetMachineBoundary } : {}),
     ...(includeContactValidation ? { contactValidation } : {}),
     productionCandidateCount: 1,
     unsafeCount: 0,

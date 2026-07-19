@@ -4674,7 +4674,13 @@ function createNativeCamTargetMachineBoundaryStatus(boundary) {
     camMode: "rotaryWrap",
     postProcessor: "wrapY",
     rotaryOutputAxis: "Y",
-    toolProfileId: "vflat-4mm-25deg"
+    rotaryWrapPerRevolutionMm: 100,
+    lengthAxis: "X",
+    depthAxis: "Z",
+    toolProfileId: "vflat-4mm-25deg",
+    toolDiameterMm: 4,
+    toolAngleDeg: 25,
+    toolTip: "flat"
   };
   if (!boundary || typeof boundary !== "object") {
     return {
@@ -4692,10 +4698,18 @@ function createNativeCamTargetMachineBoundaryStatus(boundary) {
     camMode: boundary.camMode ?? null,
     postProcessor: boundary.postProcessor ?? null,
     rotaryOutputAxis: boundary.rotaryOutputAxis ?? null,
-    toolProfileId: boundary.tool?.toolProfileId ?? null
+    rotaryWrapPerRevolutionMm: finiteNumberOrNull(boundary.rotaryWrapPerRevolutionMm),
+    lengthAxis: boundary.lengthAxis ?? null,
+    depthAxis: boundary.depthAxis ?? null,
+    toolProfileId: boundary.tool?.toolProfileId ?? null,
+    toolDiameterMm: finiteNumberOrNull(boundary.tool?.diameterMm),
+    toolAngleDeg: finiteNumberOrNull(boundary.tool?.angleDeg),
+    toolTip: boundary.tool?.tip ?? null
   };
   const mismatches = Object.entries(required)
-    .filter(([key, value]) => actual[key] !== value)
+    .filter(([key, value]) => typeof value === "number"
+      ? !numbersClose(actual[key], value, 0.001)
+      : actual[key] !== value)
     .map(([key, value]) => `${key}: expected ${value}, got ${actual[key] ?? "missing"}`);
   const axisMapping = boundary.axisMapping && typeof boundary.axisMapping === "object" ? boundary.axisMapping : {};
   if (axisMapping.X !== "length-mm") mismatches.push(`axisMapping.X: expected length-mm, got ${axisMapping.X ?? "missing"}`);
@@ -4712,6 +4726,10 @@ function createNativeCamTargetMachineBoundaryStatus(boundary) {
       ? `Native CAM 真实输出边界与目标三轴控制器+Y轴旋转夹具不一致：${mismatches.slice(0, 3).join("；")}`
       : "Native CAM 真实输出边界匹配目标三轴控制器+Y轴旋转夹具、wrapY 后处理和 4mm 25度平底尖刀。"
   };
+}
+
+function numbersClose(actual, expected, tolerance = 0.001) {
+  return Number.isFinite(Number(actual)) && Math.abs(Number(actual) - Number(expected)) <= tolerance;
 }
 
 function createToolpathFromAdapterReport(adapterReport, job, settings, selectedEngine) {
