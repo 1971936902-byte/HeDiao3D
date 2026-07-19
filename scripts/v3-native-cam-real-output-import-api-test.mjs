@@ -2,6 +2,47 @@
 import { createHash } from "node:crypto";
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
+
+const settings = {
+  lengthMm: 38,
+  diameterMm: 15,
+  blankLeftDiameterMm: 13.8,
+  blankLeftMidDiameterMm: 14.6,
+  blankCenterDiameterMm: 15,
+  blankRightMidDiameterMm: 14.6,
+  blankRightDiameterMm: 13.8,
+  depthMm: 1.25,
+  reliefAngleDeg: 360,
+  contrast: 1.45,
+  smoothPasses: 1,
+  invertDepth: false,
+  meshU: 180,
+  meshV: 120,
+  spindleRpm: 12000,
+  feedRate: 180,
+  safeZ: 22,
+  leftHoldMm: 2,
+  rightHoldMm: 2,
+  endTransitionMm: 1.2,
+  toolDiameter: 4,
+  stepoverDeg: 5,
+  stepoverMm: 0.28,
+  toolProfileId: "vflat-4mm-25deg",
+  materialProfileId: "olive-core",
+  machineProfileId: "desktop-3axis-rotary-y",
+  camMode: "rotaryWrap",
+  rotaryOutputAxis: "Y",
+  rotaryWrapPerRevolutionMm: 100,
+  meshLengthAxis: "auto",
+  meshAxisReverse: false,
+  maxCutDepth: 0.45,
+  stockAllowance: 0.08,
+  finishingStrategy: "x-scan",
+  generationMode: "active",
+  postProcessor: "wrapY"
+};
 
 async function main() {
   await getJson("/api/health");
@@ -173,12 +214,28 @@ async function main() {
     assert(readiness.gates?.blockers?.some((item) => /真实 CAM 生产候选证据.*CAMotics/.test(item)), "readiness should block production candidate CAM evidence without eligible CAMotics material-removal evidence");
   }
 
+  const created = await postJson("/api/orchestrator/jobs", { modelUrl, settings, engine: "auto" });
+  const job = await waitForJob(created.id);
+  assert(job.status === "completed", `job did not complete: ${job.status}`);
+  const prepared = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-cli-package`, {});
+  assert(prepared.ok === true, "CAMotics package prepare should refresh job-local Native CAM snapshot");
+  const snapshot = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/native-cam-real-output-snapshot.json`);
+  assert(snapshot.schema === "hediao3d.native-cam-real-output-snapshot.v1", "job-local Native CAM snapshot schema mismatch");
+  assert(snapshot.acceptance?.id === zipImported.id, "job-local Native CAM snapshot should bind latest imported acceptance id");
+  assert(snapshot.gateHints?.canSupportProductionCandidateReview === true, "job-local Native CAM snapshot should expose production candidate review support");
+  const reloadedJob = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
+  assert(reloadedJob.result?.summary?.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "native-cam-real-output-snapshot" && item.status === "pass"), "job evidence dossier should include passing Native CAM snapshot item");
+  assert(reloadedJob.result.summary.productionEvidenceDossier.crossChecks?.nativeCamRealOutputSnapshot?.acceptanceId === zipImported.id, "job evidence dossier should expose Native CAM snapshot acceptance id");
+  assert(reloadedJob.result.summary.deliveryManifest.files?.some((file) => file.filename === "native-cam-real-output-snapshot.json" && file.exists), "delivery manifest should expose Native CAM snapshot");
+  assert(reloadedJob.result.summary.packageIntegrity.files?.some((file) => file.filename === "native-cam-real-output-snapshot.json" && file.sha256), "package integrity should hash Native CAM snapshot");
+
   console.log(JSON.stringify({
     ok: true,
     importId: zipImported.id,
     readinessId: readiness.id,
     level: readiness.nativeCamRealOutputAcceptance.level,
-    candidates: readiness.nativeCamRealOutputAcceptance.productionCandidateCount
+    candidates: readiness.nativeCamRealOutputAcceptance.productionCandidateCount,
+    jobId: job.id
   }, null, 2));
 }
 
@@ -419,6 +476,16 @@ async function getJson(path) {
   const data = await response.json().catch(() => ({}));
   assert(response.ok, `${path} failed: ${response.status} ${data.error ?? ""}`);
   return data;
+}
+
+async function waitForJob(jobId) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const job = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(jobId)}`);
+    if (job.status === "completed" || job.status === "failed" || job.status === "canceled") return job;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`timed out waiting for job ${jobId}`);
 }
 
 async function postJson(path, body, expectOk = true) {

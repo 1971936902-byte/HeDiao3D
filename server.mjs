@@ -2043,6 +2043,39 @@ function readLatestNativeCamRealOutputAcceptanceSummary() {
   );
 }
 
+async function ensureNativeCamRealOutputSnapshotArtifact(job) {
+  if (!job?.workDir) return null;
+  const latest = readLatestNativeCamRealOutputAcceptanceSummary();
+  if (!latest) return null;
+  const snapshot = {
+    schema: "hediao3d.native-cam-real-output-snapshot.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    source: "latest-native-cam-real-output-acceptance",
+    productionUnlockEligible: false,
+    note: "Job-local snapshot only. It documents the Native CAM evidence visible to this package, but does not unlock production by itself.",
+    acceptance: latest,
+    artifacts: {
+      json: latest.id ? `/api/orchestrator/adapter-validation/${encodeURIComponent(latest.id)}/native-cam-real-output-acceptance.json` : null,
+      importJson: latest.id ? `/api/orchestrator/adapter-validation/${encodeURIComponent(latest.id)}/native-cam-real-output-import.json` : null
+    },
+    gateHints: {
+      level: latest.level ?? "missing",
+      sourceReportBindingStatus: latest.sourceReportBindingStatus ?? "missing",
+      targetMachineBoundaryStatus: latest.targetMachineBoundaryStatus?.status ?? "missing",
+      contactValidationStatus: latest.contactValidationStatus?.status ?? "missing",
+      productionCandidateCount: Number(latest.productionCandidateCount ?? 0),
+      canSupportProductionCandidateReview: latest.level === "ready"
+        && (!latest.sourceReportBindingRequired || latest.sourceReportBindingStatus === "matched")
+        && latest.targetMachineBoundaryStatus?.status === "matched"
+        && latest.contactValidationStatus?.status === "ready"
+    }
+  };
+  await writeFile(join(job.workDir, "native-cam-real-output-snapshot.json"), JSON.stringify(snapshot, null, 2), "utf8");
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "native-cam-real-output-snapshot.json"));
+  return snapshot;
+}
+
 function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) {
   const adapters = Array.isArray(report.adapters) ? report.adapters : [];
   const blockers = Array.isArray(report.blockers) ? report.blockers : [];
@@ -3249,6 +3282,12 @@ function createNativeCamRealOutputAcceptanceReadinessSummary(acceptance) {
     missingCount: Number(acceptance.missingCount ?? 0),
     sourceReportBindingStatus: acceptance.sourceReportBindingStatus ?? null,
     contactValidationStatus: createNativeCamContactValidationReadinessSummary(acceptance.contactValidationStatus),
+    contactValidation: acceptance.contactValidation ?? null,
+    runnerReadinessStatus: acceptance.runnerReadinessStatus ?? null,
+    runnerReadiness: acceptance.runnerReadiness ?? null,
+    openCamLibRealCandidateStatus: acceptance.openCamLibRealCandidateStatus ?? null,
+    openCamLibRealCandidate: acceptance.openCamLibRealCandidate ?? null,
+    sourceReportHandoffAudit: acceptance.sourceReportHandoffAudit ?? null,
     targetMachineBoundaryStatus: acceptance.targetMachineBoundaryStatus ?? null,
     apiArtifacts: acceptance.apiArtifacts ?? null
   };
@@ -9404,6 +9443,7 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
   const controllerDialectReport = readJsonFile(join(job.workDir, "controller-dialect-report.json"));
   const manufacturingSetupReport = readJsonFile(join(job.workDir, "manufacturing-setup-report.json"));
   const machineAcceptanceChecklist = readJsonFile(join(job.workDir, "machine-acceptance-checklist.json"));
+  const nativeCamRealOutputSnapshot = readJsonFile(join(job.workDir, "native-cam-real-output-snapshot.json"));
   if (!productionGate) return null;
   return createProductionEvidenceDossier({
     job,
@@ -9418,13 +9458,14 @@ function createProductionEvidenceDossierFromJobArtifacts(job, overrides = {}) {
     controllerDialectReport,
     manufacturingSetupReport,
     machineAcceptanceChecklist,
+    nativeCamRealOutputSnapshot,
     machineAcceptanceLog: overrides.machineAcceptanceLog ?? readJsonFile(join(job.workDir, "machine-acceptance-log.json")),
     trialFeedbackLog: overrides.trialFeedbackLog ?? readJsonFile(join(job.workDir, "trial-feedback-log.json")),
     processOptimizationPlan: overrides.processOptimizationPlan ?? readJsonFile(join(job.workDir, "process-optimization-plan.json"))
   });
 }
 
-function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, manufacturingSetupReport, machineAcceptanceChecklist, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
+function createProductionEvidenceDossier({ job, productionGate, productionUnlockMatrix, camHandoffQuality, neutralToolpathImportValidation = null, externalGcodeImportValidation = null, simulationSummary, ncStaticAnalysis, postprocessTraceReport, controllerDialectReport, manufacturingSetupReport, machineAcceptanceChecklist, nativeCamRealOutputSnapshot = null, machineAcceptanceLog = null, trialFeedbackLog = null, processOptimizationPlan = null }) {
   const simulationEvidence = productionGate?.simulationEvidence ?? createSimulationEvidence(simulationSummary);
   const camoticsIdentity = summarizeCamoticsEvidenceIdentity(simulationEvidence);
   const unlockRows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
@@ -9498,6 +9539,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       evidence: ["cam-handoff-quality.json", "adapter-report.json", "neutral-toolpath.json"],
       summary: camHandoffQuality?.summary ?? "未生成 CAM handoff 质量报告。"
     },
+    ...(nativeCamRealOutputSnapshot ? [{
+      id: "native-cam-real-output-snapshot",
+      label: "Native CAM真实输出快照",
+      status: nativeCamRealOutputSnapshot.gateHints?.canSupportProductionCandidateReview ? "pass" : nativeCamRealOutputSnapshot.gateHints?.level === "critical" ? "block" : "review",
+      evidence: ["native-cam-real-output-snapshot.json", "native-cam-real-output-acceptance.json", "native-cam-real-output-import.json"],
+      summary: nativeCamRealOutputSnapshot.gateHints?.canSupportProductionCandidateReview
+        ? `已记录 Native CAM 真实输出验收快照：${nativeCamRealOutputSnapshot.acceptance?.id ?? "unknown"}，机床边界和接触验证可用于生产候选复核。`
+        : `Native CAM 真实输出快照仍需复核：level=${nativeCamRealOutputSnapshot.gateHints?.level ?? "missing"} / source=${nativeCamRealOutputSnapshot.gateHints?.sourceReportBindingStatus ?? "missing"} / machine=${nativeCamRealOutputSnapshot.gateHints?.targetMachineBoundaryStatus ?? "missing"} / contact=${nativeCamRealOutputSnapshot.gateHints?.contactValidationStatus ?? "missing"}。`
+    }] : []),
     ...(hasNeutralToolpathImport ? [{
       id: "neutral-toolpath-import-validation",
       label: "Neutral刀位点导入校验",
@@ -9646,6 +9696,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camoticsUpstreamCamEvidenceStatus: camoticsIdentity.upstreamCamEvidenceStatus,
       camoticsUpstreamCamEvidence: camoticsIdentity.upstreamCamEvidence,
       camHandoffReady: camHandoffQuality?.level === "ready",
+      nativeCamRealOutputSnapshot: nativeCamRealOutputSnapshot ? {
+        artifact: "native-cam-real-output-snapshot.json",
+        acceptanceId: nativeCamRealOutputSnapshot.acceptance?.id ?? null,
+        level: nativeCamRealOutputSnapshot.gateHints?.level ?? "missing",
+        sourceReportBindingStatus: nativeCamRealOutputSnapshot.gateHints?.sourceReportBindingStatus ?? "missing",
+        targetMachineBoundaryStatus: nativeCamRealOutputSnapshot.gateHints?.targetMachineBoundaryStatus ?? "missing",
+        contactValidationStatus: nativeCamRealOutputSnapshot.gateHints?.contactValidationStatus ?? "missing",
+        canSupportProductionCandidateReview: Boolean(nativeCamRealOutputSnapshot.gateHints?.canSupportProductionCandidateReview)
+      } : null,
       neutralSourceBindingStatus: neutralBinding.required ? neutralBinding.bindingStatus : "not-required",
       neutralSourceBindingPass: !neutralBinding.required || neutralBinding.status === "pass",
       externalGcodeSourceBindingStatus: externalGcodeBinding.required ? externalGcodeBinding.bindingStatus : "not-required",
@@ -11851,6 +11910,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("cam-server-prep-checklist.md"),
         getFile("linux-cam-job-local-validation.json"),
         getFile("linux-cam-job-validation-import.json"),
+        getFile("native-cam-real-output-snapshot.json"),
         getFile("cam-engine-selection.json"),
         getFile("open-source-cam-execution-plan.json"),
         getFile("external-cam-recipe.json"),
@@ -12201,6 +12261,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
     createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
     createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
+    createDeliveryFile(job.id, "native-cam-real-output-snapshot.json", "Native CAM真实输出快照", "report", existsSync(join(job.workDir, "native-cam-real-output-snapshot.json")), "记录当前加工包引用的最新 Native CAM 真实输出验收摘要；仅用于复核，不单独解锁生产。"),
     createDeliveryFile(job.id, "open-source-cam-execution-plan.json", "开源CAM执行计划", "report", true, "绑定本次任务的 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 输入、输出、验收命令和生产边界。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
     createDeliveryFile(job.id, "cam-handoff-quality.json", "CAM Handoff 质量报告", "report", true, "统一检查外部/内置刀路来源、点数、轴覆盖、Z范围和 synthetic/fixture 风险。"),
@@ -12640,6 +12701,15 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
 async function refreshEvidenceDeliveryArtifacts(job) {
   if (!job?.workDir) return null;
   await refreshNextActionChecklistArtifact(job);
+  const nativeCamRealOutputSnapshot = await ensureNativeCamRealOutputSnapshotArtifact(job);
+  let refreshedProductionEvidenceDossier = null;
+  if (nativeCamRealOutputSnapshot && existsSync(join(job.workDir, "production-gate.json"))) {
+    const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job);
+    if (productionEvidenceDossier) {
+      await writeFile(join(job.workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+      refreshedProductionEvidenceDossier = productionEvidenceDossier;
+    }
+  }
   const manifestPath = join(job.workDir, "delivery-manifest.json");
   const existingManifest = readJsonFile(manifestPath);
   if (!existingManifest?.files) return null;
@@ -12660,6 +12730,7 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "opencamlib-candidate-package-bundle.zip", "OpenCAMLib候选包证据包", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip")), "OpenCAMLib 候选输出的轻量证据包，用于随 job 一起审计和交给 CAMotics/材料去除验证。"),
     createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
     createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
+    createDeliveryFile(job.id, "native-cam-real-output-snapshot.json", "Native CAM真实输出快照", "report", existsSync(join(job.workDir, "native-cam-real-output-snapshot.json")), "记录当前加工包引用的最新 Native CAM 真实输出验收摘要；仅用于复核，不单独解锁生产。"),
     createDeliveryFile(job.id, "camotics-cli-run-package.json", "CAMotics Linux运行包", "report", existsSync(join(job.workDir, "camotics-cli-run-package.json")), "Linux CAM 服务器执行前准备包，包含输入哈希、运动画像、命令和回填要求。"),
     createDeliveryFile(job.id, "camotics-result-template.json", "CAMotics结果回填模板", "report", existsSync(join(job.workDir, "camotics-result-template.json")), "真实 CAMotics 材料去除后按此模板填写 result JSON，再回填到 HeDiao3D。"),
     createDeliveryFile(job.id, "camotics-linux-run.sh", "CAMotics Linux运行脚本", "report", existsSync(join(job.workDir, "camotics-linux-run.sh")), "Linux CAM 服务器辅助脚本，仅用于打开/执行仿真准备流程，不解锁生产 NC。"),
@@ -12732,7 +12803,13 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.md"));
-  return { deliveryManifest, packageIntegrity, productionClosureAudit };
+  return {
+    deliveryManifest,
+    packageIntegrity,
+    productionClosureAudit,
+    productionEvidenceDossier: refreshedProductionEvidenceDossier ?? readJsonFile(join(job.workDir, "production-evidence-dossier.json")),
+    nativeCamRealOutputSnapshot
+  };
 }
 
 async function refreshNextActionChecklistArtifact(job) {
@@ -13666,6 +13743,9 @@ async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
         files: refreshedDelivery.packageIntegrity.files
       },
       productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
+    } : {}),
+    ...(refreshedDelivery?.productionEvidenceDossier ? {
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(refreshedDelivery.productionEvidenceDossier)
     } : {})
   };
   for (const filename of [
@@ -13750,6 +13830,9 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
         files: refreshedDelivery.packageIntegrity.files
       },
       productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
+    } : {}),
+    ...(refreshedDelivery?.productionEvidenceDossier ? {
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(refreshedDelivery.productionEvidenceDossier)
     } : {})
   };
   for (const filename of [
@@ -13829,6 +13912,9 @@ async function createOrchestratorCamoticsExecutionPreflight(jobId, res) {
         files: refreshedDelivery.packageIntegrity.files
       },
       productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
+    } : {}),
+    ...(refreshedDelivery?.productionEvidenceDossier ? {
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(refreshedDelivery.productionEvidenceDossier)
     } : {})
   };
   for (const filename of [
