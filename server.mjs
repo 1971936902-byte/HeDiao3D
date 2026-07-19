@@ -13664,7 +13664,8 @@ async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
         missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
         totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
         files: refreshedDelivery.packageIntegrity.files
-      }
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
     } : {})
   };
   for (const filename of [
@@ -13673,7 +13674,9 @@ async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
     "delivery-manifest.json",
     "operator-download-checklist.md",
     "package-integrity.json",
-    "next-action-checklist.md"
+    "next-action-checklist.md",
+    "production-closure-audit.json",
+    "production-closure-audit.md"
   ]) {
     pushIfArtifactExists(job, filename);
   }
@@ -13687,6 +13690,7 @@ async function importOrchestratorLinuxCamJobValidation(req, jobId, res) {
     productionUnlockEligible: false,
     deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
     packageIntegrity: refreshedDelivery?.packageIntegrity ?? null,
+    productionClosureAudit: refreshedDelivery?.productionClosureAudit ?? null,
     artifacts: {
       validation: publicArtifactUrl(safeJobId, "linux-cam-job-local-validation.json"),
       importAudit: publicArtifactUrl(safeJobId, "linux-cam-job-validation-import.json")
@@ -13744,7 +13748,8 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
         missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
         totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
         files: refreshedDelivery.packageIntegrity.files
-      }
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
     } : {})
   };
   for (const filename of [
@@ -13756,7 +13761,9 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
     "camotics-cli-package-report.json",
     "delivery-manifest.json",
     "operator-download-checklist.md",
-    "package-integrity.json"
+    "package-integrity.json",
+    "production-closure-audit.json",
+    "production-closure-audit.md"
   ]) {
     pushIfArtifactExists(job, filename);
   }
@@ -13776,7 +13783,8 @@ async function createOrchestratorCamoticsCliPackage(jobId, res) {
       report: publicArtifactUrl(safeJobId, "camotics-cli-package-report.json")
     },
     deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
-    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null
+    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null,
+    productionClosureAudit: refreshedDelivery?.productionClosureAudit ?? null
   });
 }
 
@@ -13819,7 +13827,8 @@ async function createOrchestratorCamoticsExecutionPreflight(jobId, res) {
         missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
         totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
         files: refreshedDelivery.packageIntegrity.files
-      }
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
     } : {})
   };
   for (const filename of [
@@ -13827,7 +13836,9 @@ async function createOrchestratorCamoticsExecutionPreflight(jobId, res) {
     "camotics-execution-preflight.md",
     "delivery-manifest.json",
     "operator-download-checklist.md",
-    "package-integrity.json"
+    "package-integrity.json",
+    "production-closure-audit.json",
+    "production-closure-audit.md"
   ]) {
     pushIfArtifactExists(job, filename);
   }
@@ -13842,7 +13853,8 @@ async function createOrchestratorCamoticsExecutionPreflight(jobId, res) {
       markdown: publicArtifactUrl(safeJobId, "camotics-execution-preflight.md")
     },
     deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
-    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null
+    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null,
+    productionClosureAudit: refreshedDelivery?.productionClosureAudit ?? null
   });
 }
 

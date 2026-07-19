@@ -84,6 +84,8 @@ async function main() {
   assert(prepared.report?.safetyLocks?.productionUnlockFromPreparePackage === false, "prepare package must not unlock production");
   assert(prepared.report?.preferredGcodeIdentity?.sha256 === previewSha256, "API report preview hash mismatch");
   assert(prepared.report?.preferredGcodeIdentity?.motionProfile?.motionLineCount === previewMotionProfile.motionLineCount, "API report motion count mismatch");
+  assert(prepared.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "prepare package response missing production closure audit");
+  assert(prepared.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "prepare package closure audit should include CAMotics material-removal step");
 
   const runPackage = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
   assert(runPackage.schema === "hediao3d.camotics-cli-run-package.v1", "run package schema mismatch");
@@ -146,6 +148,8 @@ async function main() {
   assert(preflight.report?.files?.runPackageExists === true, "preflight should see run package");
   assert(preflight.report?.files?.validatorExists === true, "preflight should see result validator");
   assert(Array.isArray(preflight.report?.nextActions), "preflight should expose next actions");
+  assert(preflight.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "preflight response missing production closure audit");
+  assert(preflight.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "preflight closure audit should include CAMotics material-removal step");
   const preflightMarkdown = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-execution-preflight.md`);
   assert(preflightMarkdown.includes("HeDiao3D CAMotics Execution Preflight"), "preflight markdown missing heading");
 
@@ -154,6 +158,8 @@ async function main() {
   assert(reloaded.result?.summary?.camoticsCliPackage?.operatorChecklist === "camotics-linux-operator-checklist.md", "job summary missing operator checklist");
   assert(reloaded.result?.summary?.camoticsCliPackage?.productionUnlockEligible === false, "summary must keep production unlock false");
   assert(reloaded.result?.summary?.camoticsExecutionPreflight?.artifact === "camotics-execution-preflight.json", "job summary missing CAMotics execution preflight");
+  assert(reloaded.result?.summary?.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary missing production closure audit after CAMotics prepare/preflight");
+  assert(reloaded.result.summary.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "job summary closure audit should include CAMotics material-removal step");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-cli-run-package.json" && file.exists), "delivery manifest missing run package");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-linux-operator-checklist.md" && file.exists), "delivery manifest missing operator checklist");
   assert(reloaded.result?.summary?.deliveryManifest?.files?.some((file) => file.filename === "camotics-result-validate.js" && file.exists), "delivery manifest missing result validator");
@@ -230,13 +236,18 @@ async function main() {
   assert(importedLinuxCamJobValidation.productionUnlockEligible === false, "Linux CAM job validation import must not unlock production");
   assert(importedLinuxCamJobValidation.validation?.level === "waiting-for-linux-evidence", "Linux CAM job validation import should preserve level");
   assert(importedLinuxCamJobValidation.artifacts?.validation?.endsWith("linux-cam-job-local-validation.json"), "Linux CAM job validation import should expose validation artifact");
+  assert(importedLinuxCamJobValidation.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "Linux CAM job validation response missing production closure audit");
+  assert(importedLinuxCamJobValidation.productionClosureAudit.steps?.some((step) => step.id === "native-cam-real-output"), "Linux CAM job validation closure audit should include external CAM step");
   const reloadedAfterLinuxCamJobValidation = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloadedAfterLinuxCamJobValidation.result?.summary?.linuxCamJobValidation?.level === "waiting-for-linux-evidence", "job summary should expose Linux CAM job validation");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.productionUnlockEligible === false, "job summary Linux CAM job validation must not unlock production");
+  assert(reloadedAfterLinuxCamJobValidation.result?.summary?.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary missing production closure audit after Linux CAM job validation import");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.productionClosureAudit.steps?.some((step) => step.id === "native-cam-real-output"), "job summary closure audit should include external CAM step after Linux validation import");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-local-validation.json" && file.exists), "delivery manifest should expose Linux CAM job local validation");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-validation-import.json" && file.exists), "delivery manifest should expose Linux CAM job validation import audit");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-job-local-validation.json" && file.sha256), "package integrity should hash Linux CAM job local validation");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-job-validation-import.json" && file.sha256), "package integrity should hash Linux CAM job validation import audit");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity should hash production closure audit after Linux validation import");
   const importedLinuxCamJobValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/linux-cam-job-local-validation.json`);
   assert(importedLinuxCamJobValidationArtifact.importedVia === "api-linux-cam-job-validation", "Linux CAM job validation artifact should record API import");
 
