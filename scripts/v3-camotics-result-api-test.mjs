@@ -127,6 +127,7 @@ async function main() {
   assert(resultArtifact.evidenceQuality?.inputIdentity?.cliRunPackage?.status === "matched", "camotics result should bind to current CLI run package");
   assert(["matched", "not-required"].includes(resultArtifact.evidenceQuality?.upstreamCamEvidence?.status), "camotics result should expose upstream CAM evidence binding status");
   assert(["matched", "not-required"].includes(resultArtifact.evidenceQuality?.upstreamCamEvidence?.machineFit?.status), "camotics result should expose upstream machine-fit evidence status");
+  assert(["matched", "not-required"].includes(resultArtifact.evidenceQuality?.upstreamCamEvidence?.materialRemovalReadiness?.status), "camotics result should expose upstream material readiness status");
   assert(resultArtifact.evidenceQuality?.motionConsistency?.status === "matched", "camotics result motion profile should match");
   assert(resultArtifact.evidenceQuality?.machineContext?.status === "matched", "camotics result machine context should match");
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");

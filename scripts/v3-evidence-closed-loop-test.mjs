@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
 const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
@@ -72,12 +74,19 @@ async function main() {
   assert(nativeCamImport.contactValidationStatus?.protectedZones?.status === "ready", "native CAM acceptance should expose ready protected-zone evidence");
   assert(nativeCamImport.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "native CAM import should preserve source ZIP");
 
+  const jobDir = join(process.cwd(), "public", "orchestrator-jobs", job.id);
+  writeFileSync(join(jobDir, "opencamlib-candidate-package-validation.json"), JSON.stringify(createCandidatePackageValidationFixture(), null, 2), "utf8");
+  writeFileSync(join(jobDir, "opencamlib-candidate-package-bundle.zip"), "PK evidence-closed-loop candidate package bundle", "utf8");
+  const prepared = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-cli-package`, {});
+  assert(prepared.ok === true, `CAMotics package refresh should succeed after job-local OpenCAMLib evidence: ${prepared.status}`);
+
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
   const previewSha256 = sha256(previewText);
   const previewMotionProfile = createPreviewMotionProfile(previewText);
   const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
   const runPackage = JSON.parse(runPackageText);
   const runPackageSha256 = sha256(runPackageText);
+  assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "run package should carry OpenCAMLib material readiness into CAMotics package");
 
   const camoticsImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({
@@ -103,12 +112,18 @@ async function main() {
   assert(["matched", "not-required"].includes(dossier.crossChecks?.camoticsUpstreamCamEvidenceStatus), "CAMotics upstream CAM evidence should be matched or not required");
   assert(dossier.crossChecks?.camoticsUpstreamCamEvidence?.status === dossier.crossChecks?.camoticsUpstreamCamEvidenceStatus, "dossier should expose CAMotics upstream evidence detail status");
   assert(typeof dossier.crossChecks?.camoticsUpstreamCamEvidence?.summary === "string", "dossier should expose CAMotics upstream evidence summary");
+  assert(dossier.crossChecks?.camoticsUpstreamCamEvidence?.materialRemovalReadiness?.status === "matched", "dossier should expose matched upstream material readiness");
+  assert(dossier.crossChecks?.camoticsUpstreamMaterialReadinessStatus === "matched", "dossier summary should expose upstream material readiness status");
+  assert(dossier.crossChecks?.camoticsUpstreamMaterialReadyForSimulation === true, "dossier summary should expose material readiness for simulation");
+  assert(dossier.crossChecks?.camoticsUpstreamMaterialResidualEvidenceReady === false, "dossier summary should preserve residual production boundary");
   assert(dossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "production package must remain locked without field acceptance and real external handoff");
   assert(dossier.status !== "production-evidence-complete", "dossier must remain incomplete before field evidence");
 
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next-action checklist should show verified CAMotics evidence");
   assert(nextActionChecklist.includes("CAMotics上游绑定:"), "next-action checklist should show CAMotics upstream binding");
+  assert(nextActionChecklist.includes("材料准备 可进仿真"), "next-action checklist should show CAMotics upstream material readiness");
+  assert(nextActionChecklist.includes("残料证据未闭合"), "next-action checklist should preserve residual evidence boundary");
   assert(nextActionChecklist.includes("Native CAM机型边界: matched"), "next-action checklist should show matched native CAM machine boundary");
   assert(nextActionChecklist.includes("Linux OpenCAMLib:"), "next-action checklist should show Linux OpenCAMLib offline evidence");
   assert(nextActionChecklist.includes("覆盖率 ready"), "next-action checklist should show ready OpenCAMLib path coverage");
@@ -127,8 +142,11 @@ async function main() {
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsInputIdentityStatus === "matched", "package index should expose refreshed CAMotics cross-checks");
   assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "package index should expose refreshed CAMotics machine context");
   assert(packageIndex.productionEvidenceDossier?.camoticsUpstreamCamEvidence?.status === packageIndex.productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidenceStatus, "package index should expose production dossier CAMotics upstream detail");
+  assert(packageIndex.productionEvidenceDossier?.camoticsUpstreamCamEvidence?.materialRemovalReadiness?.status === "matched", "package index should expose CAMotics upstream material readiness detail");
+  assert(packageIndex.productionEvidenceDossier?.crossChecks?.camoticsUpstreamMaterialReadyForSimulation === true, "package index should expose material readiness for simulation");
   assert(packageIndex.camotics?.upstreamEvidenceStatus === packageIndex.productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidenceStatus, "package index should expose CAMotics upstream status in camotics section");
   assert(packageIndex.camotics?.upstreamEvidence?.status === packageIndex.camotics?.upstreamEvidenceStatus, "package index should expose CAMotics upstream detail in camotics section");
+  assert(packageIndex.camotics?.upstreamEvidence?.materialRemovalReadiness?.status === "matched", "package index CAMotics section should expose upstream material readiness");
   assert(packageIndex.productionEvidenceDossier.crossChecks.productionReadinessAudit?.allowProductionPackage === false, "package index must keep production package locked");
   assert(packageIndex.productionEvidenceDossier?.missingEvidenceCount > 0, "package index should expose remaining production evidence gaps");
   assert(packageIndex.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose remaining field evidence gaps");
@@ -157,6 +175,9 @@ async function main() {
   assert(readiness.readinessCamoticsEvidence.productionEvidenceEligible === true, "readiness should mark latest job CAMotics evidence eligible");
   assert(readiness.readinessCamoticsEvidence.inputIdentityStatus === "matched", "readiness CAMotics evidence should preserve matched input identity");
   assert(readiness.readinessCamoticsEvidence.machineContextStatus === "matched", "readiness CAMotics evidence should preserve matched machine context");
+  assert(readiness.readinessCamoticsEvidence.upstreamMaterialReadinessStatus === "matched", "readiness CAMotics evidence should preserve upstream material readiness");
+  assert(readiness.readinessCamoticsEvidence.upstreamMaterialReadyForSimulation === true, "readiness CAMotics evidence should preserve material simulation readiness");
+  assert(readiness.readinessCamoticsEvidence.upstreamMaterialResidualEvidenceReady === false, "readiness CAMotics evidence should preserve residual production boundary");
   assert(readiness.latestEvidenceDossier?.jobId === job.id, "readiness should point to the refreshed closed-loop job");
   assert(readiness.latestEvidenceDossier.crossChecks?.realMaterialRemovalVerified === true, "readiness should expose verified material-removal evidence through latest job dossier");
   assert(readiness.latestEvidenceDossier.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "readiness must keep production locked until field evidence passes");
@@ -337,12 +358,43 @@ function createOpenCamLibRealCandidateFixture() {
       summary: "OpenCAMLib 刀路覆盖率达标：X 向和旋转/横向覆盖均通过。"
     },
     protectedZones: createProtectedZonesFixture(),
+    materialRemovalReadiness: createMaterialRemovalReadinessFixture(),
     candidatePackageLevel: "ready",
     candidatePackageBlockedReason: null,
     candidateReadyForImport: true,
     blockingCount: 0,
     firstBlocking: null,
     sha256: "evidence-closed-loop-opencamlib-real-candidate"
+  };
+}
+
+function createCandidatePackageValidationFixture() {
+  return {
+    schema: "hediao3d.opencamlib-candidate-package-validation.v1",
+    level: "ready",
+    handoffContract: { status: "ready-for-hediao3d-import" },
+    contactValidation: { level: "ready", evidenceClass: "production-candidate", checkCount: 27 },
+    artifactManifest: { readyForImport: true, evidenceClass: "production-candidate" },
+    machineFit: {
+      schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
+      level: "ok",
+      targetMachine: { controllerClass: "3axis-controller-with-rotary-fixture", rotaryOutputAxis: "Y", wrapPerRevolutionMm: 100, toolProfileId: "vflat-4mm-25deg" },
+      coverage: { pointCount: 231, rotarySpanDeg: 360, expectedRotaryCoverageDeg: 360, rotaryCoverageRatio: 1, depthMax: 0.8 },
+      riskCounts: { holdZonePointCount: 0, deepPointCount: 0, invalidPointCount: 0, missingRotaryCount: 0 }
+    },
+    materialRemovalReadiness: createMaterialRemovalReadinessFixture(),
+    summary: "Fixture OpenCAMLib candidate package is ready for CAMotics/equivalent material-removal validation."
+  };
+}
+
+function createMaterialRemovalReadinessFixture() {
+  return {
+    schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+    level: "ready-for-camotics-or-equivalent",
+    readyForMaterialRemovalSimulation: true,
+    productionResidualEvidenceReady: false,
+    missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
+    summary: "OpenCAMLib contact evidence is ready for CAMotics/equivalent material-removal simulation; residual production evidence remains open."
   };
 }
 

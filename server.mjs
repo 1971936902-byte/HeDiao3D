@@ -1865,6 +1865,11 @@ function createProductionEvidenceCrossChecksSummary(crossChecks) {
     camoticsMotionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
     camoticsMachineContextStatus: crossChecks.camoticsMachineContextStatus ?? "missing",
     camoticsArtifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
+    camoticsUpstreamCamEvidenceStatus: crossChecks.camoticsUpstreamCamEvidenceStatus ?? "not-required",
+    camoticsUpstreamCamEvidence: crossChecks.camoticsUpstreamCamEvidence ?? null,
+    camoticsUpstreamMaterialReadinessStatus: crossChecks.camoticsUpstreamCamEvidence?.materialRemovalReadiness?.status ?? "not-required",
+    camoticsUpstreamMaterialReadyForSimulation: Boolean(crossChecks.camoticsUpstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation),
+    camoticsUpstreamMaterialResidualEvidenceReady: Boolean(crossChecks.camoticsUpstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady),
     ncStaticReady: Boolean(crossChecks.ncStaticReady),
     controllerDialectReady: Boolean(crossChecks.controllerDialectReady),
     machineAcceptanceRecords: Number(crossChecks.machineAcceptanceRecords ?? 0),
@@ -1899,6 +1904,8 @@ function formatProductionEvidenceCrossChecksForReadiness(crossChecks) {
     `camoticsInput=${crossChecks.camoticsInputIdentityStatus ?? "missing"}`,
     `camoticsRunPackage=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"}`,
     `camoticsMotion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"}`,
+    `camoticsUpstream=${crossChecks.camoticsUpstreamCamEvidenceStatus ?? "not-required"}`,
+    `materialReady=${crossChecks.camoticsUpstreamMaterialReadyForSimulation ? "yes" : crossChecks.camoticsUpstreamMaterialReadinessStatus ?? "not-required"}`,
     `nc=${crossChecks.ncStaticReady && crossChecks.controllerDialectReady ? "ready" : "review"}`,
     `rotaryCalibration=${crossChecks.rotaryCalibrationPassed ? "pass" : crossChecks.rotaryCalibrationStatus ?? "missing"}`,
     `machine=${crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "accepted" : "locked"}`,
@@ -3130,6 +3137,7 @@ function createCamoticsImportContractPublicSummary(report, contractId) {
     motionConsistencyStatus: report.motionConsistencyStatus ?? report.evidenceQuality?.motionConsistency?.status ?? "missing",
     machineContextStatus: report.machineContextStatus ?? report.evidenceQuality?.machineContext?.status ?? "missing",
     evidenceQualityStatus: report.evidenceQualityStatus ?? report.evidenceQuality?.status ?? null,
+    evidenceQuality: report.evidenceQuality ?? null,
     adapterReport: report.adapterReport ?? null,
     camoticsResult: report.camoticsResult ?? null,
     outputRoot: report.outputRoot ?? null
@@ -3162,6 +3170,10 @@ function createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier
       motionConsistencyStatus: camoticsImport.motionConsistencyStatus ?? "missing",
       machineContextStatus: camoticsImport.machineContextStatus ?? "missing",
       artifactEvidenceStatus: camoticsImport.evidenceQualityStatus ?? "unknown",
+      upstreamCamEvidenceStatus: camoticsImport.evidenceQuality?.upstreamCamEvidence?.status ?? "not-required",
+      upstreamMaterialReadinessStatus: camoticsImport.evidenceQuality?.upstreamCamEvidence?.materialRemovalReadiness?.status ?? "not-required",
+      upstreamMaterialReadyForSimulation: Boolean(camoticsImport.evidenceQuality?.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation),
+      upstreamMaterialResidualEvidenceReady: Boolean(camoticsImport.evidenceQuality?.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady),
       summary: camoticsImport.productionEvidenceEligible
         ? "CAMotics 全局导入契约已达到材料去除证据标准。"
         : `CAMotics 全局导入契约未达到材料去除证据标准：${camoticsImport.status ?? "unknown"}。`
@@ -3185,6 +3197,10 @@ function createReadinessCamoticsEvidence({ camoticsImport, latestEvidenceDossier
     motionConsistencyStatus: "missing",
     machineContextStatus: "missing",
     artifactEvidenceStatus: "missing",
+    upstreamCamEvidenceStatus: "missing",
+    upstreamMaterialReadinessStatus: "missing",
+    upstreamMaterialReadyForSimulation: false,
+    upstreamMaterialResidualEvidenceReady: false,
     summary: "尚未找到 CAMotics 全局导入契约或最新 job 材料去除证据。"
   };
 }
@@ -3199,6 +3215,7 @@ function createReadinessCamoticsEvidenceFromLatestJob(latestEvidenceDossier) {
   const motionMatched = crossChecks.camoticsMotionConsistencyStatus === "matched";
   const machineMatched = crossChecks.camoticsMachineContextStatus === "matched";
   const artifactComplete = ["complete", "ready", "matched"].includes(crossChecks.camoticsArtifactEvidenceStatus);
+  const upstreamMaterial = crossChecks.camoticsUpstreamCamEvidence?.materialRemovalReadiness ?? null;
   const eligible = verified && inputMatched && cliMatched && motionMatched && machineMatched && artifactComplete;
   return {
     schema: "hediao3d.readiness-camotics-evidence.v1",
@@ -3216,6 +3233,10 @@ function createReadinessCamoticsEvidenceFromLatestJob(latestEvidenceDossier) {
     motionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
     machineContextStatus: crossChecks.camoticsMachineContextStatus ?? "missing",
     artifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
+    upstreamCamEvidenceStatus: crossChecks.camoticsUpstreamCamEvidenceStatus ?? "not-required",
+    upstreamMaterialReadinessStatus: upstreamMaterial?.status ?? "not-required",
+    upstreamMaterialReadyForSimulation: Boolean(upstreamMaterial?.readyForMaterialRemovalSimulation),
+    upstreamMaterialResidualEvidenceReady: Boolean(upstreamMaterial?.productionResidualEvidenceReady),
     summary: eligible
       ? `最新 job ${latestEvidenceDossier.jobId} 的 production-evidence-dossier 已包含可用 CAMotics 材料去除证据。`
       : `最新 job ${latestEvidenceDossier.jobId ?? "unknown"} 的 CAMotics 证据仍需复核：verified=${verified} / input=${crossChecks.camoticsInputIdentityStatus ?? "missing"} / cli=${crossChecks.camoticsCliRunPackageBindingStatus ?? "missing"} / motion=${crossChecks.camoticsMotionConsistencyStatus ?? "missing"} / machine=${crossChecks.camoticsMachineContextStatus ?? "missing"} / artifacts=${crossChecks.camoticsArtifactEvidenceStatus ?? "missing"}。`
@@ -9996,6 +10017,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       camoticsArtifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       camoticsUpstreamCamEvidenceStatus: camoticsIdentity.upstreamCamEvidenceStatus,
       camoticsUpstreamCamEvidence: camoticsIdentity.upstreamCamEvidence,
+      camoticsUpstreamMaterialReadinessStatus: camoticsIdentity.upstreamCamEvidence?.materialRemovalReadiness?.status ?? "not-required",
+      camoticsUpstreamMaterialReadyForSimulation: Boolean(camoticsIdentity.upstreamCamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation),
+      camoticsUpstreamMaterialResidualEvidenceReady: Boolean(camoticsIdentity.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady),
       camHandoffReady: camHandoffQuality?.level === "ready",
       nativeCamRealOutputSnapshot: nativeCamRealOutputSnapshot ? {
         artifact: "native-cam-real-output-snapshot.json",
@@ -12117,7 +12141,10 @@ function formatCamoticsUpstreamEvidenceLine(evidence) {
   const machineFit = evidence.machineFit
     ? ` / 机床适配 ${evidence.machineFit.level ?? evidence.machineFit.status ?? "missing"}`
     : "";
-  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}${machineFit}`;
+  const material = evidence.materialRemovalReadiness
+    ? ` / 材料准备 ${evidence.materialRemovalReadiness.readyForMaterialRemovalSimulation ? "可进仿真" : evidence.materialRemovalReadiness.status ?? "未就绪"} / 残料证据${evidence.materialRemovalReadiness.productionResidualEvidenceReady ? "已闭合" : "未闭合"}`
+    : "";
+  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}${machineFit}${material}`;
 }
 
 function createCamoticsPreviewGcode(points, settings, estimatedMinutes) {
