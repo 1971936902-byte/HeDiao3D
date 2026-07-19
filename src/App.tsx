@@ -7257,6 +7257,11 @@ export function App() {
                         <small>该准备包只用于仿真服务器；回填前先运行结果校验脚本，不会直接解锁生产 NC。</small>
                       </div>
                     )}
+                    {(v3Job.result.summary as any).linuxCamDepsInstallReport && (
+                      <small className={(v3Job.result.summary as any).linuxCamDepsInstallReport.status === "executed" || (v3Job.result.summary as any).linuxCamDepsInstallReport.status === "dry-run" ? "v3-inline-ok" : "v3-inline-warning"}>
+                        Linux依赖安装：{formatLinuxCamDepsInstallReport((v3Job.result.summary as any).linuxCamDepsInstallReport)}
+                      </small>
+                    )}
                     {(v3Job.result.summary as any).linuxCamJobPreflight && (
                       <small className={(v3Job.result.summary as any).linuxCamJobPreflight.level === "ready" || (v3Job.result.summary as any).linuxCamJobPreflight.level === "ready-with-warnings" ? "v3-inline-ok" : "v3-inline-warning"}>
                         Linux预检：{formatLinuxCamJobPreflight((v3Job.result.summary as any).linuxCamJobPreflight)}
@@ -9511,6 +9516,14 @@ function formatLinuxCamJobPreflight(preflight: any) {
   const resource = preflight.resourceProfile?.status ? `资源 ${preflight.resourceProfile.status}` : "";
   const install = preflight.installPlan?.status ? `安装 ${preflight.installPlan.status}` : "";
   return [level, passed, blockers, resource, install, preflight.summary].filter(Boolean).join(" · ");
+}
+
+function formatLinuxCamDepsInstallReport(report: any) {
+  if (!report || typeof report !== "object") return "未回填";
+  const status = report.status ?? "unknown";
+  const mode = report.mode != null ? `mode=${report.mode}` : "";
+  const commands = report.commandCount != null ? `命令 ${report.commandCount}` : "";
+  return [status, mode, commands, report.summary].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamEvidenceUploadReport(report: any) {
