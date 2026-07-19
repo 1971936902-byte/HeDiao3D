@@ -16514,12 +16514,13 @@ function getOrchestratorProductionPackage(jobId, res) {
   const manifest = readJsonFileSafe(join(workDir, "delivery-manifest.json"));
   const productionGate = readJsonFileSafe(join(workDir, "production-gate.json"));
   const evidenceDossier = readJsonFileSafe(join(workDir, "production-evidence-dossier.json"));
+  const productionClosureAudit = readJsonFileSafe(join(workDir, "production-closure-audit.json"));
   const productionAudit = evidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
   if (!manifest?.files?.length) {
     return json(res, 404, { error: "找不到 delivery-manifest.json，请先运行 V3 小闭环" });
   }
   if (evidenceDossier?.status !== "production-evidence-complete" || productionAudit?.allowProductionPackage !== true) {
-    const operatorGuidance = createLockedProductionPackageOperatorGuidance(safeJobId, manifest, productionGate, evidenceDossier, productionAudit);
+    const operatorGuidance = createLockedProductionPackageOperatorGuidance(safeJobId, manifest, productionGate, evidenceDossier, productionAudit, productionClosureAudit);
     return json(res, 423, {
       error: !manifest.allowProductionNc || productionGate?.allowProductionNc !== true
         ? "V3 正式生产包未解锁"
@@ -16529,6 +16530,12 @@ function getOrchestratorProductionPackage(jobId, res) {
       allowProductionNc: false,
       productionGateAllows: Boolean(manifest.allowProductionNc && productionGate?.allowProductionNc === true),
       dossierStatus: evidenceDossier?.status ?? "missing",
+      productionClosureAudit: productionClosureAudit ? {
+        schema: productionClosureAudit.schema,
+        status: productionClosureAudit.status,
+        summary: productionClosureAudit.summary,
+        nextActions: productionClosureAudit.nextActions ?? []
+      } : null,
       productionReadinessAudit: productionAudit ?? null,
       summary: productionAudit?.summary ?? evidenceDossier?.summary ?? productionGate?.summary ?? "缺少 production-evidence-dossier.json，无法证明真实 CAM、仿真、试雕反馈和机床验收均绑定同一加工包。",
       blockers: productionGate?.blockers ?? [],
@@ -16579,8 +16586,9 @@ function getOrchestratorProductionPackage(jobId, res) {
   res.end(zip);
 }
 
-function createLockedProductionPackageOperatorGuidance(jobId, manifest, productionGate, evidenceDossier, productionAudit) {
+function createLockedProductionPackageOperatorGuidance(jobId, manifest, productionGate, evidenceDossier, productionAudit, productionClosureAudit = null) {
   const missingEvidence = Array.isArray(evidenceDossier?.missingEvidence) ? evidenceDossier.missingEvidence : [];
+  const closureActions = Array.isArray(productionClosureAudit?.nextActions) ? productionClosureAudit.nextActions : [];
   const neverMachineFiles = Array.isArray(manifest?.files)
     ? manifest.files
       .filter((file) => file.filename === "camotics-preview.nc" || file.machineUse?.allowedOnMachine === false || file.machineUse?.class === "simulation-only-never-machine")
@@ -16601,9 +16609,24 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
       "machining-package-index.json",
       "production-gate.json",
       "production-evidence-dossier.json",
+      "production-closure-audit.json",
+      "production-closure-audit.md",
       "next-action-checklist.md",
       "package-integrity.json"
     ],
+    closureAudit: productionClosureAudit ? {
+      status: productionClosureAudit.status,
+      summary: productionClosureAudit.summary,
+      jsonUrl: `/orchestrator-jobs/${encodeURIComponent(jobId)}/production-closure-audit.json`,
+      markdownUrl: `/orchestrator-jobs/${encodeURIComponent(jobId)}/production-closure-audit.md`,
+      nextActions: closureActions.slice(0, 6).map((item) => ({
+        id: item.id,
+        title: item.title,
+        layer: item.layer,
+        action: item.action,
+        commandOrEndpoint: item.commandOrEndpoint
+      }))
+    } : null,
     allowedBeforeUnlock: [
       "下载安全试雕包。",
       "核验 package-integrity.json 与 operator-download-checklist.md。",
@@ -16619,7 +16642,7 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
     })),
     productionGateLevel: productionGate?.level ?? manifest?.packageLevel ?? "unknown",
     productionAuditAllowed: Boolean(productionAudit?.allowProductionPackage),
-    summary: "正式生产包被锁定时，先走安全试雕包和证据回填流程；不要把仿真文件或报告文件上机。"
+    summary: productionClosureAudit?.summary ?? "正式生产包被锁定时，先走安全试雕包和证据回填流程；不要把仿真文件或报告文件上机。"
   };
 }
 

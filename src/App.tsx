@@ -1037,6 +1037,47 @@ type V3OrchestratorJob = {
           evidence: string[];
         }>;
       };
+      productionClosureAudit?: {
+        schema: string;
+        status: string;
+        packageLevel: string;
+        allowProductionNc: boolean;
+        allowTrialNc: boolean;
+        passCount: number;
+        reviewCount: number;
+        blockCount: number;
+        summary: string;
+        machine?: {
+          axisInstruction?: string;
+          filePolicyArtifact?: string;
+        };
+        steps?: Array<{
+          id: string;
+          layer: string;
+          title: string;
+          status: "pass" | "review" | "block" | string;
+          summary: string;
+          operatorAction: string;
+          commandOrEndpoint: string;
+          requiredArtifacts: string[];
+        }>;
+        nextActions?: Array<{
+          id: string;
+          title: string;
+          layer: string;
+          action: string;
+          commandOrEndpoint: string;
+          requiredArtifacts: string[];
+        }>;
+        packageBinding?: {
+          packageIntegrityStatus: string;
+          requiredHashes?: Array<{
+            filename: string;
+            sha256: string | null;
+            bytes: number;
+          }>;
+        };
+      };
       trialFeedbackTemplate?: {
         schema: string;
         purpose: string;
@@ -2385,6 +2426,8 @@ export function App() {
     const byName = new Map(files.map((file) => [file.filename, file]));
     return [
       byName.get("machining-package-index.json"),
+      byName.get("production-closure-audit.json"),
+      byName.get("production-closure-audit.md"),
       byName.get("next-action-checklist.md"),
       byName.get("linux-cam-closed-loop-handoff.md"),
       byName.get("operator-runbook.md"),
@@ -7400,6 +7443,38 @@ export function App() {
                   ) : null}
                 </>
               )}
+              {v3Job?.result?.summary.productionClosureAudit && (
+                <>
+                  <small className={v3Job.result.summary.productionClosureAudit.status === "production-ready" ? "v3-inline-ok" : v3Job.result.summary.productionClosureAudit.blockCount > 0 ? "v3-inline-critical" : "v3-inline-warning"}>
+                    生产闭环审计：{formatProductionClosureStatus(v3Job.result.summary.productionClosureAudit.status)}
+                    {" · "}
+                    通过 {v3Job.result.summary.productionClosureAudit.passCount}
+                    {" · "}
+                    待闭环 {v3Job.result.summary.productionClosureAudit.reviewCount + v3Job.result.summary.productionClosureAudit.blockCount}
+                    {" · "}
+                    {v3Job.result.summary.productionClosureAudit.summary}
+                  </small>
+                  {v3Job.result.summary.productionClosureAudit.nextActions?.length ? (
+                    <div className="v3-evidence-grid compact">
+                      {v3Job.result.summary.productionClosureAudit.nextActions.slice(0, 5).map((item) => (
+                        <div className="warning" key={item.id} title={item.requiredArtifacts.join(", ")}>
+                          <span>{item.layer}</span>
+                          <strong>{item.title}</strong>
+                          <small>{item.action}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="v3-file-links compact">
+                    {findV3DeliveryFile(v3Job, "production-closure-audit.json")?.url && (
+                      <a href={findV3DeliveryFile(v3Job, "production-closure-audit.json")?.url} download>闭环审计JSON</a>
+                    )}
+                    {findV3DeliveryFile(v3Job, "production-closure-audit.md")?.url && (
+                      <a href={findV3DeliveryFile(v3Job, "production-closure-audit.md")?.url} download>闭环审计说明</a>
+                    )}
+                  </div>
+                </>
+              )}
               {v3Job?.result?.summary.machineAcceptanceLog && (
                 <small className={v3Job.result.summary.machineAcceptanceLog.allRequiredPassed ? "v3-inline-ok" : v3Job.result.summary.machineAcceptanceLog.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning"}>
                   机床验收：{v3Job.result.summary.machineAcceptanceLog.latestOutcome}
@@ -8691,6 +8766,13 @@ function formatEvidenceItemStatus(status: "pass" | "review" | "block") {
   return "复核";
 }
 
+function formatProductionClosureStatus(status: string) {
+  if (status === "production-ready") return "可生产复核";
+  if (status === "blocked") return "存在阻断";
+  if (status === "trial-closure-incomplete") return "试雕闭环未完成";
+  return status;
+}
+
 function createProductionCrossCheckTiles(crossChecks: NonNullable<NonNullable<TaskJob["result"]>["summary"]["productionEvidenceDossier"]>["crossChecks"]) {
   if (!crossChecks) return [];
   return [
@@ -9143,6 +9225,9 @@ function formatLockedProductionPackageGuidance(data: any) {
   const guidance = data?.operatorGuidance;
   const safeTrial = guidance?.safeTrialPackageUrl ? "先下载安全试雕包" : "先生成并下载安全试雕包";
   const evidenceReview = guidance?.evidenceReviewPackageUrl ? "可下载证据审查包复核缺口" : "";
+  const closure = guidance?.closureAudit
+    ? `生产闭环审计 ${formatProductionClosureStatus(guidance.closureAudit.status ?? "unknown")}：${guidance.closureAudit.nextActions?.[0]?.title ?? guidance.closureAudit.summary ?? "查看 production-closure-audit.md"}`
+    : "";
   const readFirst = Array.isArray(guidance?.readFirstFiles) && guidance.readFirstFiles.length
     ? `必读 ${guidance.readFirstFiles.slice(0, 4).join("、")}`
     : "必读 operator-download-checklist.md、machining-package-index.json、production-evidence-dossier.json";
@@ -9152,7 +9237,7 @@ function formatLockedProductionPackageGuidance(data: any) {
   const gap = Array.isArray(guidance?.evidenceGaps) && guidance.evidenceGaps[0]
     ? `证据缺口 ${guidance.evidenceGaps[0].label ?? guidance.evidenceGaps[0].id}: ${guidance.evidenceGaps[0].summary ?? guidance.evidenceGaps[0].status}`
     : data?.summary ?? data?.error ?? "生产证据尚未闭环";
-  return [safeTrial, evidenceReview, readFirst, neverRun, gap].filter(Boolean).join("；");
+  return [safeTrial, evidenceReview, closure, readFirst, neverRun, gap].filter(Boolean).join("；");
 }
 
 function createLockedProductionPackageTaskLinks(data: any) {
@@ -9163,6 +9248,9 @@ function createLockedProductionPackageTaskLinks(data: any) {
   }
   if (guidance?.evidenceReviewPackageUrl) {
     links.push({ label: "下载证据审查包", href: guidance.evidenceReviewPackageUrl, tone: "primary" });
+  }
+  if (guidance?.closureAudit?.markdownUrl) {
+    links.push({ label: "查看闭环审计", href: guidance.closureAudit.markdownUrl, tone: "warning" });
   }
   if (guidance?.productionPackageUrl) {
     links.push({ label: "重新检查生产包门禁", href: guidance.productionPackageUrl, tone: "warning" });

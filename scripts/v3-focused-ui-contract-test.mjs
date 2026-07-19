@@ -64,13 +64,23 @@ const checks = [
   },
   {
     id: "locked-production-guidance-visible",
-    ok: source.includes("formatLockedProductionPackageGuidance") && source.includes("operatorGuidance") && source.includes("先下载安全试雕包") && source.includes("禁止上机") && source.includes("证据缺口") && source.includes("可下载证据审查包复核缺口"),
+    ok: source.includes("formatLockedProductionPackageGuidance") && source.includes("operatorGuidance") && source.includes("先下载安全试雕包") && source.includes("禁止上机") && source.includes("证据缺口") && source.includes("可下载证据审查包复核缺口") && source.includes("生产闭环审计"),
     summary: "Focused UI should turn locked production-package responses into actionable safe-trial guidance."
   },
   {
     id: "locked-production-task-actions",
-    ok: source.includes("createLockedProductionPackageTaskLinks") && source.includes("actionLinks") && source.includes("下载安全试雕包") && source.includes("下载证据审查包") && source.includes("重新检查生产包门禁") && source.includes("task-event-action"),
+    ok: source.includes("createLockedProductionPackageTaskLinks") && source.includes("actionLinks") && source.includes("下载安全试雕包") && source.includes("下载证据审查包") && source.includes("查看闭环审计") && source.includes("重新检查生产包门禁") && source.includes("task-event-action"),
     summary: "Locked production-package warnings should persist actionable package links in the task timeline."
+  },
+  {
+    id: "production-closure-audit-visible",
+    ok: source.includes("productionClosureAudit")
+      && source.includes("production-closure-audit.json")
+      && source.includes("production-closure-audit.md")
+      && source.includes("闭环审计JSON")
+      && source.includes("闭环审计说明")
+      && source.includes("formatProductionClosureStatus"),
+    summary: "Focused CAM panel should expose production closure audit status, downloads, and next actions."
   },
   {
     id: "opencamlib-input-package-download",
