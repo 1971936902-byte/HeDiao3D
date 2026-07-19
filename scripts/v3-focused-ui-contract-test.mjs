@@ -86,6 +86,16 @@ const checks = [
     id: "linux-cam-job-validation-import",
     ok: source.includes("handleImportV3LinuxCamJobValidation") && source.includes("linux-cam-job-validation") && source.includes("linux-cam-job-local-validation.json") && source.includes("整单校验JSON") && source.includes("回填整单校验"),
     summary: "Focused operator UI should accept Linux CAM job local validation evidence after running the unified package."
+  },
+  {
+    id: "core-api-request-error-guidance",
+    ok: source.includes("function requestJson")
+      && source.includes("无法连接本地后端 API")
+      && source.includes('requestJson<{\n        modelUrl: string;')
+      && source.includes("requestJson<V3OrchestratorJob>")
+      && source.includes("requestJson<GeneratedToolpath>")
+      && source.includes("selectedAiProvider.name}任务创建失败"),
+    summary: "Core model import, V3 job creation, Mesh CAM and Meshy creation requests should share actionable API connection errors."
   }
 ];
 

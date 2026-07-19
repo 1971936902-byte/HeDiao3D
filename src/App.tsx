@@ -3673,13 +3673,15 @@ export function App() {
 
     try {
       const dataUrl = await fileToDataUrl(file);
-      const response = await fetch("/api/mesh/import", {
+      const data = await requestJson<{
+        modelUrl: string;
+        camModelUrl: string;
+        error?: string;
+      }>("/api/mesh/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, dataUrl })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "模型上传到本地 CAM 缓存失败");
+      }, "模型上传到本地 CAM 缓存失败");
       releaseImportedModelObjectUrl();
       setAiMeshUrl(data.modelUrl);
       setAiMeshStlUrl(data.camModelUrl);
@@ -3926,13 +3928,11 @@ export function App() {
 
     try {
       appendTaskJobLog(jobId, "提交 Orchestrator job。", 20);
-      const response = await fetch("/api/orchestrator/jobs", {
+      const data = await requestJson<V3OrchestratorJob>("/api/orchestrator/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ modelUrl: aiMeshStlUrl, settings, engine: "auto" })
-      });
-      const data = await response.json() as V3OrchestratorJob;
-      if (!response.ok) throw new Error(data.error ?? "V3 Orchestrator 小闭环失败");
+      }, "V3 Orchestrator 小闭环失败");
 
       setV3Job(data);
       appendTaskJobLog(jobId, `任务已创建：${data.id}`, 36);
@@ -4645,15 +4645,11 @@ export function App() {
       });
       try {
         appendTaskJobLog(jobId, "提交 Mesh CAM 采样请求。", 24);
-        const response = await fetch("/api/cam/mesh-toolpath", {
+        const data = await requestJson<GeneratedToolpath>("/api/cam/mesh-toolpath", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ stlUrl: aiMeshStlUrl, settings: meshCamSettings })
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error ?? "Mesh CAM 刀路生成失败");
-        }
+        }, "Mesh CAM 刀路生成失败");
         if (isTaskJobCanceled(jobId)) return;
         appendTaskJobLog(jobId, "服务端已返回刀路，正在写入预览和报告。", 86);
         setToolpath(data);
@@ -4889,19 +4885,19 @@ export function App() {
 
       setAiMeshStatus(`已提交 ${selectedAiProvider.name} 任务，等待排队`);
       appendTaskJobLog(jobId, "图片已转换，正在创建远端 AI 任务。", 32);
-      const createResponse = await fetch(selectedAiProvider.endpoint!, {
+      const createData = await requestJson<{
+        result?: string;
+        id?: string;
+        error?: string;
+        message?: string;
+      }>(selectedAiProvider.endpoint!, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image_urls: imageUrls,
           target_formats: selectedAiProvider.targetFormats
         })
-      });
-
-      const createData = await createResponse.json();
-      if (!createResponse.ok) {
-        throw new Error(createData.error ?? createData.message ?? `${selectedAiProvider.name}任务创建失败`);
-      }
+      }, `${selectedAiProvider.name}任务创建失败`);
 
       const taskId = createData.result ?? createData.id;
       if (!taskId) {
@@ -10919,11 +10915,36 @@ async function pollV3OrchestratorJob(jobId: string, onUpdate: (job: V3Orchestrat
   throw new Error("V3 Orchestrator 任务等待超时");
 }
 
+async function requestJson<T>(url: string, init: RequestInit, fallback: string): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    throw new Error(formatRequestError(error, fallback));
+  }
+
+  let data: unknown = null;
+  try {
+    data = await response.json();
+  } catch {
+    if (!response.ok) {
+      throw new Error(`${fallback}：HTTP ${response.status}`);
+    }
+    throw new Error(`${fallback}：后端返回内容不是有效 JSON。`);
+  }
+
+  if (!response.ok) {
+    const payload = data && typeof data === "object" ? data as { error?: string; message?: string; summary?: string } : {};
+    throw new Error(payload.summary ?? payload.error ?? payload.message ?? `${fallback}：HTTP ${response.status}`);
+  }
+  return data as T;
+}
+
 function formatRequestError(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
   const message = error.message || fallback;
   if (/failed to fetch|load failed|networkerror/i.test(message)) {
-    return `${fallback}：无法连接本地后端 API。请确认 8787 端口服务已启动，然后刷新页面重试。`;
+    return `${fallback}：无法连接本地后端 API。请确认 API 服务已启动（默认 8787；dev:v3 会自动选择可用端口），然后刷新页面重试。`;
   }
   return message;
 }
