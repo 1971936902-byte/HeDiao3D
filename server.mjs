@@ -14263,6 +14263,8 @@ async function importOrchestratorLinuxCamJobPreflight(req, jobId, res) {
     productionUnlockEligible: false,
     blockerCount: preflight.blockers.length,
     warningCount: preflight.warnings.length,
+    resourceStatus: preflight.resourceProfile?.status ?? null,
+    installPlanStatus: preflight.installPlan?.status ?? null,
     requiredCheckCount: preflight.requiredCheckCount,
     passedRequiredCheckCount: preflight.passedRequiredCheckCount,
     summary: preflight.summary
@@ -14288,6 +14290,8 @@ async function importOrchestratorLinuxCamJobPreflight(req, jobId, res) {
       summary: preflight.summary,
       blockerCount: preflight.blockers.length,
       warningCount: preflight.warnings.length,
+      resourceProfile: preflight.resourceProfile,
+      installPlan: preflight.installPlan,
       requiredCheckCount: preflight.requiredCheckCount,
       passedRequiredCheckCount: preflight.passedRequiredCheckCount,
       productionUnlockEligible: false,
@@ -14384,10 +14388,57 @@ function normalizeLinuxCamJobPreflight(value, jobId) {
     requiredCheckCount: Number.isFinite(Number(value.requiredCheckCount)) ? Number(value.requiredCheckCount) : checks.filter((check) => check.required).length,
     passedRequiredCheckCount: Number.isFinite(Number(value.passedRequiredCheckCount)) ? Number(value.passedRequiredCheckCount) : checks.filter((check) => check.required && check.ok).length,
     warningCount: Number.isFinite(Number(value.warningCount)) ? Number(value.warningCount) : warnings.length,
+    resourceProfile: normalizeLinuxCamResourceProfile(value.resourceProfile),
+    installPlan: normalizeLinuxCamInstallPlan(value.installPlan),
     blockers,
     warnings,
     checks,
     nextActions: Array.isArray(value.nextActions) ? value.nextActions.slice(0, 8).map((item) => String(item).slice(0, 300)) : []
+  };
+}
+
+function normalizeLinuxCamResourceProfile(value) {
+  if (!value || typeof value !== "object") return null;
+  const checks = Array.isArray(value.checks)
+    ? value.checks.slice(0, 20).map((check) => ({
+        id: typeof check?.id === "string" ? check.id.slice(0, 100) : null,
+        required: Boolean(check?.required),
+        ok: Boolean(check?.ok),
+        status: typeof check?.status === "string" ? check.status.slice(0, 80) : null,
+        value: Number.isFinite(Number(check?.value)) ? Number(check.value) : null,
+        unit: typeof check?.unit === "string" ? check.unit.slice(0, 20) : null,
+        summary: typeof check?.summary === "string" ? check.summary.slice(0, 300) : null
+      }))
+    : [];
+  return {
+    schema: "hediao3d.v3-linux-cam-resource-profile.v1",
+    cpuCores: Number.isFinite(Number(value.cpuCores)) ? Number(value.cpuCores) : null,
+    memoryGb: Number.isFinite(Number(value.memoryGb)) ? Number(value.memoryGb) : null,
+    diskAvailableGb: Number.isFinite(Number(value.diskAvailableGb)) ? Number(value.diskAvailableGb) : null,
+    recommended: value.recommended && typeof value.recommended === "object"
+      ? {
+          cpuCores: Number.isFinite(Number(value.recommended.cpuCores)) ? Number(value.recommended.cpuCores) : 4,
+          memoryGb: Number.isFinite(Number(value.recommended.memoryGb)) ? Number(value.recommended.memoryGb) : 8,
+          diskAvailableGb: Number.isFinite(Number(value.recommended.diskAvailableGb)) ? Number(value.recommended.diskAvailableGb) : 10
+        }
+      : { cpuCores: 4, memoryGb: 8, diskAvailableGb: 10 },
+    status: typeof value.status === "string" ? value.status.slice(0, 80) : null,
+    checks
+  };
+}
+
+function normalizeLinuxCamInstallPlan(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    schema: "hediao3d.v3-linux-cam-install-plan.v1",
+    distroFamily: typeof value.distroFamily === "string" ? value.distroFamily.slice(0, 160) : null,
+    status: typeof value.status === "string" ? value.status.slice(0, 80) : null,
+    aptPackages: Array.isArray(value.aptPackages) ? value.aptPackages.slice(0, 40).map((item) => String(item).slice(0, 80)) : [],
+    commands: Array.isArray(value.commands) ? value.commands.slice(0, 20).map((item) => String(item).slice(0, 300)) : [],
+    manualActions: Array.isArray(value.manualActions) ? value.manualActions.slice(0, 20).map((item) => String(item).slice(0, 300)) : [],
+    resourceActions: Array.isArray(value.resourceActions) ? value.resourceActions.slice(0, 20).map((item) => String(item).slice(0, 300)) : [],
+    productionUnlockEligible: false,
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
   };
 }
 
@@ -17793,6 +17844,8 @@ function createLinuxCamJobPackageReadme(manifest) {
     "",
     "## 推荐执行顺序",
     "",
+    "先运行预检；如果 `linux-cam-job-preflight.json` 显示 blocked，优先查看其中的 `installPlan` 和 `resourceProfile`。",
+    "",
     "最快路径：",
     "",
     "```bash",
@@ -17975,6 +18028,64 @@ function createLinuxCamJobPreflightScript(manifest) {
     "  return { id: `native:${filename}`, type: 'native-cam-script', filename, nativeDir, required: true, status: existsSync(fullPath) ? 'present' : 'missing', ok: existsSync(fullPath) };",
     "}",
     "",
+    "function shellNumber(command) {",
+    "  if (process.platform === 'win32') return null;",
+    "  const result = spawnSync('sh', ['-lc', command], { encoding: 'utf8', timeout: 5000 });",
+    "  if (result.status !== 0) return null;",
+    "  const value = Number(String(result.stdout ?? '').trim().split(/\\s+/)[0]);",
+    "  return Number.isFinite(value) ? value : null;",
+    "}",
+    "",
+    "function createResourceProfile() {",
+    "  const cpuCores = process.platform === 'win32' ? Number(process.env.NUMBER_OF_PROCESSORS ?? 0) || null : shellNumber('nproc');",
+    "  const memTotalKb = process.platform === 'win32' ? null : shellNumber(\"awk '/MemTotal/ {print $2}' /proc/meminfo\");",
+    "  const diskAvailableKb = process.platform === 'win32' ? null : shellNumber(`df -Pk ${JSON.stringify(process.cwd())} | awk 'NR==2 {print $4}'`);",
+    "  const memoryGb = memTotalKb ? Math.round((memTotalKb / 1024 / 1024) * 10) / 10 : null;",
+    "  const diskAvailableGb = diskAvailableKb ? Math.round((diskAvailableKb / 1024 / 1024) * 10) / 10 : null;",
+    "  const checks = [",
+    "    { id: 'cpu-min-4-core', required: false, ok: cpuCores == null || cpuCores >= 4, status: cpuCores == null ? 'unknown' : cpuCores >= 4 ? 'ok' : 'low', value: cpuCores, summary: 'Recommended minimum is 4 CPU cores for mesh CAM and simulation.' },",
+    "    { id: 'memory-min-8gb', required: false, ok: memoryGb == null || memoryGb >= 8, status: memoryGb == null ? 'unknown' : memoryGb >= 8 ? 'ok' : 'low', value: memoryGb, unit: 'GB', summary: 'Recommended minimum is 8GB RAM; large Meshy GLB/STL jobs may need more.' },",
+    "    { id: 'disk-free-min-10gb', required: false, ok: diskAvailableGb == null || diskAvailableGb >= 10, status: diskAvailableGb == null ? 'unknown' : diskAvailableGb >= 10 ? 'ok' : 'low', value: diskAvailableGb, unit: 'GB', summary: 'Recommended free disk space is 10GB for bundles, STL meshes and CAMotics outputs.' }",
+    "  ];",
+    "  return {",
+    "    schema: 'hediao3d.v3-linux-cam-resource-profile.v1',",
+    "    cpuCores,",
+    "    memoryGb,",
+    "    diskAvailableGb,",
+    "    recommended: { cpuCores: 4, memoryGb: 8, diskAvailableGb: 10 },",
+    "    status: checks.some((check) => check.status === 'low') ? 'below-recommended' : checks.some((check) => check.status === 'unknown') ? 'partial' : 'ok',",
+    "    checks",
+    "  };",
+    "}",
+    "",
+    "function createInstallPlan(checks, resourceProfile) {",
+    "  const byId = new Map(checks.map((check) => [check.id, check]));",
+    "  const missing = (id) => byId.get(id) && !byId.get(id).ok;",
+    "  const aptPackages = ['nodejs', 'npm', 'python3', 'python3-pip', 'python3-venv', 'zip', 'unzip'];",
+    "  if (missing('camotics-cli')) aptPackages.push('camotics');",
+    "  if (missing('freecadcmd-cli')) aptPackages.push('freecad');",
+    "  if (missing('blender-cli')) aptPackages.push('blender');",
+    "  const manual = [];",
+    "  if (missing('opencamlib-python')) manual.push('python3 -m pip install --user opencamlib || python3 -m pip install --user ocl');",
+    "  if (missing('native:native-cam-server-package-self-check.mjs') || missing('native:opencamlib-real-candidate-run.mjs') || missing('native:native-cam-real-output-check.sh')) manual.push('Download/extract HeDiao3D Native CAM server package and export HEDIAO3D_NATIVE_CAM_SERVER_DIR=/path/to/hediao3d-native-cam-server');",
+    "  const resourceActions = resourceProfile.checks.filter((check) => check.status === 'low').map((check) => `${check.id}: ${check.summary}`);",
+    "  const commands = [",
+    "    `sudo apt-get update && sudo apt-get install -y ${Array.from(new Set(aptPackages)).join(' ')}`,",
+    "    ...manual",
+    "  ];",
+    "  return {",
+    "    schema: 'hediao3d.v3-linux-cam-install-plan.v1',",
+    "    distroFamily: 'debian-ubuntu-first; adapt manually for other Linux distributions',",
+    "    status: checks.some((check) => check.required && !check.ok) ? 'required-actions' : resourceActions.length ? 'resource-review' : 'ready',",
+    "    aptPackages: Array.from(new Set(aptPackages)),",
+    "    commands,",
+    "    manualActions: manual,",
+    "    resourceActions,",
+    "    productionUnlockEligible: false,",
+    "    summary: checks.some((check) => check.required && !check.ok) ? 'Install missing required CAM/CAMotics/OpenCAMLib/Native CAM dependencies, then rerun preflight.' : 'Required runtime checks passed; continue with real CAM/CAMotics execution.'",
+    "  };",
+    "}",
+    "",
     "const checks = [",
     "  commandCheck('node-runtime', 'node', ['--version'], true),",
     "  commandCheck('python3-runtime', 'python3', ['--version'], false),",
@@ -17997,6 +18108,8 @@ function createLinuxCamJobPreflightScript(manifest) {
     "const required = checks.filter((check) => check.required);",
     "const blockers = required.filter((check) => !check.ok).map((check) => `${check.id}:${check.status}`);",
     "const warnings = checks.filter((check) => !check.required && !check.ok).map((check) => `${check.id}:${check.status}`);",
+    "const resourceProfile = createResourceProfile();",
+    "const installPlan = createInstallPlan(checks, resourceProfile);",
     "const report = {",
     "  schema: 'hediao3d.v3-linux-cam-job-preflight.v1',",
     "  jobId: manifest.jobId,",
@@ -18012,6 +18125,8 @@ function createLinuxCamJobPreflightScript(manifest) {
     "  requiredCheckCount: required.length,",
     "  passedRequiredCheckCount: required.filter((check) => check.ok).length,",
     "  warningCount: warnings.length,",
+    "  resourceProfile,",
+    "  installPlan,",
     "  blockers,",
     "  warnings,",
     "  checks,",

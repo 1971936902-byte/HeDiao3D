@@ -9508,7 +9508,9 @@ function formatLinuxCamJobPreflight(preflight: any) {
     ? `必检 ${preflight.passedRequiredCheckCount}/${preflight.requiredCheckCount}`
     : "";
   const blockers = preflight.blockerCount != null ? `阻断 ${preflight.blockerCount}` : "";
-  return [level, passed, blockers, preflight.summary].filter(Boolean).join(" · ");
+  const resource = preflight.resourceProfile?.status ? `资源 ${preflight.resourceProfile.status}` : "";
+  const install = preflight.installPlan?.status ? `安装 ${preflight.installPlan.status}` : "";
+  return [level, passed, blockers, resource, install, preflight.summary].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamEvidenceUploadReport(report: any) {

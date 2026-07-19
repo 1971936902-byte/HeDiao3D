@@ -261,6 +261,8 @@ async function main() {
   assert(linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-job-preflight.v1"), "Linux CAM job preflight missing schema");
   assert(linuxCamJobPreflight.includes("HEDIAO3D_NATIVE_CAM_SERVER_DIR"), "Linux CAM job preflight should check Native CAM server dir");
   assert(linuxCamJobPreflight.includes("opencamlib-python") && linuxCamJobPreflight.includes("camotics-cli"), "Linux CAM job preflight should check OpenCAMLib and CAMotics");
+  assert(linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-resource-profile.v1") && linuxCamJobPreflight.includes("hediao3d.v3-linux-cam-install-plan.v1"), "Linux CAM job preflight should emit resource profile and install plan");
+  assert(linuxCamJobReadme.includes("installPlan") && linuxCamJobReadme.includes("resourceProfile"), "Linux CAM job README should direct operators to installPlan/resourceProfile");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-local-validation.v1"), "Linux CAM job validator missing local validation schema");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-evidence-status.v1"), "Linux CAM job validator missing evidence status schema");
   assert(linuxCamJobValidator.includes("hediao3d.v3-linux-cam-job-upload-plan.v1"), "Linux CAM job validator missing upload plan schema");
@@ -288,16 +290,24 @@ async function main() {
   assert(preflightReport.productionUnlockEligible === false, "Linux CAM job preflight must not unlock production");
   assert(preflightReport.checks?.some((check) => check.id === "opencamlib-python"), "Linux CAM job preflight should report OpenCAMLib module check");
   assert(preflightReport.checks?.some((check) => check.id === "camotics-cli"), "Linux CAM job preflight should report CAMotics check");
+  assert(preflightReport.resourceProfile?.schema === "hediao3d.v3-linux-cam-resource-profile.v1", "Linux CAM job preflight should include resource profile");
+  assert(preflightReport.resourceProfile?.recommended?.memoryGb === 8, "Linux CAM job preflight should recommend 8GB RAM");
+  assert(preflightReport.installPlan?.schema === "hediao3d.v3-linux-cam-install-plan.v1", "Linux CAM job preflight should include install plan");
+  assert(preflightReport.installPlan?.commands?.some((command) => command.includes("apt-get install")), "Linux CAM job preflight install plan should include apt install guidance");
   const importedPreflight = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-job-preflight`, {
     preflight: preflightReport,
     sourceName: "linux-cam-job-preflight.json"
   });
   assert(importedPreflight.ok === true, "Linux CAM job preflight import should succeed");
   assert(importedPreflight.preflight?.schema === "hediao3d.v3-linux-cam-job-preflight.v1", "Linux CAM job preflight import should preserve schema");
+  assert(importedPreflight.preflight?.resourceProfile?.schema === "hediao3d.v3-linux-cam-resource-profile.v1", "Linux CAM job preflight import should preserve resource profile");
+  assert(importedPreflight.preflight?.installPlan?.schema === "hediao3d.v3-linux-cam-install-plan.v1", "Linux CAM job preflight import should preserve install plan");
   assert(importedPreflight.preflight?.productionUnlockEligible === false, "Linux CAM job preflight import must not unlock production");
   assert(importedPreflight.importAudit?.schema === "hediao3d.v3-linux-cam-job-preflight-import.v1", "Linux CAM job preflight import should write audit schema");
   const reloadedAfterPreflight = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloadedAfterPreflight.result?.summary?.linuxCamJobPreflight?.level === preflightReport.level, "job summary should expose Linux CAM preflight");
+  assert(reloadedAfterPreflight.result.summary.linuxCamJobPreflight.resourceProfile?.schema === "hediao3d.v3-linux-cam-resource-profile.v1", "job summary should expose preflight resource profile");
+  assert(reloadedAfterPreflight.result.summary.linuxCamJobPreflight.installPlan?.schema === "hediao3d.v3-linux-cam-install-plan.v1", "job summary should expose preflight install plan");
   assert(reloadedAfterPreflight.result.summary.linuxCamJobPreflight.productionUnlockEligible === false, "job summary preflight must not unlock production");
   assert(reloadedAfterPreflight.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-preflight.json" && file.exists), "delivery manifest should expose Linux CAM job preflight");
   assert(reloadedAfterPreflight.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-preflight-import.json" && file.exists), "delivery manifest should expose Linux CAM job preflight import audit");
