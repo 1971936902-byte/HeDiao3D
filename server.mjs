@@ -2930,6 +2930,9 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       productionEvidenceEligible: Boolean(chain.camotics?.productionEvidenceEligible),
       upstreamEvidenceRequired: Boolean(chain.camotics?.upstreamEvidenceRequired),
       upstreamEvidenceStatus: chain.camotics?.upstreamEvidenceStatus ?? "missing",
+      upstreamMaterialReadinessStatus: chain.camotics?.upstreamMaterialReadinessStatus ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.status ?? "not-required",
+      upstreamMaterialReadyForSimulation: Boolean(chain.camotics?.upstreamMaterialReadyForSimulation ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation),
+      upstreamMaterialResidualEvidenceReady: Boolean(chain.camotics?.upstreamMaterialResidualEvidenceReady ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady),
       upstreamEvidence: chain.camotics?.upstreamEvidence && typeof chain.camotics.upstreamEvidence === "object"
         ? {
             required: Boolean(chain.camotics.upstreamEvidence.required),
@@ -2941,6 +2944,7 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
             mismatchCount: Number(chain.camotics.upstreamEvidence.mismatchCount ?? 0),
             candidatePackageValidationBound: Boolean(chain.camotics.upstreamEvidence.candidatePackageValidationBound),
             candidatePackageBundleBound: Boolean(chain.camotics.upstreamEvidence.candidatePackageBundleBound),
+            materialRemovalReadiness: chain.camotics.upstreamEvidence.materialRemovalReadiness ?? null,
             files: Array.isArray(chain.camotics.upstreamEvidence.files)
               ? chain.camotics.upstreamEvidence.files.slice(0, 12).map((file) => ({
                   key: file.key ?? null,
@@ -2958,6 +2962,7 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       camoticsValidationStep: chain.crossChecks?.camoticsValidationStep ?? "missing",
       candidatePackageStep: chain.crossChecks?.candidatePackageStep ?? "missing",
       camoticsUpstreamEvidenceMatched: Boolean(chain.crossChecks?.camoticsUpstreamEvidenceMatched),
+      camoticsUpstreamMaterialReadinessMatched: Boolean(chain.crossChecks?.camoticsUpstreamMaterialReadinessMatched),
       materialRemovalBoundToUpstreamCam: Boolean(chain.crossChecks?.materialRemovalBoundToUpstreamCam)
     }
   };

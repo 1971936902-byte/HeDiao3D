@@ -1247,6 +1247,8 @@ function createEvidenceChain(root, steps) {
     ?? camoticsResult?.evidenceQuality?.upstreamCamEvidence?.status
     ?? (upstreamRequired ? "missing" : "not-required");
   const upstreamEvidenceSummary = summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsResult, camoticsRunPackage });
+  const upstreamMaterialReadiness = upstreamEvidenceSummary?.materialRemovalReadiness ?? null;
+  const upstreamMaterialReady = !upstreamRequired || upstreamMaterialReadiness?.status === "matched" || upstreamMaterialReadiness?.status === "not-required";
   const nativeReady = nativeAcceptance?.level === "ready";
   const contactReady = nativeAcceptance?.contactValidation?.level === "ready"
     || nativeAcceptance?.contactValidationStatus?.status === "ready"
@@ -1291,7 +1293,8 @@ function createEvidenceChain(root, steps) {
     ?? null;
   const camoticsReady = camoticsLocalValidation?.ok === true
     && camoticsLocalValidation?.productionEvidenceEligible === true
-    && (!upstreamRequired || upstreamStatus === "matched");
+    && (!upstreamRequired || upstreamStatus === "matched")
+    && upstreamMaterialReady;
   const blocking = [];
   if (!selfCheckOnly && nativeStep?.required && nativeStep.status === "pass" && !nativeReady) {
     blocking.push({ id: "native-cam-real-output-ready", required: true, status: nativeAcceptance?.level ?? "missing", summary: "native-cam-real-output-acceptance.json is not ready." });
@@ -1300,7 +1303,7 @@ function createEvidenceChain(root, steps) {
     blocking.push({ id: "opencamlib-contact-validation-ready", required: true, status: "missing-or-not-ready", summary: "OpenCAMLib strict contact validation is not ready or not bound." });
   }
   if (!selfCheckOnly && camoticsStep?.required && camoticsStep.status === "pass" && !camoticsReady) {
-    blocking.push({ id: "camotics-material-removal-ready", required: true, status: camoticsLocalValidation?.level ?? "missing", summary: "CAMotics local validation is not productionEvidenceEligible or upstream evidence is not matched." });
+    blocking.push({ id: "camotics-material-removal-ready", required: true, status: camoticsLocalValidation?.level ?? "missing", summary: "CAMotics local validation is not productionEvidenceEligible, upstream evidence is not matched, or upstream material-readiness is not ready for material-removal simulation." });
   }
   if (!selfCheckOnly && candidatePackageStep?.required && candidatePackageStep.status === "pass" && !candidatePackageReadyForImport) {
     blocking.push({ id: "opencamlib-candidate-package-ready", required: true, status: candidatePackageLevel, summary: candidatePackageBlockedReason || "OpenCAMLib candidate package validation is not ready for HeDiao3D import." });
@@ -1342,6 +1345,9 @@ function createEvidenceChain(root, steps) {
       productionEvidenceEligible: Boolean(camoticsLocalValidation?.productionEvidenceEligible),
       upstreamEvidenceRequired: upstreamRequired,
       upstreamEvidenceStatus: upstreamStatus,
+      upstreamMaterialReadinessStatus: upstreamMaterialReadiness?.status ?? "not-required",
+      upstreamMaterialReadyForSimulation: Boolean(upstreamMaterialReadiness?.readyForMaterialRemovalSimulation),
+      upstreamMaterialResidualEvidenceReady: Boolean(upstreamMaterialReadiness?.productionResidualEvidenceReady),
       upstreamEvidence: upstreamEvidenceSummary,
       simulator: camoticsLocalValidation?.simulator ?? camoticsResult?.simulator ?? null
     },
@@ -1350,6 +1356,7 @@ function createEvidenceChain(root, steps) {
       camoticsValidationStep: camoticsStep?.status ?? "missing",
       candidatePackageStep: candidatePackageStep?.status ?? "missing",
       camoticsUpstreamEvidenceMatched: !upstreamRequired || upstreamStatus === "matched",
+      camoticsUpstreamMaterialReadinessMatched: upstreamMaterialReady,
       materialRemovalBoundToUpstreamCam: camoticsReady
     },
     blocking
@@ -1382,6 +1389,7 @@ function summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsRe
   });
   const matchedCount = files.filter((file) => file.matched).length;
   const hasMatchedKey = (key) => files.some((file) => file.key === key && file.matched);
+  const materialRemovalReadiness = summarizeUpstreamMaterialReadiness(validation?.materialRemovalReadiness, imported?.materialRemovalReadiness, expected?.materialRemovalReadiness);
   return {
     required,
     status,
@@ -1392,7 +1400,45 @@ function summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsRe
     mismatchCount: Math.max(files.length - matchedCount, 0),
     candidatePackageValidationBound: hasMatchedKey("opencamlibCandidatePackageValidation"),
     candidatePackageBundleBound: hasMatchedKey("opencamlibCandidatePackageBundle"),
+    materialRemovalReadiness,
     files
+  };
+}
+
+function summarizeUpstreamMaterialReadiness(validationReadiness, importedReadiness, expectedReadiness) {
+  const source = validationReadiness && typeof validationReadiness === "object"
+    ? validationReadiness
+    : importedReadiness && typeof importedReadiness === "object"
+      ? importedReadiness
+      : expectedReadiness && typeof expectedReadiness === "object"
+        ? expectedReadiness
+        : null;
+  if (!source) {
+    return {
+      required: false,
+      status: "not-required",
+      level: "missing",
+      readyForMaterialRemovalSimulation: false,
+      productionResidualEvidenceReady: false,
+      missingForProduction: [],
+      summary: "No upstream OpenCAMLib material-removal readiness was captured."
+    };
+  }
+  const imported = source.imported && typeof source.imported === "object" ? source.imported : null;
+  const level = source.importedLevel ?? imported?.level ?? source.level ?? "missing";
+  const missingForProduction = Array.isArray(source.missingForProduction)
+    ? source.missingForProduction
+    : Array.isArray(imported?.missingForProduction)
+      ? imported.missingForProduction
+      : [];
+  return {
+    required: Boolean(source.required ?? expectedReadiness),
+    status: source.status ?? (source.ok === true ? "matched" : source.readyForMaterialRemovalSimulation ? "matched" : "mismatch"),
+    level,
+    readyForMaterialRemovalSimulation: Boolean(source.importedReadyForMaterialRemovalSimulation ?? imported?.readyForMaterialRemovalSimulation ?? source.readyForMaterialRemovalSimulation),
+    productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady ?? imported?.productionResidualEvidenceReady),
+    missingForProduction: missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12),
+    summary: source.summary ?? ("OpenCAMLib material-removal readiness: " + level + ".")
   };
 }
 

@@ -174,6 +174,11 @@ try {
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.status === "matched", "closed-loop should summarize matched CAMotics upstream evidence");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "closed-loop should show CAMotics is bound to OpenCAMLib candidate package validation");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "closed-loop should show CAMotics is bound to OpenCAMLib candidate package bundle");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamMaterialReadinessStatus === "matched", "closed-loop should expose matched upstream material readiness");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamMaterialReadyForSimulation === true, "closed-loop should expose material readiness for simulation");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamMaterialResidualEvidenceReady === false, "closed-loop should preserve residual production boundary");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.materialRemovalReadiness?.status === "matched", "closed-loop upstream evidence should include material readiness detail");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.crossChecks?.camoticsUpstreamMaterialReadinessMatched === true, "closed-loop cross-checks should mark material readiness matched");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.matchedCount >= 4, "closed-loop should count matched upstream CAM evidence files");
 
   const diagnosticsPath = join(workDir, "native-cam-diagnostics-bundle.mjs");
@@ -482,6 +487,14 @@ function createUpstreamCamEvidence() {
     status: "hash-bound",
     required: true,
     presentCount: 2,
+    materialRemovalReadiness: {
+      schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+      level: "ready-for-camotics-or-equivalent",
+      readyForMaterialRemovalSimulation: true,
+      productionResidualEvidenceReady: false,
+      missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
+      summary: "Fixture upstream material readiness can enter CAMotics/equivalent simulation."
+    },
     files: [
       {
         key: "opencamlibRealCandidateRun",
