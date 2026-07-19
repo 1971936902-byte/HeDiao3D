@@ -7275,6 +7275,11 @@ export function App() {
                         )}
                       </>
                     )}
+                    {(v3Job.result.summary as any).linuxCamEvidenceUploadReport && (
+                      <small className={(v3Job.result.summary as any).linuxCamEvidenceUploadReport.ok ? "v3-inline-ok" : "v3-inline-warning"}>
+                        Linux上传报告：{formatLinuxCamEvidenceUploadReport((v3Job.result.summary as any).linuxCamEvidenceUploadReport)}
+                      </small>
+                    )}
                     <div className="v3-server-package">
                       <strong>智能回填结果包</strong>
                       <small>选择 Linux 回传的 native-cam-real-output-bundle.zip 或 camotics-result-bundle.zip，系统通过 Orchestrator 统一入口识别并导入到对应门禁。</small>
@@ -9489,6 +9494,15 @@ function formatLinuxCamJobUploadPlan(plan: any) {
         .join(" · ")
     : "";
   return [`回填包 ${ready}`, items].filter(Boolean).join(" · ");
+}
+
+function formatLinuxCamEvidenceUploadReport(report: any) {
+  if (!report || typeof report !== "object") return "未回填";
+  const uploaded = report.uploadedCount ?? 0;
+  const planned = report.plannedCount ?? 0;
+  const total = report.uploadCount ?? uploaded + planned;
+  const mode = report.dryRun ? "dry-run" : "已执行";
+  return [`${mode}`, `上传 ${uploaded}/${total}`, report.summary].filter(Boolean).join(" · ");
 }
 
 function formatLockedProductionPackageGuidance(data: any) {

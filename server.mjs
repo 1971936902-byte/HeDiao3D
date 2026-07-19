@@ -138,6 +138,11 @@ const server = createServer(async (req, res) => {
       return importOrchestratorLinuxCamEvidenceBundle(req, orchestratorLinuxCamEvidenceBundleMatch[1], res);
     }
 
+    const orchestratorLinuxCamEvidenceUploadReportMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-evidence-upload-report$/);
+    if (req.method === "POST" && orchestratorLinuxCamEvidenceUploadReportMatch) {
+      return importOrchestratorLinuxCamEvidenceUploadReport(req, orchestratorLinuxCamEvidenceUploadReportMatch[1], res);
+    }
+
     const orchestratorLinuxCamJobValidationMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-job-validation$/);
     if (req.method === "POST" && orchestratorLinuxCamJobValidationMatch) {
       return importOrchestratorLinuxCamJobValidation(req, orchestratorLinuxCamJobValidationMatch[1], res);
@@ -12531,6 +12536,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
     createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
     createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
+    createDeliveryFile(job.id, "linux-cam-evidence-upload-report.json", "Linux CAM证据上传报告", "report", existsSync(join(job.workDir, "linux-cam-evidence-upload-report.json")), "Linux CAM 整单包 upload-linux-cam-evidence.mjs 生成并回填的上传结果；只说明证据回传状态，不解锁生产。"),
+    createDeliveryFile(job.id, "linux-cam-evidence-upload-report-import.json", "Linux CAM证据上传导入审计", "report", existsSync(join(job.workDir, "linux-cam-evidence-upload-report-import.json")), "记录 Linux CAM 证据上传报告的 Orchestrator 导入来源、上传数量和安全边界。"),
     createDeliveryFile(job.id, "native-cam-real-output-snapshot.json", "Native CAM真实输出快照", "report", existsSync(join(job.workDir, "native-cam-real-output-snapshot.json")), "记录当前加工包引用的最新 Native CAM 真实输出验收摘要；仅用于复核，不单独解锁生产。"),
     createDeliveryFile(job.id, "open-source-cam-execution-plan.json", "开源CAM执行计划", "report", true, "绑定本次任务的 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 输入、输出、验收命令和生产边界。"),
     createDeliveryFile(job.id, "adapter-preflight.json", "Adapter 运行预检", "report", true, "说明 adapter 脚本、命令、环境开关和 fallback 原因。"),
@@ -13000,6 +13007,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "opencamlib-candidate-package-bundle.zip", "OpenCAMLib候选包证据包", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip")), "OpenCAMLib 候选输出的轻量证据包，用于随 job 一起审计和交给 CAMotics/材料去除验证。"),
     createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
     createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
+    createDeliveryFile(job.id, "linux-cam-evidence-upload-report.json", "Linux CAM证据上传报告", "report", existsSync(join(job.workDir, "linux-cam-evidence-upload-report.json")), "Linux CAM 整单包 upload-linux-cam-evidence.mjs 生成并回填的上传结果；只说明证据回传状态，不解锁生产。"),
+    createDeliveryFile(job.id, "linux-cam-evidence-upload-report-import.json", "Linux CAM证据上传导入审计", "report", existsSync(join(job.workDir, "linux-cam-evidence-upload-report-import.json")), "记录 Linux CAM 证据上传报告的 Orchestrator 导入来源、上传数量和安全边界。"),
     createDeliveryFile(job.id, "native-cam-real-output-snapshot.json", "Native CAM真实输出快照", "report", existsSync(join(job.workDir, "native-cam-real-output-snapshot.json")), "记录当前加工包引用的最新 Native CAM 真实输出验收摘要；仅用于复核，不单独解锁生产。"),
     createDeliveryFile(job.id, "camotics-cli-run-package.json", "CAMotics Linux运行包", "report", existsSync(join(job.workDir, "camotics-cli-run-package.json")), "Linux CAM 服务器执行前准备包，包含输入哈希、运动画像、命令和回填要求。"),
     createDeliveryFile(job.id, "camotics-result-template.json", "CAMotics结果回填模板", "report", existsSync(join(job.workDir, "camotics-result-template.json")), "真实 CAMotics 材料去除后按此模板填写 result JSON，再回填到 HeDiao3D。"),
@@ -14028,6 +14037,189 @@ function createSyntheticJsonRequest(input) {
       return this;
     },
     destroy() {}
+  };
+}
+
+async function importOrchestratorLinuxCamEvidenceUploadReport(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  const input = await readJson(req, 5_000_000).catch((error) => ({ error }));
+  if (input.error) {
+    return json(res, 400, { error: input.error instanceof Error ? input.error.message : "Linux CAM 上传报告 JSON 无法解析" });
+  }
+  let report;
+  try {
+    report = normalizeLinuxCamEvidenceUploadReport(input.report ?? input, safeJobId);
+  } catch (error) {
+    return json(res, 400, { error: error instanceof Error ? error.message : "Linux CAM 上传报告格式不正确" });
+  }
+  await writeFile(join(workDir, "linux-cam-evidence-upload-report.json"), JSON.stringify(report, null, 2), "utf8");
+
+  const importAudit = {
+    schema: "hediao3d.v3-linux-cam-evidence-upload-report-import.v1",
+    jobId: safeJobId,
+    importedAt: report.importedAt,
+    sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : "linux-cam-evidence-upload-report.json",
+    ok: report.ok,
+    dryRun: report.dryRun,
+    productionUnlockEligible: false,
+    uploadCount: report.uploads.length,
+    uploadedCount: report.uploads.filter((item) => item.status === "uploaded").length,
+    plannedCount: report.uploads.filter((item) => item.status === "planned").length,
+    summary: report.summary
+  };
+  await writeFile(join(workDir, "linux-cam-evidence-upload-report-import.json"), JSON.stringify(importAudit, null, 2), "utf8");
+
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  appendOrchestratorLog(job, `Linux CAM 证据上传报告已回填：${report.ok ? "ok" : "review"}。`);
+  job.workDir = workDir;
+  job.updatedAt = report.importedAt;
+  job.linuxCamEvidenceUploadReport = {
+    importedAt: report.importedAt,
+    ok: report.ok,
+    dryRun: report.dryRun,
+    productionUnlockEligible: false,
+    artifact: "linux-cam-evidence-upload-report.json",
+    importAudit: "linux-cam-evidence-upload-report-import.json"
+  };
+  job.result = job.result ?? {};
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    linuxCamEvidenceUploadReport: {
+      ok: report.ok,
+      dryRun: report.dryRun,
+      summary: report.summary,
+      uploadCount: report.uploads.length,
+      uploadedCount: report.uploads.filter((item) => item.status === "uploaded").length,
+      plannedCount: report.uploads.filter((item) => item.status === "planned").length,
+      productionUnlockEligible: false,
+      artifact: "linux-cam-evidence-upload-report.json",
+      importAudit: "linux-cam-evidence-upload-report-import.json"
+    },
+    ...(refreshedDelivery ? {
+      deliveryManifest: refreshedDelivery.deliveryManifest,
+      packageIntegrity: {
+        schema: refreshedDelivery.packageIntegrity.schema,
+        status: refreshedDelivery.packageIntegrity.status,
+        summary: refreshedDelivery.packageIntegrity.summary,
+        fileCount: refreshedDelivery.packageIntegrity.fileCount,
+        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
+        files: refreshedDelivery.packageIntegrity.files
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
+    } : {}),
+    ...(refreshedDelivery?.productionEvidenceDossier ? {
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(refreshedDelivery.productionEvidenceDossier)
+    } : {})
+  };
+  for (const filename of [
+    "linux-cam-evidence-upload-report.json",
+    "linux-cam-evidence-upload-report-import.json",
+    "delivery-manifest.json",
+    "operator-download-checklist.md",
+    "package-integrity.json",
+    "next-action-checklist.md",
+    "production-closure-audit.json",
+    "production-closure-audit.md"
+  ]) {
+    pushIfArtifactExists(job, filename);
+  }
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: true,
+    report,
+    importAudit,
+    productionUnlockEligible: false,
+    deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
+    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null,
+    productionClosureAudit: refreshedDelivery?.productionClosureAudit ?? null,
+    artifacts: {
+      report: publicArtifactUrl(safeJobId, "linux-cam-evidence-upload-report.json"),
+      importAudit: publicArtifactUrl(safeJobId, "linux-cam-evidence-upload-report-import.json")
+    }
+  });
+}
+
+function normalizeLinuxCamEvidenceUploadReport(value, jobId) {
+  if (!value || typeof value !== "object") throw new Error("report 不能为空。");
+  if (value.schema !== "hediao3d.v3-linux-cam-evidence-upload-report.v1") {
+    throw new Error("report.schema 必须是 hediao3d.v3-linux-cam-evidence-upload-report.v1。");
+  }
+  const reportJobId = typeof value.jobId === "string" ? value.jobId : jobId;
+  if (reportJobId !== jobId) {
+    throw new Error("Linux CAM 上传报告与当前 job 不匹配。");
+  }
+  const uploads = Array.isArray(value.uploads)
+    ? value.uploads.slice(0, 20).map((item) => ({
+        id: typeof item?.id === "string" ? item.id.slice(0, 80) : null,
+        status: typeof item?.status === "string" ? item.status.slice(0, 80) : null,
+        endpoint: typeof item?.endpoint === "string" ? item.endpoint.slice(0, 240) : null,
+        sourceName: typeof item?.sourceName === "string" ? item.sourceName.slice(0, 160) : null,
+        level: typeof item?.level === "string" ? item.level.slice(0, 80) : null,
+        importId: typeof item?.importId === "string" ? item.importId.slice(0, 160) : null,
+        productionUnlockEligible: Boolean(item?.productionUnlockEligible)
+      }))
+    : [];
+  return {
+    schema: "hediao3d.v3-linux-cam-evidence-upload-report.v1",
+    jobId,
+    createdAt: typeof value.createdAt === "string" ? value.createdAt.slice(0, 80) : new Date().toISOString(),
+    importedAt: new Date().toISOString(),
+    ok: Boolean(value.ok),
+    dryRun: Boolean(value.dryRun),
+    productionUnlockEligible: false,
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null,
+    uploadPlan: value.uploadPlan && typeof value.uploadPlan === "object" ? normalizeLinuxCamEvidenceUploadPlan(value.uploadPlan) : null,
+    uploads,
+    error: value.error && typeof value.error === "object"
+      ? {
+          message: typeof value.error.message === "string" ? value.error.message.slice(0, 1000) : null,
+          status: Number.isFinite(Number(value.error.status)) ? Number(value.error.status) : null
+        }
+      : null
+  };
+}
+
+function normalizeLinuxCamEvidenceUploadPlan(value) {
+  const files = value.files && typeof value.files === "object" ? value.files : {};
+  const summarizeFile = (file) => file && typeof file === "object"
+    ? {
+        relativePath: typeof file.relativePath === "string" ? file.relativePath.slice(0, 180) : null,
+        exists: Boolean(file.exists),
+        status: typeof file.status === "string" ? file.status.slice(0, 80) : null,
+        sha256: typeof file.sha256 === "string" ? file.sha256.slice(0, 80) : null,
+        sizeBytes: Number.isFinite(Number(file.sizeBytes)) ? Number(file.sizeBytes) : null
+      }
+    : null;
+  return {
+    schema: "hediao3d.v3-linux-cam-evidence-upload-plan.v1",
+    jobId: typeof value.jobId === "string" ? value.jobId.slice(0, 80) : null,
+    dryRun: Boolean(value.dryRun),
+    readyForUpload: Boolean(value.readyForUpload),
+    apiBase: typeof value.apiBase === "string" ? value.apiBase.slice(0, 240) : null,
+    productionUnlockEligible: false,
+    endpoints: value.endpoints && typeof value.endpoints === "object"
+      ? {
+          validation: typeof value.endpoints.validation === "string" ? value.endpoints.validation.slice(0, 240) : null,
+          evidenceBundle: typeof value.endpoints.evidenceBundle === "string" ? value.endpoints.evidenceBundle.slice(0, 240) : null,
+          uploadReport: typeof value.endpoints.uploadReport === "string" ? value.endpoints.uploadReport.slice(0, 240) : null
+        }
+      : null,
+    files: {
+      validation: summarizeFile(files.validation),
+      nativeBundle: summarizeFile(files.nativeBundle),
+      camoticsBundle: summarizeFile(files.camoticsBundle)
+    },
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
   };
 }
 
@@ -17351,6 +17543,7 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
       evidenceUploader: "upload-linux-cam-evidence.mjs",
       localValidationOutput: "linux-cam-job-local-validation.json",
       uploadReportOutput: "linux-cam-evidence-upload-report.json",
+      uploadReportImportOutput: "linux-cam-evidence-upload-report-import.json",
       runReportOutput: "linux-cam-job-run-report.json"
     },
     nativeCam: {
@@ -17397,6 +17590,7 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
       nativeCamEndpoint: "/api/orchestrator/native-cam/real-output-acceptance",
       camoticsEndpoint: `/api/orchestrator/jobs/${jobId}/camotics-result`,
       linuxCamJobValidationEndpoint: `/api/orchestrator/jobs/${jobId}/linux-cam-job-validation`,
+      linuxCamEvidenceUploadReportEndpoint: `/api/orchestrator/jobs/${jobId}/linux-cam-evidence-upload-report`,
       productionPackageEndpoint: `/api/orchestrator/jobs/${jobId}/production-package`
     }
   };
@@ -17610,7 +17804,8 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "  productionUnlockEligible: false,",
     "  endpoints: {",
     "    validation: manifest.importBack?.linuxCamJobValidationEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-job-validation`,",
-    "    evidenceBundle: manifest.importBack?.unifiedEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-evidence-bundle`",
+    "    evidenceBundle: manifest.importBack?.unifiedEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-evidence-bundle`,",
+    "    uploadReport: manifest.importBack?.linuxCamEvidenceUploadReportEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-evidence-upload-report`",
     "  },",
     "  files: { validation, nativeBundle, camoticsBundle },",
     "  readyForUpload: validation.exists && nativeBundle.exists && camoticsBundle.exists,",
@@ -17659,6 +17854,9 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "  report.uploads.push({ id: 'camotics-result', status: 'uploaded', endpoint: uploadPlan.endpoints.evidenceBundle, level: camoticsResult?.simulationEvidence?.level ?? null, productionUnlockEligible: Boolean(camoticsResult?.simulationEvidence?.productionUnlockEligible) });",
     "  report.ok = true;",
     "  report.summary = 'Linux CAM evidence uploaded to HeDiao3D V3. Regenerate readiness and continue air-run/trial evidence.';",
+    "  writeFileSync(join(root, 'linux-cam-evidence-upload-report.json'), JSON.stringify(report, null, 2));",
+    "  const uploadReportResult = await postJson(uploadPlan.endpoints.uploadReport, { report, sourceName: 'linux-cam-evidence-upload-report.json' });",
+    "  report.uploads.push({ id: 'linux-cam-evidence-upload-report', status: 'uploaded', endpoint: uploadPlan.endpoints.uploadReport, level: uploadReportResult?.report?.ok ? 'ok' : 'review' });",
     "  writeFileSync(join(root, 'linux-cam-evidence-upload-report.json'), JSON.stringify(report, null, 2));",
     "  console.log(JSON.stringify(report, null, 2));",
     "}",
