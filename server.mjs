@@ -143,6 +143,11 @@ const server = createServer(async (req, res) => {
       return importOrchestratorLinuxCamEvidenceUploadReport(req, orchestratorLinuxCamEvidenceUploadReportMatch[1], res);
     }
 
+    const orchestratorLinuxCamJobPreflightMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-job-preflight$/);
+    if (req.method === "POST" && orchestratorLinuxCamJobPreflightMatch) {
+      return importOrchestratorLinuxCamJobPreflight(req, orchestratorLinuxCamJobPreflightMatch[1], res);
+    }
+
     const orchestratorLinuxCamJobValidationMatch = req.url?.match(/^\/api\/orchestrator\/jobs\/([^/?#/]+)\/linux-cam-job-validation$/);
     if (req.method === "POST" && orchestratorLinuxCamJobValidationMatch) {
       return importOrchestratorLinuxCamJobValidation(req, orchestratorLinuxCamJobValidationMatch[1], res);
@@ -12534,6 +12539,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "native-cam-readiness.json", "Native CAM 就绪报告", "report", true, "按当前 CAM 模式列出 FreeCAD/BlenderCAM/OpenCAMLib/CAMotics 的缺失项和部署动作。"),
     createDeliveryFile(job.id, "cam-server-config.json", "CAM服务器配置清单", "report", true, "列出外部 CAM/CAMotics adapter 所需环境变量、命令模板、验证命令和 fixture 禁用策略。"),
     createDeliveryFile(job.id, "cam-server-prep-checklist.md", "CAM服务器准备清单", "report", true, "绑定本次 job 的 Linux CAM 服务端安装、验证命令、必关开关和生产边界。"),
+    createDeliveryFile(job.id, "linux-cam-job-preflight.json", "Linux CAM整单预检", "report", existsSync(join(job.workDir, "linux-cam-job-preflight.json")), "Linux CAM 整单包 preflight-linux-cam-job.mjs 生成的环境/输入/Native CAM 脚本预检报告；只说明可执行条件，不解锁生产。"),
+    createDeliveryFile(job.id, "linux-cam-job-preflight-import.json", "Linux CAM整单预检导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-preflight-import.json")), "记录 Linux CAM 整单预检报告的回填来源、阻断数量和安全边界。"),
     createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
     createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
     createDeliveryFile(job.id, "linux-cam-evidence-upload-report.json", "Linux CAM证据上传报告", "report", existsSync(join(job.workDir, "linux-cam-evidence-upload-report.json")), "Linux CAM 整单包 upload-linux-cam-evidence.mjs 生成并回填的上传结果；只说明证据回传状态，不解锁生产。"),
@@ -13005,6 +13012,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "camotics-material-removal.stl", "CAMotics 材料去除网格", "model", existsSync(join(job.workDir, "camotics-material-removal.stl")), "真实 CAMotics 或等效材料去除仿真输出网格，需与 camotics-result.json 中 SHA-256 对应。"),
     createDeliveryFile(job.id, "opencamlib-candidate-package-validation.json", "OpenCAMLib候选包预检报告", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-validation.json")), "Linux/OpenCAMLib 真实候选输出目录的契约预检结果；只作为证据链输入，不单独解锁生产。"),
     createDeliveryFile(job.id, "opencamlib-candidate-package-bundle.zip", "OpenCAMLib候选包证据包", "report", existsSync(join(job.workDir, "opencamlib-candidate-package-bundle.zip")), "OpenCAMLib 候选输出的轻量证据包，用于随 job 一起审计和交给 CAMotics/材料去除验证。"),
+    createDeliveryFile(job.id, "linux-cam-job-preflight.json", "Linux CAM整单预检", "report", existsSync(join(job.workDir, "linux-cam-job-preflight.json")), "Linux CAM 整单包 preflight-linux-cam-job.mjs 生成的环境/输入/Native CAM 脚本预检报告；只说明可执行条件，不解锁生产。"),
+    createDeliveryFile(job.id, "linux-cam-job-preflight-import.json", "Linux CAM整单预检导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-preflight-import.json")), "记录 Linux CAM 整单预检报告的回填来源、阻断数量和安全边界。"),
     createDeliveryFile(job.id, "linux-cam-job-local-validation.json", "Linux CAM整单本地校验", "report", existsSync(join(job.workDir, "linux-cam-job-local-validation.json")), "Linux CAM 整单包解压后运行 validate-linux-cam-job.mjs 生成的本地校验报告；只说明执行进度，不解锁生产。"),
     createDeliveryFile(job.id, "linux-cam-job-validation-import.json", "Linux CAM整单校验导入审计", "report", existsSync(join(job.workDir, "linux-cam-job-validation-import.json")), "记录 Linux CAM 整单本地校验报告的回填来源、状态和下一步。"),
     createDeliveryFile(job.id, "linux-cam-evidence-upload-report.json", "Linux CAM证据上传报告", "report", existsSync(join(job.workDir, "linux-cam-evidence-upload-report.json")), "Linux CAM 整单包 upload-linux-cam-evidence.mjs 生成并回填的上传结果；只说明证据回传状态，不解锁生产。"),
@@ -14211,15 +14220,174 @@ function normalizeLinuxCamEvidenceUploadPlan(value) {
       ? {
           validation: typeof value.endpoints.validation === "string" ? value.endpoints.validation.slice(0, 240) : null,
           evidenceBundle: typeof value.endpoints.evidenceBundle === "string" ? value.endpoints.evidenceBundle.slice(0, 240) : null,
+          preflight: typeof value.endpoints.preflight === "string" ? value.endpoints.preflight.slice(0, 240) : null,
           uploadReport: typeof value.endpoints.uploadReport === "string" ? value.endpoints.uploadReport.slice(0, 240) : null
         }
       : null,
     files: {
+      preflight: summarizeFile(files.preflight),
       validation: summarizeFile(files.validation),
       nativeBundle: summarizeFile(files.nativeBundle),
       camoticsBundle: summarizeFile(files.camoticsBundle)
     },
     summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
+  };
+}
+
+async function importOrchestratorLinuxCamJobPreflight(req, jobId, res) {
+  const safeJobId = decodeURIComponent(jobId);
+  if (!/^[a-zA-Z0-9-]+$/.test(safeJobId)) return json(res, 400, { error: "非法 Orchestrator 任务 ID" });
+  const job = orchestratorJobs.get(safeJobId) ?? readJobManifest(safeJobId);
+  if (!job) return json(res, 404, { error: "找不到 Orchestrator 任务" });
+  const workDir = job.workDir ?? join(process.cwd(), "public", "orchestrator-jobs", safeJobId);
+  if (!existsSync(workDir)) return json(res, 404, { error: "找不到 Orchestrator 任务目录" });
+
+  const input = await readJson(req, 5_000_000).catch((error) => ({ error }));
+  if (input.error) {
+    return json(res, 400, { error: input.error instanceof Error ? input.error.message : "Linux CAM 预检 JSON 无法解析" });
+  }
+  let preflight;
+  try {
+    preflight = normalizeLinuxCamJobPreflight(input.preflight ?? input, safeJobId);
+  } catch (error) {
+    return json(res, 400, { error: error instanceof Error ? error.message : "Linux CAM 预检格式不正确" });
+  }
+  await writeFile(join(workDir, "linux-cam-job-preflight.json"), JSON.stringify(preflight, null, 2), "utf8");
+
+  const importAudit = {
+    schema: "hediao3d.v3-linux-cam-job-preflight-import.v1",
+    jobId: safeJobId,
+    importedAt: preflight.importedAt,
+    sourceName: typeof input.sourceName === "string" ? input.sourceName.slice(0, 160) : "linux-cam-job-preflight.json",
+    level: preflight.level,
+    productionUnlockEligible: false,
+    blockerCount: preflight.blockers.length,
+    warningCount: preflight.warnings.length,
+    requiredCheckCount: preflight.requiredCheckCount,
+    passedRequiredCheckCount: preflight.passedRequiredCheckCount,
+    summary: preflight.summary
+  };
+  await writeFile(join(workDir, "linux-cam-job-preflight-import.json"), JSON.stringify(importAudit, null, 2), "utf8");
+
+  const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
+  appendOrchestratorLog(job, `Linux CAM 整单预检已回填：${preflight.level ?? "unknown"}。`);
+  job.workDir = workDir;
+  job.updatedAt = preflight.importedAt;
+  job.linuxCamJobPreflight = {
+    importedAt: preflight.importedAt,
+    level: preflight.level,
+    productionUnlockEligible: false,
+    artifact: "linux-cam-job-preflight.json",
+    importAudit: "linux-cam-job-preflight-import.json"
+  };
+  job.result = job.result ?? {};
+  job.result.summary = {
+    ...(job.result.summary ?? {}),
+    linuxCamJobPreflight: {
+      level: preflight.level,
+      summary: preflight.summary,
+      blockerCount: preflight.blockers.length,
+      warningCount: preflight.warnings.length,
+      requiredCheckCount: preflight.requiredCheckCount,
+      passedRequiredCheckCount: preflight.passedRequiredCheckCount,
+      productionUnlockEligible: false,
+      artifact: "linux-cam-job-preflight.json",
+      importAudit: "linux-cam-job-preflight-import.json"
+    },
+    ...(refreshedDelivery ? {
+      deliveryManifest: refreshedDelivery.deliveryManifest,
+      packageIntegrity: {
+        schema: refreshedDelivery.packageIntegrity.schema,
+        status: refreshedDelivery.packageIntegrity.status,
+        summary: refreshedDelivery.packageIntegrity.summary,
+        fileCount: refreshedDelivery.packageIntegrity.fileCount,
+        downloadableCount: refreshedDelivery.packageIntegrity.downloadableCount,
+        missingDownloadableCount: refreshedDelivery.packageIntegrity.missingDownloadableCount,
+        totalBytes: refreshedDelivery.packageIntegrity.totalBytes,
+        files: refreshedDelivery.packageIntegrity.files
+      },
+      productionClosureAudit: createProductionClosureAuditPublicSummary(refreshedDelivery.productionClosureAudit)
+    } : {}),
+    ...(refreshedDelivery?.productionEvidenceDossier ? {
+      productionEvidenceDossier: createProductionEvidenceDossierPublicSummary(refreshedDelivery.productionEvidenceDossier)
+    } : {})
+  };
+  for (const filename of [
+    "linux-cam-job-preflight.json",
+    "linux-cam-job-preflight-import.json",
+    "delivery-manifest.json",
+    "operator-download-checklist.md",
+    "package-integrity.json",
+    "next-action-checklist.md",
+    "production-closure-audit.json",
+    "production-closure-audit.md"
+  ]) {
+    pushIfArtifactExists(job, filename);
+  }
+  orchestratorJobs.set(safeJobId, job);
+  await writeJobManifest(job);
+
+  return json(res, 200, {
+    ok: true,
+    preflight,
+    importAudit,
+    productionUnlockEligible: false,
+    deliveryManifest: refreshedDelivery?.deliveryManifest ?? null,
+    packageIntegrity: refreshedDelivery?.packageIntegrity ?? null,
+    productionClosureAudit: refreshedDelivery?.productionClosureAudit ?? null,
+    artifacts: {
+      preflight: publicArtifactUrl(safeJobId, "linux-cam-job-preflight.json"),
+      importAudit: publicArtifactUrl(safeJobId, "linux-cam-job-preflight-import.json")
+    }
+  });
+}
+
+function normalizeLinuxCamJobPreflight(value, jobId) {
+  if (!value || typeof value !== "object") throw new Error("preflight 不能为空。");
+  if (value.schema !== "hediao3d.v3-linux-cam-job-preflight.v1") {
+    throw new Error("preflight.schema 必须是 hediao3d.v3-linux-cam-job-preflight.v1。");
+  }
+  const reportJobId = typeof value.jobId === "string" ? value.jobId : jobId;
+  if (reportJobId !== jobId) throw new Error("Linux CAM 预检报告与当前 job 不匹配。");
+  const checks = Array.isArray(value.checks)
+    ? value.checks.slice(0, 80).map((check) => ({
+        id: typeof check?.id === "string" ? check.id.slice(0, 120) : null,
+        type: typeof check?.type === "string" ? check.type.slice(0, 80) : null,
+        command: typeof check?.command === "string" ? check.command.slice(0, 120) : null,
+        moduleName: typeof check?.moduleName === "string" ? check.moduleName.slice(0, 120) : null,
+        relativePath: typeof check?.relativePath === "string" ? check.relativePath.slice(0, 220) : null,
+        filename: typeof check?.filename === "string" ? check.filename.slice(0, 160) : null,
+        required: Boolean(check?.required),
+        ok: Boolean(check?.ok),
+        status: typeof check?.status === "string" ? check.status.slice(0, 120) : null,
+        summary: typeof check?.summary === "string" ? check.summary.slice(0, 500) : null,
+        version: typeof check?.version === "string" ? check.version.slice(0, 180) : null,
+        sha256: typeof check?.sha256 === "string" ? check.sha256.slice(0, 80) : null,
+        sizeBytes: Number.isFinite(Number(check?.sizeBytes)) ? Number(check.sizeBytes) : null
+      }))
+    : [];
+  const blockers = Array.isArray(value.blockers)
+    ? value.blockers.slice(0, 40).map((item) => String(item).slice(0, 240))
+    : checks.filter((check) => check.required && !check.ok).map((check) => `${check.id}:${check.status}`);
+  const warnings = Array.isArray(value.warnings)
+    ? value.warnings.slice(0, 40).map((item) => String(item).slice(0, 240))
+    : checks.filter((check) => !check.required && !check.ok).map((check) => `${check.id}:${check.status}`);
+  return {
+    schema: "hediao3d.v3-linux-cam-job-preflight.v1",
+    jobId,
+    checkedAt: typeof value.checkedAt === "string" ? value.checkedAt.slice(0, 80) : new Date().toISOString(),
+    importedAt: new Date().toISOString(),
+    productionUnlockEligible: false,
+    level: typeof value.level === "string" ? value.level.slice(0, 80) : blockers.length ? "blocked" : "unknown",
+    nativeCamServerDir: typeof value.nativeCamServerDir === "string" ? value.nativeCamServerDir.slice(0, 260) : null,
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null,
+    requiredCheckCount: Number.isFinite(Number(value.requiredCheckCount)) ? Number(value.requiredCheckCount) : checks.filter((check) => check.required).length,
+    passedRequiredCheckCount: Number.isFinite(Number(value.passedRequiredCheckCount)) ? Number(value.passedRequiredCheckCount) : checks.filter((check) => check.required && check.ok).length,
+    warningCount: Number.isFinite(Number(value.warningCount)) ? Number(value.warningCount) : warnings.length,
+    blockers,
+    warnings,
+    checks,
+    nextActions: Array.isArray(value.nextActions) ? value.nextActions.slice(0, 8).map((item) => String(item).slice(0, 300)) : []
   };
 }
 
@@ -17595,6 +17763,7 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
       unifiedEndpoint: `/api/orchestrator/jobs/${jobId}/linux-cam-evidence-bundle`,
       nativeCamEndpoint: "/api/orchestrator/native-cam/real-output-acceptance",
       camoticsEndpoint: `/api/orchestrator/jobs/${jobId}/camotics-result`,
+      linuxCamJobPreflightEndpoint: `/api/orchestrator/jobs/${jobId}/linux-cam-job-preflight`,
       linuxCamJobValidationEndpoint: `/api/orchestrator/jobs/${jobId}/linux-cam-job-validation`,
       linuxCamEvidenceUploadReportEndpoint: `/api/orchestrator/jobs/${jobId}/linux-cam-evidence-upload-report`,
       productionPackageEndpoint: `/api/orchestrator/jobs/${jobId}/production-package`
@@ -17904,6 +18073,7 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "  return data;",
     "}",
     "",
+    "const preflight = fileInfo('linux-cam-job-preflight.json', false);",
     "const validation = fileInfo('linux-cam-job-local-validation.json', true);",
     "const nativeBundle = fileInfo('native-cam-real-output-bundle.zip', true);",
     "const camoticsBundle = fileInfo('camotics-result-bundle.zip', true);",
@@ -17915,11 +18085,12 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "  dryRun,",
     "  productionUnlockEligible: false,",
     "  endpoints: {",
+    "    preflight: manifest.importBack?.linuxCamJobPreflightEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-job-preflight`,",
     "    validation: manifest.importBack?.linuxCamJobValidationEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-job-validation`,",
     "    evidenceBundle: manifest.importBack?.unifiedEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-evidence-bundle`,",
     "    uploadReport: manifest.importBack?.linuxCamEvidenceUploadReportEndpoint ?? `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-evidence-upload-report`",
     "  },",
-    "  files: { validation, nativeBundle, camoticsBundle },",
+    "  files: { preflight, validation, nativeBundle, camoticsBundle },",
     "  readyForUpload: validation.exists && nativeBundle.exists && camoticsBundle.exists,",
     "  summary: validation.exists && nativeBundle.exists && camoticsBundle.exists",
     "    ? 'Linux CAM validation and both evidence bundles are ready to upload through Orchestrator.'",
@@ -17949,6 +18120,7 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "    report.ok = true;",
     "    report.summary = 'Dry run passed; files are ready and endpoints are planned.';",
     "    report.uploads = [",
+    "      ...(preflight.exists ? [{ id: 'linux-cam-job-preflight', status: 'planned', endpoint: uploadPlan.endpoints.preflight, sourceName: 'linux-cam-job-preflight.json' }] : []),",
     "      { id: 'linux-cam-job-validation', status: 'planned', endpoint: uploadPlan.endpoints.validation, sourceName: 'linux-cam-job-local-validation.json' },",
     "      { id: 'native-cam-real-output', status: 'planned', endpoint: uploadPlan.endpoints.evidenceBundle, sourceName: 'native-cam-real-output-bundle.zip' },",
     "      { id: 'camotics-result', status: 'planned', endpoint: uploadPlan.endpoints.evidenceBundle, sourceName: 'camotics-result-bundle.zip' }",
@@ -17956,6 +18128,11 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "    writeFileSync(join(root, 'linux-cam-evidence-upload-report.json'), JSON.stringify(report, null, 2));",
     "    console.log(JSON.stringify(report, null, 2));",
     "    return;",
+    "  }",
+    "  if (preflight.exists) {",
+    "    const preflightJson = JSON.parse(readFileSync(join(root, 'linux-cam-job-preflight.json'), 'utf8'));",
+    "    const preflightResult = await postJson(uploadPlan.endpoints.preflight, { preflight: preflightJson, sourceName: 'linux-cam-job-preflight.json' });",
+    "    report.uploads.push({ id: 'linux-cam-job-preflight', status: 'uploaded', endpoint: uploadPlan.endpoints.preflight, level: preflightResult?.preflight?.level ?? null });",
     "  }",
     "  const validationJson = JSON.parse(readFileSync(join(root, 'linux-cam-job-local-validation.json'), 'utf8'));",
     "  const validationResult = await postJson(uploadPlan.endpoints.validation, { validation: validationJson, sourceName: 'linux-cam-job-local-validation.json' });",

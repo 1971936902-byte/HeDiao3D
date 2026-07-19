@@ -247,6 +247,7 @@ async function main() {
   assert(linuxCamJobManifest.packageScripts?.evidenceUploader === "upload-linux-cam-evidence.mjs", "Linux CAM job manifest should expose evidence uploader script");
   assert(linuxCamJobManifest.packageScripts?.uploadReportOutput === "linux-cam-evidence-upload-report.json", "Linux CAM job manifest should expose upload report output");
   assert(linuxCamJobManifest.importBack?.unifiedEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-bundle`, "Linux CAM job manifest should expose unified evidence bundle endpoint");
+  assert(linuxCamJobManifest.importBack?.linuxCamJobPreflightEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-job-preflight`, "Linux CAM job manifest should expose preflight endpoint");
   assert(linuxCamJobManifest.importBack?.linuxCamEvidenceUploadReportEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-upload-report`, "Linux CAM job manifest should expose evidence upload report endpoint");
   assert(linuxCamJobManifest.camotics?.runPackage?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should expose Native CAM snapshot evidence hash");
   assert(linuxCamJobManifest.references?.some((file) => file.name === "hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should hash Native CAM snapshot reference");
@@ -270,6 +271,7 @@ async function main() {
   assert(linuxCamJobUploader.includes("hediao3d.v3-linux-cam-evidence-upload-report.v1"), "Linux CAM job uploader should emit upload report schema");
   assert(linuxCamJobUploader.includes("HEDIAO3D_V3_API_BASE"), "Linux CAM job uploader should accept API base environment variable");
   assert(linuxCamJobUploader.includes("linux-cam-evidence-bundle"), "Linux CAM job uploader should use unified evidence endpoint");
+  assert(linuxCamJobUploader.includes("linux-cam-job-preflight"), "Linux CAM job uploader should upload preflight report when present");
   assert(linuxCamJobUploader.includes("linux-cam-evidence-upload-report"), "Linux CAM job uploader should upload its own report");
   const linuxCamJobExtractDir = join(tmpdir(), `hediao3d-linux-cam-job-${job.id}`);
   rmSync(linuxCamJobExtractDir, { recursive: true, force: true });
@@ -286,6 +288,20 @@ async function main() {
   assert(preflightReport.productionUnlockEligible === false, "Linux CAM job preflight must not unlock production");
   assert(preflightReport.checks?.some((check) => check.id === "opencamlib-python"), "Linux CAM job preflight should report OpenCAMLib module check");
   assert(preflightReport.checks?.some((check) => check.id === "camotics-cli"), "Linux CAM job preflight should report CAMotics check");
+  const importedPreflight = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-job-preflight`, {
+    preflight: preflightReport,
+    sourceName: "linux-cam-job-preflight.json"
+  });
+  assert(importedPreflight.ok === true, "Linux CAM job preflight import should succeed");
+  assert(importedPreflight.preflight?.schema === "hediao3d.v3-linux-cam-job-preflight.v1", "Linux CAM job preflight import should preserve schema");
+  assert(importedPreflight.preflight?.productionUnlockEligible === false, "Linux CAM job preflight import must not unlock production");
+  assert(importedPreflight.importAudit?.schema === "hediao3d.v3-linux-cam-job-preflight-import.v1", "Linux CAM job preflight import should write audit schema");
+  const reloadedAfterPreflight = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
+  assert(reloadedAfterPreflight.result?.summary?.linuxCamJobPreflight?.level === preflightReport.level, "job summary should expose Linux CAM preflight");
+  assert(reloadedAfterPreflight.result.summary.linuxCamJobPreflight.productionUnlockEligible === false, "job summary preflight must not unlock production");
+  assert(reloadedAfterPreflight.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-preflight.json" && file.exists), "delivery manifest should expose Linux CAM job preflight");
+  assert(reloadedAfterPreflight.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-job-preflight-import.json" && file.exists), "delivery manifest should expose Linux CAM job preflight import audit");
+  assert(reloadedAfterPreflight.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-job-preflight.json" && file.sha256), "package integrity should hash Linux CAM job preflight");
   const localValidationRun = spawnSync(process.execPath, ["validate-linux-cam-job.mjs", "."], {
     cwd: linuxCamJobRoot,
     encoding: "utf8"
@@ -339,8 +355,10 @@ async function main() {
   assert(uploadDryRunReport.schema === "hediao3d.v3-linux-cam-evidence-upload-report.v1", "Linux CAM job upload dry-run report schema mismatch");
   assert(uploadDryRunReport.dryRun === true, "Linux CAM job upload dry-run should mark dryRun");
   assert(uploadDryRunReport.uploadPlan?.readyForUpload === true, "Linux CAM job upload dry-run should see ready files");
+  assert(uploadDryRunReport.uploadPlan?.endpoints?.preflight === `/api/orchestrator/jobs/${job.id}/linux-cam-job-preflight`, "Linux CAM job upload dry-run should plan preflight endpoint");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.evidenceBundle === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-bundle`, "Linux CAM job upload dry-run should plan unified endpoint");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.uploadReport === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-upload-report`, "Linux CAM job upload dry-run should plan upload report endpoint");
+  assert(uploadDryRunReport.uploads?.some((item) => item.id === "linux-cam-job-preflight" && item.endpoint.endsWith("/linux-cam-job-preflight")), "Linux CAM job upload dry-run should plan preflight upload");
   assert(uploadDryRunReport.uploads?.some((item) => item.id === "native-cam-real-output" && item.endpoint.endsWith("/linux-cam-evidence-bundle")), "Linux CAM job upload dry-run should plan Native CAM bundle upload");
   assert(uploadDryRunReport.uploads?.some((item) => item.id === "camotics-result" && item.endpoint.endsWith("/linux-cam-evidence-bundle")), "Linux CAM job upload dry-run should plan CAMotics bundle upload");
 

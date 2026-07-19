@@ -7257,6 +7257,11 @@ export function App() {
                         <small>该准备包只用于仿真服务器；回填前先运行结果校验脚本，不会直接解锁生产 NC。</small>
                       </div>
                     )}
+                    {(v3Job.result.summary as any).linuxCamJobPreflight && (
+                      <small className={(v3Job.result.summary as any).linuxCamJobPreflight.level === "ready" || (v3Job.result.summary as any).linuxCamJobPreflight.level === "ready-with-warnings" ? "v3-inline-ok" : "v3-inline-warning"}>
+                        Linux预检：{formatLinuxCamJobPreflight((v3Job.result.summary as any).linuxCamJobPreflight)}
+                      </small>
+                    )}
                     {(v3Job.result.summary as any).linuxCamJobValidation && (
                       <>
                         <small className={(v3Job.result.summary as any).linuxCamJobValidation.level === "ready-for-v3-upload" ? "v3-inline-ok" : "v3-inline-warning"}>
@@ -9494,6 +9499,16 @@ function formatLinuxCamJobUploadPlan(plan: any) {
         .join(" · ")
     : "";
   return [`回填包 ${ready}`, items].filter(Boolean).join(" · ");
+}
+
+function formatLinuxCamJobPreflight(preflight: any) {
+  if (!preflight || typeof preflight !== "object") return "未回填";
+  const level = preflight.level ?? "unknown";
+  const passed = preflight.passedRequiredCheckCount != null && preflight.requiredCheckCount != null
+    ? `必检 ${preflight.passedRequiredCheckCount}/${preflight.requiredCheckCount}`
+    : "";
+  const blockers = preflight.blockerCount != null ? `阻断 ${preflight.blockerCount}` : "";
+  return [level, passed, blockers, preflight.summary].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamEvidenceUploadReport(report: any) {
