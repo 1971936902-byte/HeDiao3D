@@ -6563,7 +6563,7 @@ async function processOrchestratorJob(job, settings) {
     postprocessProfile,
     machineControllerProfile
   }), "utf8");
-  const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
+  let deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
   const machineFilePolicy = createMachineFilePolicy({
     job,
     deliveryManifest,
@@ -6632,6 +6632,22 @@ async function processOrchestratorJob(job, settings) {
   });
   await writeFile(join(job.workDir, "production-closure-audit.json"), JSON.stringify(productionClosureAudit, null, 2), "utf8");
   await writeFile(join(job.workDir, "production-closure-audit.md"), createProductionClosureAuditMarkdown(productionClosureAudit), "utf8");
+  const mvpOperatorStatus = createMvpOperatorStatus({
+    job,
+    productionGate,
+    productionUnlockMatrix,
+    productionEvidenceDossier,
+    productionClosureAudit,
+    safeTrialExecutionPlan,
+    machineControllerProfile,
+    deliveryManifest,
+    packageIntegrity
+  });
+  await writeFile(join(job.workDir, "mvp-operator-status.json"), JSON.stringify(mvpOperatorStatus, null, 2), "utf8");
+  await writeFile(join(job.workDir, "mvp-operator-status.md"), createMvpOperatorStatusMarkdown(mvpOperatorStatus), "utf8");
+  deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "mvp-operator-status.json", "基本可用版状态", "report", true, "面向操作员和验收脚本的一页式 MVP 状态报告，说明当前能做什么、不能做什么和生产解锁缺口。"));
+  deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "mvp-operator-status.md", "基本可用版状态说明", "report", true, "中文说明当前安全试雕包状态、目标机床、允许上机文件和下一步最短路径。"));
+  await writeFile(join(job.workDir, "delivery-manifest.json"), JSON.stringify(deliveryManifest, null, 2), "utf8");
   await writeFile(join(job.workDir, "operator-download-checklist.md"), createOperatorDownloadChecklistMarkdown({
     job,
     deliveryManifest,
@@ -6657,6 +6673,8 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "mvp-operator-status.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "mvp-operator-status.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "safe-trial-execution-plan.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "next-action-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "linux-cam-closed-loop-handoff.md"));
@@ -10925,6 +10943,159 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
   return `${lines.join("\n")}\n`;
 }
 
+function createMvpOperatorStatus({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, productionClosureAudit, safeTrialExecutionPlan, machineControllerProfile, deliveryManifest, packageIntegrity }) {
+  const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const allowedFiles = safeTrialExecutionPlan?.filePolicy?.allowedOnMachine ?? [];
+  const neverRunOnMachine = safeTrialExecutionPlan?.filePolicy?.neverRunOnMachine ?? [];
+  const rows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
+  const blockers = [
+    ...(productionGate?.blockers ?? []).map((summary) => ({ source: "production-gate", summary })),
+    ...rows
+      .filter((row) => row.status === "block" || row.blocksProduction)
+      .map((row) => ({ source: "production-unlock-matrix", id: row.id ?? null, summary: `${row.label ?? row.id ?? "未命名条件"}: ${row.summary ?? row.status}` })),
+    ...(productionClosureAudit?.nextActions ?? [])
+      .slice(0, 8)
+      .map((action) => ({ source: "production-closure-audit", id: action.id ?? null, summary: action.action ?? action.title ?? "继续补齐闭环证据" }))
+  ];
+  const requiredEvidence = [
+    {
+      id: "real-cam",
+      label: "真实 CAM 候选输出",
+      status: productionAudit?.gates?.find?.((gate) => gate.id === "external-cam-proof")?.status ?? "review",
+      requiredArtifact: "native-cam-real-output-bundle.zip"
+    },
+    {
+      id: "material-removal",
+      label: "材料去除仿真",
+      status: productionAudit?.gates?.find?.((gate) => gate.id === "material-removal-proof")?.status ?? "review",
+      requiredArtifact: "camotics-result-bundle.zip"
+    },
+    {
+      id: "postprocess",
+      label: "三轴Y旋转后处理",
+      status: productionAudit?.gates?.find?.((gate) => gate.id === "postprocess-machine-proof")?.status ?? "review",
+      requiredArtifact: "postprocess-trace-report.json"
+    },
+    {
+      id: "air-run",
+      label: "离料空跑与旋转标定",
+      status: productionAudit?.gates?.find?.((gate) => gate.id === "air-run-proof")?.status ?? "review",
+      requiredArtifact: "machine-acceptance-record.json"
+    },
+    {
+      id: "field-trial",
+      label: "低风险试雕反馈",
+      status: productionAudit?.gates?.find?.((gate) => gate.id === "field-package-proof")?.status ?? "review",
+      requiredArtifact: "trial-feedback-log.json"
+    }
+  ];
+  const safeTrialReady = Boolean(productionGate?.allowAirRun && safeTrialExecutionPlan && allowedFiles.length > 0);
+  const trialCutAllowed = Boolean(productionGate?.allowTrialNc && allowedFiles.includes("toolpath.nc"));
+  const productionReady = Boolean(productionGate?.allowProductionNc && productionAudit?.allowProductionPackage === true);
+  return {
+    schema: "hediao3d.v3-mvp-operator-status.v1",
+    jobId: job.id,
+    createdAt: new Date().toISOString(),
+    status: productionReady ? "production-ready" : safeTrialReady ? "safe-trial-ready" : "air-run-review",
+    headline: productionReady
+      ? "正式生产包已由总门禁放行；上机前仍需核验哈希和现场记录。"
+      : safeTrialReady
+        ? "基本可用版已生成安全试雕包；当前用于空跑、标定和低风险试雕，不等同于成品生产 NC。"
+        : "当前只适合复核报告和准备空跑，尚未形成完整安全试雕包。",
+    machine: {
+      profileId: machineControllerProfile?.id ?? null,
+      name: machineControllerProfile?.name ?? "三轴控制器 + Y轴旋转夹具",
+      axisMapping: "X=长度方向，Y=旋转夹具，Z=刀深/安全高度",
+      tool: "4mm 25度平底尖刀"
+    },
+    packagePolicy: {
+      allowAirRun: Boolean(productionGate?.allowAirRun),
+      allowTrialNc: Boolean(productionGate?.allowTrialNc),
+      allowProductionNc: Boolean(productionGate?.allowProductionNc),
+      safeTrialReady,
+      trialCutAllowed,
+      productionReady,
+      packageIntegrityArtifact: "package-integrity.json",
+      packageIntegrityFileCount: Number(packageIntegrity?.fileCount ?? deliveryManifest?.files?.length ?? 0),
+      packageIntegrityDownloadableCount: Number(packageIntegrity?.downloadableCount ?? deliveryManifest?.files?.filter?.((file) => file.downloadable).length ?? 0)
+    },
+    files: {
+      allowedOnMachine: allowedFiles,
+      neverRunOnMachine,
+      readFirst: [
+        "mvp-operator-status.md",
+        "operator-download-checklist.md",
+        "machining-package-index.json",
+        "production-closure-audit.md"
+      ]
+    },
+    requiredEvidence,
+    blockers: blockers.slice(0, 16),
+    nextActions: productionReady
+      ? ["下载正式生产包前复核 package-integrity.json、production-evidence-dossier.json 和现场验收记录。"]
+      : [
+        "下载安全试雕包并核验 package-integrity.json 中的 SHA-256。",
+        "先运行 rotary-calibration-airrun.nc，再运行 air-run.nc。",
+        ...(trialCutAllowed ? ["用软料/废料低倍率试雕 toolpath.nc，并回填 trial-feedback 和 machine-acceptance。"] : ["暂不切削 toolpath.nc；先补齐 production-gate 和安全试雕阻断项。"]),
+        "把 Linux CAM 真实输出和 CAMotics/等效材料去除结果回填到同一个 job。"
+      ],
+    productionBoundary: "未完成真实 CAM、材料去除仿真、离料空跑、低风险试雕和机床验收的同包哈希绑定前，不承诺下载后直接成品雕刻。"
+  };
+}
+
+function createMvpOperatorStatusMarkdown(status) {
+  const lines = [
+    "# HeDiao3D V3 基本可用版状态报告",
+    "",
+    `Job ID: ${status.jobId}`,
+    `生成时间: ${status.createdAt}`,
+    `状态: ${status.status}`,
+    "",
+    "## 当前结论",
+    "",
+    status.headline,
+    "",
+    "## 目标机床",
+    "",
+    `- 机床: ${status.machine.name}`,
+    `- 轴映射: ${status.machine.axisMapping}`,
+    `- 刀具: ${status.machine.tool}`,
+    "",
+    "## 文件使用边界",
+    "",
+    `- 允许空跑: ${status.packagePolicy.allowAirRun ? "是" : "否"}`,
+    `- 允许低风险试雕: ${status.packagePolicy.allowTrialNc ? "是" : "否"}`,
+    `- 允许正式生产 NC: ${status.packagePolicy.allowProductionNc ? "是" : "否"}`,
+    `- 完整性清单: ${status.packagePolicy.packageIntegrityArtifact}，文件 ${status.packagePolicy.packageIntegrityDownloadableCount}/${status.packagePolicy.packageIntegrityFileCount}`,
+    "",
+    "## 允许上机文件",
+    "",
+    ...(status.files.allowedOnMachine.length ? status.files.allowedOnMachine.map((file) => `- ${file}`) : ["- 暂无"]),
+    "",
+    "## 禁止上机文件",
+    "",
+    ...(status.files.neverRunOnMachine.length ? status.files.neverRunOnMachine.map((file) => `- ${file}`) : ["- 暂无"]),
+    "",
+    "## 生产放行证据",
+    "",
+    ...status.requiredEvidence.map((item) => `- ${item.label}: ${item.status}，需要 ${item.requiredArtifact}`),
+    "",
+    "## 当前阻断/复核",
+    "",
+    ...(status.blockers.length ? status.blockers.map((item) => `- ${item.summary}`) : ["- 暂无阻断项。"]),
+    "",
+    "## 下一步",
+    "",
+    ...status.nextActions.map((item) => `- [ ] ${item}`),
+    "",
+    "## 边界说明",
+    "",
+    status.productionBoundary,
+    ""
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function createJobLinuxCamClosedLoopHandoffMarkdown({ job, productionGate, productionEvidenceDossier, safeTrialExecutionPlan, postprocessProfile, machineControllerProfile }) {
   const axisInstruction = createOperatorAxisInstruction(postprocessProfile ?? {
     camMode: machineControllerProfile?.camMode,
@@ -12267,6 +12438,8 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
     },
     filesByPurpose: {
       readFirst: [
+        getFile("mvp-operator-status.md"),
+        getFile("mvp-operator-status.json"),
         getFile("machining-package-index.json"),
         getFile("production-gate.json"),
         getFile("production-unlock-matrix.json"),
@@ -12309,7 +12482,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
         getFile("operator-download-checklist.md"),
         getFile("package-integrity.json")
       ],
-      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "production-gate.json", "production-closure-audit.json", "production-closure-audit.md", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "manufacturing-setup-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "machine-file-policy.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
+      reports: deliveryManifest.files.filter((file) => file.kind === "report" && !["machining-package-index.json", "mvp-operator-status.json", "mvp-operator-status.md", "production-gate.json", "production-closure-audit.json", "production-closure-audit.md", "rotary-wrap-preview-report.json", "postprocess-trace-report.json", "manufacturing-setup-report.json", "nc-static-analysis.json", "machine-controller-profile.json", "machine-file-policy.json", "operator-runbook.md", "controller-dialect-report.json", "native-cam-readiness.json", "cam-server-prep-checklist.md", "cam-handoff-evidence.md", "cam-engine-selection.json", "open-source-cam-execution-plan.json", "postprocess-profile.json", "delivery-manifest.json", "operator-download-checklist.md", "package-integrity.json"].includes(file.filename)),
       camInputs: deliveryManifest.files
         .filter((file) => file.kind === "model")
         .map((file) => ({
@@ -12692,6 +12865,8 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-closure-audit.md", "生产闭环审计说明", "report", true, "面向操作者的生产闭环缺口说明，列出下一步需要执行的最小动作。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
     createDeliveryFile(job.id, "machine-file-policy.json", "机床文件使用策略", "report", true, "机器可读地列出可空跑、可试雕/生产、永远禁止上机和需要门禁的文件。"),
+    createDeliveryFile(job.id, "mvp-operator-status.json", "基本可用版状态", "report", true, "面向操作员和验收脚本的一页式 MVP 状态报告，说明当前能做什么、不能做什么和生产解锁缺口。"),
+    createDeliveryFile(job.id, "mvp-operator-status.md", "基本可用版状态说明", "report", true, "中文说明当前安全试雕包状态、目标机床、允许上机文件和下一步最短路径。"),
     createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", true, "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
     createDeliveryFile(job.id, "linux-cam-closed-loop-handoff.md", "Linux CAM闭环交接说明", "report", true, "把 Native CAM、CAMotics、V3 回填、readiness 和安全试雕验收串成同一条执行顺序。"),
     createDeliveryFile(job.id, "operator-runbook.md", "操作员上机说明书", "report", true, "面向机台操作员的中文空跑、试雕和正式加工流程。"),
@@ -13143,6 +13318,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "production-closure-audit.json", "生产闭环审计", "report", existsSync(join(job.workDir, "production-closure-audit.json")), "按真实 CAM、CAMotics、后处理和现场验收分层列出生产放行缺口、回填接口和证据文件。"),
     createDeliveryFile(job.id, "production-closure-audit.md", "生产闭环审计说明", "report", existsSync(join(job.workDir, "production-closure-audit.md")), "面向操作者的生产闭环缺口说明，列出下一步需要执行的最小动作。"),
     createDeliveryFile(job.id, "machining-package-index.json", "加工包索引", "report", existsSync(join(job.workDir, "machining-package-index.json")), "加工包首页，区分可上机文件、仿真文件、空跑文件和必读报告。"),
+    createDeliveryFile(job.id, "mvp-operator-status.json", "基本可用版状态", "report", existsSync(join(job.workDir, "mvp-operator-status.json")), "面向操作员和验收脚本的一页式 MVP 状态报告，说明当前能做什么、不能做什么和生产解锁缺口。"),
+    createDeliveryFile(job.id, "mvp-operator-status.md", "基本可用版状态说明", "report", existsSync(join(job.workDir, "mvp-operator-status.md")), "中文说明当前安全试雕包状态、目标机床、允许上机文件和下一步最短路径。"),
     createDeliveryFile(job.id, "next-action-checklist.md", "下一步行动清单", "report", existsSync(join(job.workDir, "next-action-checklist.md")), "面向当前加工包的最小可执行清单，列出可做、禁止做和生产解锁缺口。"),
     createDeliveryFile(job.id, "linux-cam-closed-loop-handoff.md", "Linux CAM闭环交接说明", "report", existsSync(join(job.workDir, "linux-cam-closed-loop-handoff.md")), "把 Native CAM、CAMotics、V3 回填、readiness 和安全试雕验收串成同一条执行顺序。"),
     createDeliveryFile(job.id, "trial-feedback-record.json", "最新试雕反馈记录", "report", existsSync(join(job.workDir, "trial-feedback-record.json")), "现场空跑/试雕后回填的最新单条反馈记录。"),
@@ -13184,6 +13361,22 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   });
   await writeFile(join(job.workDir, "production-closure-audit.json"), JSON.stringify(productionClosureAudit, null, 2), "utf8");
   await writeFile(join(job.workDir, "production-closure-audit.md"), createProductionClosureAuditMarkdown(productionClosureAudit), "utf8");
+  const mvpOperatorStatus = createMvpOperatorStatus({
+    job,
+    productionGate,
+    productionUnlockMatrix: readJsonFile(join(job.workDir, "production-unlock-matrix.json")),
+    productionEvidenceDossier: readJsonFile(join(job.workDir, "production-evidence-dossier.json")),
+    productionClosureAudit,
+    safeTrialExecutionPlan: readJsonFile(join(job.workDir, "safe-trial-execution-plan.json")),
+    machineControllerProfile,
+    deliveryManifest,
+    packageIntegrity
+  });
+  await writeFile(join(job.workDir, "mvp-operator-status.json"), JSON.stringify(mvpOperatorStatus, null, 2), "utf8");
+  await writeFile(join(job.workDir, "mvp-operator-status.md"), createMvpOperatorStatusMarkdown(mvpOperatorStatus), "utf8");
+  deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "mvp-operator-status.json", "基本可用版状态", "report", true, "面向操作员和验收脚本的一页式 MVP 状态报告，说明当前能做什么、不能做什么和生产解锁缺口。"));
+  deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "mvp-operator-status.md", "基本可用版状态说明", "report", true, "中文说明当前安全试雕包状态、目标机床、允许上机文件和下一步最短路径。"));
+  await writeFile(manifestPath, JSON.stringify(deliveryManifest, null, 2), "utf8");
   await writeFile(join(job.workDir, "operator-download-checklist.md"), createOperatorDownloadChecklistMarkdown({
     job,
     deliveryManifest,
@@ -13201,6 +13394,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.md"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "mvp-operator-status.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "mvp-operator-status.md"));
   return {
     deliveryManifest,
     packageIntegrity,
@@ -17188,6 +17383,8 @@ async function getOrchestratorLinuxCamJobPackage(jobId, res) {
     "production-evidence-dossier.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
+    "mvp-operator-status.json",
+    "mvp-operator-status.md",
     "operator-download-checklist.md",
     "next-action-checklist.md",
     "machine-controller-profile.json",
@@ -17658,6 +17855,8 @@ function getOrchestratorEvidenceReviewPackage(jobId, res) {
     "production-readiness-audit.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
+    "mvp-operator-status.json",
+    "mvp-operator-status.md",
     "operator-download-checklist.md",
     "safe-trial-execution-plan.json",
     "next-action-checklist.md",
@@ -17826,6 +18025,7 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
     evidenceReviewPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/evidence-review-package`,
     productionPackageUrl: `/api/orchestrator/jobs/${encodeURIComponent(jobId)}/production-package`,
     readFirstFiles: [
+      "mvp-operator-status.md",
       "operator-download-checklist.md",
       "machining-package-index.json",
       "production-gate.json",
@@ -17879,6 +18079,8 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "production-evidence-dossier.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
+    "mvp-operator-status.json",
+    "mvp-operator-status.md",
     "delivery-manifest.json",
     "package-integrity.json",
     "next-action-checklist.md",
@@ -18985,7 +19187,7 @@ function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
         reason: "simulation-only-never-machine"
       })),
     recommendedOrder: [
-      "阅读 safe-trial-execution-plan.json、operator-runbook.md、operator-download-checklist.md 和 production-gate.json。",
+      "先阅读 mvp-operator-status.md，再阅读 safe-trial-execution-plan.json、operator-runbook.md、operator-download-checklist.md 和 production-gate.json。",
       "运行 rotary-calibration-airrun.nc，确认 Y 轴旋转夹具方向和每圈距离。",
       "运行 air-run.nc，确认 X=长度方向，Y=旋转夹具，Z=安全高度。",
       "若本包包含 toolpath.nc，仅用于低风险试雕，首次建议 30%-50% 进给倍率。",
