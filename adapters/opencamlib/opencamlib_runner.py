@@ -760,10 +760,14 @@ def create_path_dropcutter_neutral_toolpath(job: Dict[str, Any], plan: Dict[str,
     axis_mapping = sampling.get("axisMapping") or {}
     stock = plan.get("stock") or {}
     output_length = float(stock.get("lengthMm") or settings.get("lengthMm") or max(0.001, float((geometry.get("dimensions") or {}).get("x") or 1)))
+    output_depth = max(0.001, float(settings.get("depthMm") or settings.get("maxCutDepth") or 1.0))
     safe_z = float(settings.get("safeZ") or 22)
     y_min = float(min_bounds["y"])
     y_max = float(max_bounds["y"])
     y_span = max(1e-9, y_max - y_min)
+    z_min = float(min_bounds["z"])
+    z_max = float(max_bounds["z"])
+    z_span = max(1e-9, z_max - z_min)
     points: List[Dict[str, Any]] = []
     for point in result["points"]:
         model_x = float(point["x"])
@@ -772,11 +776,13 @@ def create_path_dropcutter_neutral_toolpath(job: Dict[str, Any], plan: Dict[str,
         x_t = normalize_between(model_x, float(min_bounds["x"]), float(max_bounds["x"]))
         output_x = -output_length / 2 + output_length * x_t
         angle = ((model_y - y_min) / y_span) * 360.0
-        depth = max(0.0, safe_z - model_z)
+        normalized_depth = max(0.0, min(1.0, (z_max - model_z) / z_span))
+        depth = output_depth * normalized_depth
+        output_z = safe_z - depth
         points.append({
             "x": round(output_x, 4),
             "a": round(angle, 6),
-            "z": round(model_z, 4),
+            "z": round(output_z, 4),
             "depth": round(depth, 4),
             "modelX": round(model_x, 6),
             "modelY": round(model_y, 6),
@@ -1022,13 +1028,19 @@ def create_path_dropcutter_quality_metrics(job: Dict[str, Any], plan: Dict[str, 
     row_count = int(path_report.get("pathRows") or 0)
     point_count = len(points)
     points_per_row = point_count / row_count if row_count > 0 else 0
-    x_span = read_positive_number(dimensions.get("x"), axis_span(bounds, "x"), (job.get("settings") or {}).get("lengthMm"), 1.0)
+    xs = [float(point.get("x")) for point in points if is_number(point.get("x"))]
+    angles = [float(point.get("a")) for point in points if is_number(point.get("a"))]
+    x_span = (max(xs) - min(xs)) if len(xs) >= 2 else read_positive_number((job.get("settings") or {}).get("lengthMm"), dimensions.get("x"), axis_span(bounds, "x"), 1.0)
     y_span = read_positive_number(dimensions.get("y"), axis_span(bounds, "y"), 1.0)
     x_step = x_span / max(1.0, points_per_row - 1.0) if points_per_row > 1 else None
     path_grid = path_report.get("pathGrid") if isinstance(path_report.get("pathGrid"), dict) else {}
     protected_zones = path_grid.get("protectedZones") if isinstance(path_grid.get("protectedZones"), dict) else compute_path_dropcutter_protected_zones(job, plan, geometry)
     protected_zones = summarize_sampled_protected_zones(points, protected_zones)
-    cross_step = read_positive_number(path_grid.get("crossStepMm"), y_span / max(1, row_count - 1) if row_count > 1 else None, 0)
+    rotary_axis = str(((plan.get("sampling") or {}).get("axisMapping") or {}).get("rotaryAxis") or settings.get("rotaryOutputAxis") or "Y").upper()
+    wrap_per_rev = read_positive_number(((plan.get("sampling") or {}).get("axisMapping") or {}).get("rotaryWrapPerRevolutionMm"), settings.get("rotaryWrapPerRevolutionMm"), 100)
+    rotary_span_deg = (max(angles) - min(angles)) if len(angles) >= 2 else None
+    rotary_surface_step = (wrap_per_rev * rotary_span_deg / 360.0 / max(1, row_count - 1)) if rotary_axis and rotary_axis != "NONE" and wrap_per_rev and rotary_span_deg is not None and row_count > 1 else None
+    cross_step = read_positive_number(rotary_surface_step, path_grid.get("machineCrossStepMm"), path_grid.get("crossStepMm"), y_span / max(1, row_count - 1) if row_count > 1 else None, 0)
     linear_steps = [value for value in (x_step, cross_step) if value is not None]
     max_linear_step = max(linear_steps) if linear_steps else None
     step_to_cutter_ratio = max_linear_step / cutter_diameter if max_linear_step is not None and cutter_diameter > 0 else None
