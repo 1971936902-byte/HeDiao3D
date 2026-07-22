@@ -130,6 +130,23 @@ topGaps:
 - hediao3d-import-contract-not-ready: OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.
 ```
 
+2026-07-22 后续增强：
+
+```text
+strict contact 失败明细已贯穿：
+- opencamlib-candidate-package-validation.json: contactValidation.topErrors / failedChecks
+- opencamlib-production-gap-review.json: strict-contact-validation-not-ready evidence 含失败 check id
+- native-cam-real-output-acceptance.json: contactValidation.topErrors / failedChecks
+- readiness API / 前端: 显示“严格接触失败”的首要错误和失败 check
+
+验证命令：
+- npm run test:v3:opencamlib-candidate-package
+- npm run test:v3:native-cam-real-output-import-api
+- npm run test:v3:readiness-api
+- npm run test:v3:focused-ui
+- npm run build -- --emptyOutDir false（Windows 本地 dist 运行产物可能占用，Linux 部署使用正常 npm run build）
+```
+
 结论：Linux 小闭环从整单包下载、服务器执行、Native CAM/CAMotics 证据上传、readiness 复核已经跑通；当前阻断点明确集中在 OpenCAMLib 真实 cutter-contact 生产候选证据、残料/过切闭合和现场验收，不能解锁生产 NC。
 
 ### OpenCAMLib runtime probe

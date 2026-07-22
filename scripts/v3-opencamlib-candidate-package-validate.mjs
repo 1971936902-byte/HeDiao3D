@@ -182,6 +182,7 @@ function createProductionGapReview({ level, missing, blockers, contactValidation
       ["opencamlib-contact-output-validation.json"]
     );
   } else if (contactValidation.level !== "ready") {
+    const failedCheckEvidence = createFailedCheckEvidence(contactValidation);
     addGap(
       "strict-contact-validation-not-ready",
       "cam-contact",
@@ -190,7 +191,8 @@ function createProductionGapReview({ level, missing, blockers, contactValidation
       `Strict cutter-contact validation is ${contactValidation.level}.`,
       [
         contactValidation.evidenceClass ? `evidenceClass=${contactValidation.evidenceClass}` : "",
-        ...(Array.isArray(contactValidation.errors) ? contactValidation.errors.slice(0, 4) : [])
+        ...(Array.isArray(contactValidation.errors) ? contactValidation.errors.slice(0, 4) : []),
+        ...failedCheckEvidence
       ]
     );
   }
@@ -314,6 +316,8 @@ function createContactValidationSummary(value) {
   const checks = Array.isArray(value.checks) ? value.checks : [];
   const errors = Array.isArray(value.errors) ? value.errors : [];
   const warnings = Array.isArray(value.warnings) ? value.warnings : [];
+  const topErrors = createTopErrors(value);
+  const failedChecks = createFailedChecks(value);
   return {
     schema: value.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
     level: value.level ?? "missing",
@@ -323,8 +327,43 @@ function createContactValidationSummary(value) {
     failedCheckCount: checks.filter((check) => check?.status === "fail").length,
     errorCount: errors.length,
     warningCount: warnings.length,
-    firstError: errors[0] ?? null
+    firstError: errors[0] ?? null,
+    topErrors,
+    failedChecks
   };
+}
+
+function createTopErrors(value, limit = 6) {
+  const errors = Array.isArray(value?.errors) ? value.errors : [];
+  const firstError = value?.firstError ? [value.firstError] : [];
+  return [...firstError, ...errors]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .filter((item, index, items) => items.indexOf(item) === index)
+    .slice(0, limit);
+}
+
+function createFailedChecks(value, limit = 8) {
+  const checks = Array.isArray(value?.checks) ? value.checks : [];
+  return checks
+    .filter((check) => check?.status === "fail")
+    .slice(0, limit)
+    .map((check) => ({
+      id: check?.id ?? "unknown-check",
+      status: check?.status ?? "fail",
+      summary: check?.summary ?? "",
+      reported: check?.reported ?? null,
+      expected: check?.expected ?? null,
+      tolerance: check?.tolerance ?? null,
+      validationBasis: check?.validationBasis ?? null,
+      measured: check?.measured ?? null
+    }));
+}
+
+function createFailedCheckEvidence(value, limit = 4) {
+  return createFailedChecks(value, limit)
+    .map((check) => `${check.id}: ${check.summary}`)
+    .filter(Boolean);
 }
 
 function createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit }) {

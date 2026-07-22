@@ -88,6 +88,8 @@ async function main() {
   assert(imported.contactValidationStatus?.pathCoverage?.status === "ready", "imported acceptance should expose ready path coverage status");
   assert(imported.contactValidationStatus?.protectedZones?.status === "ready", "imported acceptance should expose ready protected-zone status");
   assert(imported.contactValidation?.checkCount >= 9, "imported acceptance should expose contact validation check count");
+  assert(Array.isArray(imported.contactValidation?.topErrors), "imported acceptance should expose contact validation top errors");
+  assert(Array.isArray(imported.contactValidation?.failedChecks), "imported acceptance should expose contact validation failed checks");
   assert(imported.contactValidation?.pathCoverage?.status === "ready", "imported acceptance should expose contact validation path coverage summary");
   assert(imported.contactValidation?.protectedZones?.status === "ready", "imported acceptance should expose contact validation protected-zone summary");
   assert(imported.apiArtifacts?.json?.includes("native-cam-real-output-acceptance.json"), "imported acceptance should expose JSON artifact");
@@ -121,6 +123,8 @@ async function main() {
   assert(lowCoverage.level === "critical", "low OpenCAMLib path coverage should remain critical");
   assert(lowCoverage.contactValidationStatus?.pathCoverage?.status === "review", "low path coverage should be exposed as review status");
   assert(lowCoverage.contactValidationStatus?.pathCoverage?.x?.status === "fail", "low path coverage should expose failing X coverage check");
+  assert(lowCoverage.contactValidation?.topErrors?.[0] === "contact-path-coverage-x failed", "low path coverage should expose the top strict contact error");
+  assert(lowCoverage.contactValidation?.failedChecks?.some((check) => check.id === "contact-path-coverage-x" && check.reported === 0.72), "low path coverage should expose failed strict contact check details");
 
   const missingContact = await postJson("/api/orchestrator/native-cam/real-output-acceptance", {
     sourceName: "native-cam-real-output-acceptance-missing-contact.json",
@@ -190,6 +194,8 @@ async function main() {
   assert(zipImported.sourceReportBindingStatus === "matched", "zip imported acceptance should bind validation report");
   assert(zipImported.targetMachineBoundaryStatus?.status === "matched", "zip import should preserve matched target boundary");
   assert(zipImported.contactValidationStatus?.status === "ready", "zip import should preserve ready contact validation");
+  assert(Array.isArray(zipImported.contactValidation?.topErrors), "zip import should expose strict contact top errors");
+  assert(Array.isArray(zipImported.contactValidation?.failedChecks), "zip import should expose strict contact failed checks");
   assert(zipImported.contactValidationStatus?.pathCoverage?.status === "ready", "zip import should preserve ready path coverage");
   assert(zipImported.contactValidationStatus?.protectedZones?.status === "ready", "zip import should preserve ready protected zones");
   assert(zipImported.runnerReadinessStatus?.status === "blocked", "zip import should expose blocked runner readiness status");

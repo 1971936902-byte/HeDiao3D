@@ -1591,6 +1591,17 @@ type V3OpenCamLibProductionGapReview = {
   productionBoundary?: string;
 } | null;
 
+type V3ContactValidationFailure = {
+  id?: string;
+  status?: string;
+  summary?: string;
+  reported?: unknown;
+  expected?: unknown;
+  tolerance?: unknown;
+  validationBasis?: string | null;
+  measured?: boolean | null;
+};
+
 type V3ReadinessSummary = {
   id: string;
   schema: string;
@@ -1728,6 +1739,8 @@ type V3ReadinessSummary = {
       status?: string;
       ready?: boolean;
       level?: string | null;
+      contactValidationTopErrors?: string[];
+      contactValidationFailedChecks?: V3ContactValidationFailure[];
       productionGapReview?: V3OpenCamLibProductionGapReview;
       summary?: string | null;
     } | null;
@@ -1735,12 +1748,20 @@ type V3ReadinessSummary = {
       level?: string | null;
       ok?: boolean;
       productionLocked?: boolean;
+      contactValidationTopErrors?: string[];
+      contactValidationFailedChecks?: V3ContactValidationFailure[];
       candidatePackageLevel?: string | null;
       candidatePackageBlockedReason?: string | null;
       candidateReadyForImport?: boolean;
       blockingCount?: number;
       firstBlocking?: string | null;
       productionGapReview?: V3OpenCamLibProductionGapReview;
+    } | null;
+    contactValidation?: {
+      level?: string | null;
+      topErrors?: string[];
+      failedChecks?: V3ContactValidationFailure[];
+      firstError?: string | null;
     } | null;
     targetMachineBoundaryStatus?: {
       schema?: string;
@@ -6744,6 +6765,11 @@ export function App() {
                       OpenCAMLib差距审查：{formatOpenCamLibProductionGapReview(getNativeOpenCamLibProductionGapReview(v3Readiness.nativeCamRealOutputAcceptance))}
                     </small>
                   )}
+                  {formatNativeOpenCamLibStrictContactFailure(v3Readiness.nativeCamRealOutputAcceptance) && (
+                    <small className="v3-inline-critical">
+                      严格接触失败：{formatNativeOpenCamLibStrictContactFailure(v3Readiness.nativeCamRealOutputAcceptance)}
+                    </small>
+                  )}
                   <small className={v3Readiness.externalHandoff ? v3Readiness.externalHandoff.status === "completed" && v3Readiness.externalHandoff.simulationStatus === "completed" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     Handoff：{v3Readiness.externalHandoff ? `${v3Readiness.externalHandoff.resultEngine ?? "-"} → ${v3Readiness.externalHandoff.simulationEngine ?? "-"}` : "未验证"}
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
@@ -9572,6 +9598,21 @@ function getNativeOpenCamLibProductionGapReview(acceptance: V3ReadinessSummary["
   return acceptance?.openCamLibRealCandidate?.productionGapReview
     ?? acceptance?.openCamLibRealCandidateStatus?.productionGapReview
     ?? null;
+}
+
+function formatNativeOpenCamLibStrictContactFailure(acceptance: V3ReadinessSummary["nativeCamRealOutputAcceptance"]) {
+  const firstError = acceptance?.contactValidation?.topErrors?.[0]
+    ?? acceptance?.contactValidation?.firstError
+    ?? acceptance?.openCamLibRealCandidate?.contactValidationTopErrors?.[0]
+    ?? acceptance?.openCamLibRealCandidateStatus?.contactValidationTopErrors?.[0]
+    ?? null;
+  const firstFailedCheck = acceptance?.contactValidation?.failedChecks?.[0]
+    ?? acceptance?.openCamLibRealCandidate?.contactValidationFailedChecks?.[0]
+    ?? acceptance?.openCamLibRealCandidateStatus?.contactValidationFailedChecks?.[0]
+    ?? null;
+  if (!firstError && !firstFailedCheck) return "";
+  const check = firstFailedCheck?.id ? `${firstFailedCheck.id}${firstFailedCheck.summary ? `：${firstFailedCheck.summary}` : ""}` : "";
+  return [firstError, check].filter(Boolean).join(" / ");
 }
 
 function formatOpenCamLibProductionGapClass(review: V3OpenCamLibProductionGapReview) {

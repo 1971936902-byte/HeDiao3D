@@ -2235,6 +2235,8 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
   const contactValidationChecks = Array.isArray(report.contactValidation?.checks) ? report.contactValidation.checks : null;
   const contactValidationErrors = Array.isArray(report.contactValidation?.errors) ? report.contactValidation.errors : null;
   const contactValidationWarnings = Array.isArray(report.contactValidation?.warnings) ? report.contactValidation.warnings : null;
+  const contactValidationTopErrors = createContactValidationTopErrors(report.contactValidation);
+  const contactValidationFailedChecks = createContactValidationFailedChecks(report.contactValidation);
   return {
     id: acceptanceId,
     schema: report.schema ?? "hediao3d.native-cam-real-output-acceptance.v1",
@@ -2270,6 +2272,8 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       errorCount: Number(report.contactValidation.errorCount ?? contactValidationErrors?.length ?? 0),
       warningCount: Number(report.contactValidation.warningCount ?? contactValidationWarnings?.length ?? 0),
       firstError: report.contactValidation.firstError ?? contactValidationErrors?.[0] ?? null,
+      topErrors: contactValidationTopErrors,
+      failedChecks: contactValidationFailedChecks,
       pathCoverage: report.contactValidation.pathCoverage ?? createOpenCamLibContactPathCoverageSummary(report.contactValidation),
       protectedZones: report.contactValidation.protectedZones ?? createOpenCamLibProtectedZonesSummary(report.contactValidation),
       sha256: report.contactValidation.sha256 ?? null
@@ -2295,6 +2299,17 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       productionLocked: report.openCamLibRealCandidate.productionLocked !== false,
       contactValidationLevel: report.openCamLibRealCandidate.contactValidationLevel ?? null,
       contactEvidenceClass: report.openCamLibRealCandidate.contactEvidenceClass ?? null,
+      contactValidationTopErrors: Array.isArray(report.openCamLibRealCandidate.contactValidationTopErrors) ? report.openCamLibRealCandidate.contactValidationTopErrors.slice(0, 6).map((item) => String(item)) : [],
+      contactValidationFailedChecks: Array.isArray(report.openCamLibRealCandidate.contactValidationFailedChecks) ? report.openCamLibRealCandidate.contactValidationFailedChecks.slice(0, 8).map((check) => ({
+        id: check?.id ?? "unknown-check",
+        status: check?.status ?? "fail",
+        summary: check?.summary ?? "",
+        reported: check?.reported ?? null,
+        expected: check?.expected ?? null,
+        tolerance: check?.tolerance ?? null,
+        validationBasis: check?.validationBasis ?? null,
+        measured: check?.measured ?? null
+      })) : [],
       contactValidationPathCoverage: report.openCamLibRealCandidate.contactValidationPathCoverage ?? null,
       protectedZones: report.openCamLibRealCandidate.protectedZones ?? null,
       candidateMachineFit: report.openCamLibRealCandidate.candidateMachineFit ?? null,
@@ -2380,6 +2395,21 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   const candidateMachineFit = report.candidateMachineFit ?? null;
   const materialRemovalReadiness = report.materialRemovalReadiness ?? null;
   const productionGapReview = createOpenCamLibProductionGapReviewSummary(report.productionGapReview);
+  const topErrors = Array.isArray(report.contactValidationTopErrors)
+    ? report.contactValidationTopErrors.slice(0, 6).map((item) => String(item))
+    : createContactValidationTopErrors(report.contactValidation);
+  const failedChecks = Array.isArray(report.contactValidationFailedChecks)
+    ? report.contactValidationFailedChecks.slice(0, 8).map((check) => ({
+      id: check?.id ?? "unknown-check",
+      status: check?.status ?? "fail",
+      summary: check?.summary ?? "",
+      reported: check?.reported ?? null,
+      expected: check?.expected ?? null,
+      tolerance: check?.tolerance ?? null,
+      validationBasis: check?.validationBasis ?? null,
+      measured: check?.measured ?? null
+    }))
+    : createContactValidationFailedChecks(report.contactValidation);
   return {
     schema: "hediao3d.opencamlib-real-candidate-status.v1",
     status: ready ? "ready" : report.level === "blocked" ? "blocked" : "review",
@@ -2389,6 +2419,8 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     productionLocked: report.productionLocked !== false,
     contactValidationLevel: report.contactValidationLevel ?? null,
     contactEvidenceClass: report.contactEvidenceClass ?? null,
+    contactValidationTopErrors: topErrors,
+    contactValidationFailedChecks: failedChecks,
     contactValidationPathCoverage,
     protectedZones,
     candidateMachineFit,
@@ -2789,6 +2821,8 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
   const candidateMachineFit = candidatePackage?.machineFit ?? contactReport?.candidateMachineFit ?? null;
   const materialRemovalReadiness = contactReport?.materialRemovalReadiness ?? null;
   const productionGapReview = createOpenCamLibProductionGapReviewSummary(report?.productionGapReview ?? candidatePackage?.productionGapReview ?? null);
+  const topErrors = createContactValidationTopErrors(contactValidation);
+  const failedChecks = createContactValidationFailedChecks(contactValidation);
   return {
     schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
     sourceSchema: report?.schema ?? null,
@@ -2798,6 +2832,8 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     productionLocked: report?.productionLocked !== false,
     contactValidationLevel: contactValidation?.level ?? null,
     contactEvidenceClass: contactValidation?.evidenceClass ?? null,
+    contactValidationTopErrors: topErrors,
+    contactValidationFailedChecks: failedChecks,
     contactValidationPathCoverage,
     protectedZones,
     candidateMachineFit,
@@ -2818,6 +2854,8 @@ function createNativeCamContactValidationSummary(report, rawBytes = null) {
   const warnings = Array.isArray(report?.warnings) ? report.warnings : [];
   const pathCoverage = createOpenCamLibContactPathCoverageSummary({ ...report, checks });
   const protectedZones = createOpenCamLibProtectedZonesSummary({ ...report, checks });
+  const topErrors = createContactValidationTopErrors({ ...report, errors });
+  const failedChecks = createContactValidationFailedChecks({ ...report, checks });
   return {
     schema: report?.schema ?? "hediao3d.opencamlib-contact-output-validation.v1",
     createdAt: report?.createdAt ?? null,
@@ -2830,10 +2868,39 @@ function createNativeCamContactValidationSummary(report, rawBytes = null) {
     errorCount: errors.length,
     warningCount: warnings.length,
     firstError: errors[0] ?? null,
+    topErrors,
+    failedChecks,
     pathCoverage,
     protectedZones,
     sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
   };
+}
+
+function createContactValidationTopErrors(contactValidation, limit = 6) {
+  const errors = Array.isArray(contactValidation?.errors) ? contactValidation.errors : [];
+  const firstError = contactValidation?.firstError ? [contactValidation.firstError] : [];
+  return [...firstError, ...errors]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .filter((item, index, items) => items.indexOf(item) === index)
+    .slice(0, limit);
+}
+
+function createContactValidationFailedChecks(contactValidation, limit = 8) {
+  const checks = Array.isArray(contactValidation?.checks) ? contactValidation.checks : [];
+  return checks
+    .filter((check) => check?.status === "fail")
+    .slice(0, limit)
+    .map((check) => ({
+      id: check?.id ?? "unknown-check",
+      status: check?.status ?? "fail",
+      summary: check?.summary ?? "",
+      reported: check?.reported ?? null,
+      expected: check?.expected ?? null,
+      tolerance: check?.tolerance ?? null,
+      validationBasis: check?.validationBasis ?? null,
+      measured: check?.measured ?? null
+    }));
 }
 
 function createNativeCamRealOutputImportLevel(acceptance, targetMachineBoundaryStatus, contactValidationStatus) {

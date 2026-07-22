@@ -241,6 +241,14 @@ function validateReadiness(report, label) {
     assert(typeof review.productionBlockerCount === "number", `${label} OpenCAMLib production gap review production blocker count missing`);
     assert(Array.isArray(review.topGaps), `${label} OpenCAMLib production gap review top gaps missing`);
   }
+  if (report.nativeCamRealOutputAcceptance?.contactValidation) {
+    assert(Array.isArray(report.nativeCamRealOutputAcceptance.contactValidation.topErrors), `${label} strict contact top errors missing`);
+    assert(Array.isArray(report.nativeCamRealOutputAcceptance.contactValidation.failedChecks), `${label} strict contact failed checks missing`);
+  }
+  if (report.nativeCamRealOutputAcceptance?.openCamLibRealCandidate) {
+    assert(Array.isArray(report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.contactValidationTopErrors), `${label} OpenCAMLib candidate strict contact top errors missing`);
+    assert(Array.isArray(report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.contactValidationFailedChecks), `${label} OpenCAMLib candidate strict contact failed checks missing`);
+  }
   if (report.runbookResult) validateRunbookResult(report.runbookResult, `${label} runbookResult`);
   assert(Object.hasOwn(report, "externalHandoff"), `${label} missing externalHandoff field`);
   if (report.externalHandoff) {

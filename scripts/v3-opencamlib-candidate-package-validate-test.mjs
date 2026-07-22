@@ -99,10 +99,13 @@ try {
   assert(identityMismatchReport.level === "critical", "identity-mismatched package should be critical");
   assert(identityMismatchReport.contactValidation?.level === "critical", "identity-mismatched package should expose critical contact validation");
   assert(identityMismatchReport.contactValidation?.firstError?.includes("planSha256"), "identity mismatch should name the plan hash binding failure");
+  assert(identityMismatchReport.contactValidation?.topErrors?.[0]?.includes("planSha256"), "identity mismatch should expose top strict contact errors");
+  assert(identityMismatchReport.contactValidation?.failedChecks?.some((check) => check.id === "identity-plan"), "identity mismatch should expose failed strict contact checks");
   assert(identityMismatchReport.artifactManifest?.readyForImport === false, "identity-mismatched artifact manifest should not be import-ready");
   assert(identityMismatchReport.handoffContract?.status === "blocked", "identity-mismatched handoff contract should be blocked");
   assert(identityMismatchReport.handoffContract?.strictAcceptance?.planHashBound === false, "identity-mismatched handoff should mark plan hash as unbound");
   assert(identityMismatchReport.productionGapReview?.gaps?.some((gap) => gap.id === "strict-contact-validation-not-ready"), "identity mismatch gap review should mention strict contact validation");
+  assert(identityMismatchReport.productionGapReview?.gaps?.some((gap) => gap.id === "strict-contact-validation-not-ready" && gap.evidence?.some((item) => /identity-plan/.test(item))), "identity mismatch gap review should include failed check evidence");
   assert(identityMismatchReport.blockers?.some((item) => /strict contact validation is critical/.test(item)), "identity mismatch should block candidate package at strict contact validation");
   rmSync(identityMismatchDir, { recursive: true, force: true });
 
@@ -165,6 +168,8 @@ try {
   const experimentalReport = JSON.parse(experimental.stdout);
   assert(experimentalReport.level === "critical", "experimental package should be critical in strict candidate preflight");
   assert(experimentalReport.contactValidation?.evidenceClass === "experimental-real-api", "experimental package should expose contact evidence class");
+  assert(experimentalReport.contactValidation?.topErrors?.some((item) => /experimental OpenCAMLib real API/.test(item)), "experimental package should expose strict contact top errors");
+  assert(experimentalReport.contactValidation?.failedChecks?.some((check) => check.id === "experimental-real-api-boundary"), "experimental package should expose failed experimental boundary check");
   assert(experimentalReport.artifactManifest?.evidenceClass === "experimental-real-api", "experimental artifact manifest should expose evidence class");
   assert(experimentalReport.handoffContract?.evidenceClass === "experimental-real-api", "experimental handoff contract should expose evidence class");
   assert(experimentalReport.handoffContract?.blockedReason?.includes("experimental"), "experimental handoff should explain blocked reason");
