@@ -1946,7 +1946,7 @@ if (missing.length) {
 }
 
 if (strict && (unsafe.length || (expectProductionCandidate && candidates.length === 0 && !openCamLibCandidateReady))) {
-  process.exit(3);
+  console.error("[HeDiao3D] Acceptance level is critical; bundle generation will still continue so the evidence can be uploaded and reviewed.");
 }
 
 function createContactPathCoverageSummary(report) {
@@ -2088,6 +2088,12 @@ echo "- $ACCEPTANCE_BUNDLE"
 echo "- $ROOT/native-cam-real-output-acceptance.json"
 echo "- $ROOT/native-cam-real-output-bundle.zip"
 echo "[HeDiao3D] If this script exits 0 with production-candidate output, continue with CAMotics import, V3 readiness, air-run and machine acceptance."
+if [[ "$STRICT" =~ ^(1|true|yes|on)$ ]]; then
+  ACCEPTANCE_LEVEL="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(j.level||"missing"));' "$ACCEPTANCE_REPORT")"
+  if [[ "$ACCEPTANCE_LEVEL" == "critical" ]]; then
+    exit 3
+  fi
+fi
 `;
 }
 
