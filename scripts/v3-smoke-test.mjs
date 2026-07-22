@@ -311,9 +311,13 @@ async function main() {
   assert(mvpOperatorStatus.status === "safe-trial-ready" || mvpOperatorStatus.status === "production-ready" || mvpOperatorStatus.status === "air-run-review", `unexpected MVP operator status: ${mvpOperatorStatus.status}`);
   assert(mvpOperatorStatus.machine?.axisMapping === "X=长度方向，Y=旋转夹具，Z=刀深/安全高度", "MVP operator status should state exact axis mapping");
   assert(mvpOperatorStatus.files?.readFirst?.includes("mvp-operator-status.md"), "MVP operator status should list itself as read-first");
+  assert(mvpOperatorStatus.materialRemovalGate?.id === "material-removal-proof", "MVP operator status should expose material-removal residual gate");
+  assert(mvpOperatorStatus.requiredEvidence?.some((item) => item.id === "material-removal" && Object.hasOwn(item, "residualEvidenceRequired")), "MVP required evidence should preserve residual evidence requirement");
   assert(mvpOperatorStatusMd.includes("HeDiao3D V3 基本可用版状态报告"), "MVP operator status markdown missing title");
   assert(mvpOperatorStatusMd.includes("允许上机文件"), "MVP operator status markdown missing machine file section");
+  assert(mvpOperatorStatusMd.includes("材料去除/残料门禁"), "MVP operator status markdown should show material-removal residual gate");
   assert(safeTrialExecutionPlan.machine?.axisMapping === "X=长度方向，Y=旋转夹具，Z=刀深/安全高度", "safe trial execution plan should state wrapY axis mapping");
+  assert(safeTrialExecutionPlan.productionReadiness?.materialRemovalGate?.id === "material-removal-proof", "safe trial execution plan should carry material-removal residual gate");
   assert(safeTrialExecutionPlan.steps?.some((step) => step.id === "rotary-calibration-airrun" && step.files?.includes("rotary-calibration-airrun.nc")), "safe trial plan missing rotary calibration step");
   assert(safeTrialExecutionPlan.steps?.some((step) => step.id === "feedback-and-acceptance" && step.files?.includes("machine-acceptance-checklist.json")), "safe trial plan missing feedback/acceptance step");
   assert(safeTrialExecutionPlan.filePolicy?.neverRunOnMachine?.includes("camotics-preview.nc"), "safe trial plan should forbid CAMotics preview on machine");
@@ -324,6 +328,7 @@ async function main() {
   assert(operatorRunbook.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "operator runbook should state exact wrapY axis mapping");
   assert(!operatorRunbook.includes("X/Y或A/Z"), "operator runbook should not use ambiguous axis wording");
   assert(nextActionChecklist.includes("HeDiao3D V3 下一步行动清单"), "next action checklist missing title");
+  assert(nextActionChecklist.includes("材料去除/残料门禁"), "next action checklist should show material-removal residual gate");
   assert(nextActionChecklist.includes("## 证据状态"), "next action checklist missing evidence status section");
   assert(nextActionChecklist.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "next action checklist should state exact wrapY axis mapping");
   assert(nextActionChecklist.includes("禁止上机文件"), "next action checklist should list forbidden machine files");

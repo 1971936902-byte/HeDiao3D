@@ -11084,6 +11084,7 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
   const trialNcAllowed = Boolean(productionGate?.allowTrialNc);
   const airRunAllowed = Boolean(productionGate?.allowAirRun);
   const machineName = "三轴控制器 + Y轴旋转夹具";
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null);
   const requiredHashFiles = [
     ...(trialNcAllowed ? ["toolpath.nc"] : []),
     "air-run.nc",
@@ -11198,6 +11199,9 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
       currentDossierStatus: productionEvidenceDossier?.status ?? null,
       currentDossierSummary: productionEvidenceDossier?.summary ?? null
     },
+    productionReadiness: {
+      materialRemovalGate
+    },
     nextActions: trialNcAllowed
       ? ["下载安全试雕包并核验哈希。", "先运行旋转标定空跑，再运行整条离料空跑。", "低倍率软料试雕后回填试雕反馈和机床验收。"]
       : ["下载安全试雕包并核验哈希。", "当前只允许旋转标定空跑和整条离料空跑。", "补齐阻断项后重新生成 V3 小闭环。"]
@@ -11211,6 +11215,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
   const linuxOpenCamLibEvidence = createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRealOutputAcceptance);
   const nativeCamBoundaryStatus = nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus ?? null;
   const camoticsUpstreamEvidence = productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidence ?? null;
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null);
   const blockedRows = Array.isArray(productionUnlockMatrix?.rows)
     ? productionUnlockMatrix.rows.filter((row) => row.status === "block" || row.blocksProduction)
     : [];
@@ -11240,6 +11245,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
     "",
     `- 生产门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
     `- 仿真证据: ${productionGate?.simulationEvidence?.level ?? "missing"} / ${productionGate?.simulationEvidence?.summary ?? "未生成"}`,
+    `- 材料去除/残料门禁: ${materialRemovalGate.status} / ${materialRemovalGate.summary}`,
     `- CAMotics上游绑定: ${formatCamoticsUpstreamEvidenceLine(camoticsUpstreamEvidence)}`,
     `- Native CAM机型边界: ${nativeCamBoundaryStatus?.status ?? "missing"} / ${nativeCamBoundaryStatus?.summary ?? "未回填 native-cam-real-output-bundle.zip，尚未证明真实 CAM 输出适配当前三轴控制器 + Y轴旋转夹具。"}`,
     `- Linux OpenCAMLib: ${formatLinuxOpenCamLibEvidenceOfflineLine(linuxOpenCamLibEvidence)}`,
@@ -11277,6 +11283,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
         ...(blockedRows.slice(0, 8).map((row) => `- 矩阵阻断: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
         ...(reviewRows.slice(0, 6).map((row) => `- 矩阵复核: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
         ...(dossierItems.slice(0, 8).map((item) => `- 证据缺口: ${item.label ?? item.id} / ${item.summary ?? item.status}`)),
+        ...(materialRemovalGate.residualEvidenceRequired ? [`- 证据缺口: 材料去除/残料门禁 / ${materialRemovalGate.nextActions?.[0] ?? materialRemovalGate.summary}`] : []),
         ...(linuxOpenCamLibEvidence.status === "ready-for-review" ? [] : [`- 证据缺口: Linux OpenCAMLib真实候选 / ${linuxOpenCamLibEvidence.summary}`]),
         ...(nativeCamBoundaryStatus?.status === "matched" ? [] : [`- 证据缺口: Native CAM 机型边界 / ${nativeCamBoundaryStatus?.summary ?? "缺少 target-machine-boundary.json 绑定。"}`])
       ]),
@@ -11295,6 +11302,7 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
 
 function createMvpOperatorStatus({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, productionClosureAudit, safeTrialExecutionPlan, machineControllerProfile, deliveryManifest, packageIntegrity }) {
   const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
   const allowedFiles = safeTrialExecutionPlan?.filePolicy?.allowedOnMachine ?? [];
   const neverRunOnMachine = safeTrialExecutionPlan?.filePolicy?.neverRunOnMachine ?? [];
   const rows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
@@ -11318,7 +11326,10 @@ function createMvpOperatorStatus({ job, productionGate, productionUnlockMatrix, 
       id: "material-removal",
       label: "材料去除仿真",
       status: productionAudit?.gates?.find?.((gate) => gate.id === "material-removal-proof")?.status ?? "review",
-      requiredArtifact: "camotics-result-bundle.zip"
+      requiredArtifact: "camotics-result-bundle.zip",
+      summary: materialRemovalGate.summary,
+      residualEvidenceRequired: materialRemovalGate.residualEvidenceRequired,
+      nextActions: materialRemovalGate.nextActions ?? []
     },
     {
       id: "postprocess",
@@ -11380,6 +11391,7 @@ function createMvpOperatorStatus({ job, productionGate, productionUnlockMatrix, 
       ]
     },
     requiredEvidence,
+    materialRemovalGate,
     blockers: blockers.slice(0, 16),
     nextActions: productionReady
       ? ["下载正式生产包前复核 package-integrity.json、production-evidence-dossier.json 和现场验收记录。"]
@@ -11428,7 +11440,14 @@ function createMvpOperatorStatusMarkdown(status) {
     "",
     "## 生产放行证据",
     "",
-    ...status.requiredEvidence.map((item) => `- ${item.label}: ${item.status}，需要 ${item.requiredArtifact}`),
+    ...status.requiredEvidence.map((item) => `- ${item.label}: ${item.status}，需要 ${item.requiredArtifact}${item.summary ? `，${item.summary}` : ""}`),
+    "",
+    "## 材料去除/残料门禁",
+    "",
+    `- 状态: ${status.materialRemovalGate?.status ?? "review"}`,
+    `- 摘要: ${status.materialRemovalGate?.summary ?? "未生成材料去除/残料门禁摘要"}`,
+    `- 是否仍需残料/过切证据: ${status.materialRemovalGate?.residualEvidenceRequired === false ? "否" : "是"}`,
+    ...((status.materialRemovalGate?.nextActions ?? []).slice(0, 3).map((item) => `- 下一步: ${item}`)),
     "",
     "## 当前阻断/复核",
     "",
