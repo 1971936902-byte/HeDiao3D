@@ -78,6 +78,7 @@ console.log(JSON.stringify({
 function writeBlockedPackage(reason, message) {
   const packageJson = {
     schema: "hediao3d.camotics-cli-run-package.v1",
+    jobId: plan.jobId ?? null,
     createdAt: new Date().toISOString(),
     status: "blocked",
     sourceJobDir: jobDir,
