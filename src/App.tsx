@@ -1572,6 +1572,25 @@ type V3NativeCamReadinessSummary = {
   } | null;
 };
 
+type V3OpenCamLibProductionGapReview = {
+  schema?: string;
+  level?: string;
+  productionCandidateReady?: boolean;
+  criticalCount?: number;
+  reviewCount?: number;
+  productionBlockerCount?: number;
+  gapCount?: number;
+  topGaps?: Array<{
+    id?: string;
+    layer?: string;
+    severity?: string;
+    status?: string;
+    summary?: string;
+  }>;
+  nextActions?: string[];
+  productionBoundary?: string;
+} | null;
+
 type V3ReadinessSummary = {
   id: string;
   schema: string;
@@ -1705,6 +1724,24 @@ type V3ReadinessSummary = {
     sourceReportBindingRequired?: boolean;
     sourceReportBindingSummary?: string;
     sourceReportSha256?: string | null;
+    openCamLibRealCandidateStatus?: {
+      status?: string;
+      ready?: boolean;
+      level?: string | null;
+      productionGapReview?: V3OpenCamLibProductionGapReview;
+      summary?: string | null;
+    } | null;
+    openCamLibRealCandidate?: {
+      level?: string | null;
+      ok?: boolean;
+      productionLocked?: boolean;
+      candidatePackageLevel?: string | null;
+      candidatePackageBlockedReason?: string | null;
+      candidateReadyForImport?: boolean;
+      blockingCount?: number;
+      firstBlocking?: string | null;
+      productionGapReview?: V3OpenCamLibProductionGapReview;
+    } | null;
     targetMachineBoundaryStatus?: {
       schema?: string;
       status: string;
@@ -1809,6 +1846,7 @@ type V3ReadinessSummary = {
             missingForProduction?: string[];
             summary?: string | null;
           } | null;
+          productionGapReview?: V3OpenCamLibProductionGapReview;
           candidatePackageStep?: string;
           candidatePackage?: {
             filename?: string;
@@ -6701,6 +6739,11 @@ export function App() {
                       机型边界：{v3Readiness.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.summary ?? "真实 CAM 输出未证明适配三轴控制器 + Y轴旋转夹具 / wrapY / 4mm 25度平底尖刀。"}
                     </small>
                   )}
+                  {getNativeOpenCamLibProductionGapReview(v3Readiness.nativeCamRealOutputAcceptance) && (
+                    <small className={formatOpenCamLibProductionGapClass(getNativeOpenCamLibProductionGapReview(v3Readiness.nativeCamRealOutputAcceptance))}>
+                      OpenCAMLib差距审查：{formatOpenCamLibProductionGapReview(getNativeOpenCamLibProductionGapReview(v3Readiness.nativeCamRealOutputAcceptance))}
+                    </small>
+                  )}
                   <small className={v3Readiness.externalHandoff ? v3Readiness.externalHandoff.status === "completed" && v3Readiness.externalHandoff.simulationStatus === "completed" ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     Handoff：{v3Readiness.externalHandoff ? `${v3Readiness.externalHandoff.resultEngine ?? "-"} → ${v3Readiness.externalHandoff.simulationEngine ?? "-"}` : "未验证"}
                     {v3Readiness.externalHandoff?.syntheticSimulation ? " · synthetic仿真" : ""}
@@ -9520,8 +9563,34 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const packageFile = openCamLib?.candidatePackage?.exists ? "证据JSON已回填" : "";
   const machineFit = formatLinuxOpenCamLibMachineFit(openCamLib?.candidateMachineFit);
   const materialRemoval = formatLinuxOpenCamLibMaterialRemovalReadiness(openCamLib?.materialRemovalReadiness);
+  const productionGap = formatOpenCamLibProductionGapReview(openCamLib?.productionGapReview);
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
-  return [candidate, coverage, protectedZones, machineFit, materialRemoval, packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+  return [candidate, coverage, protectedZones, machineFit, materialRemoval, productionGap ? `差距 ${productionGap}` : "", packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+}
+
+function getNativeOpenCamLibProductionGapReview(acceptance: V3ReadinessSummary["nativeCamRealOutputAcceptance"]) {
+  return acceptance?.openCamLibRealCandidate?.productionGapReview
+    ?? acceptance?.openCamLibRealCandidateStatus?.productionGapReview
+    ?? null;
+}
+
+function formatOpenCamLibProductionGapClass(review: V3OpenCamLibProductionGapReview) {
+  if (!review) return "v3-inline-warning";
+  if ((review.criticalCount ?? 0) > 0) return "v3-inline-critical";
+  if ((review.productionBlockerCount ?? 0) > 0 || (review.reviewCount ?? 0) > 0) return "v3-inline-warning";
+  return review.productionCandidateReady ? "v3-inline-ok" : "v3-inline-warning";
+}
+
+function formatOpenCamLibProductionGapReview(review: V3OpenCamLibProductionGapReview) {
+  if (!review) return "";
+  const level = review.level ?? "missing";
+  const critical = Number(review.criticalCount ?? 0);
+  const productionBlockers = Number(review.productionBlockerCount ?? 0);
+  const reviewCount = Number(review.reviewCount ?? 0);
+  const gapCount = Number(review.gapCount ?? (review.topGaps?.length ?? 0));
+  const firstGap = review.topGaps?.[0]?.summary ? `首项 ${review.topGaps[0].summary}` : "";
+  const candidate = review.productionCandidateReady ? "候选可进入下游证据链" : "候选未闭合";
+  return [level, candidate, `critical ${critical}`, `productionBlocker ${productionBlockers}`, `review ${reviewCount}`, `gaps ${gapCount}`, firstGap].filter(Boolean).join(" · ");
 }
 
 function formatLinuxOpenCamLibMachineFit(machineFit: NonNullable<NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["openCamLib"]>["candidateMachineFit"]) {

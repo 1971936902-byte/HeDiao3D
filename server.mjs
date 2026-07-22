@@ -2302,6 +2302,7 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       candidatePackageLevel: report.openCamLibRealCandidate.candidatePackageLevel ?? null,
       candidatePackageBlockedReason: report.openCamLibRealCandidate.candidatePackageBlockedReason ?? null,
       candidateReadyForImport: Boolean(report.openCamLibRealCandidate.candidateReadyForImport),
+      productionGapReview: createOpenCamLibProductionGapReviewSummary(report.openCamLibRealCandidate.productionGapReview),
       blockingCount: Number(report.openCamLibRealCandidate.blockingCount ?? 0),
       firstBlocking: report.openCamLibRealCandidate.firstBlocking ?? null,
       sha256: report.openCamLibRealCandidate.sha256 ?? null
@@ -2378,6 +2379,7 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   const protectedZones = report.protectedZones ?? null;
   const candidateMachineFit = report.candidateMachineFit ?? null;
   const materialRemovalReadiness = report.materialRemovalReadiness ?? null;
+  const productionGapReview = createOpenCamLibProductionGapReviewSummary(report.productionGapReview);
   return {
     schema: "hediao3d.opencamlib-real-candidate-status.v1",
     status: ready ? "ready" : report.level === "blocked" ? "blocked" : "review",
@@ -2391,6 +2393,7 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     protectedZones,
     candidateMachineFit,
     materialRemovalReadiness,
+    productionGapReview,
     candidatePackageLevel: report.candidatePackageLevel ?? null,
     candidatePackageBlockedReason: report.candidatePackageBlockedReason ?? null,
     candidateReadyForImport: Boolean(report.candidateReadyForImport),
@@ -2398,6 +2401,33 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     summary: ready
       ? "OpenCAMLib one-command real candidate chain is ready for HeDiao3D import review."
       : `OpenCAMLib one-command real candidate chain 未就绪：level=${report.level ?? "missing"}，blocking=${blockingCount}。`
+  };
+}
+
+function createOpenCamLibProductionGapReviewSummary(review) {
+  if (!review || typeof review !== "object") return null;
+  const gaps = Array.isArray(review.gaps)
+    ? review.gaps
+    : Array.isArray(review.topGaps)
+      ? review.topGaps
+      : [];
+  return {
+    schema: review.schema ?? "hediao3d.opencamlib-production-gap-review.v1",
+    level: review.level ?? "blocked",
+    productionCandidateReady: Boolean(review.productionCandidateReady),
+    criticalCount: Number(review.criticalCount ?? gaps.filter((gap) => gap?.severity === "critical").length),
+    reviewCount: Number(review.reviewCount ?? gaps.filter((gap) => gap?.severity === "review").length),
+    productionBlockerCount: Number(review.productionBlockerCount ?? gaps.filter((gap) => gap?.severity === "production-blocker").length),
+    gapCount: Number(review.gapCount ?? gaps.length),
+    topGaps: gaps.slice(0, 6).map((gap) => ({
+      id: gap?.id ?? "unknown-gap",
+      layer: gap?.layer ?? "unknown",
+      severity: gap?.severity ?? "critical",
+      status: gap?.status ?? "blocked",
+      summary: gap?.summary ?? ""
+    })),
+    nextActions: Array.isArray(review.nextActions) ? review.nextActions.slice(0, 4).map((item) => String(item)) : [],
+    productionBoundary: review.productionBoundary ?? "This review never unlocks production NC by itself."
   };
 }
 
@@ -2462,6 +2492,12 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     ?? nativeCandidate?.materialRemovalReadiness
     ?? chainOpenCamLib?.materialRemovalReadiness
     ?? null;
+  const productionGapReview = createOpenCamLibProductionGapReviewSummary(
+    nativeCandidateStatus?.productionGapReview
+    ?? nativeCandidate?.productionGapReview
+    ?? chainOpenCamLib?.productionGapReview
+    ?? null
+  );
   const status = realCandidateReady && contactPathCoverage?.ready && protectedZones?.ready && candidatePackageReadyForImport
     ? "ready-for-review"
     : realCandidateKnown || contactPathCoverage?.status !== "missing" || candidatePackageLevel !== "missing"
@@ -2490,6 +2526,7 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     candidatePackageBlockedReason,
     candidateMachineFit,
     materialRemovalReadiness,
+    productionGapReview,
     firstBlocking: blocker,
     summary: status === "ready-for-review"
       ? "Linux OpenCAMLib 真实候选链路已具备可回填复核证据；仍需同 job 的材料去除、空跑和试雕证据后才可生产解锁。"
@@ -2751,6 +2788,7 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     };
   const candidateMachineFit = candidatePackage?.machineFit ?? contactReport?.candidateMachineFit ?? null;
   const materialRemovalReadiness = contactReport?.materialRemovalReadiness ?? null;
+  const productionGapReview = createOpenCamLibProductionGapReviewSummary(report?.productionGapReview ?? candidatePackage?.productionGapReview ?? null);
   return {
     schema: "hediao3d.opencamlib-real-candidate-run-summary.v1",
     sourceSchema: report?.schema ?? null,
@@ -2767,6 +2805,7 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     candidatePackageLevel: candidatePackage?.level ?? null,
     candidatePackageBlockedReason: candidatePackage?.blockedReason ?? null,
     candidateReadyForImport: Boolean(candidatePackage?.readyForImport),
+    productionGapReview,
     blockingCount: blocking.length,
     firstBlocking: blocking[0] ?? null,
     sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
@@ -3702,6 +3741,7 @@ function createV3ReadinessMarkdown(report) {
     `- CAM server config: ${report.camServerConfig ? `${report.camServerConfig.status} / ${report.camServerConfig.selectedEngineName} / missing=${report.camServerConfig.missingRequired.length}` : "missing"}`,
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Native CAM real output acceptance: ${report.nativeCamRealOutputAcceptance ? `${report.nativeCamRealOutputAcceptance.level} / productionCandidate=${report.nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${report.nativeCamRealOutputAcceptance.unsafeCount} / missing=${report.nativeCamRealOutputAcceptance.missingCount}` : "missing"}`,
+    `- OpenCAMLib production gap review: ${report.nativeCamRealOutputAcceptance?.openCamLibRealCandidate?.productionGapReview ? `${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.level} / critical=${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.criticalCount} / productionBlocker=${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.productionBlockerCount} / gaps=${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.gapCount}` : "missing"}`,
     `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / blocking=${report.runbookResult.blockingFailedCount ?? "unknown"} / identity=${report.runbookResult.identityValid ? "valid" : "invalid"} / productionSafe=${report.runbookResult.productionSafe ? "yes" : "no"} / report=${report.runbookResult.readinessReportId ?? "missing"}` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
     `- External CAM handoffs: ${report.externalCamHandoffs ? `${report.externalCamHandoffs.completedEngines.length}/${report.externalCamHandoffs.requiredEngines.length} engines (${report.externalCamHandoffs.completedEngines.join(", ") || "none"})` : "missing"}`,

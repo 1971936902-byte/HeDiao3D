@@ -99,6 +99,7 @@ async function main() {
   assert(markdown.includes("CAM server config"), "readiness markdown missing CAM server config summary");
   assert(markdown.includes("Native CAM server package"), "readiness markdown missing native CAM server package summary");
   assert(markdown.includes("Native CAM real output acceptance"), "readiness markdown missing native CAM real output acceptance summary");
+  assert(markdown.includes("OpenCAMLib production gap review"), "readiness markdown missing OpenCAMLib production gap review summary");
   assert(markdown.includes("CAMotics readiness evidence"), "readiness markdown missing CAMotics readiness evidence summary");
   assert(markdown.includes("Safe trial readiness"), "readiness markdown missing safe trial readiness summary");
   assert(markdown.includes("Adapter Handoff Audit"), "readiness markdown missing adapter handoff audit section");
@@ -231,6 +232,14 @@ function validateReadiness(report, label) {
     assert(report.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.schema === "hediao3d.native-cam-target-machine-boundary-status.v1", `${label} native CAM target boundary schema mismatch`);
     assert(["matched", "missing", "mismatch"].includes(report.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.status), `${label} native CAM target boundary status mismatch`);
     assert(typeof report.nativeCamRealOutputAcceptance.targetMachineBoundaryStatus.summary === "string", `${label} native CAM target boundary summary missing`);
+  }
+  if (report.nativeCamRealOutputAcceptance?.openCamLibRealCandidate?.productionGapReview) {
+    const review = report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview;
+    assert(review.schema === "hediao3d.opencamlib-production-gap-review.v1", `${label} OpenCAMLib production gap review schema mismatch`);
+    assert(typeof review.level === "string", `${label} OpenCAMLib production gap review level missing`);
+    assert(typeof review.criticalCount === "number", `${label} OpenCAMLib production gap review critical count missing`);
+    assert(typeof review.productionBlockerCount === "number", `${label} OpenCAMLib production gap review production blocker count missing`);
+    assert(Array.isArray(review.topGaps), `${label} OpenCAMLib production gap review top gaps missing`);
   }
   if (report.runbookResult) validateRunbookResult(report.runbookResult, `${label} runbookResult`);
   assert(Object.hasOwn(report, "externalHandoff"), `${label} missing externalHandoff field`);
