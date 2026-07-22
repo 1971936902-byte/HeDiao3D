@@ -117,10 +117,12 @@ async function main() {
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.sha256), "package integrity should hash local validation report");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "camotics-result-import.json" && file.sha256), "package integrity should hash CAMotics import audit");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "next-action-checklist.md" && file.sha256), "package integrity should hash refreshed next action checklist");
+  assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "safe-trial-execution-plan.json" && file.sha256), "package integrity should hash refreshed safe trial execution plan");
   assert(reloaded.result.summary.packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity should hash refreshed production closure audit");
   const resultArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
   const localValidationArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-local-validation.json`);
   const importAuditArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  const safeTrialExecutionPlan = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/safe-trial-execution-plan.json`);
   const nextActionChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/next-action-checklist.md`);
   const operatorDownloadChecklist = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/operator-download-checklist.md`);
   assert(localValidationArtifact.productionEvidenceEligible === true, "local validation artifact should preserve production evidence eligibility");
@@ -129,8 +131,12 @@ async function main() {
   assert(importAuditArtifact.binding?.preferredGcode?.status === "matched", "import audit should bind preferred G-code hash");
   assert(importAuditArtifact.binding?.camoticsCliRunPackage?.status === "matched", "import audit should bind CAMotics run package hash");
   assert(importAuditArtifact.localValidation?.productionEvidenceEligible === true, "import audit should summarize local validation");
+  assert(safeTrialExecutionPlan.productionReadiness?.materialRemovalGate?.id === "material-removal-proof", "refreshed safe trial plan should preserve material-removal residual gate");
+  assert(safeTrialExecutionPlan.productionReadiness?.materialRemovalGate?.status === "review", "safe trial plan should show residual gate review after material-removal import without residualValidation");
+  assert(safeTrialExecutionPlan.productionReadiness?.materialRemovalGate?.residualEvidenceRequired === true, "safe trial plan should still require residual evidence without residualValidation");
   assert(nextActionChecklist.includes("## 证据状态"), "next action checklist should be refreshed with evidence status");
   assert(nextActionChecklist.includes("仿真证据: material-removal-verified"), "next action checklist should show imported CAMotics evidence level");
+  assert(nextActionChecklist.includes("材料去除/残料门禁"), "next action checklist should show refreshed material-removal residual gate after CAMotics import");
   assert(operatorDownloadChecklist.includes("CAMotics 上游绑定"), "operator download checklist should show CAMotics upstream binding after import");
   assert(operatorDownloadChecklist.includes("候选包预检"), "operator download checklist should mention candidate package validation binding after import");
   assert(operatorDownloadChecklist.includes("机床适配"), "operator download checklist should show upstream machine-fit status after import");

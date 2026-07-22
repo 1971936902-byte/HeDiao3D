@@ -6842,6 +6842,12 @@ async function processOrchestratorJob(job, settings) {
   });
   await writeFile(join(job.workDir, "production-closure-audit.json"), JSON.stringify(productionClosureAudit, null, 2), "utf8");
   await writeFile(join(job.workDir, "production-closure-audit.md"), createProductionClosureAuditMarkdown(productionClosureAudit), "utf8");
+  const refreshedSafeTrialExecutionPlan = createRefreshedSafeTrialExecutionPlan(job, productionGate, readJsonFile(join(job.workDir, "production-evidence-dossier.json")));
+  if (refreshedSafeTrialExecutionPlan) {
+    await writeFile(join(job.workDir, "safe-trial-execution-plan.json"), JSON.stringify(refreshedSafeTrialExecutionPlan, null, 2), "utf8");
+    deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "safe-trial-execution-plan.json", "安全试雕执行计划", "report", true, "结构化记录导入模型、生成安全数据、下载核验、空跑/软料试雕和证据回填步骤。"));
+  }
+  await refreshNextActionChecklistArtifact(job);
   const mvpOperatorStatus = createMvpOperatorStatus({
     job,
     productionGate,
@@ -13731,6 +13737,12 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   });
   await writeFile(join(job.workDir, "production-closure-audit.json"), JSON.stringify(productionClosureAudit, null, 2), "utf8");
   await writeFile(join(job.workDir, "production-closure-audit.md"), createProductionClosureAuditMarkdown(productionClosureAudit), "utf8");
+  const refreshedSafeTrialExecutionPlan = createRefreshedSafeTrialExecutionPlan(job, productionGate, readJsonFile(join(job.workDir, "production-evidence-dossier.json")));
+  if (refreshedSafeTrialExecutionPlan) {
+    await writeFile(join(job.workDir, "safe-trial-execution-plan.json"), JSON.stringify(refreshedSafeTrialExecutionPlan, null, 2), "utf8");
+    deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "safe-trial-execution-plan.json", "安全试雕执行计划", "report", true, "结构化记录导入模型、生成安全数据、下载核验、空跑/软料试雕和证据回填步骤。"));
+  }
+  await refreshNextActionChecklistArtifact(job);
   const mvpOperatorStatus = createMvpOperatorStatus({
     job,
     productionGate,
@@ -13773,6 +13785,27 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     productionEvidenceDossier: refreshedProductionEvidenceDossier ?? readJsonFile(join(job.workDir, "production-evidence-dossier.json")),
     nativeCamRealOutputSnapshot
   };
+}
+
+function createRefreshedSafeTrialExecutionPlan(job, productionGate, productionEvidenceDossier) {
+  if (!job?.workDir) return null;
+  const jobSpec = readJsonFile(join(job.workDir, "job.json"));
+  const settings = jobSpec?.settings;
+  const postprocessProfile = readJsonFile(join(job.workDir, "postprocess-profile.json"));
+  const toolSetupSheet = readJsonFile(join(job.workDir, "tool-setup-sheet.json"));
+  const rotaryCalibrationSheet = readJsonFile(join(job.workDir, "rotary-calibration-sheet.json"));
+  const machineAcceptanceChecklist = readJsonFile(join(job.workDir, "machine-acceptance-checklist.json"));
+  if (!settings || !postprocessProfile || !toolSetupSheet || !rotaryCalibrationSheet || !machineAcceptanceChecklist) return null;
+  return createSafeTrialExecutionPlan({
+    job,
+    settings,
+    productionGate,
+    postprocessProfile,
+    toolSetupSheet,
+    rotaryCalibrationSheet,
+    machineAcceptanceChecklist,
+    productionEvidenceDossier
+  });
 }
 
 async function refreshNextActionChecklistArtifact(job) {
