@@ -168,6 +168,12 @@ async function main() {
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
+  assert(template.residualValidation?.schema === "hediao3d.residual-validation.v1", "result template should include residual validation schema");
+  assert(template.residualValidation?.maxGougeMm === null, "result template should require max gouge metric");
+  assert(template.residualValidation?.maxUndercutMm === null, "result template should require max undercut metric");
+  assert(template.residualValidation?.tolerances?.maxGougeMm === 0.03, "result template should expose gouge tolerance");
+  assert(template.residualValidation?.tolerances?.maxUndercutMm === 0.08, "result template should expose undercut tolerance");
+  assert(template.residualValidation?.productionResidualEvidenceReady === false, "result template must keep residual production evidence open by default");
 
   const runScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-linux-run.sh`);
   assert(runScript.includes("camotics"), "Linux run script should mention camotics command");
@@ -178,6 +184,9 @@ async function main() {
   assert(operatorChecklist.includes(runPackageSha256), "operator checklist should bind run package hash");
   assert(operatorChecklist.includes("inputs.machineContext.rotaryWrapAxis"), "operator checklist should require machine context");
   assert(operatorChecklist.includes("productionEvidenceEligible=true"), "operator checklist should require production evidence validation");
+  assert(operatorChecklist.includes("residualValidation.maxGougeMm"), "operator checklist should require residual max gouge review");
+  assert(operatorChecklist.includes("residualValidation.maxUndercutMm"), "operator checklist should require residual max undercut review");
+  assert(operatorChecklist.includes("swept-volume-validated"), "operator checklist should mention swept-volume residual validation basis");
   const validatorScript = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-validate.js`);
   assert(validatorScript.includes("hediao3d.camotics-result-local-validation.v1"), "validator should emit local validation schema");
   assert(validatorScript.includes("camotics-result-bundle.zip"), "validator should write uploadable CAMotics result bundle");
@@ -189,6 +198,9 @@ async function main() {
   assert(validatorScript.includes("opencamlibCandidatePackageValidation"), "validator should bind CAMotics results to candidate package validation evidence");
   assert(validatorScript.includes("opencamlibCandidatePackageBundle"), "validator should bind CAMotics results to candidate package bundle evidence");
   assert(validatorScript.includes("upstream-material-readiness"), "validator should check upstream material-removal readiness");
+  assert(validatorScript.includes("residualValidation"), "validator should summarize residual validation evidence");
+  assert(validatorScript.includes("maxGougeMm"), "validator should inspect residual max gouge");
+  assert(validatorScript.includes("maxUndercutMm"), "validator should inspect residual max undercut");
   const camoticsResultBundleDataUrl = runLocalValidatorFixture({
     jobId: job.id,
     validatorScript,
@@ -242,6 +254,7 @@ async function main() {
   assert(linuxZipNames.includes("hediao3d-v3-camotics/run/camotics-result-template.json"), "CAMotics Linux package missing result template");
   const camoticsLinuxManifest = JSON.parse(readStoredZipEntry(linuxPackage.bytes, "hediao3d-v3-camotics/camotics-linux-package-manifest.json"));
   assert(camoticsLinuxManifest.runPackage?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "CAMotics Linux manifest should expose Native CAM snapshot evidence hash");
+  assert(camoticsLinuxManifest.requiredSequence?.some((item) => item.includes("residualValidation.maxGougeMm") && item.includes("swept-volume-validated")), "CAMotics Linux manifest should guide residual validation evidence capture");
 
   const openCamLibInputsPackage = await getBinary(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/opencamlib-candidate-inputs.zip`);
   assert(openCamLibInputsPackage.bytes[0] === 0x50 && openCamLibInputsPackage.bytes[1] === 0x4b, "OpenCAMLib candidate input package should be a ZIP file");
@@ -287,6 +300,7 @@ async function main() {
   assert(linuxCamJobManifest.importBack?.linuxCamEvidenceUploadReportEndpoint === `/api/orchestrator/jobs/${job.id}/linux-cam-evidence-upload-report`, "Linux CAM job manifest should expose evidence upload report endpoint");
   assert(linuxCamJobManifest.camotics?.runPackage?.upstreamCamEvidence?.files?.some((file) => file.key === "nativeCamRealOutputSnapshot" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should expose Native CAM snapshot evidence hash");
   assert(linuxCamJobManifest.camotics?.runPackage?.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.riskCount === 1, "Linux CAM job manifest should preserve material simulation quality");
+  assert(linuxCamJobManifest.camotics?.requiredSequence?.some((item) => item.includes("residualValidation.maxGougeMm") && item.includes("maxUndercutMm")), "Linux CAM job manifest should require residual validation metrics when available");
   assert(linuxCamJobManifest.references?.some((file) => file.name === "hediao3d-v3-linux-cam-job/references/native-cam-real-output-snapshot.json" && file.sha256 === nativeSnapshotSha), "Linux CAM job manifest should hash Native CAM snapshot reference");
   const linuxCamJobReadme = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/README-LINUX-CAM-JOB.md");
   const linuxCamJobChecklist = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/OPERATOR-LINUX-CAM-CHECKLIST.md");
@@ -295,6 +309,7 @@ async function main() {
   assert(linuxCamJobReadme.includes("preflight-linux-cam-job.mjs"), "Linux CAM job README should document preflight");
   assert(linuxCamJobReadme.includes("install-linux-cam-deps.sh") && linuxCamJobReadme.includes("HEDIAO3D_INSTALL_DEPS=1"), "Linux CAM job README should document dependency installer dry-run boundary");
   assert(linuxCamJobReadme.includes("linux-cam-evidence-bundle"), "Linux CAM job README should mention unified evidence endpoint");
+  assert(linuxCamJobReadme.includes("residualValidation") && linuxCamJobReadme.includes("maxGougeMm"), "Linux CAM job README should mention residual validation fields");
   const linuxCamJobInstaller = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/install-linux-cam-deps.sh");
   const linuxCamJobPreflight = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/preflight-linux-cam-job.mjs");
   const linuxCamJobValidator = readStoredZipEntry(linuxCamJobPackage.bytes, "hediao3d-v3-linux-cam-job/validate-linux-cam-job.mjs");

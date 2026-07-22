@@ -18630,6 +18630,11 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
         "node camotics/run/camotics-result-validate.js camotics-result.json"
       ],
       expectedUpload: "camotics-result-bundle.zip",
+      requiredSequence: [
+        "按 camotics/run/camotics-result-template.json 填写真实材料去除体积 metrics.materialRemovedMm3。",
+        "如已完成残料/过切复核，填写 residualValidation.maxGougeMm、maxUndercutMm、maxResidualStockMm。",
+        "只有 measured 或 swept-volume/material-removal validated 且 gouge/undercut 在容差内，residualValidation.productionResidualEvidenceReady 才可置为 true。"
+      ],
       files: camoticsFiles
     },
     references,
@@ -18639,7 +18644,7 @@ function createLinuxCamJobPackageManifest({ jobId, runPackage, deliveryManifest,
       "运行 bash run-linux-cam-job.sh，或按 README 分步执行。",
       "准备/解压 HeDiao3D Native CAM server-package.zip，并把 native-cam/opencamlib-candidate-inputs 内文件复制进去。",
       "在 Native CAM 服务目录运行 OpenCAMLib 真实候选链路，生成 native-cam-real-output-bundle.zip。",
-      "在同一 job 上运行 CAMotics/等效材料去除仿真，生成 camotics-result-bundle.zip。",
+      "在同一 job 上运行 CAMotics/等效材料去除仿真，按模板填写 residualValidation.maxGougeMm/maxUndercutMm 等残料指标后生成 camotics-result-bundle.zip。",
       "把 native-cam-real-output-bundle.zip 和 camotics-result-bundle.zip 回填到 HeDiao3D V3。",
       "重新生成 readiness；只有总门禁、空跑、试雕和机床验收全部通过后，production-package 才能生成正式生产包。"
     ],
@@ -19683,7 +19688,7 @@ function createCamoticsLinuxPackageManifest(jobId, runPackage, deliveryManifest,
       "阅读 run/camotics-linux-operator-checklist.md。",
       "核验 inputs/camotics-preview.nc 的 SHA-256 与 manifest 中 preferredGcodeSha256 一致。",
       "运行 run/camotics-linux-run.sh，或用 CAMotics/等效仿真打开 inputs/camotics-preview.nc。",
-      "按 run/camotics-result-template.json 填写真实 camotics-result.json，并导出截图或材料去除 STL。",
+      "按 run/camotics-result-template.json 填写真实 camotics-result.json，并导出截图或材料去除 STL；如已完成残料/过切复核，同步填写 residualValidation.maxGougeMm、maxUndercutMm、validationBasis=swept-volume-validated/measured。",
       "运行 node run/camotics-result-validate.js camotics-result.json，生成 camotics-result-local-validation.json。",
       "将 camotics-result.json、camotics-result-local-validation.json 和截图/STL 回填到 HeDiao3D 当前 job。"
     ],
@@ -19832,6 +19837,7 @@ function createCamoticsLinuxPackageReadme(packageManifest) {
     "- 本包只用于 Linux CAM 服务器上的 CAMotics/等效材料去除仿真。",
     "- 本包内所有 NC 和脚本都不是正式上机加工文件。",
     "- `inputs/camotics-preview.nc` 是展开三轴仿真文件，禁止上机。",
+    "- `run/camotics-result-template.json` 已包含 `residualValidation` 模板；没有 measured/swept-volume validated 的残料/过切指标时，生产残料证据保持未闭合。",
     "- 正式生产 NC 下载仍由 `production-evidence-dossier.json` 和 `productionReadinessAudit` 锁定。",
     "",
     "## 执行顺序",

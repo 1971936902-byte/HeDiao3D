@@ -338,6 +338,7 @@ function inspectWrittenRunPackage(path) {
 function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity) {
   const machineContext = motionProfile?.machineContext ?? createMachineContextFromGcode(preferred.exists ? readFileSync(preferred.path, "utf8") : "");
   const runPackage = readJsonIfExists(runPackageIdentity.path) ?? {};
+  const residualValidation = createResidualValidationTemplate();
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId: plan.jobId ?? null,
@@ -368,6 +369,7 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
       zMax: motionProfile?.zMax ?? null,
       materialRemovedMm3: null
     },
+    residualValidation,
     artifacts: {
       screenshot: "camotics-preview.png",
       materialMesh: "camotics-material-removal.stl"
@@ -377,8 +379,34 @@ function createResultTemplate(plan, preferred, motionProfile, runPackageIdentity
       "materialRemovedMm3 must come from the real CAMotics/material-removal run.",
       "If CAMotics is not usable on this Linux host, record the equivalent simulator name/version/sourceCommand and keep synthetic=false only for real material-removal evidence.",
       "If inputs.upstreamCamEvidence.required=true, keep every listed upstream CAM/OpenCAMLib SHA-256 unchanged.",
+      "Fill residualValidation.maxGougeMm/maxUndercutMm/maxResidualStockMm from measured or swept-volume-validated evidence when available.",
+      "Without residualValidation, productionResidualEvidenceReady remains false even when material-removal validation can be imported.",
       "Do not import this template until the screenshot or material-removal STL exists.",
       "Synthetic or hand-edited fixture evidence must remain locked for production."
+    ]
+  };
+}
+
+function createResidualValidationTemplate() {
+  return {
+    schema: "hediao3d.residual-validation.v1",
+    status: "missing",
+    productionResidualEvidenceReady: false,
+    present: false,
+    measured: false,
+    validationBasis: "fill: measured | swept-volume-validated | material-removal-validated",
+    evidenceClass: "fill: material-removal-validated",
+    maxGougeMm: null,
+    maxUndercutMm: null,
+    maxResidualStockMm: null,
+    tolerances: {
+      maxGougeMm: 0.03,
+      maxUndercutMm: 0.08
+    },
+    notes: [
+      "没有这些指标时材料去除证据可导入，但 productionResidualEvidenceReady=false。",
+      "只有 measured 或 swept-volume/material-removal validated 且 gouge/undercut 在容差内，残料/过切证据才可闭合。",
+      "若只完成工程估算，请保持 productionResidualEvidenceReady=false。"
     ]
   };
 }
@@ -592,6 +620,9 @@ function createLinuxOperatorChecklist(packageJson, runPackageIdentity, resultTem
     "",
     `- [ ] 复制 \`camotics-result-template.json\` 为 \`${resultJson}\`。`,
     `- [ ] 填写 \`${resultJson}\` 的真实材料去除体积 \`metrics.materialRemovedMm3\`。`,
+    `- [ ] 如已完成测量或 swept-volume/material-removal validated 复核，填写 \`${resultJson}\` 的 \`residualValidation.maxGougeMm\`、\`residualValidation.maxUndercutMm\`、\`residualValidation.maxResidualStockMm\`。`,
+    "- [ ] 若 gouge/undercut 均在容差内，将 `residualValidation.validationBasis` 设为 `swept-volume-validated`、`material-removal-validated` 或 `measured`，并确认 `residualValidation.productionResidualEvidenceReady=true`。",
+    "- [ ] 若缺少残料/过切实测或 swept-volume 证据，保持 `residualValidation.productionResidualEvidenceReady=false`，不要把材料去除证据误认为生产残料闭合。",
     `- [ ] 确认 \`inputs.preferredGcodeSha256\` 等于 \`${expectedHash}\`。`,
     `- [ ] 确认 \`inputs.camoticsCliRunPackageSha256\` 等于 \`${runPackageIdentity.sha256}\`。`,
     `- [ ] 确认 \`inputs.machineContext.rotaryWrapAxis\` 等于 \`${machineContext.rotaryWrapAxis ?? "missing"}\`。`,
@@ -678,6 +709,7 @@ check("material-volume", Number.isFinite(Number(result?.metrics?.materialRemoved
 
 const artifactEvidence = inspectArtifacts(result, resultPath, expected);
 check("visual-or-material-artifact", artifactEvidence.hasScreenshot || artifactEvidence.hasMaterialMesh, "Provide at least one existing artifact: camotics-preview.png or camotics-material-removal.stl.");
+const residualValidation = inspectResidualValidation(result);
 
 const ok = checks.every((item) => item.ok);
 const missing = checks.filter((item) => !item.ok).map((item) => item.id);
@@ -691,6 +723,7 @@ const report = {
   checks,
   missing,
   artifactEvidence,
+  residualValidation,
   expected: {
     preferredGcodeSha256: expected.preferredGcodeSha256,
     camoticsCliRunPackageSha256: expected.camoticsCliRunPackageSha256,
@@ -821,6 +854,52 @@ function inspectArtifacts(result, resultPath, expected) {
   };
 }
 
+function inspectResidualValidation(result) {
+  const raw = result?.residualValidation && typeof result.residualValidation === "object"
+    ? result.residualValidation
+    : result?.metrics?.residualValidation && typeof result.metrics.residualValidation === "object"
+      ? result.metrics.residualValidation
+      : null;
+  const maxGougeMm = finiteOrNull(raw?.maxGougeMm);
+  const maxUndercutMm = finiteOrNull(raw?.maxUndercutMm);
+  const maxResidualStockMm = finiteOrNull(raw?.maxResidualStockMm);
+  const gougeTolerance = finiteOrNull(raw?.tolerances?.maxGougeMm) ?? 0.03;
+  const undercutTolerance = finiteOrNull(raw?.tolerances?.maxUndercutMm) ?? 0.08;
+  const basis = String(raw?.validationBasis ?? "");
+  const validatedBasis = /measured|swept-volume-validated|material-removal-validated/i.test(basis);
+  const withinTolerance = Number.isFinite(maxGougeMm)
+    && Number.isFinite(maxUndercutMm)
+    && maxGougeMm <= gougeTolerance
+    && maxUndercutMm <= undercutTolerance;
+  const productionResidualEvidenceReady = Boolean(raw?.productionResidualEvidenceReady) && Boolean(raw?.measured || validatedBasis) && withinTolerance;
+  return {
+    schema: "hediao3d.residual-validation.v1",
+    present: Boolean(raw),
+    measured: Boolean(raw?.measured),
+    status: productionResidualEvidenceReady ? "ready" : raw ? "incomplete" : "missing",
+    validationBasis: raw?.validationBasis ?? null,
+    evidenceClass: raw?.evidenceClass ?? null,
+    maxGougeMm,
+    maxUndercutMm,
+    maxResidualStockMm,
+    tolerances: {
+      maxGougeMm: gougeTolerance,
+      maxUndercutMm: undercutTolerance
+    },
+    withinTolerance,
+    productionResidualEvidenceReady,
+    summary: productionResidualEvidenceReady
+      ? "Residual/gouge evidence is closed for server-side review."
+      : raw
+        ? "Residual/gouge fields are present but not production-closed; material-removal evidence may still be imported as non-production closure."
+        : "No residualValidation was provided; material-removal evidence may pass while residual production evidence remains open."
+  };
+}
+
+function finiteOrNull(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
 function resolveArtifact(value, sourceDir) {
   if (!value || typeof value !== "string") return null;
   if (isAbsolute(value)) return value;
@@ -858,6 +937,7 @@ function createResultBundle({ resultPath, localValidationPath, artifactEvidence 
         "- camotics-result-local-validation.json",
         "- camotics-result-bundle-manifest.json",
         "- camotics-preview.png and/or camotics-material-removal.stl when available",
+        "- residualValidation summary when provided in camotics-result.json",
         "",
         "This bundle is material-removal evidence for readiness gates only. It does not unlock production NC by itself.",
         ""
@@ -901,7 +981,8 @@ function createResultBundleManifest(files, resultContent, localValidationContent
       preferredGcodeSha256: result?.inputs?.preferredGcodeSha256 ?? null,
       camoticsCliRunPackageSha256: result?.inputs?.camoticsCliRunPackageSha256 ?? null,
       machineContext: result?.inputs?.machineContext ?? null,
-      upstreamCamEvidence: result?.inputs?.upstreamCamEvidence ?? null
+      upstreamCamEvidence: result?.inputs?.upstreamCamEvidence ?? null,
+      residualValidation: result?.residualValidation ?? result?.metrics?.residualValidation ?? null
     },
     localValidation: {
       schema: localValidation?.schema ?? null,
