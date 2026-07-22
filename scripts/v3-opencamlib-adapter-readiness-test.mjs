@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const workDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-adapter-readiness-"));
-const python = process.env.PYTHON ?? "python";
+const python = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
 const adapterPath = resolve("adapters", "opencamlib", "opencamlib_job.py");
 
 try {

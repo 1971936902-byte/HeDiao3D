@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const workDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-contact-spike-"));
-const python = process.env.PYTHON ?? "python";
+const python = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
 const spikePath = resolve("adapters", "opencamlib", "opencamlib_contact_spike.py");
 const outPath = join(workDir, "opencamlib-real-contact-spike.json");
 const neutralPath = join(workDir, "neutral-toolpath-spike.json");

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const workDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-probe-"));
-const python = process.env.PYTHON ?? "python";
+const python = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
 const probePath = resolve("adapters", "opencamlib", "opencamlib_probe.py");
 const outPath = join(workDir, "opencamlib-runtime-probe.json");
 

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 
 const workDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-runner-contract-"));
 const runnerPath = resolve("adapters", "opencamlib", "opencamlib_runner.py");
-const python = process.env.PYTHON ?? "python";
+const python = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
 
 try {
   const jobPath = join(workDir, "job.json");
@@ -178,7 +178,14 @@ try {
   assert(readiness.checks?.some((check) => check.id === "real-contact-spike"), "runner readiness should include contact spike check");
   assert(readiness.geometry?.triangleCount === 2, "runner readiness should preserve parsed model geometry");
   assert(readiness.target?.machineProfileId === "desktop-3axis-rotary-y", "runner readiness should preserve target machine profile");
-  assert(Array.isArray(readiness.blockers) && readiness.blockers.length > 0, "runner readiness should explain fail-closed blockers");
+  assert(Array.isArray(readiness.blockers), "runner readiness should expose blockers array");
+  if (readiness.level === "blocked") {
+    assert(readiness.blockers.length > 0, "blocked runner readiness should explain fail-closed blockers");
+  } else {
+    assert(readiness.level === "ready-for-real-contact-runner", `unexpected non-blocked readiness level: ${readiness.level}`);
+    assert(readiness.checks?.every((check) => check.status === "pass"), "ready runner readiness should only contain passing preflight checks");
+    assert(/Production remains locked/i.test(readiness.productionBoundary ?? ""), "ready runner readiness should still state production lock boundary");
+  }
 
   console.log(JSON.stringify({
     ok: true,
