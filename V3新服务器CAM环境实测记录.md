@@ -193,3 +193,57 @@ buddha-e2e: ok=true, points=8979, machineAxes X/Y/Z present, A=0, rotaryCoverage
 2. 在服务器运行 `opencamlib-real-candidate-run.mjs`，产出真实候选 neutral/contact/candidate package。
 3. 继续解决 CAMotics 安装或接入等效材料去除仿真器。
 4. 将真实 CAM 与材料去除证据回填同一个 V3 job。
+
+## 2026-07-22 15:05 佛头 Linux CAM 整单复测
+
+本次服务器提交：
+
+```text
+e302072 stream opencamlib candidate point stats
+```
+
+复测命令链路：
+
+```bash
+npm run test:v3:native-cam
+curl /api/orchestrator/jobs/970989c4-c357-4360-94e8-931fa3e55bab/linux-cam-job-package
+bash run-linux-cam-job.sh
+node validate-linux-cam-job.mjs .
+POST /api/orchestrator/jobs/970989c4-c357-4360-94e8-931fa3e55bab/linux-cam-evidence-bundle
+```
+
+关键结果：
+
+```text
+Native CAM readiness: ok=true, level=ready, ready=4/4
+Linux CAM preflight: level=ready, required=12/12
+native-cam-real-output-bundle.zip: generated, 76KB
+neutral-toolpath points: 1,487,639
+machineFit.level: ok
+machineFit.depthMax: 0.6096mm
+machineFit.rotaryCoverageRatio: 0.9944444444
+targetMachineBoundary: matched
+```
+
+已修复的问题：
+
+```text
+1. native-cam-real-output-check.sh 不再强依赖 FreeCAD proof 测试通过，OpenCAMLib real-candidate 成为佛头整单的主证据链。
+2. critical acceptance 也会生成 native-cam-real-output-bundle.zip，便于回填和审计，不再只留下中断日志。
+3. OpenCAMLib candidate package 对 148 万级刀位点改为流式统计，避免 Math.min(...points) / Math.max(...points) 导致 Maximum call stack size exceeded。
+4. Native CAM 真实输出包会复制到 Native CAM 根目录，Linux 整单包可以稳定回收。
+```
+
+当前仍保持阻断：
+
+```text
+native acceptance level: critical
+contactValidation.level: critical
+contactValidation.pathCoverage: ready
+candidatePackage.level: critical
+candidatePackage.blockedReason: OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.
+camotics-result-bundle.zip: missing
+productionAllowed: false
+```
+
+解释：这次已经证明佛头 OpenCAMLib 大规模刀位点可生成、可校验、机床边界匹配，且不再因为脚本错误中断。但它仍只是工程证据，不是可直接上机生产的 NC。下一步必须补同一 job 的材料去除仿真或等效残余验证，再进入离料空跑和软料试雕。
