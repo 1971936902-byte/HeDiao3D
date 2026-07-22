@@ -79,6 +79,59 @@ ready=4/4
 blockers=[]
 ```
 
+### 佛头 Linux CAM 整单回填实测
+
+时间：2026-07-22 17:17
+
+样件：
+
+```text
+jobId=970989c4-c357-4360-94e8-931fa3e55bab
+model=/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl
+toolpathPoints=8979
+packageLevel=trial-only
+allowAirRun=true
+allowTrialNc=true
+allowProductionNc=false
+```
+
+执行：
+
+```bash
+npm run test:v3:native-cam
+curl -fsS http://127.0.0.1/api/orchestrator/jobs/970989c4-c357-4360-94e8-931fa3e55bab/linux-cam-job-package -o linux-cam-job-package.zip
+HEDIAO3D_NATIVE_CAM_SERVER_DIR=/opt/hediao3d/public/native-cam-readiness/2026-07-22T09-12-40-919Z bash run-linux-cam-job.sh
+HEDIAO3D_V3_API_BASE=http://127.0.0.1 node upload-linux-cam-evidence.mjs .
+curl -fsS -X POST http://127.0.0.1/api/orchestrator/readiness
+```
+
+结果：
+
+```text
+linux-cam-job-local-validation.level=ready-for-v3-upload
+native-cam-real-output-bundle.zip=已生成并上传
+camotics-result-bundle.zip=已生成并上传
+readiness.level=blocked
+readiness.safeTrialReadiness.status=safe-trial-ready
+productionAllowed=false
+```
+
+OpenCAMLib 真实候选差距审查已进入 readiness：
+
+```text
+productionGapReview.level=blocked
+criticalCount=3
+productionBlockerCount=1
+gapCount=4
+topGaps:
+- strict-contact-validation-not-ready: Strict cutter-contact validation is critical.
+- experimental-real-api: OpenCAMLib output is still experimental engineering evidence, not a production candidate.
+- production-residual-not-closed: Residual/gouge evidence is not closed for production use.
+- hediao3d-import-contract-not-ready: OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.
+```
+
+结论：Linux 小闭环从整单包下载、服务器执行、Native CAM/CAMotics 证据上传、readiness 复核已经跑通；当前阻断点明确集中在 OpenCAMLib 真实 cutter-contact 生产候选证据、残料/过切闭合和现场验收，不能解锁生产 NC。
+
 ### OpenCAMLib runtime probe
 
 ```bash
