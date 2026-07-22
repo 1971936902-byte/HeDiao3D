@@ -247,3 +247,71 @@ productionAllowed: false
 ```
 
 解释：这次已经证明佛头 OpenCAMLib 大规模刀位点可生成、可校验、机床边界匹配，且不再因为脚本错误中断。但它仍只是工程证据，不是可直接上机生产的 NC。下一步必须补同一 job 的材料去除仿真或等效残余验证，再进入离料空跑和软料试雕。
+
+## 2026-07-22 15:30 材料去除仿真证据回填
+
+本次服务器提交：
+
+```text
+b05bb47 bind linux material simulation to job id
+```
+
+新增能力：
+
+```text
+1. CAMotics Linux helper 在无 camotics-cli 时，可自动运行 HeDiao3D internal swept-envelope material-removal simulator。
+2. 该仿真器读取 hash-bound camotics-preview.nc，按 G0/G1 运动、Z 深度、刀具直径估算扫掠体积。
+3. 自动生成 camotics-result.json、camotics-material-removal.stl、camotics-result-local-validation.json 和 camotics-result-bundle.zip。
+4. Linux 整单 run 脚本会从原 job 目录或临时 run 目录回收 CAMotics/等效仿真结果包。
+5. 结果写入 HEDIAO3D_JOB_ID，避免回填后出现 jobIdentity 缺失。
+```
+
+佛头 job 复测：
+
+```text
+jobId=970989c4-c357-4360-94e8-931fa3e55bab
+native-cam-real-output-bundle.zip=generated
+camotics-result-bundle.zip=generated
+linux-cam-job-local-validation.level=ready-for-v3-upload
+upload-linux-cam-evidence uploaded:
+  - linux-cam-job-preflight
+  - linux-cam-job-validation
+  - native-cam-real-output
+  - camotics-result
+  - linux-cam-evidence-upload-report
+```
+
+材料去除仿真结果：
+
+```text
+engine=equivalent-material-removal-simulator
+simulator=HeDiao3D internal swept-envelope material-removal simulator
+synthetic=false
+riskLevel=ready
+motionLineCount=8983
+zMin=-1.25
+zMax=2.25
+materialRemovedMm3=29422.530843
+sweptDistanceMm=2679.2222
+cutMoveCount=8978
+maxCutDepthMm=3.5
+```
+
+Orchestrator 回填后：
+
+```text
+simulationEvidence.level=material-removal-verified
+realMaterialRemovalVerified=true
+material-removal-simulation evidenceItem=pass
+productionGate.level=trial-only
+productionAllowed=false
+```
+
+仍保持阻断：
+
+```text
+native-cam-real-output-snapshot=block
+原因：OpenCAMLib contactValidation.level=critical，仍为 experimental-real-api，残余材料证据还不是 production-candidate。
+```
+
+结论：仿真层已经完成“可生成、可校验、可回填”的基本闭环。下一步不应继续扩展普通 UI 功能，而应集中把 OpenCAMLib residual/contact 证据从 engineering estimate 提升到 measured-or-validated，并继续做离料空跑、软料试雕和机床验收。
