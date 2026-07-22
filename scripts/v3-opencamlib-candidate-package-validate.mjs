@@ -254,13 +254,12 @@ function createNeutralMachineFitPreflight(neutral, plan) {
     errors.push("rotary-wrap neutral output has no usable A angle or Y linearized rotary coordinate.");
   }
 
-  const xs = finitePoints.map((point) => Number(point.x));
-  const depths = finitePoints.map((point) => Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, settings.safeZ - Number(point.z)));
-  const xMin = xs.length ? Math.min(...xs) : null;
-  const xMax = xs.length ? Math.max(...xs) : null;
-  const depthMax = depths.length ? Math.max(...depths) : null;
-  const holdZonePointCount = finitePoints.filter((point) => Number(point.x) < settings.safeMinX || Number(point.x) > settings.safeMaxX).length;
-  const deepPointCount = depths.filter((depth) => depth > settings.depthLimitMm).length;
+  const stats = createMachineFitPointStats(finitePoints, settings);
+  const xMin = stats.xMin;
+  const xMax = stats.xMax;
+  const depthMax = stats.depthMax;
+  const holdZonePointCount = stats.holdZonePointCount;
+  const deepPointCount = stats.deepPointCount;
   const rotaryCoverage = calculateRotaryCoverage(rotaryValues);
   const expectedRotaryCoverageDeg = settings.expectedRotaryCoverageDeg;
   const rotaryCoverageRatio = settings.rotaryMode && expectedRotaryCoverageDeg > 0
@@ -369,13 +368,34 @@ function calculateRotaryCoverage(angles) {
   if (normalized.length === 1) return { minDeg: normalized[0], maxDeg: normalized[0], spanDeg: 0 };
   const directSpan = normalized[normalized.length - 1] - normalized[0];
   const wrapGap = 360 - directSpan;
-  const gaps = normalized.slice(1).map((angle, index) => angle - normalized[index]);
-  const largestGap = Math.max(wrapGap, ...gaps);
+  let largestGap = wrapGap;
+  for (let index = 1; index < normalized.length; index += 1) {
+    largestGap = Math.max(largestGap, normalized[index] - normalized[index - 1]);
+  }
   return {
     minDeg: normalized[0],
     maxDeg: normalized[normalized.length - 1],
     spanDeg: Math.max(0, 360 - largestGap)
   };
+}
+
+function createMachineFitPointStats(points, settings) {
+  let xMin = null;
+  let xMax = null;
+  let depthMax = null;
+  let holdZonePointCount = 0;
+  let deepPointCount = 0;
+  for (const point of points) {
+    const x = Number(point.x);
+    const z = Number(point.z);
+    const depth = Number.isFinite(Number(point.depth)) ? Number(point.depth) : Math.max(0, settings.safeZ - z);
+    xMin = xMin === null ? x : Math.min(xMin, x);
+    xMax = xMax === null ? x : Math.max(xMax, x);
+    depthMax = depthMax === null ? depth : Math.max(depthMax, depth);
+    if (x < settings.safeMinX || x > settings.safeMaxX) holdZonePointCount += 1;
+    if (depth > settings.depthLimitMm) deepPointCount += 1;
+  }
+  return { xMin, xMax, depthMax, holdZonePointCount, deepPointCount };
 }
 
 function normalizeAngle(value) {
