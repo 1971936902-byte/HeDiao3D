@@ -86,15 +86,16 @@ async function main() {
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
   const previewMotionProfile = createPreviewMotionProfile(previewText);
   const runPackageText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-cli-run-package.json`);
-  const camoticsImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+  const camoticsWithoutResidual = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({
-      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, sha256(previewText), previewMotionProfile, sha256(runPackageText)), null, 2),
+      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, sha256(previewText), previewMotionProfile, sha256(runPackageText), { includeResidualValidation: false }), null, 2),
       "camotics-result-local-validation.json": JSON.stringify(createLocalValidation(), null, 2),
       "camotics-preview.png": "production-package-unlock-fixture-png",
       "camotics-material-removal.stl": "solid production_package_unlock\nendsolid production_package_unlock\n"
     })
   });
-  assert(camoticsImport.simulationEvidence?.productionUnlockEligible === true, "CAMotics evidence should be production eligible");
+  assert(camoticsWithoutResidual.simulationEvidence?.productionUnlockEligible === true, "CAMotics evidence should be material-removal eligible before residual closure");
+  assert(camoticsWithoutResidual.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === false, "CAMotics evidence without residualValidation must not close residual production evidence");
 
   const packageIntegrity = await getArtifactJson(job.id, "package-integrity.json");
   const downloadIntegrity = createDownloadIntegrityEvidence(packageIntegrity);
@@ -142,8 +143,24 @@ async function main() {
       { id: "soft-material-trial", passed: true, evidenceNote: "Soft material trial passed." }
     ]
   });
-  assert(acceptance.productionEvidenceDossier?.crossChecks?.productionReadinessAudit?.allowProductionPackage === true, "complete evidence should allow production package");
-  assert(acceptance.productionEvidenceDossier?.status === "production-evidence-complete", "dossier should become production-evidence-complete");
+  assert(acceptance.productionEvidenceDossier?.crossChecks?.productionReadinessAudit?.allowProductionPackage === false, "field evidence without residualValidation must not allow production package");
+  assert(acceptance.productionEvidenceDossier?.status !== "production-evidence-complete", "dossier without residualValidation must stay incomplete");
+  const lockedWithoutResidual = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
+  const lockedMaterialRemovalGate = lockedWithoutResidual.productionReadinessAudit?.gates?.find((gate) => gate.id === "material-removal-proof");
+  assert(lockedMaterialRemovalGate?.status === "review", "locked production package should identify residual material-removal proof as review");
+  assert(/残料|过切|residual|gouge/i.test(lockedMaterialRemovalGate?.summary ?? ""), "locked material-removal gate should mention residual/gouge evidence gap");
+
+  const camoticsWithResidual = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": JSON.stringify(createCamoticsResult(job.id, sha256(previewText), previewMotionProfile, sha256(runPackageText), { includeResidualValidation: true }), null, 2),
+      "camotics-result-local-validation.json": JSON.stringify(createLocalValidation(), null, 2),
+      "camotics-preview.png": "production-package-unlock-fixture-png-with-residual",
+      "camotics-material-removal.stl": "solid production_package_unlock_residual\nendsolid production_package_unlock_residual\n"
+    })
+  });
+  assert(camoticsWithResidual.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === true, "CAMotics evidence with residualValidation should close residual production evidence");
+  assert(camoticsWithResidual.productionEvidenceDossier?.crossChecks?.productionReadinessAudit?.allowProductionPackage === true, "complete evidence with residualValidation should allow production package");
+  assert(camoticsWithResidual.productionEvidenceDossier?.status === "production-evidence-complete", "dossier should become production-evidence-complete after residualValidation");
 
   const productionPackage = await fetch(`${baseUrl}/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`);
   const packageBuffer = Buffer.from(await productionPackage.arrayBuffer());
@@ -163,6 +180,8 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     jobId: job.id,
+    residualGateLockedWithoutResidual: true,
+    residualGateStatusWithoutResidual: lockedMaterialRemovalGate.status,
     dossierStatus: dossier.status,
     productionPackageBytes: packageBuffer.length,
     productionAllowed: true
@@ -266,7 +285,8 @@ function createCandidateNeutral(options = {}) {
   return neutral;
 }
 
-function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256) {
+function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, options = {}) {
+  const includeResidualValidation = options.includeResidualValidation !== false;
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId,
@@ -288,7 +308,7 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       zMax: motionProfile.zMax,
       materialRemovedMm3: 8.8
     },
-    residualValidation: {
+    ...(includeResidualValidation ? { residualValidation: {
       schema: "hediao3d.residual-validation.v1",
       status: "ready",
       productionResidualEvidenceReady: true,
@@ -310,7 +330,7 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       ],
       topBlockers: [],
       summary: "Production package unlock fixture residual/gouge evidence is within tolerance."
-    }
+    } } : {})
   };
 }
 
