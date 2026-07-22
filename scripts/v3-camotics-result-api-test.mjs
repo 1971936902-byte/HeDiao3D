@@ -80,6 +80,9 @@ async function main() {
   assert(completeImport.adapterReport?.localValidation?.productionEvidenceEligible === true, "adapter report should expose passing local validation");
   assert(completeImport.simulationEvidence?.level === "material-removal-verified", `expected material-removal-verified, got ${completeImport.simulationEvidence?.level}`);
   assert(completeImport.simulationEvidence?.productionUnlockEligible === true, "complete CAMotics import should be production evidence eligible");
+  assert(completeImport.simulationEvidence?.residualClosureReview?.schema === "hediao3d.residual-closure-review.v1", "complete CAMotics import should expose residual closure review");
+  assert(["engineering-closed", "simulation-verified-upstream-review"].includes(completeImport.simulationEvidence?.residualClosureReview?.status), `expected reviewed residual closure, got ${completeImport.simulationEvidence?.residualClosureReview?.status}`);
+  assert(completeImport.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === false, "residual closure review must preserve production residual boundary");
   assert(completeImport.productionUnlockMatrix?.rows?.some((row) => row.id === "simulation-evidence" && row.status === "pass"), "unlock matrix should mark simulation row pass");
   assert(completeImport.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "complete import response missing production closure audit");
   assert(completeImport.productionClosureAudit.steps?.some((step) => step.id === "camotics-material-removal"), "complete import closure audit should include CAMotics material-removal step");
@@ -94,10 +97,14 @@ async function main() {
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsCliRunPackageBindingStatus === "matched", "evidence dossier should expose matched CAMotics CLI package binding");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsMotionConsistencyStatus === "matched", "evidence dossier should expose matched CAMotics motion consistency");
   assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.camoticsMachineContextStatus === "matched", "evidence dossier should expose matched CAMotics machine context");
+  assert(["engineering-closed", "simulation-verified-upstream-review"].includes(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.residualClosureStatus), "evidence dossier should expose residual closure review status");
+  assert(reloaded.result.summary.productionEvidenceDossier?.crossChecks?.residualProductionEvidenceReady === false, "evidence dossier should preserve residual production boundary");
+  assert(reloaded.result.summary.productionEvidenceDossier?.evidenceItems?.some((item) => item.id === "residual-closure-review" && item.status === "review"), "evidence dossier should expose residual closure review item");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.inputIdentityStatus === "matched", "package index should expose CAMotics input identity");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.cliRunPackageBindingStatus === "matched", "package index should expose CAMotics CLI package binding");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.motionConsistencyStatus === "matched", "package index should expose CAMotics motion consistency");
   assert(reloaded.result.summary.machiningPackageIndex?.camotics?.machineContextStatus === "matched", "package index should expose CAMotics machine context");
+  assert(["engineering-closed", "simulation-verified-upstream-review"].includes(reloaded.result.summary.machiningPackageIndex?.camotics?.residualClosureReview?.status), "package index should expose residual closure review");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result.json" && file.exists), "delivery manifest should expose camotics result");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-local-validation.json" && file.exists), "delivery manifest should expose local validation report");
   assert(reloaded.result.summary.deliveryManifest.files?.some((file) => file.filename === "camotics-result-import.json" && file.exists), "delivery manifest should expose CAMotics import audit");

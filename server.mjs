@@ -8728,6 +8728,10 @@ function createSimulationEvidence(simulationSummary) {
   const evidenceQuality = adapter?.evidenceQuality ?? null;
   const evidenceComplete = evidenceQuality?.productionEvidenceEligible === true;
   const realMaterialRemovalVerified = simulationSummary?.engine === "camotics" && adapterCompleted && !synthetic && evidenceComplete;
+  const residualClosureReview = createResidualClosureReviewFromCamoticsEvidence({
+    realMaterialRemovalVerified,
+    evidenceQuality
+  });
   const level = realMaterialRemovalVerified
     ? "material-removal-verified"
     : synthetic
@@ -8759,10 +8763,69 @@ function createSimulationEvidence(simulationSummary) {
     engine: simulationSummary?.engine ?? "unknown",
     adapterStatus: adapter?.status ?? "missing",
     evidenceQuality,
+    residualClosureReview,
     resultArtifact: adapter?.resultArtifact ?? null,
     reportArtifact: adapter?.reportArtifact ?? null,
     summary,
     requiredActions
+  };
+}
+
+function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVerified, evidenceQuality }) {
+  const upstream = evidenceQuality?.upstreamCamEvidence && typeof evidenceQuality.upstreamCamEvidence === "object"
+    ? evidenceQuality.upstreamCamEvidence
+    : null;
+  const materialReadiness = upstream?.materialRemovalReadiness && typeof upstream.materialRemovalReadiness === "object"
+    ? upstream.materialRemovalReadiness
+    : null;
+  const simulationQuality = materialReadiness?.simulationQuality && typeof materialReadiness.simulationQuality === "object"
+    ? materialReadiness.simulationQuality
+    : null;
+  const upstreamMatched = upstream?.status === "matched" || upstream?.ok === true || upstream?.required === false;
+  const readyForSimulation = Boolean(
+    materialReadiness?.readyForMaterialRemovalSimulation
+    ?? materialReadiness?.importedReadyForMaterialRemovalSimulation
+  );
+  const productionResidualEvidenceReady = Boolean(
+    materialReadiness?.productionResidualEvidenceReady
+    ?? materialReadiness?.imported?.productionResidualEvidenceReady
+  );
+  const engineeringSimulationAllowed = Boolean(simulationQuality?.engineeringSimulationAllowed);
+  const productionEvidenceAllowed = Boolean(simulationQuality?.productionEvidenceAllowed);
+  const missingForProduction = Array.isArray(materialReadiness?.missingForProduction)
+    ? materialReadiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12)
+    : [];
+  const risks = Array.isArray(simulationQuality?.risks)
+    ? simulationQuality.risks.map((item) => String(item)).filter(Boolean).slice(0, 12)
+    : [];
+  const status = productionResidualEvidenceReady
+    ? "production-residual-closed"
+    : realMaterialRemovalVerified && upstreamMatched && (readyForSimulation || engineeringSimulationAllowed)
+      ? "engineering-closed"
+      : realMaterialRemovalVerified
+        ? "simulation-verified-upstream-review"
+        : "not-closed";
+  return {
+    schema: "hediao3d.residual-closure-review.v1",
+    status,
+    realMaterialRemovalVerified,
+    upstreamCamEvidenceStatus: upstream?.status ?? (upstream?.required === false ? "not-required" : "missing"),
+    readyForMaterialRemovalSimulation: readyForSimulation,
+    engineeringSimulationAllowed,
+    productionEvidenceAllowed,
+    productionResidualEvidenceReady,
+    residualBasis: productionResidualEvidenceReady
+      ? "measured-or-swept-volume-validated"
+      : realMaterialRemovalVerified
+        ? "material-removal-simulation-bound-engineering-review"
+        : "not-validated",
+    missingForProduction,
+    risks,
+    summary: productionResidualEvidenceReady
+      ? "OpenCAMLib 残料/过切证据已通过测量或扫掠体积验证，可进入生产证据复核。"
+      : realMaterialRemovalVerified
+        ? "材料去除仿真已经闭环绑定，但 OpenCAMLib 残料指标仍按工程审查处理；可用于离料空跑/小料试雕，不单独解锁生产 NC。"
+        : "尚未形成材料去除仿真与 OpenCAMLib 残料证据闭环。"
   };
 }
 
@@ -9921,6 +9984,17 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
         : "未生成仿真证据。"
     },
     {
+      id: "residual-closure-review",
+      label: "残料/过切闭环复核",
+      status: simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady
+        ? "pass"
+        : simulationEvidence?.residualClosureReview?.realMaterialRemovalVerified
+          ? "review"
+          : "review",
+      evidence: ["camotics-result.json", "camotics-result-local-validation.json", "opencamlib-cutter-contact-report.json"],
+      summary: simulationEvidence?.residualClosureReview?.summary ?? "尚未形成材料去除仿真与 OpenCAMLib 残料证据闭环。"
+    },
+    {
       id: "nc-static-analysis",
       label: "NC 静态分析",
       status: ncStaticAnalysis?.level === "ready" ? "pass" : ncStaticAnalysis?.level === "critical" ? "block" : "review",
@@ -10033,6 +10107,9 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     crossChecks: {
       unlockMatrixPass: unlockByMatrix,
       realMaterialRemovalVerified: Boolean(simulationEvidence?.realMaterialRemovalVerified),
+      residualClosureReview: simulationEvidence?.residualClosureReview ?? null,
+      residualClosureStatus: simulationEvidence?.residualClosureReview?.status ?? "missing",
+      residualProductionEvidenceReady: Boolean(simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady),
       camoticsInputIdentityStatus: camoticsIdentity.inputIdentityStatus,
       camoticsCliRunPackageBindingStatus: camoticsIdentity.cliRunPackageBindingStatus,
       camoticsMotionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
@@ -12786,6 +12863,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
       artifactEvidenceStatus: camoticsIdentity.artifactEvidenceStatus,
       upstreamEvidenceStatus: camoticsIdentity.upstreamCamEvidenceStatus,
       upstreamEvidence: camoticsIdentity.upstreamCamEvidence,
+      residualClosureReview: productionGate.simulationEvidence?.residualClosureReview ?? null,
       productionUnlockEligible: productionGate.simulationEvidence?.productionUnlockEligible ?? false,
       limitation: "CAMotics 仅用于展开三轴检查；旋转夹具真实材料去除仍需专业仿真或机床控制软件复核。"
     },

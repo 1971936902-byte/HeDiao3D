@@ -7,7 +7,7 @@
 - 系统：Ubuntu 22.04.3 LTS
 - 项目目录：`/opt/hediao3d`
 - Git 分支：`HeDiao3D_V3`
-- 当前同步提交：`114b231 relax opencamlib readiness boundary assertion`
+- 当前同步提交：以 `git log -1 --oneline` 为准
 - 目标机床：三轴控制器 + Y 轴旋转夹具
 - 目标轴映射：`X=长度方向，Y=旋转夹具，Z=刀深/安全高度`
 - 目标刀具：`4mm 25度平底尖刀`
@@ -303,6 +303,7 @@ Orchestrator 回填后：
 simulationEvidence.level=material-removal-verified
 realMaterialRemovalVerified=true
 material-removal-simulation evidenceItem=pass
+residualClosureReview=工程复核，不单独解锁生产 NC
 productionGate.level=trial-only
 productionAllowed=false
 ```
@@ -315,3 +316,39 @@ native-cam-real-output-snapshot=block
 ```
 
 结论：仿真层已经完成“可生成、可校验、可回填”的基本闭环。下一步不应继续扩展普通 UI 功能，而应集中把 OpenCAMLib residual/contact 证据从 engineering estimate 提升到 measured-or-validated，并继续做离料空跑、软料试雕和机床验收。
+
+## 2026-07-22 15:58 新服务器重装/重配验证
+
+本次服务器状态：
+
+```text
+系统: Ubuntu 22.04.3 LTS
+项目路径: /opt/hediao3d
+分支: HeDiao3D_V3
+Node.js: v20.20.2
+npm: 10.8.2
+OpenCAMLib: opencamlib.ocl import OK
+CAMotics: 1.2
+服务: hediao3d-api / nginx / hediao3d-cloudflared 均 active
+公网隧道: trycloudflare 临时地址已验证 /api/health 返回 ok
+```
+
+本轮新增后端证据字段：
+
+```text
+simulationEvidence.residualClosureReview.schema=hediao3d.residual-closure-review.v1
+用途: 区分“材料去除仿真已闭环”和“OpenCAMLib 残料/过切生产证据是否已闭合”
+生产边界: residualClosureReview 为 review 证据，不绕过 Native CAM、空跑、试雕和机床验收门禁
+```
+
+本轮验证：
+
+```text
+node --check server.mjs
+node --check scripts/v3-camotics-result-api-test.mjs
+npm run test:v3:camotics-material-validate
+npm run test:v3:camotics-result-api
+npm run test:v3:opencamlib-contact-validate
+npm run test:v3:opencamlib-candidate-package
+npm run test:v3:native-cam-package-self-check
+```
