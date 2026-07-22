@@ -462,6 +462,13 @@ type V3OrchestratorJob = {
             residualBasis?: string;
             missingForProduction?: string[];
             risks?: string[];
+            checks?: Array<{
+              id?: string;
+              status?: string;
+              summary?: string;
+            }>;
+            topBlockers?: string[];
+            nextActions?: string[];
             summary?: string;
           } | null;
           evidenceQuality?: {
@@ -9685,7 +9692,8 @@ function formatResidualClosureReview(review: NonNullable<NonNullable<NonNullable
   const missing = Array.isArray(review.missingForProduction) && review.missingForProduction.length
     ? `缺${review.missingForProduction.length}项`
     : "";
-  return [status, basis, production, upstream, missing].filter(Boolean).join(" · ");
+  const blocker = review.topBlockers?.[0] ? `首要阻断 ${review.topBlockers[0]}` : "";
+  return [status, basis, production, upstream, missing, blocker].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["camotics"]) {

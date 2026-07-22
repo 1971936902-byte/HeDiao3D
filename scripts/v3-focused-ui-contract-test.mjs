@@ -67,6 +67,8 @@ const checks = [
     ok: source.includes("残料/过切复核：")
       && source.includes("formatResidualClosureReview")
       && source.includes("productionResidualEvidenceReady")
+      && source.includes("topBlockers")
+      && source.includes("首要阻断")
       && source.includes("生产残料证据未闭合")
       && source.includes("材料去除仿真绑定"),
     summary: "Focused CAM report should expose residual/gouge closure review separately from material-removal simulation."

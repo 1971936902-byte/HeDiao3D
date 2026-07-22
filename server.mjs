@@ -9015,6 +9015,52 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
       : realMaterialRemovalVerified
         ? "simulation-verified-upstream-review"
         : "not-closed";
+  const checks = [
+    {
+      id: "camotics-real-material-removal",
+      status: realMaterialRemovalVerified ? "pass" : "block",
+      summary: realMaterialRemovalVerified
+        ? "真实 CAMotics/等效材料去除结果已完成并通过证据质量校验。"
+        : "尚未导入通过哈希、运动、机床上下文和产物校验的真实材料去除结果。"
+    },
+    {
+      id: "upstream-cam-evidence-bound",
+      status: upstreamMatched ? "pass" : "block",
+      summary: upstreamMatched
+        ? "材料去除结果已绑定上游 Native CAM/OpenCAMLib 证据。"
+        : `上游 CAM 证据未绑定或不匹配：${upstream?.status ?? "missing"}。`
+    },
+    {
+      id: "material-removal-ready-for-simulation",
+      status: readyForSimulation || engineeringSimulationAllowed ? "pass" : "block",
+      summary: readyForSimulation || engineeringSimulationAllowed
+        ? "OpenCAMLib 输出可进入 CAMotics/等效材料去除仿真。"
+        : "OpenCAMLib 输出尚未达到可进入材料去除仿真的前置条件。"
+    },
+    {
+      id: "production-residual-evidence",
+      status: productionResidualEvidenceReady ? "pass" : "review",
+      summary: productionResidualEvidenceReady
+        ? "OpenCAMLib 残料/过切证据已由测量或扫掠体积验证闭合。"
+        : "OpenCAMLib 残料/过切仍缺少测量或扫掠体积验证，不能单独作为生产放行依据。"
+    }
+  ];
+  const topBlockers = [
+    ...checks.filter((check) => check.status !== "pass").map((check) => `${check.id}: ${check.summary}`),
+    ...missingForProduction.map((item) => `missing: ${item}`),
+    ...risks.map((item) => `risk: ${item}`)
+  ].slice(0, 8);
+  const nextActions = productionResidualEvidenceReady
+    ? ["继续执行离料空跑、软料试雕和机床验收，形成最终生产放行证据。"]
+    : realMaterialRemovalVerified
+      ? [
+        "保留当前 CAMotics/等效材料去除结果作为安全试雕证据。",
+        "补充 OpenCAMLib 残料/过切的测量或扫掠体积验证，再申请生产 NC 放行。"
+      ]
+      : [
+        "先运行真实 CAMotics/等效材料去除仿真并回填结果包。",
+        "确认结果绑定当前 camotics-preview.nc、运行包、机床上下文和上游 CAM 证据。"
+      ];
   return {
     schema: "hediao3d.residual-closure-review.v1",
     status,
@@ -9031,6 +9077,9 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
         : "not-validated",
     missingForProduction,
     risks,
+    checks,
+    topBlockers,
+    nextActions,
     summary: productionResidualEvidenceReady
       ? "OpenCAMLib 残料/过切证据已通过测量或扫掠体积验证，可进入生产证据复核。"
       : realMaterialRemovalVerified

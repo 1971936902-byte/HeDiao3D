@@ -147,6 +147,25 @@ strict contact 失败明细已贯穿：
 - npm run build -- --emptyOutDir false（Windows 本地 dist 运行产物可能占用，Linux 部署使用正常 npm run build）
 ```
 
+2026-07-22 残料/过切闭环诊断增强：
+
+```text
+residualClosureReview 新增：
+- checks: camotics-real-material-removal / upstream-cam-evidence-bound / material-removal-ready-for-simulation / production-residual-evidence
+- topBlockers: 首要残料/过切阻断原因
+- nextActions: 下一步补证据动作
+
+当前生产边界不变：
+- CAMotics 真实材料去除通过后，可作为安全试雕/生产证据链的一项
+- 若 OpenCAMLib 残料/过切仍只是工程估算，productionResidualEvidenceReady=false
+- 正式生产 NC 仍需测量或 swept-volume/material-removal validated 残料证据、空跑、试雕和机床验收
+
+验证命令：
+- npm run test:v3:camotics-result-api
+- npm run test:v3:focused-ui
+- npm run build -- --emptyOutDir false（Windows 本地）
+```
+
 结论：Linux 小闭环从整单包下载、服务器执行、Native CAM/CAMotics 证据上传、readiness 复核已经跑通；当前阻断点明确集中在 OpenCAMLib 真实 cutter-contact 生产候选证据、残料/过切闭合和现场验收，不能解锁生产 NC。
 
 ### OpenCAMLib runtime probe
