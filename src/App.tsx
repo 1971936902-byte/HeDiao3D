@@ -450,6 +450,20 @@ type V3OrchestratorJob = {
           engine: string;
           adapterStatus: string;
           summary: string;
+          residualClosureReview?: {
+            schema?: string;
+            status?: string;
+            realMaterialRemovalVerified?: boolean;
+            upstreamCamEvidenceStatus?: string;
+            readyForMaterialRemovalSimulation?: boolean;
+            engineeringSimulationAllowed?: boolean;
+            productionEvidenceAllowed?: boolean;
+            productionResidualEvidenceReady?: boolean;
+            residualBasis?: string;
+            missingForProduction?: string[];
+            risks?: string[];
+            summary?: string;
+          } | null;
           evidenceQuality?: {
             productionEvidenceEligible: boolean;
             status: string;
@@ -7718,6 +7732,11 @@ export function App() {
                     : ""}
                 </small>
               )}
+              {v3Job?.result?.summary.productionGate?.simulationEvidence?.residualClosureReview && (
+                <small className={v3Job.result.summary.productionGate.simulationEvidence.residualClosureReview.productionResidualEvidenceReady ? "v3-inline-ok" : v3Job.result.summary.productionGate.simulationEvidence.residualClosureReview.realMaterialRemovalVerified ? "v3-inline-warning" : "v3-inline-critical"}>
+                  残料/过切复核：{formatResidualClosureReview(v3Job.result.summary.productionGate.simulationEvidence.residualClosureReview)}
+                </small>
+              )}
               {v3Job?.result?.summary.postprocessProfile && (
                 <small>
                   后处理：{v3Job.result.summary.postprocessProfile.postProcessorName}
@@ -9494,6 +9513,27 @@ function formatLinuxOpenCamLibMaterialRemovalReadiness(readiness: NonNullable<No
     ? `缺 ${readiness.missingForProduction.length}项`
     : "";
   return [`材料去除 ${level}`, sim, simulationQuality, residual, missing].filter(Boolean).join(" · ");
+}
+
+function formatResidualClosureReview(review: NonNullable<NonNullable<NonNullable<V3OrchestratorJob["result"]>["summary"]["productionGate"]>["simulationEvidence"]>["residualClosureReview"]) {
+  const status = review.status === "production-residual-closed"
+    ? "生产残料证据已闭合"
+    : review.status === "engineering-closed"
+      ? "工程闭环"
+      : review.status === "simulation-verified-upstream-review"
+        ? "仿真已过，上游待复核"
+        : "未闭合";
+  const basis = review.residualBasis === "measured-or-swept-volume-validated"
+    ? "测量/扫掠体积验证"
+    : review.residualBasis === "material-removal-simulation-bound-engineering-review"
+      ? "材料去除仿真绑定"
+      : "缺少验证依据";
+  const production = review.productionResidualEvidenceReady ? "可进生产证据复核" : "生产残料证据未闭合";
+  const upstream = review.upstreamCamEvidenceStatus ? `上游${review.upstreamCamEvidenceStatus}` : "";
+  const missing = Array.isArray(review.missingForProduction) && review.missingForProduction.length
+    ? `缺${review.missingForProduction.length}项`
+    : "";
+  return [status, basis, production, upstream, missing].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["camotics"]) {

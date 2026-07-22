@@ -63,6 +63,15 @@ const checks = [
     summary: "Focused readiness UI should expose CAMotics upstream binding to OpenCAMLib candidate package validation and bundle evidence."
   },
   {
+    id: "residual-closure-review-visible",
+    ok: source.includes("残料/过切复核：")
+      && source.includes("formatResidualClosureReview")
+      && source.includes("productionResidualEvidenceReady")
+      && source.includes("生产残料证据未闭合")
+      && source.includes("材料去除仿真绑定"),
+    summary: "Focused CAM report should expose residual/gouge closure review separately from material-removal simulation."
+  },
+  {
     id: "locked-production-guidance-visible",
     ok: source.includes("formatLockedProductionPackageGuidance") && source.includes("operatorGuidance") && source.includes("先下载安全试雕包") && source.includes("禁止上机") && source.includes("证据缺口") && source.includes("可下载证据审查包复核缺口") && source.includes("生产闭环审计"),
     summary: "Focused UI should turn locked production-package responses into actionable safe-trial guidance."
