@@ -18478,7 +18478,7 @@ function createLinuxCamJobRunScript(manifest) {
     "cp -Rf \"$ROOT/camotics/\"* \"$CAMOTICS_WORK\"/",
     "if [[ -f \"$CAMOTICS_WORK/run/camotics-linux-run.sh\" ]]; then",
     "  log \"Running CAMotics helper script.\"",
-    "  (cd \"$CAMOTICS_WORK\" && bash run/camotics-linux-run.sh || true)",
+    `  (cd "$CAMOTICS_WORK" && HEDIAO3D_JOB_ID=${shellQuote(manifest.jobId)} bash run/camotics-linux-run.sh || true)`,
     "else",
     "  log \"CAMotics helper script missing.\"",
     "fi",

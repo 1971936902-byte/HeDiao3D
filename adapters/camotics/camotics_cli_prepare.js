@@ -454,7 +454,7 @@ function createLinuxRunScript(packageJson) {
     "writeFileSync(materialMesh, createSweptEnvelopeStl(sourceStats), 'utf8');",
     "const result = {",
     "  schema: 'hediao3d.camotics-result.v1',",
-    "  jobId: runPackage.jobId || null,",
+    "  jobId: process.env.HEDIAO3D_JOB_ID || runPackage.jobId || null,",
     "  engine: 'equivalent-material-removal-simulator',",
     "  simulator: {",
     "    schema: 'hediao3d.material-removal-simulator.v1',",
