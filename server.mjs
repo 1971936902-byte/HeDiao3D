@@ -20188,19 +20188,49 @@ async function importLocalMesh(req, res) {
   if (!extension || !["stl", "obj", "glb", "gltf"].includes(extension)) {
     return json(res, 400, { error: "当前后端 CAM 支持导入 .stl/.obj/.glb/.gltf 模型" });
   }
-  const base64 = dataUrl.includes(",") ? dataUrl.split(",").pop() : dataUrl;
-  if (!base64) return json(res, 400, { error: "模型文件内容为空" });
+  const base64 = (dataUrl.includes(",") ? dataUrl.split(",").pop() : dataUrl).replace(/\s+/g, "");
+  if (!base64) return json(res, 400, { error: "模型文件内容为空，请重新选择有效的 STL/OBJ/GLB/GLTF 文件。" });
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    return json(res, 400, { error: "模型文件编码无效，请重新导出模型后再导入。" });
+  }
+  const buffer = Buffer.from(base64, "base64");
+  if (buffer.byteLength < 32) {
+    return json(res, 400, { error: "模型文件太小或为空，无法作为 CAM 输入。" });
+  }
 
   const dir = join(process.cwd(), "public", "imported-models");
   await mkdir(dir, { recursive: true });
   const safeName = `${Date.now()}-${Math.random().toString(16).slice(2)}-${filename}`;
   const filePath = join(dir, safeName);
-  await writeFile(filePath, Buffer.from(base64, "base64"));
+  await writeFile(filePath, buffer);
+  let geometry = null;
+  let meshQuality = null;
+  try {
+    geometry = await loadModelGeometry(filePath);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    const position = geometry.getAttribute("position");
+    if (!position || position.count < 3) {
+      throw new Error("模型没有可用于 CAM 的三角面。");
+    }
+    meshQuality = buildMeshQualityReport(geometry);
+  } catch (error) {
+    await rm(filePath, { force: true }).catch(() => {});
+    return json(res, 400, {
+      error: error instanceof Error
+        ? `模型已读取但无法进入 CAM：${error.message}`
+        : "模型已读取但无法进入 CAM，请重新导出 STL/OBJ/GLB/GLTF。"
+    });
+  } finally {
+    geometry?.dispose?.();
+  }
   const publicUrl = `/imported-models/${safeName}`;
   return json(res, 200, {
     modelUrl: publicUrl,
     camModelUrl: publicUrl,
     format: extension,
+    meshQuality,
     message: `${filename} 已上传到本地 CAM 缓存`
   });
 }

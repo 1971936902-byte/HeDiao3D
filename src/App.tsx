@@ -3927,14 +3927,38 @@ export function App() {
 
     const extension = file.name.split(".").pop()?.toLowerCase();
     if (!extension || !["stl", "obj", "glb", "gltf"].includes(extension)) {
-      const message = "当前支持导入 .stl/.obj/.glb/.gltf 原始3D模型。";
+      const message = createOriginalModelImportFailureMessage("unsupported-format", file.name);
+      setAiMeshStatus(message);
+      setV3Status(message);
+      setV3UserNotice({
+        level: "error",
+        title: "导入原始3D模型失败",
+        detail: message
+      });
       recordTask({
         category: "model",
         status: "error",
         title: "导入原始3D模型失败",
         detail: message
       });
-      alert(message);
+      return;
+    }
+
+    if (file.size <= 0) {
+      const message = createOriginalModelImportFailureMessage("empty-file", file.name);
+      setAiMeshStatus(message);
+      setV3Status(message);
+      setV3UserNotice({
+        level: "error",
+        title: "导入原始3D模型失败",
+        detail: message
+      });
+      recordTask({
+        category: "model",
+        status: "error",
+        title: "导入原始3D模型失败",
+        detail: message
+      });
       return;
     }
 
@@ -3963,6 +3987,7 @@ export function App() {
       const data = await requestJson<{
         modelUrl: string;
         camModelUrl: string;
+        meshQuality?: MeshQualityReport;
         error?: string;
       }>("/api/mesh/import", {
         method: "POST",
@@ -3972,6 +3997,7 @@ export function App() {
       releaseImportedModelObjectUrl();
       setAiMeshUrl(data.modelUrl);
       setAiMeshStlUrl(data.camModelUrl);
+      if (data.meshQuality) setMeshQuality(data.meshQuality);
       setAiMeshStatus(`已导入原始3D模型：${file.name}，可直接生成 Mesh 刀路${toolpath ? "，当前 NC/G-code 已叠加显示" : ""}`);
       setV3UserNotice({
         level: "ok",
@@ -3985,17 +4011,19 @@ export function App() {
         detail: `${file.name} 已保存为 ${data.modelUrl}，可用于生成刀路。`
       });
     } catch (error) {
-      setAiMeshStatus(error instanceof Error ? error.message : "模型上传到本地 CAM 缓存失败；当前只能预览，不能生成刀路");
+      const message = createOriginalModelImportFailureMessage("backend-cache", file.name, error);
+      setAiMeshStatus(message);
+      setV3Status(message);
       setV3UserNotice({
         level: "error",
         title: "原始3D模型缓存失败",
-        detail: error instanceof Error ? error.message : "当前只能在右侧预览，后端 CAM 暂时不能读取该模型。"
+        detail: message
       });
       recordTask({
         category: "model",
         status: "error",
         title: "原始3D模型缓存失败",
-        detail: error instanceof Error ? error.message : "未知错误"
+        detail: message
       });
     }
   };
@@ -11601,6 +11629,17 @@ function formatRequestError(error: unknown, fallback: string) {
     return `${fallback}：无法连接本地后端 API。请确认 API 服务已启动（默认 8787；dev:v3 会自动选择可用端口），然后刷新页面重试。`;
   }
   return message;
+}
+
+function createOriginalModelImportFailureMessage(reason: "unsupported-format" | "empty-file" | "backend-cache", filename: string, error?: unknown) {
+  if (reason === "unsupported-format") {
+    return `导入失败：${filename} 不是可用于 CAM 的 3D 模型格式。当前支持 .stl/.obj/.glb/.gltf；如果是压缩包或工程文件，请先在建模软件中导出为 STL 或 GLB。`;
+  }
+  if (reason === "empty-file") {
+    return `导入失败：${filename} 文件为空，无法生成 3D 预览或刀路。请重新导出模型后再导入。`;
+  }
+  const detail = error instanceof Error ? error.message : "模型上传到本地 CAM 缓存失败。";
+  return `${detail} 当前文件仍可作为本地预览参考，但不能生成试雕刀路与安全包；请重新导出 STL/OBJ/GLB，或检查后端 API 是否正常。`;
 }
 
 function extractDownloadFilename(url: string, fallbackName: string) {

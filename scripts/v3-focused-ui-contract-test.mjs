@@ -150,6 +150,18 @@ const checks = [
       && source.includes("V3 证据审查包下载失败")
       && countIncludes(source, "await downloadV3ApiArtifact({") >= 5,
     summary: "Focused V3 package downloads should share actionable network/HTTP/empty-file errors and visible task feedback."
+  },
+  {
+    id: "original-model-import-failure-guidance",
+    ok: source.includes("createOriginalModelImportFailureMessage")
+      && source.includes("不是可用于 CAM 的 3D 模型格式")
+      && source.includes("文件为空，无法生成 3D 预览或刀路")
+      && source.includes("不能生成试雕刀路与安全包")
+      && source.includes("setV3UserNotice({")
+      && source.includes("原始3D模型缓存失败")
+      && source.includes("meshQuality?: MeshQualityReport")
+      && source.includes("if (data.meshQuality) setMeshQuality(data.meshQuality)"),
+    summary: "Original model import failures should be visible, actionable, and prevent bad backend CAM cache assumptions."
   }
 ];
 
