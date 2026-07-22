@@ -88,6 +88,15 @@ const checks = [
     summary: "Focused UI should turn locked production-package responses into actionable safe-trial guidance."
   },
   {
+    id: "locked-production-material-removal-gate-visible",
+    ok: source.includes("formatProductionReadinessMaterialRemovalGate")
+      && source.includes("material-removal-proof")
+      && source.includes("材料去除/残料门禁")
+      && source.includes("需补残料/过切闭环证据")
+      && /formatLockedProductionPackageGuidance[\s\S]{0,600}formatProductionReadinessMaterialRemovalGate/.test(source),
+    summary: "Locked production-package guidance should surface the material-removal residual/gouge gate separately from generic evidence gaps."
+  },
+  {
     id: "locked-production-task-actions",
     ok: source.includes("createLockedProductionPackageTaskLinks") && source.includes("actionLinks") && source.includes("下载安全试雕包") && source.includes("下载证据审查包") && source.includes("查看闭环审计") && source.includes("重新检查生产包门禁") && source.includes("task-event-action"),
     summary: "Locked production-package warnings should persist actionable package links in the task timeline."

@@ -9813,6 +9813,7 @@ function formatLockedProductionPackageGuidance(data: any) {
   const guidance = data?.operatorGuidance;
   const safeTrial = guidance?.safeTrialPackageUrl ? "先下载安全试雕包" : "先生成并下载安全试雕包";
   const evidenceReview = guidance?.evidenceReviewPackageUrl ? "可下载证据审查包复核缺口" : "";
+  const materialRemovalGate = formatProductionReadinessMaterialRemovalGate(data?.productionReadinessAudit ?? guidance?.productionReadinessAudit);
   const closure = guidance?.closureAudit
     ? `生产闭环审计 ${formatProductionClosureStatus(guidance.closureAudit.status ?? "unknown")}：${guidance.closureAudit.nextActions?.[0]?.title ?? guidance.closureAudit.summary ?? "查看 production-closure-audit.md"}`
     : "";
@@ -9825,7 +9826,26 @@ function formatLockedProductionPackageGuidance(data: any) {
   const gap = Array.isArray(guidance?.evidenceGaps) && guidance.evidenceGaps[0]
     ? `证据缺口 ${guidance.evidenceGaps[0].label ?? guidance.evidenceGaps[0].id}: ${guidance.evidenceGaps[0].summary ?? guidance.evidenceGaps[0].status}`
     : data?.summary ?? data?.error ?? "生产证据尚未闭环";
-  return [safeTrial, evidenceReview, closure, readFirst, neverRun, gap].filter(Boolean).join("；");
+  return [safeTrial, evidenceReview, materialRemovalGate, closure, readFirst, neverRun, gap].filter(Boolean).join("；");
+}
+
+function formatProductionReadinessMaterialRemovalGate(audit: any) {
+  const gate = Array.isArray(audit?.gates)
+    ? audit.gates.find((item: any) => item?.id === "material-removal-proof")
+    : null;
+  if (!gate) return "";
+  const status = gate.status === "pass"
+    ? "已通过"
+    : gate.status === "block"
+      ? "阻断"
+      : "待复核";
+  const residualHint = /残料|过切|residual|gouge/i.test(`${gate.summary ?? ""} ${gate.detail ?? ""} ${gate.reason ?? ""}`)
+    ? ""
+    : "，需补残料/过切闭环证据";
+  const nextAction = Array.isArray(gate.nextActions) && gate.nextActions[0]
+    ? `，下一步 ${gate.nextActions[0]}`
+    : "";
+  return `材料去除/残料门禁 ${status}：${gate.summary ?? "材料去除仿真和残料/过切证据未闭合"}${residualHint}${nextAction}`;
 }
 
 function createLockedProductionPackageTaskLinks(data: any) {
