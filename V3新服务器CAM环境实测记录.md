@@ -26,11 +26,12 @@
   - `freecad-python3`
 - Native CAM 总检查已把 FreeCAD 计入 ready 能力。
 
-### Blender
+### Blender / FabexCNC
 
 - 已安装 Ubuntu apt 包：`blender`
 - 版本探测：`Blender 3.0.1`
-- 当前阻断：未安装 BlenderCAM/FabexCNC 插件，所以 BlenderCAM/FabexCNC 仍不计入 ready。
+- 已从 FabexCNC/BlenderCAM GitHub release 安装 `fabexcnc.zip`
+- Blender 后台探测结果：`CAM_ADDON_OK`
 
 ### OpenCAMLib
 
@@ -46,8 +47,11 @@
   - `gdebi-core`
   - `libqt5websockets5`
   - `libqt5websockets5-dev`
-- 官方 `camotics_1.2.0_amd64.deb` 下载在服务器网络环境中超时，当前 `camotics/camotics-cli` 仍不可用。
-- 当前策略：CAMotics 保留为材料去除结果回填/可插拔仿真入口；真实安装继续作为 P0 环境任务推进。
+- 已从 CAMotics GitHub release 安装 `camotics_1.2.0_amd64.deb`
+- 已补 Ubuntu 22.04 兼容依赖：
+  - `libv8.so.3.14.5` 兼容链接
+  - `libssl1.1`
+- 命令探测：`camotics --version` 返回 `1.2`
 
 ## 服务器实测命令与结果
 
@@ -57,13 +61,22 @@
 npm run test:v3:native-cam
 ```
 
-结果：
+旧结果：
 
 ```text
 level=partial
 ready=2/4
 ready: FreeCAD, OpenCAMLib
 blocked: BlenderCAM/FabexCNC 插件缺失, CAMotics 缺失
+```
+
+最新结果：
+
+```text
+ok=true
+level=ready
+ready=4/4
+blockers=[]
 ```
 
 ### OpenCAMLib runtime probe
@@ -170,8 +183,8 @@ buddha-e2e: ok=true, points=8979, machineAxes X/Y/Z present, A=0, rotaryCoverage
 仍未达到正式生产：
 
 - OpenCAMLib 佛头真实 production-candidate 刀位点尚未生成并通过 strict contact/candidate package 验收。
-- CAMotics 或等效材料去除仿真尚未在服务器完成真实结果。
-- BlenderCAM/FabexCNC 插件未安装。
+- CAMotics 或等效材料去除仿真工具已安装，但尚未对同一个佛头 job 完成真实材料去除结果回填与哈希绑定。
+- Blender/FabexCNC 已安装并通过 addon 探测，但尚未对佛头 job 生成可纳入生产证据链的真实输出。
 - 真实机床空跑、旋转标定、软料试雕、机床验收仍未回填。
 
 下一步优先：
