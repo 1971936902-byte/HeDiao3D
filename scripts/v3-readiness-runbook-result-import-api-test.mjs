@@ -79,6 +79,8 @@ async function main() {
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.protectedZones?.status === "ready", "Linux evidence chain should preserve OpenCAMLib protected-zone summary");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.protectedZonesReady === true, "Linux evidence chain should expose ready protected-zone flag");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackageBlockedReason === null, "Linux evidence chain should preserve candidate package blocked reason");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "Linux evidence chain should preserve OpenCAMLib production gap review");
+  assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.productionGapReview?.productionCandidateReady === true, "Linux evidence chain should preserve production gap review candidate readiness");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackage?.filename === "opencamlib-candidate-package-validation.json", "Linux evidence chain should preserve candidate package validation file summary");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", "Linux evidence chain should preserve candidate package validation level");
   assert(linuxEvidenceArtifact.evidenceChain?.openCamLib?.candidateMachineFit?.level === "ok", "Linux evidence chain should preserve OpenCAMLib candidate machine-fit level");
@@ -105,6 +107,7 @@ async function main() {
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.contactPathCoverage?.status === "ready", "latest runbook result should summarize OpenCAMLib path coverage");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.protectedZones?.status === "ready", "latest runbook result should summarize OpenCAMLib protected zones");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidatePackage?.exists === true, "latest runbook result should summarize OpenCAMLib candidate package file");
+  assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.productionGapReview?.productionCandidateReady === true, "latest runbook result should summarize OpenCAMLib production gap review");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidateMachineFit?.level === "ok", "latest runbook result should summarize OpenCAMLib candidate machine-fit");
   assert(latest.latest.linuxEvidence?.evidenceChain?.openCamLib?.candidateMachineFit?.riskCounts?.missingRotaryCount === 0, "latest runbook result should summarize machine-fit risk counts");
   assert(latest.latest.linuxEvidence?.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "latest runbook result should summarize CAMotics candidate package validation binding");
@@ -179,6 +182,26 @@ function createClosedLoopEvidenceChainFixture() {
       candidatePackageLevel: "ready",
       candidatePackageReadyForImport: true,
       candidatePackageBlockedReason: null,
+      productionGapReview: {
+        schema: "hediao3d.opencamlib-production-gap-review.v1",
+        level: "candidate-ready-for-downstream-evidence",
+        productionCandidateReady: true,
+        criticalCount: 0,
+        reviewCount: 0,
+        productionBlockerCount: 1,
+        gapCount: 1,
+        topGaps: [
+          {
+            id: "production-residual-not-closed",
+            layer: "residual-gouge",
+            severity: "production-blocker",
+            status: "needs-downstream-evidence",
+            summary: "Residual/gouge production evidence is not closed."
+          }
+        ],
+        nextActions: ["Continue CAMotics/material-removal plus field validation."],
+        productionBoundary: "This review never unlocks production NC by itself."
+      },
       candidatePackage: {
         filename: "opencamlib-candidate-package-validation.json",
         exists: true,

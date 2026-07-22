@@ -3062,6 +3062,7 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       candidateMachineFit: chain.openCamLib?.candidateMachineFit && typeof chain.openCamLib.candidateMachineFit === "object"
         ? createRunbookMachineFitSummary(chain.openCamLib.candidateMachineFit)
         : null,
+      productionGapReview: createOpenCamLibProductionGapReviewSummary(chain.openCamLib?.productionGapReview),
       candidatePackageStep: chain.crossChecks?.candidatePackageStep ?? "missing",
       candidatePackage: chain.openCamLib?.candidatePackage ?? null
     },

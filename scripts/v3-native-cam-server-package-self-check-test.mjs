@@ -122,6 +122,8 @@ try {
   const candidatePackageReport = JSON.parse(readFileSync(join(workDir, "opencamlib-candidate-package-validation.json"), "utf8"));
   assert(candidatePackageReport.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "candidate package validation should write production gap review");
   assert(candidatePackageReport.productionGapReview?.productionCandidateReady === true, "ready candidate fixture should clear OpenCAMLib production gap review");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "closed-loop evidence chain should preserve OpenCAMLib production gap review");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionGapReview?.productionCandidateReady === true, "closed-loop evidence chain should preserve ready production gap review");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", `closed-loop evidence chain should read candidate package validation level: ${JSON.stringify(candidatePackageReport, null, 2)}`);
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackageReadyForImport === true, "closed-loop evidence chain should mark candidate package ready for import");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidateMachineFit?.level === candidatePackageReport.machineFit?.level, "closed-loop evidence chain should preserve candidate machine-fit preflight");

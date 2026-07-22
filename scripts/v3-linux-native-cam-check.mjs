@@ -1292,6 +1292,13 @@ function createEvidenceChain(root, steps) {
     ?? nativeAcceptance?.openCamLibRealCandidate?.candidateMachineFit
     ?? candidatePackage?.machineFit
     ?? null;
+  const productionGapReview = summarizeProductionGapReview(
+    realCandidate?.productionGapReview
+    ?? realCandidate?.candidatePackage?.productionGapReview
+    ?? nativeAcceptance?.openCamLibRealCandidate?.productionGapReview
+    ?? candidatePackage?.productionGapReview
+    ?? null
+  );
   const camoticsReady = camoticsLocalValidation?.ok === true
     && camoticsLocalValidation?.productionEvidenceEligible === true
     && (!upstreamRequired || upstreamStatus === "matched")
@@ -1335,6 +1342,7 @@ function createEvidenceChain(root, steps) {
       candidatePackageReadyForImport,
       candidatePackageBlockedReason,
       candidateMachineFit: summarizeMachineFit(candidateMachineFit),
+      productionGapReview,
       candidatePackage: summarizeJson("opencamlib-candidate-package-validation.json", candidatePackage),
       contactValidation: summarizeJson("opencamlib-contact-output-validation.json", contactValidation)
     },
@@ -1488,6 +1496,33 @@ function summarizeMachineFit(machineFit) {
       protectedZoneClean: Boolean(machineFit.checks.protectedZoneClean),
       depthWithinLimit: Boolean(machineFit.checks.depthWithinLimit)
     } : null
+  };
+}
+
+function summarizeProductionGapReview(review) {
+  if (!review || typeof review !== "object") return null;
+  const gaps = Array.isArray(review.gaps)
+    ? review.gaps
+    : Array.isArray(review.topGaps)
+      ? review.topGaps
+      : [];
+  return {
+    schema: review.schema ?? "hediao3d.opencamlib-production-gap-review.v1",
+    level: review.level ?? "blocked",
+    productionCandidateReady: Boolean(review.productionCandidateReady),
+    criticalCount: Number(review.criticalCount ?? gaps.filter((gap) => gap?.severity === "critical").length),
+    reviewCount: Number(review.reviewCount ?? gaps.filter((gap) => gap?.severity === "review").length),
+    productionBlockerCount: Number(review.productionBlockerCount ?? gaps.filter((gap) => gap?.severity === "production-blocker").length),
+    gapCount: Number(review.gapCount ?? gaps.length),
+    topGaps: gaps.slice(0, 6).map((gap) => ({
+      id: gap?.id ?? "unknown-gap",
+      layer: gap?.layer ?? "unknown",
+      severity: gap?.severity ?? "critical",
+      status: gap?.status ?? "blocked",
+      summary: gap?.summary ?? ""
+    })),
+    nextActions: Array.isArray(review.nextActions) ? review.nextActions.slice(0, 4).map((item) => String(item)) : [],
+    productionBoundary: review.productionBoundary ?? "This review never unlocks production NC by itself."
   };
 }
 
