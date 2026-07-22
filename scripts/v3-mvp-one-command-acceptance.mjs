@@ -17,6 +17,11 @@ const commands = [
     command: npmRun("test:v3:architecture")
   },
   {
+    id: "machine-contract",
+    title: "Target 3-axis rotary-Y machine contract audit",
+    command: npmRun("test:v3:machine-contract")
+  },
+  {
     id: "mvp-basic",
     title: "Basic usable MVP acceptance",
     command: npmRun("test:v3:mvp-basic")

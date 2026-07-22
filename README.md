@@ -14,6 +14,7 @@
 
 ```bash
 npm run test:v3:architecture
+npm run test:v3:machine-contract
 npm run test:v3:mvp-basic
 npm run test:v3:mvp-release
 npm run test:v3:mvp-one-command
