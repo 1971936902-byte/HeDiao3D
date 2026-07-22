@@ -9,7 +9,11 @@ import net from "node:net";
 const host = "127.0.0.1";
 const timeoutMs = Number(process.env.V3_FRONTEND_E2E_TIMEOUT_MS ?? 180000);
 const chromePath = process.env.CHROME_PATH ?? findChromePath();
-const mode = process.argv.includes("--import-model") ? "import-model" : "buddha-fixture";
+const mode = process.argv.includes("--import-bad-model")
+  ? "import-bad-model"
+  : process.argv.includes("--import-model")
+    ? "import-model"
+    : "buddha-fixture";
 const children = [];
 const tempDirs = [];
 
@@ -139,6 +143,48 @@ try {
         || text.includes("后端 CAM 可读取")
         || text.includes("已导入原始3D模型");
     }, 30000, "imported STL model cached for CAM");
+  } else if (mode === "import-bad-model") {
+    await importInlineBadObjModel(page);
+    await waitForCondition(page, () => {
+      const text = document.body.innerText;
+      return (text.includes("原始3D模型缓存失败")
+          || text.includes("模型已读取但无法进入 CAM")
+          || text.includes("没有可用于 CAM 的三角面"))
+        && text.includes("不能生成试雕刀路与安全包");
+    }, 30000, "bad original model import rejected");
+    await clickButton(page, "刀路生成/下载");
+    const failureState = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll("button")].map((button) => ({
+        text: button.textContent?.replace(/\s+/g, " ").trim() ?? "",
+        disabled: button.disabled,
+        title: button.title ?? ""
+      }));
+      const camButtons = buttons.filter((button) => button.text.includes("生成试雕刀路与安全包"));
+      return {
+        hasCachedSuccessText: document.body.innerText.includes("原始3D模型已缓存")
+          || document.body.innerText.includes("后端 CAM 可读取"),
+        hasFailureText: document.body.innerText.includes("原始3D模型缓存失败")
+          || document.body.innerText.includes("模型已读取但无法进入 CAM")
+          || document.body.innerText.includes("没有可用于 CAM 的三角面"),
+        hasCannotCamText: document.body.innerText.includes("不能生成试雕刀路与安全包"),
+        camButtons
+      };
+    });
+    if (failureState.hasCachedSuccessText) {
+      throw new Error(`Bad model import incorrectly showed CAM cache success: ${JSON.stringify(failureState, null, 2)}`);
+    }
+    if (!failureState.camButtons.length || failureState.camButtons.some((button) => !button.disabled)) {
+      throw new Error(`Bad model import left CAM generation enabled: ${JSON.stringify(failureState, null, 2)}`);
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      schema: "hediao3d.v3-frontend-operator-e2e.v1",
+      mode,
+      ui: pageUrl,
+      api: `http://${host}:${apiPort}`,
+      chrome: chromePath,
+      summary: failureState
+    }, null, 2));
   } else {
     await clickButton(page, "载入佛头测试模型");
     await waitForCondition(page, () => {
@@ -150,65 +196,67 @@ try {
     }, 20000, "Buddha test model ready for CAM");
   }
 
-  const movedToCam = await clickButtonIfPresent(page, "去生成试雕刀路");
-  if (!movedToCam) await clickButton(page, "刀路生成/下载");
-  await waitForCondition(page, () => document.body.innerText.includes("生成试雕刀路与安全包"), 10000, "CAM action visible");
+  if (mode !== "import-bad-model") {
+    const movedToCam = await clickButtonIfPresent(page, "去生成试雕刀路");
+    if (!movedToCam) await clickButton(page, "刀路生成/下载");
+    await waitForCondition(page, () => document.body.innerText.includes("生成试雕刀路与安全包"), 10000, "CAM action visible");
 
-  await clickButton(page, "生成试雕刀路与安全包");
-  await waitForCondition(page, () => {
-    const activeTab = [...document.querySelectorAll(".workbench-tabs button.active")].map((item) => item.textContent?.trim()).join(" ");
-    const hasSimulationCanvas = [...document.querySelectorAll("canvas")].some((canvas) => canvas.clientWidth > 100 && canvas.clientHeight > 100);
-    return document.body.innerText.includes("试雕刀路已生成")
-      && activeTab.includes("模拟雕刻")
-      && hasSimulationCanvas
-      && [...document.querySelectorAll("button")].some((button) => button.textContent?.includes("下载安全试雕包") && !button.disabled);
-  }, timeoutMs, "trial toolpath generated and simulation view rendered");
+    await clickButton(page, "生成试雕刀路与安全包");
+    await waitForCondition(page, () => {
+      const activeTab = [...document.querySelectorAll(".workbench-tabs button.active")].map((item) => item.textContent?.trim()).join(" ");
+      const hasSimulationCanvas = [...document.querySelectorAll("canvas")].some((canvas) => canvas.clientWidth > 100 && canvas.clientHeight > 100);
+      return document.body.innerText.includes("试雕刀路已生成")
+        && activeTab.includes("模拟雕刻")
+        && hasSimulationCanvas
+        && [...document.querySelectorAll("button")].some((button) => button.textContent?.includes("下载安全试雕包") && !button.disabled);
+    }, timeoutMs, "trial toolpath generated and simulation view rendered");
 
-  await clickButton(page, "下载安全试雕包");
-  await waitForCondition(page, () => {
-    const downloads = window.__hediaoDownloads || [];
-    return downloads.some((item) => /trial|试雕|safe|package|zip/i.test(item.download || "") && item.blob?.size > 1000);
-  }, 60000, "safe trial package download triggered");
+    await clickButton(page, "下载安全试雕包");
+    await waitForCondition(page, () => {
+      const downloads = window.__hediaoDownloads || [];
+      return downloads.some((item) => /trial|试雕|safe|package|zip/i.test(item.download || "") && item.blob?.size > 1000);
+    }, 60000, "safe trial package download triggered");
 
-  await assertArtifactDownload(page, "加工包说明", /operator-runbook|operator-download-checklist|operator-note/i, "operator package note download");
-  await assertArtifactDownload(page, "下载空跑 NC", /air-run\.nc$/i, "air-run NC download");
-  await assertArtifactDownload(page, "下载安全报告 JSON", /production-gate|nc-static-analysis|safety-report.*\.json/i, "safety report JSON download");
-  await assertArtifactDownload(page, "下载安全报告 MD", /operator-runbook|operator-download-checklist|safety-report.*\.md/i, "safety report Markdown download");
+    await assertArtifactDownload(page, "加工包说明", /operator-runbook|operator-download-checklist|operator-note/i, "operator package note download");
+    await assertArtifactDownload(page, "下载空跑 NC", /air-run\.nc$/i, "air-run NC download");
+    await assertArtifactDownload(page, "下载安全报告 JSON", /production-gate|nc-static-analysis|safety-report.*\.json/i, "safety report JSON download");
+    await assertArtifactDownload(page, "下载安全报告 MD", /operator-runbook|operator-download-checklist|safety-report.*\.md/i, "safety report Markdown download");
 
-  const summary = await page.evaluate(() => {
-    const activeTab = [...document.querySelectorAll(".workbench-tabs button.active")].map((item) => item.textContent?.trim()).join(" ");
-    const canvases = [...document.querySelectorAll("canvas")].map((canvas) => ({
-      width: canvas.clientWidth,
-      height: canvas.clientHeight
-    }));
-    const downloads = window.__hediaoDownloads || [];
-    return {
-      trialGenerated: document.body.innerText.includes("试雕刀路已生成")
-        || activeTab.includes("模拟雕刻")
-        || downloads.some((item) => /trial|试雕|safe|package|zip/i.test(item.download || "")),
-      activeTab,
-      canvasCount: canvases.length,
-      visibleCanvasCount: canvases.filter((item) => item.width > 100 && item.height > 100).length,
-      downloads,
-      artifactDownloads: {
-        operator: downloads.some((item) => /operator-runbook|operator-download-checklist|operator-note/i.test(item.download || "")),
-        airRun: downloads.some((item) => /air-run\.nc$/i.test(item.download || "")),
-        safetyJson: downloads.some((item) => /production-gate|nc-static-analysis|safety-report.*\.json/i.test(item.download || "")),
-        safetyMarkdown: downloads.some((item) => /operator-runbook|operator-download-checklist|safety-report.*\.md/i.test(item.download || ""))
-      },
-      safeTrialButtonEnabled: [...document.querySelectorAll("button")].some((button) => button.textContent?.includes("下载安全试雕包") && !button.disabled)
-    };
-  });
+    const summary = await page.evaluate(() => {
+      const activeTab = [...document.querySelectorAll(".workbench-tabs button.active")].map((item) => item.textContent?.trim()).join(" ");
+      const canvases = [...document.querySelectorAll("canvas")].map((canvas) => ({
+        width: canvas.clientWidth,
+        height: canvas.clientHeight
+      }));
+      const downloads = window.__hediaoDownloads || [];
+      return {
+        trialGenerated: document.body.innerText.includes("试雕刀路已生成")
+          || activeTab.includes("模拟雕刻")
+          || downloads.some((item) => /trial|试雕|safe|package|zip/i.test(item.download || "")),
+        activeTab,
+        canvasCount: canvases.length,
+        visibleCanvasCount: canvases.filter((item) => item.width > 100 && item.height > 100).length,
+        downloads,
+        artifactDownloads: {
+          operator: downloads.some((item) => /operator-runbook|operator-download-checklist|operator-note/i.test(item.download || "")),
+          airRun: downloads.some((item) => /air-run\.nc$/i.test(item.download || "")),
+          safetyJson: downloads.some((item) => /production-gate|nc-static-analysis|safety-report.*\.json/i.test(item.download || "")),
+          safetyMarkdown: downloads.some((item) => /operator-runbook|operator-download-checklist|safety-report.*\.md/i.test(item.download || ""))
+        },
+        safeTrialButtonEnabled: [...document.querySelectorAll("button")].some((button) => button.textContent?.includes("下载安全试雕包") && !button.disabled)
+      };
+    });
 
-  console.log(JSON.stringify({
-    ok: true,
-    schema: "hediao3d.v3-frontend-operator-e2e.v1",
-    mode,
-    ui: pageUrl,
-    api: `http://${host}:${apiPort}`,
-    chrome: chromePath,
-    summary
-  }, null, 2));
+    console.log(JSON.stringify({
+      ok: true,
+      schema: "hediao3d.v3-frontend-operator-e2e.v1",
+      mode,
+      ui: pageUrl,
+      api: `http://${host}:${apiPort}`,
+      chrome: chromePath,
+      summary
+    }, null, 2));
+  }
 } finally {
   await shutdown();
 }
@@ -225,6 +273,22 @@ async function importInlineStlModel(page) {
     return { ok: true, filename: file.name, size: file.size };
   }, createBrowserImportStl());
   if (!result.ok) throw new Error(`Failed to import inline STL model: ${result.reason}`);
+  return result;
+}
+
+async function importInlineBadObjModel(page) {
+  const result = await page.evaluate((objText) => {
+    const input = document.querySelector('input[type="file"][accept*=".obj"]')
+      || document.querySelector('input[type="file"][accept*=".stl"]');
+    if (!input) return { ok: false, reason: "original model file input not found" };
+    const file = new File([objText], "browser-import-bad-empty-geometry.obj", { type: "model/obj" });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, filename: file.name, size: file.size };
+  }, createBadObjWithoutFaces());
+  if (!result.ok) throw new Error(`Failed to import bad inline OBJ model: ${result.reason}`);
   return result;
 }
 
@@ -471,5 +535,14 @@ function createBrowserImportStl() {
     endloop
   endfacet
 endsolid browser_import
+`;
+}
+
+function createBadObjWithoutFaces() {
+  return `# HeDiao3D bad import fixture: vertices only, no faces.
+o bad_empty_geometry
+v 0 0 0
+v 1 0 0
+v 0 1 0
 `;
 }

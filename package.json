@@ -20,6 +20,7 @@
     "test:v3:mvp-one-command": "node scripts/v3-mvp-one-command-acceptance.mjs",
     "test:v3:frontend-e2e": "node scripts/v3-frontend-operator-e2e.mjs",
     "test:v3:frontend-import-e2e": "node scripts/v3-frontend-operator-e2e.mjs --import-model",
+    "test:v3:frontend-import-failure-e2e": "node scripts/v3-frontend-operator-e2e.mjs --import-bad-model",
     "test:v3:small-loop-acceptance": "node scripts/v3-small-loop-acceptance.mjs",
     "test:v3": "node scripts/v3-smoke-test.mjs",
     "test:v3:adapters": "node scripts/v3-adapter-contract-test.mjs",
