@@ -100,6 +100,7 @@ async function main() {
   assert(markdown.includes("Native CAM server package"), "readiness markdown missing native CAM server package summary");
   assert(markdown.includes("Native CAM real output acceptance"), "readiness markdown missing native CAM real output acceptance summary");
   assert(markdown.includes("CAMotics readiness evidence"), "readiness markdown missing CAMotics readiness evidence summary");
+  assert(markdown.includes("Safe trial readiness"), "readiness markdown missing safe trial readiness summary");
   assert(markdown.includes("Adapter Handoff Audit"), "readiness markdown missing adapter handoff audit section");
   assert(markdown.includes("Postprocess handoff"), "readiness markdown missing postprocess handoff summary");
   assert(markdown.includes("Latest trial feedback"), "readiness markdown missing trial feedback summary");
@@ -274,6 +275,13 @@ function validateReadiness(report, label) {
     assert(typeof report.readinessCamoticsEvidence.productionEvidenceEligible === "boolean", `${label} readiness CAMotics eligibility missing`);
     assert(typeof report.readinessCamoticsEvidence.source === "string", `${label} readiness CAMotics source missing`);
     assert(typeof report.readinessCamoticsEvidence.inputIdentityStatus === "string", `${label} readiness CAMotics input status missing`);
+  }
+  assert(Object.hasOwn(report, "safeTrialReadiness"), `${label} missing safeTrialReadiness field`);
+  if (report.safeTrialReadiness) {
+    assert(report.safeTrialReadiness.schema === "hediao3d.safe-trial-readiness.v1", `${label} safeTrialReadiness schema mismatch`);
+    assert(typeof report.safeTrialReadiness.status === "string", `${label} safeTrialReadiness status missing`);
+    assert(Array.isArray(report.safeTrialReadiness.allowedFiles), `${label} safeTrialReadiness allowed files missing`);
+    assert(report.safeTrialReadiness.blockedForProduction === true, `${label} safeTrialReadiness must keep production boundary`);
   }
   assert(Object.hasOwn(report, "latestTrialFeedback"), `${label} missing latestTrialFeedback field`);
   if (report.latestTrialFeedback) {

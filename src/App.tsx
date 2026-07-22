@@ -1586,6 +1586,21 @@ type V3ReadinessSummary = {
     warnings: string[];
     nextActions: string[];
   };
+  safeTrialReadiness?: {
+    schema: string;
+    status: string;
+    jobId: string | null;
+    packageLevel: string | null;
+    allowAirRun: boolean;
+    allowTrialNc: boolean;
+    allowProductionNc: boolean;
+    allowedFiles: string[];
+    blockedForProduction: boolean;
+    checks: Record<string, boolean>;
+    missing: string[];
+    nextActions: string[];
+    summary: string;
+  } | null;
   acceptancePlan?: {
     schema: string;
     level: string;
@@ -6723,6 +6738,17 @@ export function App() {
                     {v3Readiness.readinessCamoticsEvidence ? ` · eligible ${v3Readiness.readinessCamoticsEvidence.productionEvidenceEligible ? "yes" : "no"} · input ${v3Readiness.readinessCamoticsEvidence.inputIdentityStatus} · cli ${v3Readiness.readinessCamoticsEvidence.cliRunPackageBindingStatus} · motion ${v3Readiness.readinessCamoticsEvidence.motionConsistencyStatus} · machine ${v3Readiness.readinessCamoticsEvidence.machineContextStatus}` : ""}
                     {v3Readiness.readinessCamoticsEvidence?.jobId ? ` · job ${v3Readiness.readinessCamoticsEvidence.jobId.slice(0, 8)}` : ""}
                   </small>
+                  {v3Readiness.safeTrialReadiness && (
+                    <small className={
+                      v3Readiness.safeTrialReadiness.status === "safe-trial-ready"
+                        ? "v3-inline-ok"
+                        : ["blocked", "missing-job"].includes(v3Readiness.safeTrialReadiness.status)
+                          ? "v3-inline-critical"
+                          : "v3-inline-warning"
+                    }>
+                      安全试雕状态：{formatSafeTrialReadiness(v3Readiness.safeTrialReadiness)}
+                    </small>
+                  )}
                   </>}
                   <small className={v3Readiness.latestTrialFeedback ? v3Readiness.latestTrialFeedback.latestOutcome === "success" ? "v3-inline-ok" : v3Readiness.latestTrialFeedback.latestOutcome === "failed" ? "v3-inline-critical" : "v3-inline-warning" : "v3-inline-warning"}>
                     最新试雕反馈：{v3Readiness.latestTrialFeedback ? `${v3Readiness.latestTrialFeedback.recordCount} 条 · ${v3Readiness.latestTrialFeedback.latestOutcome ?? "-"}` : "未回填"}
@@ -9456,6 +9482,22 @@ function formatReadinessCamoticsSource(source: string) {
   if (source === "camotics-import-contract") return "全局导入契约";
   if (source === "missing") return "缺失";
   return source;
+}
+
+function formatSafeTrialReadiness(readiness: NonNullable<V3ReadinessSummary["safeTrialReadiness"]>) {
+  const status = readiness.status === "safe-trial-ready"
+    ? "可按安全试雕流程继续"
+    : readiness.status === "trial-with-engineering-review"
+      ? "可工程复核试雕"
+      : readiness.status === "air-run-only"
+        ? "仅建议离料空跑"
+        : readiness.status === "missing-job"
+          ? "缺少最新任务"
+          : "暂不建议试雕";
+  const files = readiness.allowedFiles.length ? `文件 ${readiness.allowedFiles.join(", ")}` : "无上机文件";
+  const missing = readiness.missing.length ? `缺 ${readiness.missing.length} 项` : "缺口已清";
+  const production = readiness.blockedForProduction ? "生产仍锁定" : "生产可复核";
+  return [status, files, missing, production].join(" · ");
 }
 
 function formatRunbookLinuxEvidenceStatus(status?: string) {

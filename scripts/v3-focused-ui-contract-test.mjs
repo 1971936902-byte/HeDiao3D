@@ -72,6 +72,15 @@ const checks = [
     summary: "Focused CAM report should expose residual/gouge closure review separately from material-removal simulation."
   },
   {
+    id: "safe-trial-readiness-visible",
+    ok: source.includes("安全试雕状态：")
+      && source.includes("formatSafeTrialReadiness")
+      && source.includes("safeTrialReadiness")
+      && source.includes("生产仍锁定")
+      && source.includes("仅建议离料空跑"),
+    summary: "Focused readiness UI should show current job safe-trial readiness separately from production readiness."
+  },
+  {
     id: "locked-production-guidance-visible",
     ok: source.includes("formatLockedProductionPackageGuidance") && source.includes("operatorGuidance") && source.includes("先下载安全试雕包") && source.includes("禁止上机") && source.includes("证据缺口") && source.includes("可下载证据审查包复核缺口") && source.includes("生产闭环审计"),
     summary: "Focused UI should turn locked production-package responses into actionable safe-trial guidance."

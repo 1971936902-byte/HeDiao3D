@@ -626,6 +626,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
   const camServerConfig = createDeploymentCamServerConfigReport(reportId);
   await writeFile(join(outputRoot, "cam-server-config.json"), JSON.stringify(camServerConfig, null, 2), "utf8");
   const gates = createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
+  const safeTrialReadiness = createSafeTrialReadinessSummary({ latestJob, latestEvidenceDossier, readinessCamoticsEvidence, latestTrialFeedback, latestMachineAcceptance });
   const acceptancePlan = createV3DeploymentAcceptancePlan({ gates, diagnostics, nativeCam, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, camServerConfig, externalHandoff, externalCamHandoffs, neutralImport, camoticsImport, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   const goalAudit = createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, adapterValidation, nativeCamRealOutputAcceptance, runbookResult, externalHandoff, externalCamHandoffs, neutralImport, postprocessHandoffReadiness, readinessCamoticsEvidence, latestJob, latestTrialFeedback, latestMachineAcceptance, latestEvidenceDossier });
   return {
@@ -650,6 +651,7 @@ async function buildV3ReadinessReport(reportId, outputRoot) {
     postprocessHandoffReadiness,
     camoticsImport,
     readinessCamoticsEvidence,
+    safeTrialReadiness,
     latestJob,
     latestTrialFeedback,
     latestMachineAcceptance,
@@ -1812,6 +1814,104 @@ function createProductionEvidenceDossierSummaryFromJob(job) {
     summary: dossier.summary ?? null,
     crossChecks: rawCrossChecks ? createProductionEvidenceCrossChecksSummary(rawCrossChecks) : null,
     artifact: publicArtifactUrl(dossier.jobId ?? job.id, "production-evidence-dossier.json")
+  };
+}
+
+function createSafeTrialReadinessSummary({ latestJob, latestEvidenceDossier, readinessCamoticsEvidence, latestTrialFeedback, latestMachineAcceptance }) {
+  const crossChecks = latestEvidenceDossier?.crossChecks ?? {};
+  const hasJob = Boolean(latestJob);
+  const airRunReady = Boolean(latestJob?.allowAirRun);
+  const trialNcReady = Boolean(latestJob?.allowTrialNc);
+  const reportsReady = Boolean(latestEvidenceDossier && latestEvidenceDossier.status !== "missing");
+  const ncAndControllerReady = Boolean(crossChecks.ncStaticReady && crossChecks.controllerDialectReady);
+  const simulationReady = Boolean(
+    readinessCamoticsEvidence?.productionEvidenceEligible
+    || crossChecks.realMaterialRemovalVerified
+  );
+  const sourceBindingReady = Boolean(
+    crossChecks.neutralSourceBindingPass
+    || crossChecks.externalGcodeSourceBindingPass
+    || latestJob?.allowTrialNc
+  );
+  const trialFeedbackReady = Boolean(
+    latestTrialFeedback?.latestOutcome === "success"
+    && latestTrialFeedback?.latestDownloadIntegrityBound === "matched"
+  );
+  const machineAcceptanceReady = Boolean(
+    latestMachineAcceptance?.latestOutcome === "success"
+    && latestMachineAcceptance?.latestAllRequiredPassed
+    && latestMachineAcceptance?.latestDownloadIntegrityBound === "matched"
+  );
+  const allowedFiles = [
+    ...(airRunReady ? ["air-run.nc", "rotary-calibration-airrun.nc"] : []),
+    ...(trialNcReady ? ["toolpath.nc"] : [])
+  ];
+  const missing = [
+    ...(!hasJob ? ["latest-v3-job"] : []),
+    ...(!airRunReady ? ["air-run-nc"] : []),
+    ...(!trialNcReady ? ["trial-toolpath-nc"] : []),
+    ...(!reportsReady ? ["production-evidence-dossier"] : []),
+    ...(!ncAndControllerReady ? ["nc-static-and-controller-dialect"] : []),
+    ...(!simulationReady ? ["material-removal-evidence"] : []),
+    ...(!sourceBindingReady ? ["cam-source-binding"] : [])
+  ];
+  const status = !hasJob
+    ? "missing-job"
+    : airRunReady && trialNcReady && reportsReady && ncAndControllerReady
+      ? simulationReady && sourceBindingReady
+        ? "safe-trial-ready"
+        : "trial-with-engineering-review"
+      : airRunReady
+        ? "air-run-only"
+        : "blocked";
+  return {
+    schema: "hediao3d.safe-trial-readiness.v1",
+    status,
+    jobId: latestJob?.id ?? null,
+    packageLevel: latestJob?.packageLevel ?? latestEvidenceDossier?.packageLevel ?? null,
+    allowAirRun: airRunReady,
+    allowTrialNc: trialNcReady,
+    allowProductionNc: Boolean(latestJob?.allowProductionNc),
+    allowedFiles,
+    blockedForProduction: true,
+    checks: {
+      hasJob,
+      airRunReady,
+      trialNcReady,
+      reportsReady,
+      ncAndControllerReady,
+      simulationReady,
+      sourceBindingReady,
+      trialFeedbackReady,
+      machineAcceptanceReady
+    },
+    missing,
+    nextActions: status === "safe-trial-ready"
+      ? [
+        "下载安全试雕包，先运行 rotary-calibration-airrun.nc。",
+        "主轴关闭运行 air-run.nc，确认 X/Y旋转/Z 方向和行程。",
+        "用废料或软材料低倍率试雕 toolpath.nc，并回填 trial-feedback 和 machine-acceptance。"
+      ]
+      : status === "trial-with-engineering-review"
+        ? [
+          "先按报告复核材料去除证据和 CAM 源绑定，再只做离料空跑或低风险试雕。",
+          "补齐 camotics-result-bundle.zip 或真实 Native CAM 证据后重新生成 readiness。"
+        ]
+        : status === "air-run-only"
+          ? [
+            "当前只适合离料空跑和旋转标定，不建议切削 toolpath.nc。",
+            "补齐 production-evidence-dossier、NC 静态分析、控制器方言和材料去除证据。"
+          ]
+          : [
+            "先生成或恢复一个 V3 job，并确认安全试雕包已生成。"
+          ],
+    summary: status === "safe-trial-ready"
+      ? "当前最新 job 已具备安全试雕包基础条件；仍需现场空跑、软料试雕和机床验收，不能直接生产。"
+      : status === "trial-with-engineering-review"
+        ? "当前最新 job 可进入工程复核型试雕，但材料去除或 CAM 源绑定证据仍需补强。"
+        : status === "air-run-only"
+          ? "当前最新 job 仅建议离料空跑/旋转标定，暂不建议切削试雕。"
+          : "当前没有可用于安全试雕判断的 V3 job。"
   };
 }
 
@@ -3343,6 +3443,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
     postprocessHandoffReadiness: report.postprocessHandoffReadiness ?? null,
     camoticsImport: report.camoticsImport ?? null,
     readinessCamoticsEvidence: report.readinessCamoticsEvidence ?? null,
+    safeTrialReadiness: report.safeTrialReadiness ?? null,
     latestJob: report.latestJob,
     latestTrialFeedback: report.latestTrialFeedback ?? null,
     latestMachineAcceptance: report.latestMachineAcceptance ?? null,
@@ -3563,6 +3664,7 @@ function createV3ReadinessMarkdown(report) {
     `- Production NC: ${report.gates.allowProductionNc ? "yes" : "no"}`,
     `- Trial NC: ${report.gates.allowTrialNc ? "yes" : "no"}`,
     `- Air run: ${report.gates.allowAirRun ? "yes" : "no"}`,
+    `- Safe trial readiness: ${report.safeTrialReadiness ? `${report.safeTrialReadiness.status} / files=${report.safeTrialReadiness.allowedFiles.join(", ") || "none"}` : "missing"}`,
     `- Goal audit: ${report.goalAudit ? `${report.goalAudit.status} / ready=${report.goalAudit.readyLayerCount} partial=${report.goalAudit.partialLayerCount} blocked=${report.goalAudit.blockedLayerCount}` : "missing"}`,
     "",
     "## Blockers",
