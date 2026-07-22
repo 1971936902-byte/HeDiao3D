@@ -69,11 +69,11 @@ def main() -> int:
             print(f"OpenCAMLib PathDropCutter output requested but no real cutter-location points were produced. Readiness report: {readiness_path}", file=sys.stderr)
             return 6
         contact_path = output_path.with_name("opencamlib-cutter-contact-report.json")
-        contact_report = create_path_dropcutter_contact_report(job, plan, neutral, detection, geometry, plan_path)
-        neutral["cutterContactReport"] = contact_report
         neutral["cutterContactReportPath"] = str(contact_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(neutral, ensure_ascii=False, indent=2), encoding="utf-8")
+        neutral_file_sha = sha256_file(output_path)
+        contact_report = create_path_dropcutter_contact_report(job, plan, neutral, detection, geometry, plan_path, neutral_file_sha)
         contact_path.write_text(json.dumps(contact_report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({
             "ok": True,
@@ -942,7 +942,7 @@ def resolve_path_dropcutter_grid(job: Dict[str, Any], plan: Dict[str, Any], geom
     }
 
 
-def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path) -> Dict[str, Any]:
+def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, Any], neutral: Dict[str, Any], detection: Dict[str, Any], geometry: Dict[str, Any], plan_path: Path, neutral_file_sha: Optional[str] = None) -> Dict[str, Any]:
     points = neutral.get("points") if isinstance(neutral.get("points"), list) else []
     path_report = ((neutral.get("runner") or {}).get("pathDropCutter") or {})
     metrics = create_path_dropcutter_quality_metrics(job, plan, neutral, geometry, path_report)
@@ -957,6 +957,7 @@ def create_path_dropcutter_contact_report(job: Dict[str, Any], plan: Dict[str, A
             "planSha256": sha256_file(plan_path),
             "sourceNeutralToolpathSha256": sha256_json_without_contact_report(neutral),
             "neutralToolpathWithoutContactReportSha256": sha256_json_without_contact_report(neutral),
+            "externalNeutralToolpathSha256": neutral_file_sha,
         },
         "opencamlib": detection,
         "model": {
