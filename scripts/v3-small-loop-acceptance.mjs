@@ -37,6 +37,11 @@ const steps = [
     command: [process.execPath, join("scripts", "v3-frontend-operator-e2e.mjs"), "--import-model"]
   },
   {
+    id: "frontend-import-failure-e2e",
+    label: "V3 frontend bad original model fail-closed E2E",
+    command: [process.execPath, join("scripts", "v3-frontend-operator-e2e.mjs"), "--import-bad-model"]
+  },
+  {
     id: "v3-smoke",
     label: "V3 orchestrator smoke loop",
     command: [process.execPath, join("scripts", "v3-smoke-test.mjs")]

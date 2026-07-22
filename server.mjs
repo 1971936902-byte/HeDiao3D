@@ -10447,10 +10447,12 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
     || (neutralBinding?.required === true && neutralBinding?.status === "pass")
   );
   const realCamReady = externalSourceReady && externalBindingReady;
+  const residualEvidenceReady = Boolean(simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady);
   const realSimulationReady = Boolean(
     simulationEvidence?.realMaterialRemovalVerified
     && simulationEvidence?.productionUnlockEligible
     && simulationEvidence?.level === "material-removal-verified"
+    && residualEvidenceReady
   );
   const ncReady = ncStaticAnalysis?.level === "ready" && controllerDialectReport?.level === "ready";
   const fieldReady = Boolean(
@@ -10474,8 +10476,10 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
       label: "真实材料去除仿真",
       status: realSimulationReady ? "pass" : "review",
       summary: realSimulationReady
-        ? "CAMotics/等效材料去除仿真已绑定当前输入并满足生产证据。"
-        : simulationEvidence?.summary ?? "缺少真实材料去除仿真证据。"
+        ? "CAMotics/等效材料去除仿真已绑定当前输入，且残料/过切证据已闭合。"
+        : simulationEvidence?.realMaterialRemovalVerified && !residualEvidenceReady
+          ? "材料去除仿真已绑定当前输入，但残料/过切证据尚未通过测量或扫掠体积验证。"
+          : simulationEvidence?.summary ?? "缺少真实材料去除仿真证据。"
     },
     {
       id: "postprocess-machine-proof",

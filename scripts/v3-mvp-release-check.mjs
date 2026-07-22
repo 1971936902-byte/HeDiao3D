@@ -29,6 +29,9 @@ const requiredScripts = [
   "test:v3:mvp-one-command",
   "test:v3:small-loop-acceptance",
   "test:v3:focused-ui",
+  "test:v3:frontend-e2e",
+  "test:v3:frontend-import-e2e",
+  "test:v3:frontend-import-failure-e2e",
   "test:v3:buddha-fixture"
 ];
 

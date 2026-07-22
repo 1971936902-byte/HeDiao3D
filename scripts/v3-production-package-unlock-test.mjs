@@ -287,6 +287,29 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       zMin: motionProfile.zMin,
       zMax: motionProfile.zMax,
       materialRemovedMm3: 8.8
+    },
+    residualValidation: {
+      schema: "hediao3d.residual-validation.v1",
+      status: "ready",
+      productionResidualEvidenceReady: true,
+      present: true,
+      measured: false,
+      validationBasis: "swept-volume-validated",
+      evidenceClass: "material-removal-validated",
+      maxGougeMm: 0.012,
+      maxUndercutMm: 0.035,
+      maxResidualStockMm: 0.06,
+      tolerances: {
+        maxGougeMm: 0.03,
+        maxUndercutMm: 0.08
+      },
+      checks: [
+        { id: "residual-basis", status: "pass", summary: "Fixture residual basis is swept-volume validated." },
+        { id: "max-gouge", status: "pass", summary: "Fixture gouge is within tolerance." },
+        { id: "max-undercut", status: "pass", summary: "Fixture undercut is within tolerance." }
+      ],
+      topBlockers: [],
+      summary: "Production package unlock fixture residual/gouge evidence is within tolerance."
     }
   };
 }

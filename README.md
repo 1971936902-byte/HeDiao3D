@@ -20,6 +20,12 @@ npm run test:v3:mvp-release
 npm run test:v3:mvp-one-command
 ```
 
+完整工程验收会额外运行浏览器 E2E，覆盖佛头样件、浏览器内 STL 导入，以及无三角面 OBJ 的失败阻断路径：
+
+```bash
+npm run test:v3:small-loop-acceptance
+```
+
 ## 当前已实现
 
 1. 上传一张或多张核雕参考图片。
@@ -37,6 +43,7 @@ npm run test:v3:mvp-one-command
 13. 支持下载 `.nc`、`.tap`、`.txt` G-code 文件和 `.csv` 刀路点文件。
 14. 生成刀路后在 3D 视图中叠加刀路轨迹，并显示 X/A 范围和基础安全提示。
 15. 支持通过本地后端代理调用 Meshy Multi-Image to 3D，生成真实 GLB/STL AI 网格。
+16. V3 原始模型导入会区分“本地预览”和“后端 CAM 可读取”：无效 STL/OBJ/GLB 会显示阻断提示，并禁用试雕刀路生成。
 
 详细验收步骤见 [验收清单.md](./验收清单.md)。
 
