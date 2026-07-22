@@ -1678,19 +1678,32 @@ TARGET_BOUNDARY="$OUT_DIR/target-machine-boundary.json"
 CONTACT_VALIDATION_REPORT="$OUT_DIR/opencamlib-contact-output-validation.json"
 RUNNER_READINESS_REPORT="$OUT_DIR/opencamlib-runner-readiness.json"
 REAL_CANDIDATE_REPORT="$OUT_DIR/opencamlib-real-candidate-run.json"
+NEUTRAL_TOOLPATH="$OUT_DIR/neutral-toolpath.json"
+CONTACT_REPORT="$OUT_DIR/opencamlib-cutter-contact-report.json"
+CANDIDATE_INPUT_DIR="$OUT_DIR"
+if [[ -s "$ROOT/job.json" && -s "$ROOT/opencamlib-kernel-plan.json" && -s "$ROOT/repaired-model.stl" ]]; then
+  CANDIDATE_INPUT_DIR="$ROOT"
+  CONTACT_VALIDATION_REPORT="$ROOT/opencamlib-contact-output-validation.json"
+  REAL_CANDIDATE_REPORT="$ROOT/opencamlib-real-candidate-run.json"
+  NEUTRAL_TOOLPATH="$ROOT/neutral-toolpath.json"
+  CONTACT_REPORT="$ROOT/opencamlib-cutter-contact-report.json"
+fi
+if [[ -s "$ROOT/opencamlib-runner-readiness.json" ]]; then
+  RUNNER_READINESS_REPORT="$ROOT/opencamlib-runner-readiness.json"
+fi
 if [[ ! -s "$REPORT" ]]; then
   echo "[HeDiao3D] Missing validation report: $REPORT" >&2
   exit 2
 fi
 
 echo "[HeDiao3D] Step 4/4 OpenCAMLib strict contact validation"
-if [[ -f "opencamlib-real-candidate-run.mjs" && -s "$OUT_DIR/job.json" && -s "$OUT_DIR/opencamlib-kernel-plan.json" && -s "$OUT_DIR/repaired-model.stl" ]]; then
+if [[ -f "opencamlib-real-candidate-run.mjs" && -s "$CANDIDATE_INPUT_DIR/job.json" && -s "$CANDIDATE_INPUT_DIR/opencamlib-kernel-plan.json" && -s "$CANDIDATE_INPUT_DIR/repaired-model.stl" ]]; then
   echo "[HeDiao3D] Running OpenCAMLib real candidate chain"
-  HEDIAO3D_OPENCAMLIB_JOB_JSON="$OUT_DIR/job.json" \
-  HEDIAO3D_OPENCAMLIB_PLAN_JSON="$OUT_DIR/opencamlib-kernel-plan.json" \
-  HEDIAO3D_OPENCAMLIB_MODEL_STL="$OUT_DIR/repaired-model.stl" \
-  HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON="$OUT_DIR/neutral-toolpath.json" \
-  HEDIAO3D_OPENCAMLIB_CONTACT_JSON="$OUT_DIR/opencamlib-cutter-contact-report.json" \
+  HEDIAO3D_OPENCAMLIB_JOB_JSON="$CANDIDATE_INPUT_DIR/job.json" \
+  HEDIAO3D_OPENCAMLIB_PLAN_JSON="$CANDIDATE_INPUT_DIR/opencamlib-kernel-plan.json" \
+  HEDIAO3D_OPENCAMLIB_MODEL_STL="$CANDIDATE_INPUT_DIR/repaired-model.stl" \
+  HEDIAO3D_OPENCAMLIB_NEUTRAL_JSON="$NEUTRAL_TOOLPATH" \
+  HEDIAO3D_OPENCAMLIB_CONTACT_JSON="$CONTACT_REPORT" \
   HEDIAO3D_OPENCAMLIB_CONTACT_VALIDATION_JSON="$CONTACT_VALIDATION_REPORT" \
   HEDIAO3D_OPENCAMLIB_REAL_CANDIDATE_REPORT_JSON="$REAL_CANDIDATE_REPORT" \
   node opencamlib-real-candidate-run.mjs . || true
@@ -1698,12 +1711,12 @@ else
   echo "[HeDiao3D] OpenCAMLib real candidate inputs not found in $OUT_DIR; skipping one-command candidate chain." >&2
 fi
 
-if [[ -s "$OUT_DIR/neutral-toolpath.json" && -s "$OUT_DIR/opencamlib-kernel-plan.json" && -s "$OUT_DIR/repaired-model.stl" && -s "$OUT_DIR/opencamlib-cutter-contact-report.json" ]]; then
+if [[ -s "$NEUTRAL_TOOLPATH" && -s "$CANDIDATE_INPUT_DIR/opencamlib-kernel-plan.json" && -s "$CANDIDATE_INPUT_DIR/repaired-model.stl" && -s "$CONTACT_REPORT" ]]; then
   node opencamlib-contact-output-validate.mjs \
-    --neutral "$OUT_DIR/neutral-toolpath.json" \
-    --plan "$OUT_DIR/opencamlib-kernel-plan.json" \
-    --model "$OUT_DIR/repaired-model.stl" \
-    --contact "$OUT_DIR/opencamlib-cutter-contact-report.json" \
+    --neutral "$NEUTRAL_TOOLPATH" \
+    --plan "$CANDIDATE_INPUT_DIR/opencamlib-kernel-plan.json" \
+    --model "$CANDIDATE_INPUT_DIR/repaired-model.stl" \
+    --contact "$CONTACT_REPORT" \
     --out "$CONTACT_VALIDATION_REPORT" || true
 else
   echo "[HeDiao3D] OpenCAMLib contact validation inputs not found in $OUT_DIR; acceptance will stay blocked for production candidates." >&2
@@ -1899,7 +1912,7 @@ const acceptance = {
   expectProductionCandidate,
   level: blockers.length ? "critical" : warnings.length ? "review" : "ready",
   productionCandidateCount: candidates.length,
-  openCamLibRealCandidateReady,
+  openCamLibRealCandidateReady: openCamLibCandidateReady,
   unsafeCount: unsafe.length,
   missingCount: missing.length,
   contactValidation,
@@ -2064,11 +2077,16 @@ function crc32(buffer) {
 }
 NODE
 
+cp -f "$ACCEPTANCE_REPORT" "$ROOT/native-cam-real-output-acceptance.json"
+cp -f "$ACCEPTANCE_BUNDLE" "$ROOT/native-cam-real-output-bundle.zip"
+
 echo "[HeDiao3D] Acceptance artifacts:"
 echo "- $REPORT"
 echo "- $OUT_DIR/v3-external-adapter-validation.md"
 echo "- $ACCEPTANCE_REPORT"
 echo "- $ACCEPTANCE_BUNDLE"
+echo "- $ROOT/native-cam-real-output-acceptance.json"
+echo "- $ROOT/native-cam-real-output-bundle.zip"
 echo "[HeDiao3D] If this script exits 0 with production-candidate output, continue with CAMotics import, V3 readiness, air-run and machine acceptance."
 `;
 }
