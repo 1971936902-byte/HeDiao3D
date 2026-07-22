@@ -18393,6 +18393,7 @@ function getOrchestratorProductionPackage(jobId, res) {
 function createLockedProductionPackageOperatorGuidance(jobId, manifest, productionGate, evidenceDossier, productionAudit, productionClosureAudit = null) {
   const missingEvidence = Array.isArray(evidenceDossier?.missingEvidence) ? evidenceDossier.missingEvidence : [];
   const closureActions = Array.isArray(productionClosureAudit?.nextActions) ? productionClosureAudit.nextActions : [];
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
   const neverMachineFiles = Array.isArray(manifest?.files)
     ? manifest.files
       .filter((file) => file.filename === "camotics-preview.nc" || file.machineUse?.allowedOnMachine === false || file.machineUse?.class === "simulation-only-never-machine")
@@ -18432,6 +18433,7 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
         commandOrEndpoint: item.commandOrEndpoint
       }))
     } : null,
+    materialRemovalGate,
     allowedBeforeUnlock: [
       "下载安全试雕包。",
       "核验 package-integrity.json 与 operator-download-checklist.md。",
@@ -18448,6 +18450,40 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
     productionGateLevel: productionGate?.level ?? manifest?.packageLevel ?? "unknown",
     productionAuditAllowed: Boolean(productionAudit?.allowProductionPackage),
     summary: productionClosureAudit?.summary ?? "正式生产包被锁定时，先走安全试雕包和证据回填流程；不要把仿真文件或报告文件上机。"
+  };
+}
+
+function createLockedProductionMaterialRemovalGuidance(productionAudit) {
+  const gate = Array.isArray(productionAudit?.gates)
+    ? productionAudit.gates.find((item) => item?.id === "material-removal-proof")
+    : null;
+  if (!gate) {
+    return {
+      id: "material-removal-proof",
+      label: "真实材料去除仿真",
+      status: "review",
+      summary: "缺少生产审计中的材料去除/残料门禁记录。",
+      residualEvidenceRequired: true,
+      nextActions: [
+        "回填同一 job 的 CAMotics/等效材料去除结果。",
+        "补齐 residualValidation.maxGougeMm / maxUndercutMm，并证明来源为 measured 或 swept-volume/material-removal validated。"
+      ]
+    };
+  }
+  const residualClosed = /残料\/过切证据已闭合|残料.*已闭合|gouge.*closed|residual.*closed/i.test(gate.summary ?? "");
+  return {
+    id: gate.id,
+    label: gate.label ?? "真实材料去除仿真",
+    status: gate.status ?? "review",
+    summary: gate.summary ?? "材料去除仿真和残料/过切证据仍需复核。",
+    residualEvidenceRequired: gate.status !== "pass" || !residualClosed,
+    nextActions: gate.status === "pass"
+      ? ["继续核验 NC/控制器、离料空跑、试雕反馈和机床验收是否与同一加工包哈希绑定。"]
+      : [
+          "确认材料去除仿真结果绑定当前 job、当前 toolpath 和当前机床上下文。",
+          "补齐残料/过切 residualValidation，要求 maxGougeMm/maxUndercutMm 在容差内且依据为 measured 或 swept-volume/material-removal validated。",
+          "重新上传 camotics-result-bundle.zip 或等效材料去除证据包。"
+        ]
   };
 }
 

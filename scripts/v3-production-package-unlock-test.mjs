@@ -149,6 +149,10 @@ async function main() {
   const lockedMaterialRemovalGate = lockedWithoutResidual.productionReadinessAudit?.gates?.find((gate) => gate.id === "material-removal-proof");
   assert(lockedMaterialRemovalGate?.status === "review", "locked production package should identify residual material-removal proof as review");
   assert(/残料|过切|residual|gouge/i.test(lockedMaterialRemovalGate?.summary ?? ""), "locked material-removal gate should mention residual/gouge evidence gap");
+  assert(lockedWithoutResidual.operatorGuidance?.materialRemovalGate?.id === "material-removal-proof", "locked guidance should expose material-removal gate summary");
+  assert(lockedWithoutResidual.operatorGuidance?.materialRemovalGate?.status === "review", "locked guidance material-removal gate should stay in review without residualValidation");
+  assert(lockedWithoutResidual.operatorGuidance?.materialRemovalGate?.residualEvidenceRequired === true, "locked guidance should require residual/gouge evidence");
+  assert(lockedWithoutResidual.operatorGuidance?.materialRemovalGate?.nextActions?.some((item) => /residualValidation|maxGouge|maxUndercut|残料|过切/i.test(item)), "locked guidance should tell operator to close residualValidation metrics");
 
   const camoticsWithResidual = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({

@@ -90,6 +90,8 @@ const checks = [
   {
     id: "locked-production-material-removal-gate-visible",
     ok: source.includes("formatProductionReadinessMaterialRemovalGate")
+      && source.includes("formatLockedProductionMaterialRemovalGuidance")
+      && source.includes("guidance?.materialRemovalGate")
       && source.includes("material-removal-proof")
       && source.includes("材料去除/残料门禁")
       && source.includes("需补残料/过切闭环证据")
