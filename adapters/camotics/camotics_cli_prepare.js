@@ -78,7 +78,7 @@ console.log(JSON.stringify({
 function writeBlockedPackage(reason, message) {
   const packageJson = {
     schema: "hediao3d.camotics-cli-run-package.v1",
-    jobId: plan.jobId ?? null,
+    jobId: plan.jobId ?? inferJobIdFromPath(jobDir),
     createdAt: new Date().toISOString(),
     status: "blocked",
     sourceJobDir: jobDir,
@@ -1029,6 +1029,11 @@ function parseWord(line, word) {
 function readJsonIfExists(path) {
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function inferJobIdFromPath(value) {
+  const match = String(value ?? "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return match ? match[0] : null;
 }
 
 function shellQuote(value) {
