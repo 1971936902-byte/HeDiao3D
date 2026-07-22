@@ -184,7 +184,7 @@ try {
   } else {
     assert(readiness.level === "ready-for-real-contact-runner", `unexpected non-blocked readiness level: ${readiness.level}`);
     assert(readiness.checks?.every((check) => check.status === "pass"), "ready runner readiness should only contain passing preflight checks");
-    assert(/Production remains locked/i.test(readiness.productionBoundary ?? ""), "ready runner readiness should still state production lock boundary");
+    assert(/does not generate machine NC/i.test(readiness.productionBoundary ?? "") && /must not unlock/i.test(readiness.productionBoundary ?? ""), "ready runner readiness should still state production lock boundary");
   }
 
   console.log(JSON.stringify({
