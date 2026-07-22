@@ -26,6 +26,7 @@ const files = {
 };
 const plan = files.plan.exists ? readJson(planPath, "OpenCAMLib kernel plan") : null;
 const neutral = files.neutral.exists ? readJson(neutralPath, "neutral toolpath") : null;
+const contact = files.contact.exists ? readJson(contactPath, "OpenCAMLib cutter-contact report") : null;
 const modelPath = explicitModelPath ?? resolveModelPath(plan, planPath);
 files.model = createFileIdentity(modelPath, modelPath ? basename(modelPath) : "model");
 
@@ -66,6 +67,7 @@ if (machineFit.level === "critical") {
 const level = blockers.length ? "critical" : "ready";
 const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit });
 const handoffContract = createHandoffContract({ level, files, contactValidation, machineFit });
+const materialRemovalReadiness = summarizeMaterialRemovalReadiness(contact?.materialRemovalReadiness);
 const report = {
   schema: "hediao3d.opencamlib-candidate-package-validation.v1",
   createdAt: new Date().toISOString(),
@@ -76,6 +78,7 @@ const report = {
   artifactManifest,
   handoffContract,
   machineFit,
+  materialRemovalReadiness,
   contactValidation: contactValidation ? createContactValidationSummary(contactValidation) : null,
   validatorRun: validatorRun ? {
     exitCode: validatorRun.status,
@@ -103,6 +106,46 @@ console.log(JSON.stringify(report, null, 2));
 
 if (strict && level === "critical") {
   process.exitCode = 3;
+}
+
+function summarizeMaterialRemovalReadiness(readiness) {
+  if (!readiness || typeof readiness !== "object") {
+    return {
+      schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+      level: "missing",
+      readyForMaterialRemovalSimulation: false,
+      productionResidualEvidenceReady: false,
+      simulationQuality: {
+        schema: "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+        level: "missing",
+        engineeringSimulationAllowed: false,
+        productionEvidenceAllowed: false,
+        risks: ["missing-opencamlib-material-removal-readiness"]
+      },
+      missingForProduction: ["camotics-result.json or equivalent material-removal result"],
+      summary: "OpenCAMLib contact report did not include material-removal readiness."
+    };
+  }
+  const simulationQuality = readiness.simulationQuality && typeof readiness.simulationQuality === "object"
+    ? readiness.simulationQuality
+    : {};
+  return {
+    schema: readiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1",
+    level: readiness.level ?? (readiness.readyForMaterialRemovalSimulation ? "ready-for-camotics-or-equivalent" : "blocked"),
+    readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
+    productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
+    simulationQuality: {
+      schema: simulationQuality.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+      level: simulationQuality.level ?? "review",
+      engineeringSimulationAllowed: Boolean(simulationQuality.engineeringSimulationAllowed),
+      productionEvidenceAllowed: Boolean(simulationQuality.productionEvidenceAllowed),
+      risks: Array.isArray(simulationQuality.risks) ? simulationQuality.risks.map((item) => String(item)).slice(0, 24) : []
+    },
+    missingForProduction: Array.isArray(readiness.missingForProduction)
+      ? readiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 24)
+      : [],
+    summary: readiness.summary ?? "OpenCAMLib output can proceed to CAMotics/equivalent material-removal simulation as engineering evidence."
+  };
 }
 
 function parseValidatorOutput(run) {
