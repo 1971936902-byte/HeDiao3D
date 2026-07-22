@@ -444,6 +444,7 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
   const motionConsistency = evaluateCamoticsMotionConsistency(metrics, inputIdentity?.previewMotionProfile ?? null);
   const machineContext = evaluateCamoticsMachineContext(result?.inputs?.machineContext ?? null, inputIdentity?.machineContext ?? null);
   const upstreamCamEvidence = evaluateUpstreamCamEvidenceBinding(result?.inputs?.upstreamCamEvidence ?? null, inputIdentity?.cliRunPackageIdentity?.upstreamCamEvidence ?? null);
+  const residualValidation = evaluateResidualValidation(result);
   const bundleManifestIntegrity = result?.importBundleManifestIntegrity ?? null;
   const bundleManifestIntegrityOk = !bundleManifestIntegrity || bundleManifestIntegrity.status === "matched";
   const expectedJobId = adapterJob?.jobId ?? null;
@@ -590,11 +591,59 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
     motionConsistency,
     machineContext,
     upstreamCamEvidence,
+    residualValidation,
     bundleManifestIntegrity,
     artifactEvidence,
     summary: missing.length === 0
       ? "CAMotics result includes matching G-code identity, material volume, Z range and visual/material mesh evidence."
       : `CAMotics result imported, but evidence is incomplete: ${missing.join(", ")}.`
+  };
+}
+
+function evaluateResidualValidation(result) {
+  const metrics = result?.metrics ?? {};
+  const raw = result?.residualValidation && typeof result.residualValidation === "object"
+    ? result.residualValidation
+    : metrics.residualValidation && typeof metrics.residualValidation === "object"
+      ? metrics.residualValidation
+      : {};
+  const maxGougeMm = numberOrNull(raw.maxGougeMm ?? metrics.maxGougeMm);
+  const maxUndercutMm = numberOrNull(raw.maxUndercutMm ?? metrics.maxUndercutMm);
+  const maxResidualStockMm = numberOrNull(raw.maxResidualStockMm ?? metrics.maxResidualStockMm);
+  const measured = raw.measured === true || metrics.residualMeasured === true;
+  const validationBasis = String(raw.validationBasis ?? metrics.residualValidationBasis ?? "");
+  const evidenceClass = String(raw.evidenceClass ?? metrics.residualEvidenceClass ?? "");
+  const gougeToleranceMm = numberOrNull(raw.tolerances?.maxGougeMm ?? result?.tolerances?.maxGougeMm) ?? 0.03;
+  const undercutToleranceMm = numberOrNull(raw.tolerances?.maxUndercutMm ?? result?.tolerances?.maxUndercutMm) ?? 0.08;
+  const basisOk = measured || /(swept-volume|material-removal|validated|measured)/i.test(`${validationBasis} ${evidenceClass}`);
+  const gougeOk = maxGougeMm !== null && maxGougeMm <= gougeToleranceMm;
+  const undercutOk = maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm;
+  const present = maxGougeMm !== null || maxUndercutMm !== null || maxResidualStockMm !== null || Boolean(validationBasis || evidenceClass || measured);
+  const ready = basisOk && gougeOk && undercutOk;
+  const checks = [
+    { id: "residual-basis", status: basisOk ? "pass" : present ? "fail" : "missing", summary: basisOk ? "Residual evidence basis is measured or validated." : "Residual evidence must be measured or backed by swept-volume/material-removal/validated evidence.", measured, validationBasis: validationBasis || null, evidenceClass: evidenceClass || null },
+    { id: "max-gouge", status: gougeOk ? "pass" : present ? "fail" : "missing", summary: maxGougeMm === null ? "maxGougeMm is missing." : `maxGougeMm=${maxGougeMm}mm, tolerance=${gougeToleranceMm}mm.`, reported: maxGougeMm, tolerance: gougeToleranceMm },
+    { id: "max-undercut", status: undercutOk ? "pass" : present ? "fail" : "missing", summary: maxUndercutMm === null ? "maxUndercutMm is missing." : `maxUndercutMm=${maxUndercutMm}mm, tolerance=${undercutToleranceMm}mm.`, reported: maxUndercutMm, tolerance: undercutToleranceMm }
+  ];
+  return {
+    schema: "hediao3d.residual-validation.v1",
+    status: ready ? "ready" : present ? "review" : "missing",
+    productionResidualEvidenceReady: ready,
+    present,
+    measured,
+    validationBasis: validationBasis || null,
+    evidenceClass: evidenceClass || null,
+    maxGougeMm,
+    maxUndercutMm,
+    maxResidualStockMm,
+    tolerances: { maxGougeMm: gougeToleranceMm, maxUndercutMm: undercutToleranceMm },
+    checks,
+    topBlockers: checks.filter((check) => check.status !== "pass").map((check) => `${check.id}: ${check.summary}`).slice(0, 6),
+    summary: ready
+      ? "Residual/gouge evidence is measured or swept-volume validated and within tolerance."
+      : present
+        ? "Residual/gouge evidence is present but not production-ready."
+        : "No residual/gouge production evidence was supplied."
   };
 }
 
@@ -874,6 +923,11 @@ function evaluateCamoticsMachineContext(importedContext, expectedContext) {
 
 function close(actual, expectedValue, tolerance) {
   return Number.isFinite(actual) && Number.isFinite(expectedValue) && Math.abs(actual - expectedValue) <= tolerance;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function createGcodeMotionProfile(gcodeText) {

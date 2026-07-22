@@ -8991,15 +8991,20 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
   const simulationQuality = materialReadiness?.simulationQuality && typeof materialReadiness.simulationQuality === "object"
     ? materialReadiness.simulationQuality
     : null;
+  const residualValidation = evidenceQuality?.residualValidation && typeof evidenceQuality.residualValidation === "object"
+    ? evidenceQuality.residualValidation
+    : null;
   const upstreamMatched = upstream?.status === "matched" || upstream?.ok === true || upstream?.required === false;
   const readyForSimulation = Boolean(
     materialReadiness?.readyForMaterialRemovalSimulation
     ?? materialReadiness?.importedReadyForMaterialRemovalSimulation
   );
-  const productionResidualEvidenceReady = Boolean(
+  const upstreamProductionResidualEvidenceReady = Boolean(
     materialReadiness?.productionResidualEvidenceReady
     ?? materialReadiness?.imported?.productionResidualEvidenceReady
   );
+  const localProductionResidualEvidenceReady = Boolean(residualValidation?.productionResidualEvidenceReady);
+  const productionResidualEvidenceReady = upstreamProductionResidualEvidenceReady || localProductionResidualEvidenceReady;
   const engineeringSimulationAllowed = Boolean(simulationQuality?.engineeringSimulationAllowed);
   const productionEvidenceAllowed = Boolean(simulationQuality?.productionEvidenceAllowed);
   const missingForProduction = Array.isArray(materialReadiness?.missingForProduction)
@@ -9041,8 +9046,8 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
       id: "production-residual-evidence",
       status: productionResidualEvidenceReady ? "pass" : "review",
       summary: productionResidualEvidenceReady
-        ? "OpenCAMLib 残料/过切证据已由测量或扫掠体积验证闭合。"
-        : "OpenCAMLib 残料/过切仍缺少测量或扫掠体积验证，不能单独作为生产放行依据。"
+        ? "残料/过切证据已由测量或扫掠体积验证闭合。"
+        : "残料/过切仍缺少测量或扫掠体积验证，不能单独作为生产放行依据。"
     }
   ];
   const topBlockers = [
@@ -9070,8 +9075,13 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
     engineeringSimulationAllowed,
     productionEvidenceAllowed,
     productionResidualEvidenceReady,
+    upstreamProductionResidualEvidenceReady,
+    localProductionResidualEvidenceReady,
+    residualValidation,
     residualBasis: productionResidualEvidenceReady
-      ? "measured-or-swept-volume-validated"
+      ? localProductionResidualEvidenceReady
+        ? "camotics-residual-validation-measured-or-swept-volume"
+        : "opencamlib-measured-or-swept-volume-validated"
       : realMaterialRemovalVerified
         ? "material-removal-simulation-bound-engineering-review"
         : "not-validated",
@@ -9081,7 +9091,7 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
     topBlockers,
     nextActions,
     summary: productionResidualEvidenceReady
-      ? "OpenCAMLib 残料/过切证据已通过测量或扫掠体积验证，可进入生产证据复核。"
+      ? "残料/过切证据已通过测量或扫掠体积验证，可进入生产证据复核。"
       : realMaterialRemovalVerified
         ? "材料去除仿真已经闭环绑定，但 OpenCAMLib 残料指标仍按工程审查处理；可用于离料空跑/小料试雕，不单独解锁生产 NC。"
         : "尚未形成材料去除仿真与 OpenCAMLib 残料证据闭环。"
@@ -15936,6 +15946,9 @@ async function writeImportedCamoticsResultBundle(workDir, input) {
       };
     }
   }
+  if (!result.residualValidation && localValidation?.residualValidation) {
+    result.residualValidation = localValidation.residualValidation;
+  }
   result.artifacts = {
     ...(result.artifacts ?? {}),
     ...(screenshotFilename ? { screenshot: join(workDir, screenshotFilename) } : {}),
@@ -16219,7 +16232,37 @@ function normalizeCamoticsLocalValidation(value) {
     ok: value.ok === true,
     productionEvidenceEligible: value.productionEvidenceEligible === true,
     missing: Array.isArray(value.missing) ? value.missing.map((item) => String(item)).slice(0, 50) : [],
+    residualValidation: normalizeResidualValidation(value.residualValidation),
     summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
+  };
+}
+
+function normalizeResidualValidation(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    schema: value.schema ?? "hediao3d.residual-validation.v1",
+    status: typeof value.status === "string" ? value.status.slice(0, 80) : "missing",
+    productionResidualEvidenceReady: Boolean(value.productionResidualEvidenceReady),
+    present: Boolean(value.present),
+    measured: Boolean(value.measured),
+    validationBasis: typeof value.validationBasis === "string" ? value.validationBasis.slice(0, 160) : null,
+    evidenceClass: typeof value.evidenceClass === "string" ? value.evidenceClass.slice(0, 160) : null,
+    maxGougeMm: Number.isFinite(Number(value.maxGougeMm)) ? Number(value.maxGougeMm) : null,
+    maxUndercutMm: Number.isFinite(Number(value.maxUndercutMm)) ? Number(value.maxUndercutMm) : null,
+    maxResidualStockMm: Number.isFinite(Number(value.maxResidualStockMm)) ? Number(value.maxResidualStockMm) : null,
+    tolerances: value.tolerances && typeof value.tolerances === "object" ? {
+      maxGougeMm: Number.isFinite(Number(value.tolerances.maxGougeMm)) ? Number(value.tolerances.maxGougeMm) : null,
+      maxUndercutMm: Number.isFinite(Number(value.tolerances.maxUndercutMm)) ? Number(value.tolerances.maxUndercutMm) : null
+    } : null,
+    checks: Array.isArray(value.checks)
+      ? value.checks.slice(0, 12).map((check) => ({
+        id: typeof check?.id === "string" ? check.id.slice(0, 120) : "unknown-check",
+        status: typeof check?.status === "string" ? check.status.slice(0, 40) : "missing",
+        summary: typeof check?.summary === "string" ? check.summary.slice(0, 300) : ""
+      }))
+      : [],
+    topBlockers: Array.isArray(value.topBlockers) ? value.topBlockers.slice(0, 8).map((item) => String(item).slice(0, 300)) : [],
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 500) : null
   };
 }
 

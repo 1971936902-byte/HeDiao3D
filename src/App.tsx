@@ -459,7 +459,18 @@ type V3OrchestratorJob = {
             engineeringSimulationAllowed?: boolean;
             productionEvidenceAllowed?: boolean;
             productionResidualEvidenceReady?: boolean;
+            upstreamProductionResidualEvidenceReady?: boolean;
+            localProductionResidualEvidenceReady?: boolean;
             residualBasis?: string;
+            residualValidation?: {
+              schema?: string;
+              status?: string;
+              productionResidualEvidenceReady?: boolean;
+              maxGougeMm?: number | null;
+              maxUndercutMm?: number | null;
+              maxResidualStockMm?: number | null;
+              summary?: string | null;
+            } | null;
             missingForProduction?: string[];
             risks?: string[];
             checks?: Array<{
@@ -9682,8 +9693,10 @@ function formatResidualClosureReview(review: NonNullable<NonNullable<NonNullable
       : review.status === "simulation-verified-upstream-review"
         ? "仿真已过，上游待复核"
         : "未闭合";
-  const basis = review.residualBasis === "measured-or-swept-volume-validated"
-    ? "测量/扫掠体积验证"
+  const basis = review.residualBasis === "camotics-residual-validation-measured-or-swept-volume"
+    ? "CAMotics残料验证"
+    : review.residualBasis === "opencamlib-measured-or-swept-volume-validated" || review.residualBasis === "measured-or-swept-volume-validated"
+      ? "OpenCAMLib测量/扫掠验证"
     : review.residualBasis === "material-removal-simulation-bound-engineering-review"
       ? "材料去除仿真绑定"
       : "缺少验证依据";

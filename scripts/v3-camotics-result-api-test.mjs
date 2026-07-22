@@ -145,6 +145,19 @@ async function main() {
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
+  const closedResidual = createResidualValidationFixture();
+  const residualClosedImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence, closedResidual),
+    localValidation: createLocalValidation(true, closedResidual),
+    screenshotDataUrl: toDataUrl("residual-closed-camotics-png"),
+    materialMeshText: "solid residual_closed_material\nendsolid residual_closed_material\n"
+  });
+  assert(residualClosedImport.ok === true, "residual-closed CAMotics import should succeed");
+  assert(residualClosedImport.simulationEvidence?.residualClosureReview?.status === "production-residual-closed", `expected production-residual-closed, got ${residualClosedImport.simulationEvidence?.residualClosureReview?.status}`);
+  assert(residualClosedImport.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === true, "validated residual metrics should close production residual evidence");
+  assert(residualClosedImport.simulationEvidence?.residualClosureReview?.localProductionResidualEvidenceReady === true, "residual closure should name local residual validation readiness");
+  assert(residualClosedImport.simulationEvidence?.residualClosureReview?.residualValidation?.status === "ready", "residual closure should preserve residual validation detail");
+
   const zipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence), null, 2);
   const zipLocalValidationText = JSON.stringify(createLocalValidation(true), null, 2);
   const zipScreenshotText = "zip-fixture-camotics-png";
@@ -273,7 +286,7 @@ async function main() {
   }, null, 2));
 }
 
-function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, machineContext = motionProfile.machineContext, upstreamCamEvidence = null) {
+function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPackageSha256, machineContext = motionProfile.machineContext, upstreamCamEvidence = null, residualValidation = null) {
   return {
     schema: "hediao3d.camotics-result.v1",
     jobId,
@@ -295,11 +308,12 @@ function createCamoticsResult(jobId, preferredGcodeSha256, motionProfile, runPac
       zMin: motionProfile.zMin,
       zMax: motionProfile.zMax,
       materialRemovedMm3: 8.4
-    }
+    },
+    ...(residualValidation ? { residualValidation } : {})
   };
 }
 
-function createLocalValidation(ok) {
+function createLocalValidation(ok, residualValidation = null) {
   return {
     schema: "hediao3d.camotics-result-local-validation.v1",
     createdAt: new Date().toISOString(),
@@ -310,8 +324,35 @@ function createLocalValidation(ok) {
       { id: "result-file", ok: true, severity: "info", message: "fixture" },
       { id: "run-package-hash", ok, severity: ok ? "info" : "critical", message: "fixture" }
     ],
+    ...(residualValidation ? { residualValidation } : {}),
     missing: ok ? [] : ["run-package-hash"],
     summary: ok ? "CAMotics local validation passed: result is eligible to be imported as material-removal evidence." : "CAMotics local validation failed: run-package-hash"
+  };
+}
+
+function createResidualValidationFixture() {
+  return {
+    schema: "hediao3d.residual-validation.v1",
+    status: "ready",
+    productionResidualEvidenceReady: true,
+    present: true,
+    measured: true,
+    validationBasis: "swept-volume-validated",
+    evidenceClass: "material-removal-validated",
+    maxGougeMm: 0.012,
+    maxUndercutMm: 0.04,
+    maxResidualStockMm: 0.06,
+    tolerances: {
+      maxGougeMm: 0.03,
+      maxUndercutMm: 0.08
+    },
+    checks: [
+      { id: "residual-basis", status: "pass", summary: "Residual evidence basis is measured or validated." },
+      { id: "max-gouge", status: "pass", summary: "maxGougeMm=0.012mm, tolerance=0.03mm." },
+      { id: "max-undercut", status: "pass", summary: "maxUndercutMm=0.04mm, tolerance=0.08mm." }
+    ],
+    topBlockers: [],
+    summary: "Residual/gouge evidence is measured or swept-volume validated and within tolerance."
   };
 }
 

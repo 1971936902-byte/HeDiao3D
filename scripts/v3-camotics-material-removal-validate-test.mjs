@@ -45,6 +45,8 @@ try {
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.status === "matched", "ready report should expose matched upstream simulation quality");
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.productionEvidenceAllowed === false, "ready report should preserve simulation quality production boundary");
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "ready report should preserve production residual boundary");
+  assert(readyReport.residualValidation?.status === "missing", "ready report without residual metrics should mark residual validation missing");
+  assert(readyReport.residualValidation?.productionResidualEvidenceReady === false, "ready report without residual metrics should not close production residual evidence");
   assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
   const bundlePath = join(workDir, "camotics-result-bundle.zip");
@@ -54,6 +56,28 @@ try {
   assert(bundleNames.includes("camotics-result-local-validation.json"), "bundle missing validation JSON");
   assert(bundleNames.includes("camotics-preview.png"), "bundle missing screenshot");
   assert(bundleNames.includes("camotics-material-removal.stl"), "bundle missing material mesh");
+
+  writeJsonWithHash(resultPath, createResult({
+    runPackage,
+    runPackageSha,
+    residualValidation: {
+      measured: true,
+      validationBasis: "swept-volume-validated",
+      maxGougeMm: 0.012,
+      maxUndercutMm: 0.04,
+      maxResidualStockMm: 0.06
+    }
+  }));
+  const residualClosed = spawnSync(node, [validator, "--result", resultPath, "--run-package", runPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(residualClosed.status === 0, `residual-closed validation failed: ${residualClosed.stderr || residualClosed.stdout}`);
+  const residualClosedReport = JSON.parse(residualClosed.stdout);
+  assert(residualClosedReport.residualValidation?.status === "ready", "validated residual metrics should close residual validation");
+  assert(residualClosedReport.residualValidation?.productionResidualEvidenceReady === true, "validated residual metrics should be production residual evidence");
+  assert(residualClosedReport.residualValidation?.checks?.every((check) => check.status === "pass"), "validated residual checks should pass");
 
   writeJsonWithHash(resultPath, createResult({
     runPackage,
@@ -199,7 +223,7 @@ function createRunPackage(overrides = {}) {
   };
 }
 
-function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel = "ready", machineContext = null, artifacts = null, upstreamCamEvidence = runPackage.upstreamCamEvidence }) {
+function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel = "ready", machineContext = null, artifacts = null, upstreamCamEvidence = runPackage.upstreamCamEvidence, residualValidation = null }) {
   return {
     schema: "hediao3d.camotics-result.v1",
     engine: "camotics",
@@ -225,6 +249,7 @@ function createResult({ runPackage, runPackageSha, synthetic = false, riskLevel 
       zMax: runPackage.preferredGcodeIdentity.motionProfile.zMax,
       materialRemovedMm3: 12.4
     },
+    ...(residualValidation ? { residualValidation } : {}),
     artifacts: artifacts ?? {
       screenshot: "camotics-preview.png",
       materialMesh: "camotics-material-removal.stl"

@@ -166,6 +166,31 @@ residualClosureReview 新增：
 - npm run build -- --emptyOutDir false（Windows 本地）
 ```
 
+2026-07-22 残料指标验证入口增强：
+
+```text
+CAMotics/等效仿真结果可新增 residualValidation：
+- maxGougeMm
+- maxUndercutMm
+- maxResidualStockMm
+- measured=true 或 validationBasis=swept-volume-validated/material-removal-validated/measured
+- tolerances.maxGougeMm 默认 0.03mm
+- tolerances.maxUndercutMm 默认 0.08mm
+
+校验结果：
+- 无 residualValidation：材料去除证据可通过，但 productionResidualEvidenceReady=false
+- residualValidation 合格：residualValidation.status=ready，productionResidualEvidenceReady=true
+- 后端导入后：residualClosureReview.status=production-residual-closed
+
+生产边界：
+- 这只闭合“残料/过切证据”这一项
+- 正式生产 NC 仍需真实 CAM 输出、后处理绑定、离料空跑、软料试雕、机床验收和 production readiness audit 共同放行
+
+验证命令：
+- npm run test:v3:camotics-material-validate
+- npm run test:v3:camotics-result-api
+```
+
 结论：Linux 小闭环从整单包下载、服务器执行、Native CAM/CAMotics 证据上传、readiness 复核已经跑通；当前阻断点明确集中在 OpenCAMLib 真实 cutter-contact 生产候选证据、残料/过切闭合和现场验收，不能解锁生产 NC。
 
 ### OpenCAMLib runtime probe
