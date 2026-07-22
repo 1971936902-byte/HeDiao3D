@@ -46,6 +46,8 @@ try {
   assert(readyReport.handoffContract?.status === "ready-for-hediao3d-import", "ready handoff contract should be import-ready");
   assert(readyReport.handoffContract?.strictAcceptance?.neutralHashBound === true, "ready handoff contract should confirm neutral hash binding");
   assert(readyReport.handoffContract?.strictAcceptance?.machineFitLevel === readyReport.machineFit.level, "handoff contract should expose machine-fit level");
+  assert(readyReport.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "ready package should include production gap review");
+  assert(readyReport.productionGapReview?.productionCandidateReady === true, "ready package should clear OpenCAMLib production gap review");
   assert(readyReport.files.neutral?.sha256 === sha256File(neutralPath), "ready package should hash neutral output");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-validation.json")), "candidate package report should be written");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-bundle.zip")), "candidate package bundle should be written");
@@ -64,6 +66,8 @@ try {
   assert(blockedReport.level === "critical", "blocked package should be critical");
   assert(blockedReport.artifactManifest?.readyForImport === false, "blocked artifact manifest should not be import-ready");
   assert(blockedReport.handoffContract?.status === "blocked", "blocked handoff contract should be blocked");
+  assert(blockedReport.productionGapReview?.criticalCount >= 1, "blocked package production gap review should include critical gaps");
+  assert(blockedReport.productionGapReview?.gaps?.some((gap) => gap.id === "missing-required-artifacts"), "blocked package gap review should mention missing artifacts");
   assert(blockedReport.blockers?.some((item) => /contact/i.test(item)), "blocked package should mention missing contact");
   assert(existsSync(join(blockedDir, "opencamlib-candidate-package-validation.json")), "blocked package should still write report");
   rmSync(blockedDir, { recursive: true, force: true });
@@ -98,6 +102,7 @@ try {
   assert(identityMismatchReport.artifactManifest?.readyForImport === false, "identity-mismatched artifact manifest should not be import-ready");
   assert(identityMismatchReport.handoffContract?.status === "blocked", "identity-mismatched handoff contract should be blocked");
   assert(identityMismatchReport.handoffContract?.strictAcceptance?.planHashBound === false, "identity-mismatched handoff should mark plan hash as unbound");
+  assert(identityMismatchReport.productionGapReview?.gaps?.some((gap) => gap.id === "strict-contact-validation-not-ready"), "identity mismatch gap review should mention strict contact validation");
   assert(identityMismatchReport.blockers?.some((item) => /strict contact validation is critical/.test(item)), "identity mismatch should block candidate package at strict contact validation");
   rmSync(identityMismatchDir, { recursive: true, force: true });
 
@@ -130,6 +135,7 @@ try {
   assert(machineMismatchReport.machineFit?.checks?.rotaryCoordinatePresent === false, "machine-fit should fail missing rotary coordinate");
   assert(machineMismatchReport.artifactManifest?.readyForImport === false, "machine-mismatched artifact manifest should not be import-ready");
   assert(machineMismatchReport.handoffContract?.strictAcceptance?.rotaryCoordinatePresent === false, "handoff should expose missing rotary coordinate");
+  assert(machineMismatchReport.productionGapReview?.gaps?.some((gap) => gap.id === "machine-fit-critical"), "machine mismatch gap review should mention machine-fit critical");
   assert(machineMismatchReport.blockers?.some((item) => /machine-fit/i.test(item)), "machine mismatch should block candidate package at machine-fit preflight");
   rmSync(machineMismatchDir, { recursive: true, force: true });
 
@@ -162,6 +168,7 @@ try {
   assert(experimentalReport.artifactManifest?.evidenceClass === "experimental-real-api", "experimental artifact manifest should expose evidence class");
   assert(experimentalReport.handoffContract?.evidenceClass === "experimental-real-api", "experimental handoff contract should expose evidence class");
   assert(experimentalReport.handoffContract?.blockedReason?.includes("experimental"), "experimental handoff should explain blocked reason");
+  assert(experimentalReport.productionGapReview?.gaps?.some((gap) => gap.id === "experimental-real-api"), "experimental gap review should mention experimental-real-api");
   assert(experimentalReport.blockers?.some((item) => /experimental-real-api/.test(item)), "experimental package blockers should name experimental-real-api");
   rmSync(experimentalDir, { recursive: true, force: true });
 

@@ -68,6 +68,7 @@ const level = blockers.length ? "critical" : "ready";
 const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit });
 const handoffContract = createHandoffContract({ level, files, contactValidation, machineFit });
 const materialRemovalReadiness = summarizeMaterialRemovalReadiness(contact?.materialRemovalReadiness);
+const productionGapReview = createProductionGapReview({ level, missing, blockers, contactValidation, machineFit, materialRemovalReadiness, artifactManifest, handoffContract });
 const report = {
   schema: "hediao3d.opencamlib-candidate-package-validation.v1",
   createdAt: new Date().toISOString(),
@@ -79,6 +80,7 @@ const report = {
   handoffContract,
   machineFit,
   materialRemovalReadiness,
+  productionGapReview,
   contactValidation: contactValidation ? createContactValidationSummary(contactValidation) : null,
   validatorRun: validatorRun ? {
     exitCode: validatorRun.status,
@@ -145,6 +147,134 @@ function summarizeMaterialRemovalReadiness(readiness) {
       ? readiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 24)
       : [],
     summary: readiness.summary ?? "OpenCAMLib output can proceed to CAMotics/equivalent material-removal simulation as engineering evidence."
+  };
+}
+
+function createProductionGapReview({ level, missing, blockers, contactValidation, machineFit, materialRemovalReadiness, artifactManifest, handoffContract }) {
+  const gaps = [];
+  const addGap = (id, layer, severity, status, summary, evidence = []) => {
+    gaps.push({
+      id,
+      layer,
+      severity,
+      status,
+      summary,
+      evidence: evidence.filter(Boolean).map((item) => String(item)).slice(0, 12)
+    });
+  };
+  if (missing.length) {
+    addGap(
+      "missing-required-artifacts",
+      "cam-artifacts",
+      "critical",
+      "blocked",
+      `Missing ${missing.length} required OpenCAMLib candidate artifact(s).`,
+      missing
+    );
+  }
+  if (!contactValidation) {
+    addGap(
+      "strict-contact-validation-missing",
+      "cam-contact",
+      "critical",
+      "blocked",
+      "Strict cutter-contact validation has not run.",
+      ["opencamlib-contact-output-validation.json"]
+    );
+  } else if (contactValidation.level !== "ready") {
+    addGap(
+      "strict-contact-validation-not-ready",
+      "cam-contact",
+      "critical",
+      "blocked",
+      `Strict cutter-contact validation is ${contactValidation.level}.`,
+      [
+        contactValidation.evidenceClass ? `evidenceClass=${contactValidation.evidenceClass}` : "",
+        ...(Array.isArray(contactValidation.errors) ? contactValidation.errors.slice(0, 4) : [])
+      ]
+    );
+  }
+  if (contactValidation?.evidenceClass === "experimental-real-api") {
+    addGap(
+      "experimental-real-api",
+      "cam-contact",
+      "critical",
+      "blocked",
+      "OpenCAMLib output is still experimental engineering evidence, not a production candidate.",
+      ["algorithmFamily", "residualMaterial", "materialRemovalReadiness"]
+    );
+  }
+  if (machineFit?.level === "critical") {
+    addGap(
+      "machine-fit-critical",
+      "machine-boundary",
+      "critical",
+      "blocked",
+      machineFit.summary ?? "Neutral toolpath does not match the target rotary-Y machine boundary.",
+      [...(machineFit.errors ?? []), ...(machineFit.warnings ?? [])]
+    );
+  } else if (machineFit?.level === "review") {
+    addGap(
+      "machine-fit-review",
+      "machine-boundary",
+      "review",
+      "needs-review",
+      machineFit.summary ?? "Neutral toolpath has machine-fit warnings.",
+      machineFit.warnings ?? []
+    );
+  }
+  if (!materialRemovalReadiness?.readyForMaterialRemovalSimulation) {
+    addGap(
+      "material-removal-input-not-ready",
+      "simulation",
+      "production-blocker",
+      "needs-downstream-evidence",
+      materialRemovalReadiness?.summary ?? "OpenCAMLib output is not ready for CAMotics or equivalent material-removal simulation.",
+      materialRemovalReadiness?.missingForProduction ?? ["material-removal-readiness"]
+    );
+  }
+  if (!materialRemovalReadiness?.productionResidualEvidenceReady) {
+    addGap(
+      "production-residual-not-closed",
+      "residual-gouge",
+      "production-blocker",
+      "needs-downstream-evidence",
+      "Residual/gouge evidence is not closed for production use.",
+      materialRemovalReadiness?.missingForProduction ?? ["measured-or-swept-volume-validated residual evidence"]
+    );
+  }
+  if (artifactManifest?.readyForImport !== true || handoffContract?.status !== "ready-for-hediao3d-import") {
+    addGap(
+      "hediao3d-import-contract-not-ready",
+      "orchestrator-handoff",
+      "critical",
+      "blocked",
+      handoffContract?.blockedReason ?? "Candidate package is not ready for HeDiao3D import.",
+      blockers
+    );
+  }
+  const criticalCount = gaps.filter((gap) => gap.severity === "critical").length;
+  const reviewCount = gaps.filter((gap) => gap.severity === "review").length;
+  const productionBlockerCount = gaps.filter((gap) => gap.severity === "production-blocker").length;
+  return {
+    schema: "hediao3d.opencamlib-production-gap-review.v1",
+    level: criticalCount ? "blocked" : productionBlockerCount ? "candidate-ready-needs-downstream-evidence" : reviewCount ? "review" : level === "ready" ? "candidate-ready-for-downstream-evidence" : "blocked",
+    productionCandidateReady: criticalCount === 0 && level === "ready",
+    criticalCount,
+    reviewCount,
+    productionBlockerCount,
+    gapCount: gaps.length,
+    gaps,
+    nextActions: criticalCount
+      ? [
+        "Fix critical OpenCAMLib candidate gaps before importing as production-candidate CAM evidence.",
+        "Rerun opencamlib-real-candidate-run.mjs and this validator after regenerating neutral/contact outputs."
+      ]
+      : [
+        "Import the candidate package into HeDiao3D, then run CAMotics/equivalent material-removal validation.",
+        "Continue air-run, low-risk trial carving and machine acceptance before production unlock."
+      ],
+    productionBoundary: "This review only classifies OpenCAMLib candidate evidence gaps. It never unlocks production NC by itself."
   };
 }
 
@@ -449,7 +579,8 @@ function createBundleFiles(report, reportPath, identities) {
   const files = [
     { name: "opencamlib-candidate-package-validation.json", content: Buffer.from(JSON.stringify(report, null, 2), "utf8") },
     { name: "opencamlib-candidate-artifact-manifest.json", content: Buffer.from(JSON.stringify(report.artifactManifest, null, 2), "utf8") },
-    { name: "opencamlib-neutral-handoff-contract.json", content: Buffer.from(JSON.stringify(report.handoffContract, null, 2), "utf8") }
+    { name: "opencamlib-neutral-handoff-contract.json", content: Buffer.from(JSON.stringify(report.handoffContract, null, 2), "utf8") },
+    { name: "opencamlib-production-gap-review.json", content: Buffer.from(JSON.stringify(report.productionGapReview, null, 2), "utf8") }
   ];
   for (const [key, identity] of Object.entries(identities)) {
     if (!identity.exists || key === "model" || key === "validator") continue;
@@ -472,6 +603,7 @@ function createBundleFiles(report, reportPath, identities) {
       "Important:",
       "- The package is report-only until every HeDiao3D production gate passes.",
       "- The model file is not included by default; use the recorded sha256 to verify the exact source/repaired mesh.",
+      "- opencamlib-production-gap-review.json lists the remaining CAM, machine, simulation and field-evidence gaps.",
       ""
     ].join("\n"), "utf8")
   });

@@ -63,6 +63,7 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "real-output-contact-path-coverage" && check.status === "pass"), "self-check should verify real-output bundle preserves contact pathCoverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "real-candidate-path-coverage" && check.status === "pass"), "self-check should verify real candidate runner summarizes contact pathCoverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "real-candidate-protected-zones" && check.status === "pass"), "self-check should verify real candidate runner summarizes protected-zone diagnostics");
+  assert(readyReport.checks?.some((check) => check.id === "real-candidate-production-gap-review" && check.status === "pass"), "self-check should verify real candidate runner summarizes production gap review diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
 
@@ -93,6 +94,8 @@ try {
   assert(realCandidateReport.schema === "hediao3d.opencamlib-real-candidate-run.v1", "real candidate runner schema mismatch");
   assert(realCandidateReport.productionLocked === true, "real candidate runner must keep production locked");
   assert(realCandidateReport.blocking?.includes("opencamlib-production-candidate-not-proven"), "real candidate runner should block when production candidate is not proven");
+  assert(realCandidateReport.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "real candidate runner should expose production gap review");
+  assert(realCandidateReport.productionGapReview?.criticalCount >= 1, "missing-input real candidate gap review should explain critical gaps");
   assert(existsSync(join(workDir, "opencamlib-real-candidate-run.json")), "real candidate runner should write JSON report");
 
   createOpenCamLibCandidateFiles(workDir);
@@ -107,6 +110,7 @@ try {
   assert(realCandidateWithContactReport.openCamLibContactReport?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "real candidate runner should preserve raw contact machine-fit rotary axis");
   assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "real candidate runner should summarize material-removal readiness");
   assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.productionResidualEvidenceReady === true, "validated contact fixture should preserve production residual readiness summary");
+  assert(realCandidateWithContactReport.candidatePackage?.productionGapReview?.productionCandidateReady === true, "real candidate runner should preserve ready candidate package production gap review");
   const candidateClosedLoop = spawnSync(node, [closedLoopPath, workDir], {
     cwd: workDir,
     encoding: "utf8",
@@ -116,6 +120,8 @@ try {
   const candidateClosedLoopReport = JSON.parse(candidateClosedLoop.stdout);
   assert(candidateClosedLoopReport.productionLocked === true, "candidate closed-loop report must keep production locked");
   const candidatePackageReport = JSON.parse(readFileSync(join(workDir, "opencamlib-candidate-package-validation.json"), "utf8"));
+  assert(candidatePackageReport.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "candidate package validation should write production gap review");
+  assert(candidatePackageReport.productionGapReview?.productionCandidateReady === true, "ready candidate fixture should clear OpenCAMLib production gap review");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", `closed-loop evidence chain should read candidate package validation level: ${JSON.stringify(candidatePackageReport, null, 2)}`);
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackageReadyForImport === true, "closed-loop evidence chain should mark candidate package ready for import");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidateMachineFit?.level === candidatePackageReport.machineFit?.level, "closed-loop evidence chain should preserve candidate machine-fit preflight");
