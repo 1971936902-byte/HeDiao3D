@@ -137,6 +137,19 @@ const checks = [
       && source.includes("requestJson<GeneratedToolpath>")
       && source.includes("selectedAiProvider.name}任务创建失败"),
     summary: "Core model import, V3 job creation, Mesh CAM and Meshy creation requests should share actionable API connection errors."
+  },
+  {
+    id: "v3-download-error-guidance",
+    ok: source.includes("const downloadV3ApiArtifact")
+      && source.includes("后端返回空文件")
+      && source.includes("formatRequestError(error, `${context}失败`)")
+      && source.includes("安全试雕包下载失败")
+      && source.includes("CAMotics Linux 仿真包下载失败")
+      && source.includes("OpenCAMLib 输入包下载失败")
+      && source.includes("Linux CAM 整单包下载失败")
+      && source.includes("V3 证据审查包下载失败")
+      && countIncludes(source, "await downloadV3ApiArtifact({") >= 5,
+    summary: "Focused V3 package downloads should share actionable network/HTTP/empty-file errors and visible task feedback."
   }
 ];
 

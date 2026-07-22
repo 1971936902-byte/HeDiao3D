@@ -4277,7 +4277,12 @@ export function App() {
   };
 
   const downloadUrlAsset = async (url: string, fallbackName: string, context: string) => {
-    const response = await fetch(url);
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(formatRequestError(error, `${context}失败`));
+    }
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       let detail = "";
@@ -4290,9 +4295,42 @@ export function App() {
       throw new Error(`${context}失败：${detail || response.status}`);
     }
     const blob = await response.blob();
+    if (blob.size <= 0) {
+      throw new Error(`${context}失败：后端返回空文件，请重新生成任务或检查服务日志。`);
+    }
     const headerName = response.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/i)?.[1];
     const filename = headerName ? decodeURIComponent(headerName) : extractDownloadFilename(url, fallbackName);
     downloadBlob(filename, blob);
+    return filename;
+  };
+
+  const downloadV3ApiArtifact = async (input: {
+    url: string;
+    fallbackName: string;
+    context: string;
+    successStatus: string;
+    successTitle: string;
+    successDetail: string | ((filename: string) => string);
+    taskTitle: string;
+    taskDetail: string | ((filename: string) => string);
+    noticeLevel?: "ok" | "warning" | "error" | "info";
+    taskStatus?: TaskEvent["status"];
+  }) => {
+    const filename = await downloadUrlAsset(input.url, input.fallbackName, input.context);
+    const detail = typeof input.successDetail === "function" ? input.successDetail(filename) : input.successDetail;
+    const taskDetail = typeof input.taskDetail === "function" ? input.taskDetail(filename) : input.taskDetail;
+    setV3Status(`${input.successStatus}：${filename}`);
+    setV3UserNotice({
+      level: input.noticeLevel ?? "ok",
+      title: input.successTitle,
+      detail
+    });
+    recordTask({
+      category: "cam",
+      status: input.taskStatus ?? "ok",
+      title: input.taskTitle,
+      detail: taskDetail
+    });
     return filename;
   };
 
@@ -4449,26 +4487,19 @@ export function App() {
     setIsV3PackageDownloading(true);
     setV3Status("正在打包 V3 安全试雕包");
     try {
-      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/trial-package`);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? `安全试雕包下载失败：${response.status}`);
-      }
-      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-safe-trial-${stamp}.zip`;
-      downloadBlob(filename, blob);
-      setV3Status("V3 安全试雕包已由 Orchestrator 打包");
-      setV3UserNotice({
-        level: manifest.allowTrialNc ? "ok" : "warning",
-        title: "安全试雕包已开始下载",
-        detail: manifest.allowTrialNc ? filename : `${filename}；当前未放行试雕 NC，请只按包内说明做空跑/标定。`
-      });
-      recordTask({
-        category: "cam",
-        status: manifest.allowTrialNc ? "ok" : "warning",
-        title: "下载 V3 安全试雕包",
-        detail: manifest.allowTrialNc ? "已包含试雕候选 NC、空跑和核验说明。" : "当前未放行试雕 NC，仅包含空跑、标定和报告。"
+      await downloadV3ApiArtifact({
+        url: `/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/trial-package`,
+        fallbackName: filename,
+        context: "安全试雕包下载",
+        successStatus: "V3 安全试雕包已由 Orchestrator 打包",
+        successTitle: "安全试雕包已开始下载",
+        successDetail: (downloaded) => manifest.allowTrialNc ? downloaded : `${downloaded}；当前未放行试雕 NC，请只按包内说明做空跑/标定。`,
+        taskTitle: "下载 V3 安全试雕包",
+        taskDetail: manifest.allowTrialNc ? "已包含试雕候选 NC、空跑和核验说明。" : "当前未放行试雕 NC，仅包含空跑、标定和报告。",
+        noticeLevel: manifest.allowTrialNc ? "ok" : "warning",
+        taskStatus: manifest.allowTrialNc ? "ok" : "warning"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "V3 安全试雕包下载失败";
@@ -4498,33 +4529,25 @@ export function App() {
     setIsV3PackageDownloading(true);
     setV3Status("正在打包 CAMotics Linux 仿真包");
     try {
-      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-linux-package`);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? `CAMotics Linux 仿真包下载失败：${response.status}`);
-      }
-      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-camotics-linux-${stamp}.zip`;
-      downloadBlob(filename, blob);
-      setV3Status("CAMotics Linux 仿真包已由 Orchestrator 打包");
-      setV3UserNotice({
-        level: "ok",
-        title: "Linux 仿真包已开始下载",
-        detail: filename
-      });
-      recordTask({
-        category: "cam",
-        status: "ok",
-        title: "下载 CAMotics Linux 仿真包",
-        detail: "包含预览 NC、运行脚本、校验器、操作清单和结果回填模板；不会解锁生产 NC。"
+      await downloadV3ApiArtifact({
+        url: `/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/camotics-linux-package`,
+        fallbackName: filename,
+        context: "CAMotics Linux 仿真包下载",
+        successStatus: "CAMotics Linux 仿真包已由 Orchestrator 打包",
+        successTitle: "Linux 仿真包已开始下载",
+        successDetail: filename,
+        taskTitle: "下载 CAMotics Linux 仿真包",
+        taskDetail: "包含预览 NC、运行脚本、校验器、操作清单和结果回填模板；不会解锁生产 NC。"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "CAMotics Linux 仿真包下载失败";
       setV3Status(message);
+      setV3UserNotice({ level: "error", title: "CAMotics Linux 仿真包下载失败", detail: message });
       recordTask({
         category: "cam",
-        status: "warning",
+        status: "error",
         title: "CAMotics Linux 仿真包下载失败",
         detail: message
       });
@@ -4542,38 +4565,29 @@ export function App() {
     setIsV3PackageDownloading(true);
     setV3Status("正在打包 OpenCAMLib Linux 输入包");
     try {
-      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/opencamlib-candidate-inputs.zip`);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? `OpenCAMLib 输入包下载失败：${response.status}`);
-      }
-      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-opencamlib-inputs-${stamp}.zip`;
-      downloadBlob(filename, blob);
-      setV3Status("OpenCAMLib Linux 输入包已由 Orchestrator 打包");
-      setV3UserNotice({
-        level: "ok",
-        title: "OpenCAMLib 输入包已开始下载",
-        detail: `${filename}；复制到 Linux Native CAM 服务包目录后运行 real candidate 脚本。`
-      });
-      recordTask({
-        category: "cam",
-        status: "ok",
-        title: "下载 OpenCAMLib Linux 输入包",
-        detail: "包含 job.json、opencamlib-kernel-plan.json、STL 模型和清单；只用于真实 CAM 候选验证，不解锁生产 NC。"
+      await downloadV3ApiArtifact({
+        url: `/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/opencamlib-candidate-inputs.zip`,
+        fallbackName: filename,
+        context: "OpenCAMLib 输入包下载",
+        successStatus: "OpenCAMLib Linux 输入包已由 Orchestrator 打包",
+        successTitle: "OpenCAMLib 输入包已开始下载",
+        successDetail: (downloaded) => `${downloaded}；复制到 Linux Native CAM 服务包目录后运行 real candidate 脚本。`,
+        taskTitle: "下载 OpenCAMLib Linux 输入包",
+        taskDetail: "包含 job.json、opencamlib-kernel-plan.json、STL 模型和清单；只用于真实 CAM 候选验证，不解锁生产 NC。"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "OpenCAMLib 输入包下载失败";
       setV3Status(message);
       setV3UserNotice({
-        level: "warning",
+        level: "error",
         title: "OpenCAMLib 输入包下载失败",
         detail: message
       });
       recordTask({
         category: "cam",
-        status: "warning",
+        status: "error",
         title: "OpenCAMLib 输入包下载失败",
         detail: message
       });
@@ -4591,38 +4605,29 @@ export function App() {
     setIsV3PackageDownloading(true);
     setV3Status("正在打包 Linux CAM 整单执行包");
     try {
-      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/linux-cam-job-package`);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? `Linux CAM 整单包下载失败：${response.status}`);
-      }
-      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-linux-cam-job-${stamp}.zip`;
-      downloadBlob(filename, blob);
-      setV3Status("Linux CAM 整单执行包已由 Orchestrator 打包");
-      setV3UserNotice({
-        level: "ok",
-        title: "Linux CAM 整单包已开始下载",
-        detail: `${filename}；包含 OpenCAMLib 输入、CAMotics 仿真准备、闭环说明和回填清单。`
-      });
-      recordTask({
-        category: "cam",
-        status: "ok",
-        title: "下载 Linux CAM 整单执行包",
-        detail: "将当前 job 的 OpenCAMLib 真实候选输入、CAMotics 材料去除仿真文件和证据回填说明放入同一个 ZIP；不解锁生产 NC。"
+      await downloadV3ApiArtifact({
+        url: `/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/linux-cam-job-package`,
+        fallbackName: filename,
+        context: "Linux CAM 整单包下载",
+        successStatus: "Linux CAM 整单执行包已由 Orchestrator 打包",
+        successTitle: "Linux CAM 整单包已开始下载",
+        successDetail: (downloaded) => `${downloaded}；包含 OpenCAMLib 输入、CAMotics 仿真准备、闭环说明和回填清单。`,
+        taskTitle: "下载 Linux CAM 整单执行包",
+        taskDetail: "将当前 job 的 OpenCAMLib 真实候选输入、CAMotics 材料去除仿真文件和证据回填说明放入同一个 ZIP；不解锁生产 NC。"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Linux CAM 整单包下载失败";
       setV3Status(message);
       setV3UserNotice({
-        level: "warning",
+        level: "error",
         title: "Linux CAM 整单包下载失败",
         detail: message
       });
       recordTask({
         category: "cam",
-        status: "warning",
+        status: "error",
         title: "Linux CAM 整单包下载失败",
         detail: message
       });
@@ -4640,24 +4645,22 @@ export function App() {
     setIsV3PackageDownloading(true);
     setV3Status("正在打包 V3 证据审查包");
     try {
-      const response = await fetch(`/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/evidence-review-package`);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error ?? `证据审查包下载失败：${response.status}`);
-      }
-      const blob = await response.blob();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(`hediao3d-v3-${v3Job.id.slice(0, 8)}-evidence-review-${stamp}.zip`, blob);
-      setV3Status("V3 证据审查包已由 Orchestrator 打包");
-      recordTask({
-        category: "cam",
-        status: "ok",
-        title: "下载 V3 证据审查包",
-        detail: "用于复核当前 job 的门禁、哈希、仿真、后处理和现场证据缺口；不是上机加工包。"
+      const filename = `hediao3d-v3-${v3Job.id.slice(0, 8)}-evidence-review-${stamp}.zip`;
+      await downloadV3ApiArtifact({
+        url: `/api/orchestrator/jobs/${encodeURIComponent(v3Job.id)}/evidence-review-package`,
+        fallbackName: filename,
+        context: "证据审查包下载",
+        successStatus: "V3 证据审查包已由 Orchestrator 打包",
+        successTitle: "证据审查包已开始下载",
+        successDetail: (downloaded) => `${downloaded}；只用于复核证据缺口，不是上机加工包。`,
+        taskTitle: "下载 V3 证据审查包",
+        taskDetail: "用于复核当前 job 的门禁、哈希、仿真、后处理和现场证据缺口；不是上机加工包。"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "V3 证据审查包下载失败";
       setV3Status(message);
+      setV3UserNotice({ level: "error", title: "V3 证据审查包下载失败", detail: message });
       recordTask({
         category: "cam",
         status: "error",
