@@ -37,6 +37,7 @@ try {
   assert(readyReport.checks.some((check) => check.id === "machine-context" && check.status === "pass"), "machine context check missing");
   assert(readyReport.checks.some((check) => check.id === "simulator-evidence" && check.status === "pass"), "simulator evidence check missing");
   assert(readyReport.checks.some((check) => check.id === "upstream-cam-evidence" && check.ok && check.status === "matched"), "upstream CAM evidence check missing");
+  assert(readyReport.checks.some((check) => check.id === "upstream-candidate-package" && check.ok && check.status === "matched"), "upstream candidate package check missing");
   assert(readyReport.checks.some((check) => check.id === "upstream-machine-fit" && check.ok && check.status === "matched"), "upstream machine-fit check missing");
   assert(readyReport.checks.some((check) => check.id === "upstream-material-readiness" && check.ok && check.status === "matched"), "upstream material readiness check missing");
   assert(readyReport.upstreamCamEvidence?.status === "matched", "ready report should expose matched upstream CAM evidence");
@@ -45,17 +46,29 @@ try {
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.status === "matched", "ready report should expose matched upstream simulation quality");
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.productionEvidenceAllowed === false, "ready report should preserve simulation quality production boundary");
   assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "ready report should preserve production residual boundary");
+  assert(readyReport.upstreamCamEvidence?.materialRemovalReadiness?.residualProofSource?.ready === true, "ready report should preserve upstream residual proof source");
   assert(readyReport.residualValidation?.status === "missing", "ready report without residual metrics should mark residual validation missing");
   assert(readyReport.residualValidation?.productionResidualEvidenceReady === false, "ready report without residual metrics should not close production residual evidence");
+  assert(readyReport.residualProofChain?.schema === "hediao3d.camotics-residual-proof-chain.v1", "ready report should include residual proof chain");
+  assert(readyReport.residualProofChain?.status === "missing-residual-proof", "ready report should mark residual proof chain missing without residual metrics");
+  assert(readyReport.residualProofChain?.productionResidualEvidenceReady === false, "open residual proof chain must not claim production residual evidence");
+  assert(readyReport.residualProofChain?.upstreamCamEvidence?.status === "matched", "residual proof chain should preserve upstream CAM evidence status");
   assert(readyReport.simulator?.name === "CAMotics", "ready report should expose simulator evidence");
   assert(readyReport.missing.length === 0, "ready report should not have missing checks");
   const bundlePath = join(workDir, "camotics-result-bundle.zip");
+  assert(readyReport.upstreamCamEvidence?.candidatePackage?.status === "matched", "ready report should expose matched upstream candidate package binding");
+  assert(readyReport.upstreamCamEvidence?.candidatePackage?.bundleShaOk === true, "ready report should verify candidate package bundle generated-artifact hash");
   assert(existsSync(bundlePath), "ready validator should write camotics-result-bundle.zip");
   const bundleNames = listZipFilenames(readFileSync(bundlePath));
   assert(bundleNames.includes("camotics-result.json"), "bundle missing result JSON");
   assert(bundleNames.includes("camotics-result-local-validation.json"), "bundle missing validation JSON");
+  assert(bundleNames.includes("camotics-result-bundle-manifest.json"), "bundle missing manifest JSON");
   assert(bundleNames.includes("camotics-preview.png"), "bundle missing screenshot");
   assert(bundleNames.includes("camotics-material-removal.stl"), "bundle missing material mesh");
+  const readyManifest = readZipJson(readFileSync(bundlePath), "camotics-result-bundle-manifest.json");
+  assert(readyManifest.schema === "hediao3d.camotics-result-bundle-manifest.v1", "bundle manifest schema mismatch");
+  assert(readyManifest.localValidation?.residualValidation?.productionResidualEvidenceReady === false, "manifest should preserve open residual boundary when residual metrics are missing");
+  assert(readyManifest.localValidation?.residualProofChain?.status === "missing-residual-proof", "manifest should preserve residual proof chain status");
 
   writeJsonWithHash(resultPath, createResult({
     runPackage,
@@ -77,7 +90,38 @@ try {
   const residualClosedReport = JSON.parse(residualClosed.stdout);
   assert(residualClosedReport.residualValidation?.status === "ready", "validated residual metrics should close residual validation");
   assert(residualClosedReport.residualValidation?.productionResidualEvidenceReady === true, "validated residual metrics should be production residual evidence");
+  assert(residualClosedReport.residualProofChain?.status === "production-residual-proof-bound", "validated residual metrics should bind residual proof chain");
+  assert(residualClosedReport.residualProofChain?.productionResidualEvidenceReady === true, "validated residual proof chain should be production residual evidence");
+  assert(residualClosedReport.residualProofChain?.artifactEvidence?.hasMaterialMesh === true, "validated residual proof chain should preserve material mesh evidence");
   assert(residualClosedReport.residualValidation?.checks?.every((check) => check.status === "pass"), "validated residual checks should pass");
+  const residualClosedManifest = readZipJson(readFileSync(bundlePath), "camotics-result-bundle-manifest.json");
+  assert(residualClosedManifest.result?.residualValidation?.maxGougeMm === 0.012, "manifest should preserve result residual max gouge");
+  assert(residualClosedManifest.localValidation?.residualValidation?.productionResidualEvidenceReady === true, "manifest should preserve local residual production proof");
+  assert(residualClosedManifest.localValidation?.residualProofChain?.productionResidualEvidenceReady === true, "manifest should preserve local residual proof chain");
+
+  writeJsonWithHash(resultPath, createResult({
+    runPackage,
+    runPackageSha,
+    residualValidation: {
+      productionResidualEvidenceReady: true,
+      measured: false,
+      maxGougeMm: 0.012,
+      maxUndercutMm: 0.04,
+      maxResidualStockMm: 0.06
+    }
+  }));
+  const unsafeResidualClaim = spawnSync(node, [validator, "--result", resultPath, "--run-package", runPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(unsafeResidualClaim.status === 3, "unsafe production residual claim should fail material-removal validation");
+  const unsafeResidualClaimReport = JSON.parse(unsafeResidualClaim.stdout);
+  assert(unsafeResidualClaimReport.missing.includes("residual-production-claim"), "unsafe residual claim should name residual-production-claim");
+  assert(unsafeResidualClaimReport.residualValidation?.unsafeProductionClaim === true, "unsafe residual claim should be exposed in residual validation summary");
+  assert(unsafeResidualClaimReport.residualProofChain?.status === "blocked-unsafe-residual-claim", "unsafe residual claim should block residual proof chain");
+  assert(unsafeResidualClaimReport.residualProofChain?.productionResidualEvidenceReady === false, "unsafe residual proof chain must not be production-ready");
+  assert(unsafeResidualClaimReport.productionEvidenceEligible === false, "unsafe residual claim should not be production evidence eligible");
 
   writeJsonWithHash(resultPath, createResult({
     runPackage,
@@ -183,6 +227,23 @@ try {
   assert(tamperedSimulationQualityReport.missing.includes("upstream-material-readiness"), "tampered simulation quality should fail upstream material readiness");
   assert(tamperedSimulationQualityReport.upstreamCamEvidence?.materialRemovalReadiness?.simulationQuality?.status === "mismatch", "tampered simulation quality report should expose mismatch");
 
+  writeJsonWithHash(resultPath, createResult({
+    runPackage,
+    runPackageSha,
+    upstreamCamEvidence: createUpstreamCamEvidence({
+      candidatePackage: createCandidatePackageSummary({ candidatePackageBundleSha256: sha256Text("wrong-candidate-bundle") })
+    })
+  }));
+  const tamperedCandidatePackage = spawnSync(node, [validator, "--result", resultPath, "--run-package", runPackagePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(tamperedCandidatePackage.status === 3, "tampered candidate package binding should fail material-removal validation");
+  const tamperedCandidatePackageReport = JSON.parse(tamperedCandidatePackage.stdout);
+  assert(tamperedCandidatePackageReport.missing.includes("upstream-candidate-package"), "tampered candidate package should name the failed check");
+  assert(tamperedCandidatePackageReport.upstreamCamEvidence?.candidatePackage?.status === "mismatch", "tampered candidate package report should expose mismatch");
+
   console.log(JSON.stringify({
     ok: true,
     readyLevel: readyReport.level,
@@ -262,7 +323,8 @@ function createUpstreamCamEvidence(overrides = {}) {
     schema: "hediao3d.camotics-upstream-cam-evidence.v1",
     status: "hash-bound",
     required: true,
-    presentCount: 2,
+    presentCount: 4,
+    candidatePackage: overrides.candidatePackage ?? createCandidatePackageSummary(),
     candidateMachineFit: overrides.candidateMachineFit ?? createCandidateMachineFit(),
     materialRemovalReadiness: overrides.materialRemovalReadiness ?? createMaterialRemovalReadiness(),
     files: [
@@ -281,9 +343,56 @@ function createUpstreamCamEvidence(overrides = {}) {
         exists: true,
         sizeBytes: 42,
         sha256: sha256Text("contact-validation-fixture")
+      },
+      {
+        key: "opencamlibCandidatePackageValidation",
+        label: "OpenCAMLib 候选包预检",
+        filename: "opencamlib-candidate-package-validation.json",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("candidate-package-validation-fixture")
+      },
+      {
+        key: "opencamlibCandidatePackageBundle",
+        label: "OpenCAMLib 候选包证据包",
+        filename: "opencamlib-candidate-package-bundle.zip",
+        exists: true,
+        sizeBytes: 42,
+        sha256: sha256Text("candidate-package-bundle-fixture")
       }
     ],
     summary: "Fixture upstream CAM evidence."
+  };
+}
+
+function createCandidatePackageSummary({
+  level = "ready",
+  readyForImport = true,
+  validationReportContentSha256 = sha256Text("candidate-package-report-content"),
+  candidatePackageBundleSha256 = sha256Text("candidate-package-bundle-fixture"),
+  actualBundleSha256 = sha256Text("candidate-package-bundle-fixture"),
+  bundleShaMatches = true
+} = {}) {
+  return {
+    schema: "hediao3d.opencamlib-candidate-package-summary.v1",
+    validationSchema: "hediao3d.opencamlib-candidate-package-validation.v1",
+    level,
+    readyForImport,
+    evidenceClass: "production-candidate",
+    contactValidationLevel: "ready",
+    machineFitLevel: "ok",
+    productionGapLevel: "candidate-ready-needs-downstream-evidence",
+    productionCandidateReady: true,
+    generatedArtifactsSchema: "hediao3d.opencamlib-candidate-generated-artifacts.v1",
+    validationReportContentSha256,
+    validationReportDigestBasis: "report-json-without-generatedArtifacts",
+    candidatePackageBundleSha256,
+    candidatePackageBundleSizeBytes: 42,
+    actualBundleSha256,
+    actualBundleSizeBytes: 42,
+    bundleShaMatches,
+    productionBoundary: "OpenCAMLib candidate package preflight does not unlock production NC by itself.",
+    summary: "Fixture OpenCAMLib candidate package report is bound to the bundle sha256."
   };
 }
 
@@ -294,10 +403,25 @@ function createMaterialRemovalReadiness({ level = "ready-for-camotics-or-equival
     readyForMaterialRemovalSimulation,
     simulationQuality: createSimulationQuality(),
     productionResidualEvidenceReady,
+    residualProofSource: createResidualProofSource(),
     missingForProduction: productionResidualEvidenceReady ? [] : ["residual-stock-map", "verified-material-removal-volume"],
     summary: readyForMaterialRemovalSimulation
       ? "Fixture contact evidence is ready for CAMotics/equivalent simulation."
       : "Fixture contact evidence is blocked before material-removal simulation."
+  };
+}
+
+function createResidualProofSource() {
+  return {
+    schema: "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: "bound",
+    ready: true,
+    proofStatus: "production-residual-proof-bound",
+    localValidationOk: true,
+    productionResidualEvidenceReady: true,
+    unsafeProductionClaim: false,
+    upstreamStatus: "matched",
+    upstreamCandidatePackageStatus: "matched"
   };
 }
 
@@ -387,6 +511,31 @@ function listZipFilenames(bytes) {
     offset += 1;
   }
   return names;
+}
+
+function readZipJson(bytes, filename) {
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = bytes.readUInt32LE(offset);
+    if (signature === 0x04034b50) {
+      const compressedSize = bytes.readUInt32LE(offset + 18);
+      const fileNameLength = bytes.readUInt16LE(offset + 26);
+      const extraLength = bytes.readUInt16LE(offset + 28);
+      const nameStart = offset + 30;
+      const nameEnd = nameStart + fileNameLength;
+      const name = bytes.subarray(nameStart, nameEnd).toString("utf8");
+      const contentStart = nameEnd + extraLength;
+      const contentEnd = contentStart + compressedSize;
+      if (name === filename) {
+        return JSON.parse(bytes.subarray(contentStart, contentEnd).toString("utf8"));
+      }
+      offset = contentEnd;
+      continue;
+    }
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    offset += 1;
+  }
+  throw new Error(`ZIP entry not found: ${filename}`);
 }
 
 function assert(condition, message) {

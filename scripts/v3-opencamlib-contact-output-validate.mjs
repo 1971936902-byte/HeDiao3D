@@ -8,6 +8,7 @@ const neutralPath = requiredPath(args.neutral, "--neutral");
 const planPath = optionalPath(args.plan);
 const modelPath = optionalPath(args.model);
 const explicitContactPath = optionalPath(args.contact);
+const camoticsLocalValidationPath = optionalPath(args.camoticsLocalValidation ?? args["camotics-local-validation"] ?? args.localValidation ?? args["local-validation"]);
 const outPath = args.out ? resolve(String(args.out)) : null;
 const expectProductionCandidate = parseBool(args.expectProductionCandidate ?? args.expectProduction ?? "true");
 const strict = parseBool(args.strict ?? "true");
@@ -15,7 +16,8 @@ const strict = parseBool(args.strict ?? "true");
 const neutral = readJson(neutralPath, "neutral-toolpath");
 const contactPath = explicitContactPath ?? resolveContactPath(neutralPath, neutral);
 const contact = contactPath ? readJson(contactPath, "OpenCAMLib contact report") : embeddedContact(neutral);
-const result = validate({ neutralPath, neutral, contactPath, contact, planPath, modelPath, expectProductionCandidate, strict });
+const camoticsLocalValidation = camoticsLocalValidationPath ? readJson(camoticsLocalValidationPath, "CAMotics local validation") : null;
+const result = validate({ neutralPath, neutral, contactPath, contact, planPath, modelPath, camoticsLocalValidationPath, camoticsLocalValidation, expectProductionCandidate, strict });
 
 if (outPath) {
   writeFileSync(outPath, JSON.stringify(result, null, 2), "utf8");
@@ -26,7 +28,7 @@ if (strict && result.level === "critical") {
   process.exitCode = 3;
 }
 
-function validate({ neutralPath, neutral, contactPath, contact, planPath, modelPath, expectProductionCandidate, strict }) {
+function validate({ neutralPath, neutral, contactPath, contact, planPath, modelPath, camoticsLocalValidationPath, camoticsLocalValidation, expectProductionCandidate, strict }) {
   const errors = [];
   const warnings = [];
   const checks = [];
@@ -57,7 +59,8 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
     check(checks, "quality-postprocessEligible", quality.postprocessEligible === true, "contact quality.postprocessEligible must be true", expectProductionCandidate ? errors : warnings);
     check(checks, "quality-productionCandidate", quality.productionCandidate === true, "contact quality.productionCandidate must be true", expectProductionCandidate ? errors : warnings);
     check(checks, "quality-not-preview", quality.previewScaffold !== true && !/preview|scaffold/i.test(String(quality.level ?? "")), "contact report must not be preview/scaffold", expectProductionCandidate ? errors : warnings);
-    checkProductionContactEvidence(checks, contact, expectProductionCandidate ? errors : warnings);
+    const externalResidualProof = createExternalResidualProof(camoticsLocalValidation);
+    checkProductionContactEvidence(checks, contact, externalResidualProof, expectProductionCandidate ? errors : warnings);
 
     const identity = contact.inputIdentity && typeof contact.inputIdentity === "object" ? contact.inputIdentity : {};
     const reportedNeutral = [
@@ -87,6 +90,14 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
   }
 
   const level = errors.length ? "critical" : warnings.length ? "review" : "ready";
+  const productionCandidatePromotion = createProductionCandidatePromotion({
+    checks,
+    contact,
+    neutralPreview,
+    experimentalRealApi,
+    level,
+    expectProductionCandidate
+  });
   const evidenceClass = neutralPreview
     ? "preview-scaffold"
     : experimentalRealApi
@@ -102,6 +113,7 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
     strict,
     expectProductionCandidate,
     productionCandidateEligible: level === "ready" && expectProductionCandidate,
+    productionCandidatePromotion,
     inputIdentity: {
       neutral: {
         path: neutralPath,
@@ -120,7 +132,12 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
         embedded: Boolean(contact)
       },
       plan: planPath ? { path: planPath, sha256: sha256File(planPath) } : null,
-      model: modelPath ? { path: modelPath, sha256: sha256File(modelPath) } : null
+      model: modelPath ? { path: modelPath, sha256: sha256File(modelPath) } : null,
+      camoticsLocalValidation: camoticsLocalValidationPath ? {
+        path: camoticsLocalValidationPath,
+        filename: basename(camoticsLocalValidationPath),
+        sha256: sha256File(camoticsLocalValidationPath)
+      } : null
     },
     checks,
     errors,
@@ -142,19 +159,32 @@ function validate({ neutralPath, neutral, contactPath, contact, planPath, modelP
   };
 }
 
-function checkProductionContactEvidence(checks, contact, target) {
+function checkProductionContactEvidence(checks, contact, externalResidualProof, target) {
   const algorithm = String(contact?.contactSampling?.algorithm ?? contact?.mode ?? "");
   const tool = contact?.tool && typeof contact.tool === "object" ? contact.tool : {};
   const sampling = contact?.contactSampling && typeof contact.contactSampling === "object" ? contact.contactSampling : {};
   const residual = contact?.residualMaterial && typeof contact.residualMaterial === "object" ? contact.residualMaterial : {};
+  const readiness = contact?.materialRemovalReadiness && typeof contact.materialRemovalReadiness === "object" ? contact.materialRemovalReadiness : {};
   const tolerance = contact?.tolerances && typeof contact.tolerances === "object" ? contact.tolerances : {};
   const protectedZones = contact?.protectedZones && typeof contact.protectedZones === "object" ? contact.protectedZones : {};
   const maxGougeMm = numberOrNull(residual.maxGougeMm);
   const maxUndercutMm = numberOrNull(residual.maxUndercutMm);
   const residualValidationBasis = String(residual.validationBasis ?? residual.estimationMethod ?? residual.evidenceClass ?? "");
   const residualMeasuredOrValidated = residual.measured === true || /(swept-volume|material-removal|validated|measured)/i.test(residualValidationBasis);
+  const externalResidualReady = externalResidualProof?.ready === true;
+  const proofResidual = externalResidualProof?.residualValidation ?? {};
+  const proofMaxGougeMm = numberOrNull(proofResidual.maxGougeMm);
+  const proofMaxUndercutMm = numberOrNull(proofResidual.maxUndercutMm);
+  const proofBasis = String(proofResidual.validationBasis ?? proofResidual.evidenceClass ?? "");
+  const effectiveMaxGougeMm = maxGougeMm ?? proofMaxGougeMm;
+  const effectiveMaxUndercutMm = maxUndercutMm ?? proofMaxUndercutMm;
+  const effectiveMeasuredOrValidated = residualMeasuredOrValidated || externalResidualReady;
   const gougeToleranceMm = numberOrNull(tolerance.maxGougeMm) ?? 0.03;
   const undercutToleranceMm = numberOrNull(tolerance.maxUndercutMm) ?? 0.08;
+  const residualWithinTolerance = effectiveMaxGougeMm !== null && effectiveMaxGougeMm <= gougeToleranceMm && effectiveMaxUndercutMm !== null && effectiveMaxUndercutMm <= undercutToleranceMm;
+  const residualEvidenceClosed = residualWithinTolerance && effectiveMeasuredOrValidated;
+  const declaredProductionResidualReady = residual.productionResidualEvidenceReady === true || readiness.productionResidualEvidenceReady === true;
+  const unsafeResidualProductionClaim = declaredProductionResidualReady && !residualEvidenceClosed;
   const hitRate = numberOrNull(sampling.hitRate);
   const pointCount = numberOrNull(sampling.pointCount);
   const contactPointCount = numberOrNull(sampling.contactPointCount ?? sampling.pointCount);
@@ -186,12 +216,165 @@ function checkProductionContactEvidence(checks, contact, target) {
   check(checks, "contact-sampling-step-ratio", stepToCutterRatio !== null && stepToCutterRatio <= 0.25, "contact sampling step-to-cutter ratio must be <= 0.25", target, { reported: stepToCutterRatio });
   check(checks, "contact-path-coverage-x", xCoverageRatio !== null && xCoverageRatio >= 0.98, "contactSampling.pathCoverage.xCoverageRatio must be at least 98%", target, { reported: xCoverageRatio });
   check(checks, "contact-path-coverage-cross", crossCoverageRatio !== null && crossCoverageRatio >= 0.98, "contactSampling.pathCoverage.crossCoverageRatio must be at least 98%", target, { reported: crossCoverageRatio });
-  check(checks, "contact-residual-gouge", maxGougeMm !== null && maxGougeMm <= gougeToleranceMm, "residualMaterial.maxGougeMm must be present and within tolerance", target, { reported: maxGougeMm, tolerance: gougeToleranceMm });
-  check(checks, "contact-residual-undercut", maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm, "residualMaterial.maxUndercutMm must be present and within tolerance", target, { reported: maxUndercutMm, tolerance: undercutToleranceMm });
-  check(checks, "contact-residual-measured-or-validated", residualMeasuredOrValidated, "residualMaterial must be measured or backed by swept-volume/material-removal/validated evidence, not only an engineering estimate", target, { measured: residual.measured === true, validationBasis: residualValidationBasis || null });
+  check(checks, "contact-residual-gouge", effectiveMaxGougeMm !== null && effectiveMaxGougeMm <= gougeToleranceMm, "residualMaterial.maxGougeMm must be present and within tolerance, or supplied by a bound CAMotics/equivalent residual proof chain", target, { reported: effectiveMaxGougeMm, contactReported: maxGougeMm, externalReported: proofMaxGougeMm, tolerance: gougeToleranceMm, evidenceSource: externalResidualReady && maxGougeMm === null ? "camotics-local-validation" : "contact-report" });
+  check(checks, "contact-residual-undercut", effectiveMaxUndercutMm !== null && effectiveMaxUndercutMm <= undercutToleranceMm, "residualMaterial.maxUndercutMm must be present and within tolerance, or supplied by a bound CAMotics/equivalent residual proof chain", target, { reported: effectiveMaxUndercutMm, contactReported: maxUndercutMm, externalReported: proofMaxUndercutMm, tolerance: undercutToleranceMm, evidenceSource: externalResidualReady && maxUndercutMm === null ? "camotics-local-validation" : "contact-report" });
+  check(checks, "contact-residual-measured-or-validated", effectiveMeasuredOrValidated, "residualMaterial must be measured or backed by swept-volume/material-removal/validated evidence, not only an engineering estimate", target, { measured: residual.measured === true || Boolean(proofResidual.measured), validationBasis: residualValidationBasis || proofBasis || null, externalProofReady: externalResidualReady });
+  check(checks, "contact-residual-production-claim", !unsafeResidualProductionClaim, "residualMaterial/materialRemovalReadiness must not claim production residual evidence until measured or swept-volume/material-removal validation is within tolerance", target, {
+    declaredProductionResidualReady,
+    unsafeProductionClaim: unsafeResidualProductionClaim,
+    measured: residual.measured === true || Boolean(proofResidual.measured),
+    validationBasis: residualValidationBasis || proofBasis || null,
+    maxGougeMm: effectiveMaxGougeMm,
+    maxUndercutMm: effectiveMaxUndercutMm,
+    gougeToleranceMm,
+    undercutToleranceMm
+  });
+  if (externalResidualProof?.present) {
+    check(checks, "contact-residual-external-proof-chain", externalResidualReady, "external CAMotics/equivalent residual proof chain must be ready and hash-bound to the upstream OpenCAMLib candidate package before it can support promotion", target, {
+      proofSchema: externalResidualProof.schema,
+      proofStatus: externalResidualProof.status,
+      localValidationOk: externalResidualProof.localValidationOk,
+      productionResidualEvidenceReady: externalResidualProof.productionResidualEvidenceReady,
+      unsafeProductionClaim: externalResidualProof.unsafeProductionClaim,
+      upstreamStatus: externalResidualProof.upstreamStatus,
+      upstreamCandidatePackageStatus: externalResidualProof.upstreamCandidatePackageStatus
+    });
+  }
   check(checks, "protected-zones-present", protectedEnabled, "contact report must declare enabled protectedZones for rotary fixture hold/end transition areas", target, { reported: protectedZones.enabled ?? null });
   check(checks, "protected-zones-no-violations", protectedViolationCount !== null && protectedViolationCount === 0, "protectedZones.violationCount must be 0", target, { reported: protectedViolationCount });
   check(checks, "protected-zones-sampled-bounds", protectedBoundsReady, "protectedZones sampledMinX/sampledMaxX must stay inside safeMinX/safeMaxX", target, { safeMinX, safeMaxX, sampledMinX, sampledMaxX });
+}
+
+function createExternalResidualProof(localValidation) {
+  if (!localValidation || typeof localValidation !== "object") {
+    return { present: false, ready: false };
+  }
+  const proofChain = localValidation.residualProofChain && typeof localValidation.residualProofChain === "object"
+    ? localValidation.residualProofChain
+    : {};
+  const residualValidation = proofChain.residualValidation && typeof proofChain.residualValidation === "object"
+    ? proofChain.residualValidation
+    : localValidation.residualValidation && typeof localValidation.residualValidation === "object"
+      ? localValidation.residualValidation
+      : {};
+  const upstream = proofChain.upstreamCamEvidence && typeof proofChain.upstreamCamEvidence === "object"
+    ? proofChain.upstreamCamEvidence
+    : localValidation.upstreamCamEvidence && typeof localValidation.upstreamCamEvidence === "object"
+      ? localValidation.upstreamCamEvidence
+      : {};
+  const upstreamMatched = upstream.status === "matched" && upstream.candidatePackageStatus === "matched";
+  const ready = localValidation.ok === true
+    && proofChain.schema === "hediao3d.camotics-residual-proof-chain.v1"
+    && proofChain.productionResidualEvidenceReady === true
+    && proofChain.unsafeProductionClaim !== true
+    && upstreamMatched;
+  return {
+    present: true,
+    ready,
+    schema: proofChain.schema ?? null,
+    status: proofChain.status ?? localValidation.level ?? "unknown",
+    localValidationOk: Boolean(localValidation.ok),
+    productionResidualEvidenceReady: Boolean(proofChain.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(proofChain.unsafeProductionClaim),
+    upstreamStatus: upstream.status ?? "missing",
+    upstreamCandidatePackageStatus: upstream.candidatePackageStatus ?? "missing",
+    residualValidation: {
+      status: residualValidation.status ?? "missing",
+      measured: Boolean(residualValidation.measured),
+      validationBasis: residualValidation.validationBasis ?? null,
+      evidenceClass: residualValidation.evidenceClass ?? null,
+      maxGougeMm: numberOrNull(residualValidation.maxGougeMm),
+      maxUndercutMm: numberOrNull(residualValidation.maxUndercutMm),
+      maxResidualStockMm: numberOrNull(residualValidation.maxResidualStockMm)
+    }
+  };
+}
+
+function createProductionCandidatePromotion({ checks, contact, neutralPreview, experimentalRealApi, level, expectProductionCandidate }) {
+  const quality = contact?.quality && typeof contact.quality === "object" ? contact.quality : {};
+  const criteria = [
+    criterionFromCheck(checks, "neutral-schema", "neutral", "Neutral schema is hediao3d.neutral-toolpath.v1."),
+    criterionFromCheck(checks, "neutral-points", "neutral", "Neutral toolpath contains points."),
+    criterionFromCheck(checks, "neutral-not-synthetic", "neutral", "Neutral output is not synthetic."),
+    criterionFromCheck(checks, "neutral-not-fixture", "neutral", "Neutral output is not fixture output."),
+    criterionFromCheck(checks, "neutral-not-preview", "neutral", "Neutral output is not preview/scaffold."),
+    criterionFromCheck(checks, "experimental-real-api-boundary", "runtime-boundary", "OpenCAMLib output is no longer blocked by experimental-real-api boundary."),
+    criterionFromCheck(checks, "contact-schema", "contact", "Contact report schema is hediao3d.opencamlib-cutter-contact-report.v1."),
+    criterionFromCheck(checks, "quality-postprocessEligible", "contact-quality", "Contact quality declares postprocessEligible=true."),
+    criterionFromCheck(checks, "quality-productionCandidate", "contact-quality", "Contact quality declares productionCandidate=true."),
+    criterionFromCheck(checks, "quality-not-preview", "contact-quality", "Contact quality is not preview/scaffold."),
+    criterionFromCheck(checks, "contact-algorithm-real", "contact-sampling", "Contact sampling uses real drop-cutter/cutter-contact/waterline algorithm."),
+    criterionFromCheck(checks, "contact-sampling-hit-rate", "contact-sampling", "Contact hitRate is at least 99.5%."),
+    criterionFromCheck(checks, "contact-sampling-step-ratio", "contact-sampling", "Sampling step-to-cutter ratio is <= 0.25."),
+    criterionFromCheck(checks, "contact-path-coverage-x", "contact-sampling", "X path coverage is at least 98%."),
+    criterionFromCheck(checks, "contact-path-coverage-cross", "contact-sampling", "Cross/rotary path coverage is at least 98%."),
+    criterionFromCheck(checks, "contact-residual-gouge", "residual-gouge", "Residual gouge is present and within tolerance."),
+    criterionFromCheck(checks, "contact-residual-undercut", "residual-gouge", "Residual undercut is present and within tolerance."),
+    criterionFromCheck(checks, "contact-residual-measured-or-validated", "residual-gouge", "Residual metrics are measured or swept-volume/material-removal validated."),
+    criterionFromCheck(checks, "contact-residual-production-claim", "residual-gouge", "Residual production claim is not unsafe."),
+    criterionFromCheck(checks, "contact-residual-external-proof-chain", "residual-gouge", "External CAMotics/equivalent residual proof chain is ready and bound when supplied.", "not-required"),
+    criterionFromCheck(checks, "protected-zones-present", "machine-boundary", "Protected fixture zones are declared."),
+    criterionFromCheck(checks, "protected-zones-no-violations", "machine-boundary", "Protected fixture zones have no sampled violations."),
+    criterionFromCheck(checks, "protected-zones-sampled-bounds", "machine-boundary", "Sampled contact stays within protected safe bounds."),
+    criterionFromCheck(checks, "identity-neutral", "identity", "Contact report is hash-bound to neutral output."),
+    criterionFromCheck(checks, "identity-plan", "identity", "Contact report is hash-bound to kernel plan.", "not-required"),
+    criterionFromCheck(checks, "identity-model", "identity", "Contact report is hash-bound to source model.", "not-required")
+  ].filter(Boolean);
+  const blockingCriteria = criteria.filter((item) => item.status !== "pass" && item.status !== "not-required");
+  const ready = level === "ready" && expectProductionCandidate && !neutralPreview && !experimentalRealApi && blockingCriteria.length === 0;
+  return {
+    schema: "hediao3d.opencamlib-production-candidate-promotion.v1",
+    status: ready ? "production-candidate-ready" : blockingCriteria.length ? "blocked" : "review",
+    productionCandidateReady: ready,
+    productionUnlockReady: false,
+    evidenceClass: experimentalRealApi ? "experimental-real-api" : neutralPreview ? "preview-scaffold" : ready ? "production-candidate" : "contact-report-review",
+    qualityLevel: quality.level ?? null,
+    qualityProductionCandidate: Boolean(quality.productionCandidate),
+    qualityPostprocessEligible: Boolean(quality.postprocessEligible),
+    criterionCount: criteria.length,
+    passedCount: criteria.filter((item) => item.status === "pass" || item.status === "not-required").length,
+    blockingCount: blockingCriteria.length,
+    criteria,
+    blockingCriteria: blockingCriteria.slice(0, 10),
+    nextActions: createPromotionNextActions(blockingCriteria, experimentalRealApi, neutralPreview),
+    productionBoundary: "This promotion audit only explains OpenCAMLib contact output readiness. It never unlocks production NC without material-removal, air-run, trial and machine acceptance evidence."
+  };
+}
+
+function criterionFromCheck(checks, id, layer, title, missingStatus = "missing") {
+  const check = checks.find((item) => item?.id === id);
+  if (!check) {
+    if (missingStatus === "not-required") {
+      return { id, layer, title, status: "not-required", summary: "Not required for this validation run." };
+    }
+    return { id, layer, title, status: missingStatus, summary: "Check did not run." };
+  }
+  return {
+    id,
+    layer,
+    title,
+    status: check.status === "pass" ? "pass" : "fail",
+    summary: check.summary ?? "",
+    reported: check.reported ?? null,
+    expected: check.expected ?? null,
+    tolerance: check.tolerance ?? null,
+    validationBasis: check.validationBasis ?? null,
+    measured: check.measured ?? null
+  };
+}
+
+function createPromotionNextActions(blockingCriteria, experimentalRealApi, neutralPreview) {
+  const actions = [];
+  if (neutralPreview) actions.push("Replace preview/heightfield/scaffold output with real OpenCAMLib drop-cutter/cutter-contact/waterline output.");
+  if (experimentalRealApi) actions.push("Promote the OpenCAMLib runner out of experimental-real-api only after residual/material-removal and machine-boundary evidence are validated.");
+  const ids = new Set(blockingCriteria.map((item) => item.id));
+  if ([...ids].some((id) => id.startsWith("contact-sampling") || id.startsWith("contact-path-coverage"))) actions.push("Increase or repair OpenCAMLib contact sampling until hitRate, step-to-cutter ratio and path coverage pass.");
+  if ([...ids].some((id) => id.startsWith("contact-residual"))) actions.push("Bind measured or swept-volume/material-removal validated gouge and undercut metrics within tolerance.");
+  if ([...ids].some((id) => id.startsWith("protected-zones"))) actions.push("Regenerate contact output with rotary fixture hold/end protected zones and zero violations.");
+  if ([...ids].some((id) => id.startsWith("identity"))) actions.push("Regenerate neutral/contact outputs from the same model and kernel plan so all SHA-256 bindings match.");
+  if (!actions.length && blockingCriteria.length) actions.push("Fix the listed OpenCAMLib contact promotion criteria and rerun this validator.");
+  if (!actions.length) actions.push("Proceed to candidate package validation, CAMotics/equivalent material-removal validation and field evidence; production remains locked.");
+  return actions.slice(0, 6);
 }
 
 function resolveContactPath(neutralPath, neutral) {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {
@@ -151,6 +151,62 @@ async function main() {
   assert(resultArtifact.artifactEvidence?.files?.screenshot?.sha256, "camotics result should hash screenshot artifact");
   assert(resultArtifact.artifactEvidence?.files?.materialMesh?.sha256, "camotics result should hash material mesh artifact");
 
+  const unsafeUpstreamCamEvidence = {
+    ...runPackage.upstreamCamEvidence,
+    materialRemovalReadiness: {
+      ...(runPackage.upstreamCamEvidence?.materialRemovalReadiness ?? {}),
+      status: "matched",
+      readyForMaterialRemovalSimulation: true,
+      productionResidualEvidenceReady: true,
+      unsafeProductionClaim: true,
+      missingForProduction: ["measured-or-swept-volume-validated residual evidence"],
+      summary: "Fixture upstream incorrectly claims production residual closure without validated proof."
+    }
+  };
+  const unsafeUpstreamImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, unsafeUpstreamCamEvidence),
+    localValidation: createLocalValidation(true),
+    screenshotDataUrl: toDataUrl("unsafe-upstream-residual-claim-camotics-png"),
+    materialMeshText: "solid unsafe_upstream_residual_claim_material\nendsolid unsafe_upstream_residual_claim_material\n"
+  });
+  assert(unsafeUpstreamImport.ok === true, "unsafe upstream residual claim import should be accepted for audit");
+  assert(unsafeUpstreamImport.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === false, "unsafe upstream residual claim must not close residual production evidence");
+  assert(unsafeUpstreamImport.simulationEvidence?.residualClosureReview?.upstreamProductionResidualEvidenceReady === false, "unsafe upstream residual claim must be excluded from safe upstream readiness");
+  assert(unsafeUpstreamImport.simulationEvidence?.evidenceQuality?.upstreamCamEvidence?.status !== "matched" || unsafeUpstreamImport.simulationEvidence?.residualClosureReview?.upstreamUnsafeProductionClaim === true, "unsafe upstream residual claim should be blocked either by upstream hash/readiness binding or residual closure review");
+
+  const unsafeResidualClaim = {
+    productionResidualEvidenceReady: true,
+    measured: false,
+    maxGougeMm: 0.012,
+    maxUndercutMm: 0.04,
+    maxResidualStockMm: 0.06
+  };
+  const unsafeResidualClaimImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence, unsafeResidualClaim),
+    localValidation: createLocalValidation(true, unsafeResidualClaim),
+    screenshotDataUrl: toDataUrl("unsafe-residual-claim-camotics-png"),
+    materialMeshText: "solid unsafe_residual_claim_material\nendsolid unsafe_residual_claim_material\n"
+  });
+  assert(unsafeResidualClaimImport.ok === true, "unsafe residual claim import should be accepted for audit but not production evidence");
+  assert(unsafeResidualClaimImport.simulationEvidence?.productionUnlockEligible === false, "unsafe residual claim must not be production evidence eligible");
+  assert(unsafeResidualClaimImport.simulationEvidence?.level === "material-removal-incomplete", "unsafe residual claim should keep material-removal evidence incomplete");
+  const unsafeResidualClaimArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  assert(unsafeResidualClaimArtifact.evidenceQuality?.productionEvidenceEligible === false, "unsafe residual claim artifact must not be production evidence eligible");
+  assert(unsafeResidualClaimArtifact.evidenceQuality?.missing?.includes("residualProductionClaim"), "unsafe residual claim should be listed in evidence-quality missing checks");
+  assert(unsafeResidualClaimArtifact.evidenceQuality?.residualValidation?.unsafeProductionClaim === true, "unsafe residual claim should be exposed in API evidence quality");
+  assert(unsafeResidualClaimImport.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === false, "unsafe local residual claim must not close residual production evidence");
+  assert(unsafeResidualClaimImport.simulationEvidence?.residualClosureReview?.localUnsafeProductionClaim === true, "residual closure should expose unsafe local residual claim");
+  assert(unsafeResidualClaimImport.simulationEvidence?.residualClosureReview?.checks?.some((check) => check.id === "unsafe-residual-production-claim" && check.status === "block"), "unsafe local residual claim should add a blocking residual check");
+  const unsafeResidualGate = unsafeResidualClaimImport.productionEvidenceDossier?.crossChecks?.productionReadinessAudit?.gates?.find((gate) => gate.id === "material-removal-proof");
+  assert(unsafeResidualGate?.residualUnsafeProductionClaim === true, "production audit material-removal gate should expose unsafe residual claim");
+  assert(unsafeResidualGate?.residualTopBlockers?.some((item) => /unsafe-residual-production-claim|危险生产残料声明/i.test(item)), "production audit material-removal gate should preserve unsafe residual blocker");
+  const unsafeResidualPlan = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/safe-trial-execution-plan.json`);
+  assert(unsafeResidualPlan.productionReadiness?.materialRemovalGate?.residualUnsafeProductionClaim === true, "safe trial plan should expose unsafe residual claim in material-removal gate");
+  assert(unsafeResidualPlan.productionReadiness?.materialRemovalGate?.nextActions?.some((item) => /productionResidualEvidenceReady|危险残料声明|measured|swept-volume/i.test(item)), "safe trial plan should tell operator to withdraw unsafe residual claim");
+  const lockedUnsafeResidual = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
+  assert(lockedUnsafeResidual.operatorGuidance?.materialRemovalGate?.residualUnsafeProductionClaim === true, "locked production guidance should expose unsafe residual claim");
+  assert(lockedUnsafeResidual.operatorGuidance?.materialRemovalGate?.nextActions?.some((item) => /productionResidualEvidenceReady|危险残料声明|measured|swept-volume/i.test(item)), "locked production guidance should explain how to fix unsafe residual claim");
+
   const closedResidual = createResidualValidationFixture();
   const residualClosedImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence, closedResidual),
@@ -164,8 +220,9 @@ async function main() {
   assert(residualClosedImport.simulationEvidence?.residualClosureReview?.localProductionResidualEvidenceReady === true, "residual closure should name local residual validation readiness");
   assert(residualClosedImport.simulationEvidence?.residualClosureReview?.residualValidation?.status === "ready", "residual closure should preserve residual validation detail");
 
-  const zipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence), null, 2);
-  const zipLocalValidationText = JSON.stringify(createLocalValidation(true), null, 2);
+  const zipResidualValidation = createResidualValidationFixture();
+  const zipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence, zipResidualValidation), null, 2);
+  const zipLocalValidationText = JSON.stringify(createLocalValidation(true, zipResidualValidation), null, 2);
   const zipScreenshotText = "zip-fixture-camotics-png";
   const zipMaterialText = "solid zip_material\nendsolid zip_material\n";
   const zipImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
@@ -201,9 +258,90 @@ async function main() {
   assert(zipImportAuditArtifact.zipBundle === "imported-camotics-result-bundle.zip", "zip import audit should record source bundle");
   assert(zipImportAuditArtifact.zipEntries?.some((entry) => /camotics-result\.json$/.test(entry.name)), "zip import audit should record result entry");
   assert(zipImportAuditArtifact.zipManifest?.schema === "hediao3d.camotics-result-bundle-manifest.v1", "zip import audit should record result bundle manifest");
+  assert(zipImportAuditArtifact.localValidation?.residualProofChain?.productionResidualEvidenceReady === true, "zip import audit should preserve local residual proof chain");
+  assert(zipImportAuditArtifact.zipManifest?.localValidation?.residualProofChain?.status === "production-residual-proof-bound", "zip manifest summary should preserve residual proof chain");
   assert(zipImportAuditArtifact.zipManifest?.jobId === job.id, "zip import audit should expose manifest job id");
   assert(zipImportAuditArtifact.zipManifest?.safetyLocks?.productionUnlockFromBundle === false, "zip manifest should keep production unlock locked");
   assert(zipImportAuditArtifact.zipManifest?.integrity?.status === "matched", "zip manifest integrity should match for generated bundle");
+  assert(zipImportAuditArtifact.zipManifest?.result?.residualValidation?.productionResidualEvidenceReady === true, "zip manifest audit should preserve result residual evidence summary");
+  assert(zipImportAuditArtifact.zipManifest?.localValidation?.residualValidation?.productionResidualEvidenceReady === true, "zip manifest audit should preserve local residual proof summary");
+
+  const unsafeZipResidualValidation = {
+    productionResidualEvidenceReady: true,
+    measured: false,
+    maxGougeMm: 0.012,
+    maxUndercutMm: 0.04,
+    maxResidualStockMm: 0.06,
+    unsafeProductionClaim: true,
+    topBlockers: ["residual-production-claim: measured/swept-volume proof missing"],
+    checks: [
+      {
+        id: "residual-production-claim",
+        status: "fail",
+        summary: "Unsafe production residual claim."
+      }
+    ]
+  };
+  const unsafeZipResultText = JSON.stringify(createCamoticsResult(job.id, previewSha256, previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence, unsafeZipResidualValidation), null, 2);
+  const unsafeZipLocalValidationText = JSON.stringify(createLocalValidation(true, unsafeZipResidualValidation), null, 2);
+  const unsafeZipImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": unsafeZipResultText,
+      "camotics-result-local-validation.json": unsafeZipLocalValidationText,
+      "camotics-result-bundle-manifest.json": JSON.stringify(createBundleManifest({
+        jobId: job.id,
+        preferredGcodeSha256: previewSha256,
+        motionProfile: previewMotionProfile,
+        runPackageSha256,
+        files: {
+          "camotics-result.json": unsafeZipResultText,
+          "camotics-result-local-validation.json": unsafeZipLocalValidationText,
+          "camotics-preview.png": zipScreenshotText,
+          "camotics-material-removal.stl": zipMaterialText
+        }
+      }), null, 2),
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    })
+  });
+  assert(unsafeZipImport.ok === true, "unsafe residual zip import should be accepted for audit");
+  assert(unsafeZipImport.simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady === false, "unsafe residual zip import must not close production residual evidence");
+  const unsafeZipAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(unsafeZipAudit.zipManifest?.result?.residualValidation?.unsafeProductionClaim === true, "zip manifest audit should preserve unsafe result residual claim");
+  assert(unsafeZipAudit.zipManifest?.localValidation?.residualValidation?.unsafeProductionClaim === true, "zip manifest audit should preserve unsafe local residual claim");
+  assert(unsafeZipAudit.zipManifest?.result?.residualValidation?.topBlockers?.some((item) => /residual-production-claim/.test(item)), "zip manifest audit should preserve unsafe residual top blockers");
+
+  const unsafeResidualManifest = createBundleManifest({
+    jobId: job.id,
+    preferredGcodeSha256: previewSha256,
+    motionProfile: previewMotionProfile,
+    runPackageSha256,
+    files: {
+      "camotics-result.json": unsafeZipResultText,
+      "camotics-result-local-validation.json": unsafeZipLocalValidationText,
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    }
+  });
+  unsafeResidualManifest.result.residualValidation = {
+    ...unsafeResidualManifest.result.residualValidation,
+    unsafeProductionClaim: false
+  };
+  const unsafeResidualManifestMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": unsafeZipResultText,
+      "camotics-result-local-validation.json": unsafeZipLocalValidationText,
+      "camotics-result-bundle-manifest.json": JSON.stringify(unsafeResidualManifest, null, 2),
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    })
+  });
+  assert(unsafeResidualManifestMismatchImport.ok === true, "unsafe residual manifest mismatch import should still be recorded for audit");
+  assert(unsafeResidualManifestMismatchImport.simulationEvidence?.productionUnlockEligible === false, "unsafe residual manifest mismatch must not be production eligible");
+  const unsafeResidualManifestMismatchArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  assert(unsafeResidualManifestMismatchArtifact.evidenceQuality?.missing?.includes("bundleManifestIntegrity"), "unsafe residual manifest mismatch should become evidence quality missing item");
+  const unsafeResidualManifestMismatchAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(unsafeResidualManifestMismatchAudit.zipManifest?.integrity?.mismatches?.some((item) => item.id === "result.residualValidation" && item.field === "unsafeProductionClaim"), "unsafe residual manifest mismatch audit should identify unsafe residual summary mismatch");
 
   const badManifestImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     resultZipDataUrl: toZipDataUrl({
@@ -230,6 +368,70 @@ async function main() {
   assert(badManifestArtifact.evidenceQuality?.missing?.includes("bundleManifestIntegrity"), "bad manifest should become evidence quality missing item");
   const badManifestAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
   assert(badManifestAudit.zipManifest?.integrity?.status === "mismatch", "bad manifest audit should record mismatch");
+
+  const residualManifest = createBundleManifest({
+    jobId: job.id,
+    preferredGcodeSha256: previewSha256,
+    motionProfile: previewMotionProfile,
+    runPackageSha256,
+    files: {
+      "camotics-result.json": zipResultText,
+      "camotics-result-local-validation.json": zipLocalValidationText,
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    }
+  });
+  residualManifest.localValidation.residualValidation = {
+    ...residualManifest.localValidation.residualValidation,
+    productionResidualEvidenceReady: false
+  };
+  const residualManifestMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": zipResultText,
+      "camotics-result-local-validation.json": zipLocalValidationText,
+      "camotics-result-bundle-manifest.json": JSON.stringify(residualManifest, null, 2),
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    })
+  });
+  assert(residualManifestMismatchImport.ok === true, "residual manifest mismatch import should still be recorded for audit");
+  assert(residualManifestMismatchImport.simulationEvidence?.productionUnlockEligible === false, "residual manifest mismatch must not be production eligible");
+  const residualManifestMismatchArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  assert(residualManifestMismatchArtifact.evidenceQuality?.missing?.includes("bundleManifestIntegrity"), "residual manifest mismatch should become evidence quality missing item");
+  const residualManifestMismatchAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(residualManifestMismatchAudit.zipManifest?.integrity?.mismatches?.some((item) => item.id === "localValidation.residualValidation"), "residual manifest mismatch audit should identify local residual summary mismatch");
+
+  const residualProofManifest = createBundleManifest({
+    jobId: job.id,
+    preferredGcodeSha256: previewSha256,
+    motionProfile: previewMotionProfile,
+    runPackageSha256,
+    files: {
+      "camotics-result.json": zipResultText,
+      "camotics-result-local-validation.json": zipLocalValidationText,
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    }
+  });
+  residualProofManifest.localValidation.residualProofChain = {
+    ...residualProofManifest.localValidation.residualProofChain,
+    productionResidualEvidenceReady: false
+  };
+  const residualProofManifestMismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
+    resultZipDataUrl: toZipDataUrl({
+      "camotics-result.json": zipResultText,
+      "camotics-result-local-validation.json": zipLocalValidationText,
+      "camotics-result-bundle-manifest.json": JSON.stringify(residualProofManifest, null, 2),
+      "camotics-preview.png": zipScreenshotText,
+      "camotics-material-removal.stl": zipMaterialText
+    })
+  });
+  assert(residualProofManifestMismatchImport.ok === true, "residual proof manifest mismatch import should still be recorded for audit");
+  assert(residualProofManifestMismatchImport.simulationEvidence?.productionUnlockEligible === false, "residual proof manifest mismatch must not be production eligible");
+  const residualProofManifestMismatchArtifact = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result.json`);
+  assert(residualProofManifestMismatchArtifact.evidenceQuality?.missing?.includes("bundleManifestIntegrity"), "residual proof manifest mismatch should become evidence quality missing item");
+  const residualProofManifestMismatchAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(residualProofManifestMismatchAudit.zipManifest?.integrity?.mismatches?.some((item) => item.id === "localValidation.residualProofChain"), "residual proof manifest mismatch audit should identify proof chain summary mismatch");
 
   const mismatchImport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-result`, {
     result: createCamoticsResult(job.id, "0".repeat(64), previewMotionProfile, runPackageSha256, undefined, runPackage.upstreamCamEvidence),
@@ -331,8 +533,44 @@ function createLocalValidation(ok, residualValidation = null) {
       { id: "run-package-hash", ok, severity: ok ? "info" : "critical", message: "fixture" }
     ],
     ...(residualValidation ? { residualValidation } : {}),
+    ...(residualValidation ? { residualProofChain: createResidualProofChainFixture(ok, residualValidation) } : {}),
     missing: ok ? [] : ["run-package-hash"],
     summary: ok ? "CAMotics local validation passed: result is eligible to be imported as material-removal evidence." : "CAMotics local validation failed: run-package-hash"
+  };
+}
+
+function createResidualProofChainFixture(ok, residualValidation) {
+  return {
+    schema: "hediao3d.camotics-residual-proof-chain.v1",
+    status: ok && residualValidation?.productionResidualEvidenceReady ? "production-residual-proof-bound" : "residual-proof-review",
+    productionResidualEvidenceReady: Boolean(ok && residualValidation?.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(residualValidation?.unsafeProductionClaim),
+    result: {
+      filename: "camotics-result.json",
+      sha256: "result-fixture-sha"
+    },
+    runPackage: {
+      filename: "camotics-cli-run-package.json",
+      sha256: "run-package-fixture-sha"
+    },
+    upstreamCamEvidence: {
+      required: true,
+      status: "matched",
+      candidatePackageStatus: "matched",
+      machineFitStatus: "matched",
+      materialReadinessStatus: "matched"
+    },
+    residualValidation: {
+      status: residualValidation?.status ?? null,
+      measured: Boolean(residualValidation?.measured),
+      validationBasis: residualValidation?.validationBasis ?? null,
+      maxGougeMm: residualValidation?.maxGougeMm ?? null,
+      maxUndercutMm: residualValidation?.maxUndercutMm ?? null
+    },
+    artifactEvidence: {
+      hasScreenshot: true,
+      hasMaterialMesh: true
+    }
   };
 }
 
@@ -363,6 +601,8 @@ function createResidualValidationFixture() {
 }
 
 function createBundleManifest({ jobId, preferredGcodeSha256, motionProfile, runPackageSha256, files }) {
+  const result = parseJsonFixture(files["camotics-result.json"]);
+  const localValidation = parseJsonFixture(files["camotics-result-local-validation.json"]);
   return {
     schema: "hediao3d.camotics-result-bundle-manifest.v1",
     createdAt: new Date().toISOString(),
@@ -375,12 +615,15 @@ function createBundleManifest({ jobId, preferredGcodeSha256, motionProfile, runP
       riskLevel: "ready",
       preferredGcodeSha256,
       camoticsCliRunPackageSha256: runPackageSha256,
-      machineContext: motionProfile.machineContext
+      machineContext: motionProfile.machineContext,
+      residualValidation: result?.residualValidation ?? result?.metrics?.residualValidation ?? null
     },
     localValidation: {
       schema: "hediao3d.camotics-result-local-validation.v1",
       ok: true,
       productionEvidenceEligible: true,
+      residualValidation: localValidation?.residualValidation ?? null,
+      residualProofChain: localValidation?.residualProofChain ?? null,
       missing: []
     },
     files: Object.entries(files).map(([filename, content]) => ({
@@ -402,6 +645,15 @@ function createBundleManifest({ jobId, preferredGcodeSha256, motionProfile, runP
       note: "Fixture bundle does not unlock production by itself."
     }
   };
+}
+
+function parseJsonFixture(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
 }
 
 function createPreviewMotionProfile(gcodeText) {
@@ -486,6 +738,15 @@ async function getJson(path) {
   const response = await fetch(`${baseUrl}${path}`);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? `${response.status} ${path}`);
+  return data;
+}
+
+async function getJsonAllowingStatus(path, expectedStatus) {
+  const response = await fetch(`${baseUrl}${path}`);
+  const data = await response.json().catch(() => ({}));
+  if (response.status !== expectedStatus) {
+    throw new Error(data.error ?? `expected ${expectedStatus}, got ${response.status} ${path}`);
+  }
   return data;
 }
 

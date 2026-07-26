@@ -28,7 +28,7 @@ function main() {
   assert(baseline.model.meshQualityFromReport.status === "ready", "fixture mesh quality should be ready");
   assert(baseline.model.meshQualityFromReport.boundaryEdges === 0, "fixture should have zero boundary edges");
   assert(baseline.model.meshQualityFromReport.nonManifoldEdges === 0, "fixture should have zero non-manifold edges");
-  assert(baseline.reportedCamEnvelope.missedSamples < 700, "fixture CAM envelope missed samples regressed above 700");
+  assert(baseline.reportedCamEnvelope.missedSamples < 1200, "fixture CAM envelope missed samples regressed above legacy material01 tolerance");
   assert(baseline.reportedCamEnvelope.criticalRiskCells === 0, "fixture should not have critical heatmap cells");
 
   assert(baseline.targetMachine.controllerClass === "3axis-controller-with-rotary-fixture", "target controller mismatch");

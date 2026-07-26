@@ -54,6 +54,7 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
   });
   const upstreamCamEvidence = evaluateUpstreamCamEvidenceBinding(result.inputs?.upstreamCamEvidence, runPackage.upstreamCamEvidence);
   check(checks, "upstream-cam-evidence", upstreamCamEvidence.ok, upstreamCamEvidence.summary, upstreamCamEvidence);
+  check(checks, "upstream-candidate-package", upstreamCamEvidence.candidatePackage.ok, upstreamCamEvidence.candidatePackage.summary, upstreamCamEvidence.candidatePackage);
   check(checks, "upstream-machine-fit", upstreamCamEvidence.machineFit.ok, upstreamCamEvidence.machineFit.summary, upstreamCamEvidence.machineFit);
   check(checks, "upstream-material-readiness", upstreamCamEvidence.materialRemovalReadiness.ok, upstreamCamEvidence.materialRemovalReadiness.summary, upstreamCamEvidence.materialRemovalReadiness);
   check(checks, "motion-line-count", Number(result.metrics?.motionLineCount) === Number(expectedMotion.motionLineCount), "result metrics.motionLineCount must match run package motion profile.", {
@@ -70,12 +71,24 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
   });
   check(checks, "material-removed", Number.isFinite(Number(result.metrics?.materialRemovedMm3)) && Number(result.metrics.materialRemovedMm3) >= 0, "result metrics.materialRemovedMm3 must be a real non-negative number.");
   const residualValidation = evaluateResidualValidation(result);
+  check(checks, "residual-production-claim", !residualValidation.unsafeProductionClaim, residualValidation.unsafeProductionClaim
+    ? "result residualValidation claims productionResidualEvidenceReady=true, but measured/swept-volume residual proof is incomplete or outside tolerance."
+    : "result residualValidation does not make an unsafe production residual claim.", residualValidation);
 
   const artifactEvidence = inspectArtifacts({ result, resultPath, args, runPackage });
   check(checks, "visual-or-material-artifact", artifactEvidence.hasScreenshot || artifactEvidence.hasMaterialMesh, "provide at least one real artifact: screenshot or material-removal mesh.", artifactEvidence);
 
   const failed = checks.filter((item) => item.ok !== true);
   const ok = failed.length === 0;
+  const residualProofChain = createResidualProofChain({
+    ok,
+    resultPath,
+    runPackagePath,
+    expectedRunPackageSha,
+    residualValidation,
+    upstreamCamEvidence,
+    artifactEvidence
+  });
   return {
     schema: "hediao3d.camotics-result-local-validation.v1",
     createdAt: new Date().toISOString(),
@@ -97,6 +110,7 @@ function validateMaterialRemovalResult({ resultPath, result, runPackagePath, run
     simulator,
     upstreamCamEvidence,
     residualValidation,
+    residualProofChain,
     missing: failed.map((item) => item.id),
     artifactEvidence,
     output: {
@@ -138,6 +152,8 @@ function evaluateResidualValidation(result) {
   const undercutOk = maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm;
   const ready = basisOk && gougeOk && undercutOk;
   const present = maxGougeMm !== null || maxUndercutMm !== null || maxResidualStockMm !== null || Boolean(validationBasis || evidenceClass || measured);
+  const declaredProductionResidualEvidenceReady = raw.productionResidualEvidenceReady === true;
+  const unsafeProductionClaim = declaredProductionResidualEvidenceReady && !ready;
   const checks = [
     {
       id: "residual-basis",
@@ -172,6 +188,8 @@ function evaluateResidualValidation(result) {
     schema: "hediao3d.residual-validation.v1",
     status: ready ? "ready" : present ? "review" : "missing",
     productionResidualEvidenceReady: ready,
+    declaredProductionResidualEvidenceReady,
+    unsafeProductionClaim,
     present,
     measured,
     validationBasis: validationBasis || null,
@@ -203,6 +221,12 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
       status: "not-required",
       required: false,
       presentCount: Number(expected?.presentCount ?? 0),
+      candidatePackage: {
+        ok: true,
+        status: "not-required",
+        required: false,
+        summary: "No upstream OpenCAMLib candidate package summary was captured in the run package."
+      },
       machineFit: {
         ok: true,
         status: "not-required",
@@ -237,7 +261,8 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
     .filter((item) => !item.matched);
   const machineFit = evaluateUpstreamMachineFit(imported?.candidateMachineFit, expected?.candidateMachineFit);
   const materialRemovalReadiness = evaluateUpstreamMaterialRemovalReadiness(imported?.materialRemovalReadiness, expected?.materialRemovalReadiness);
-  const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1" && expectedFiles.length > 0 && mismatches.length === 0 && machineFit.ok && materialRemovalReadiness.ok;
+  const candidatePackage = evaluateUpstreamCandidatePackage(imported?.candidatePackage, expected?.candidatePackage);
+  const ok = imported?.schema === "hediao3d.camotics-upstream-cam-evidence.v1" && expectedFiles.length > 0 && mismatches.length === 0 && candidatePackage.ok && machineFit.ok && materialRemovalReadiness.ok;
   return {
     ok,
     status: ok ? "matched" : "mismatch",
@@ -245,15 +270,106 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
     expectedCount: expectedFiles.length,
     importedCount: importedFiles.length,
     mismatches,
+    candidatePackage,
     machineFit,
     materialRemovalReadiness,
     summary: ok
       ? "CAMotics result is hash-bound to the upstream Native CAM/OpenCAMLib evidence captured by the run package."
-      : machineFit.ok && materialRemovalReadiness.ok
+      : candidatePackage.ok && machineFit.ok && materialRemovalReadiness.ok
         ? "CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
-        : !machineFit.ok
+        : !candidatePackage.ok
+          ? `CAMotics upstream OpenCAMLib candidate package is not acceptable: ${candidatePackage.summary}`
+          : !machineFit.ok
           ? `CAMotics upstream candidate machine-fit is not acceptable: ${machineFit.summary}`
           : `CAMotics upstream material-removal readiness is not acceptable: ${materialRemovalReadiness.summary}`
+  };
+}
+
+function createResidualProofChain({ ok, resultPath, runPackagePath, expectedRunPackageSha, residualValidation, upstreamCamEvidence, artifactEvidence }) {
+  const ready = Boolean(ok && residualValidation?.productionResidualEvidenceReady && !residualValidation?.unsafeProductionClaim);
+  return {
+    schema: "hediao3d.camotics-residual-proof-chain.v1",
+    status: ready
+      ? "production-residual-proof-bound"
+      : residualValidation?.unsafeProductionClaim
+        ? "blocked-unsafe-residual-claim"
+        : residualValidation?.present
+          ? "residual-proof-review"
+          : "missing-residual-proof",
+    productionResidualEvidenceReady: ready,
+    unsafeProductionClaim: Boolean(residualValidation?.unsafeProductionClaim),
+    result: {
+      filename: basename(resultPath),
+      sha256: sha256File(resultPath)
+    },
+    runPackage: {
+      filename: basename(runPackagePath),
+      sha256: expectedRunPackageSha
+    },
+    upstreamCamEvidence: {
+      required: Boolean(upstreamCamEvidence?.required),
+      status: upstreamCamEvidence?.status ?? "not-required",
+      candidatePackageStatus: upstreamCamEvidence?.candidatePackage?.status ?? "not-required",
+      machineFitStatus: upstreamCamEvidence?.machineFit?.status ?? "not-required",
+      materialReadinessStatus: upstreamCamEvidence?.materialRemovalReadiness?.status ?? "not-required"
+    },
+    residualValidation: {
+      status: residualValidation?.status ?? "missing",
+      measured: Boolean(residualValidation?.measured),
+      validationBasis: residualValidation?.validationBasis ?? null,
+      evidenceClass: residualValidation?.evidenceClass ?? null,
+      maxGougeMm: residualValidation?.maxGougeMm ?? null,
+      maxUndercutMm: residualValidation?.maxUndercutMm ?? null,
+      maxResidualStockMm: residualValidation?.maxResidualStockMm ?? null,
+      tolerances: residualValidation?.tolerances ?? null
+    },
+    artifactEvidence: {
+      hasScreenshot: Boolean(artifactEvidence?.hasScreenshot),
+      hasMaterialMesh: Boolean(artifactEvidence?.hasMaterialMesh),
+      screenshotSha256: artifactEvidence?.screenshot?.sha256 ?? null,
+      materialMeshSha256: artifactEvidence?.materialMesh?.sha256 ?? null
+    },
+    productionBoundary: "This proof chain only binds residual/gouge evidence inside the material-removal bundle. Production NC still requires same-job CAM, postprocess, air-run, trial feedback and machine acceptance."
+  };
+}
+
+function evaluateUpstreamCandidatePackage(importedPackage, expectedPackage) {
+  if (!expectedPackage) {
+    return {
+      ok: true,
+      status: "not-required",
+      required: false,
+      summary: "No upstream OpenCAMLib candidate package summary was captured in the run package."
+    };
+  }
+  const schemaOk = importedPackage?.schema === (expectedPackage.schema ?? "hediao3d.opencamlib-candidate-package-summary.v1");
+  const levelOk = importedPackage?.level === expectedPackage.level;
+  const readyForImportOk = Boolean(importedPackage?.readyForImport) === Boolean(expectedPackage.readyForImport);
+  const bundleShaOk = normalizeSha(importedPackage?.candidatePackageBundleSha256) === normalizeSha(expectedPackage.candidatePackageBundleSha256)
+    && normalizeSha(importedPackage?.actualBundleSha256) === normalizeSha(expectedPackage.actualBundleSha256)
+    && Boolean(importedPackage?.bundleShaMatches) === true
+    && Boolean(expectedPackage.bundleShaMatches) === true
+    && normalizeSha(importedPackage?.candidatePackageBundleSha256) === normalizeSha(importedPackage?.actualBundleSha256);
+  const reportDigestOk = String(importedPackage?.validationReportContentSha256 ?? "") === String(expectedPackage.validationReportContentSha256 ?? "");
+  const ok = schemaOk && levelOk && readyForImportOk && bundleShaOk && reportDigestOk;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    required: true,
+    schemaOk,
+    levelOk,
+    readyForImportOk,
+    bundleShaOk,
+    reportDigestOk,
+    expectedLevel: expectedPackage.level ?? null,
+    importedLevel: importedPackage?.level ?? null,
+    expectedBundleSha256: expectedPackage.candidatePackageBundleSha256 ?? null,
+    importedBundleSha256: importedPackage?.candidatePackageBundleSha256 ?? null,
+    importedActualBundleSha256: importedPackage?.actualBundleSha256 ?? null,
+    expectedActualBundleSha256: expectedPackage.actualBundleSha256 ?? null,
+    summary: ok
+      ? "Upstream OpenCAMLib candidate package report and bundle generated-artifact identity match the run package."
+      : `Expected candidate package level=${expectedPackage.level ?? "missing"} and bundle sha=${expectedPackage.candidatePackageBundleSha256 ?? "missing"}; got level=${importedPackage?.level ?? "missing"} and bundle sha=${importedPackage?.candidatePackageBundleSha256 ?? "missing"}.`
   };
 }
 
@@ -292,6 +408,12 @@ function evaluateUpstreamMachineFit(importedMachineFit, expectedMachineFit) {
   };
 }
 
+function normalizeSha(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value.trim())
+    ? value.trim().toLowerCase()
+    : "";
+}
+
 function evaluateUpstreamMaterialRemovalReadiness(importedReadiness, expectedReadiness) {
   if (!expectedReadiness) {
     return {
@@ -325,12 +447,28 @@ function evaluateUpstreamMaterialRemovalReadiness(importedReadiness, expectedRea
     readyMatches,
     simulationQuality,
     productionResidualEvidenceReady: Boolean(importedReadiness?.productionResidualEvidenceReady),
+    residualProofSource: summarizeResidualProofSource(importedReadiness?.residualProofSource ?? expectedReadiness?.residualProofSource ?? null),
     missingForProduction: Array.isArray(importedReadiness?.missingForProduction)
       ? importedReadiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12)
       : [],
     summary: ok
       ? `Upstream OpenCAMLib material-removal readiness is ${importedLevel} and can enter CAMotics/equivalent simulation.`
       : `Expected material readiness level=${expectedLevel}, readyForSimulation=${expectedReadyForSimulation}; got level=${importedLevel}, readyForSimulation=${readyForSimulation}.`
+  };
+}
+
+function summarizeResidualProofSource(source) {
+  if (!source || typeof source !== "object") return null;
+  return {
+    schema: source.schema ?? "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: source.status ?? "unknown",
+    ready: Boolean(source.ready),
+    proofStatus: source.proofStatus ?? null,
+    localValidationOk: Boolean(source.localValidationOk),
+    productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(source.unsafeProductionClaim),
+    upstreamStatus: source.upstreamStatus ?? null,
+    upstreamCandidatePackageStatus: source.upstreamCandidatePackageStatus ?? null
   };
 }
 
@@ -447,11 +585,14 @@ function inspectFile(path) {
 }
 
 function createResultBundle({ resultPath, validationPath, artifactEvidence }) {
+  const resultContent = readFileSync(resultPath);
+  const localValidationContent = readFileSync(validationPath);
   const files = [
-    { name: "camotics-result.json", content: readFileSync(resultPath) },
-    { name: "camotics-result-local-validation.json", content: readFileSync(validationPath) },
+    { name: "camotics-result.json", role: "material-removal-result", content: resultContent },
+    { name: "camotics-result-local-validation.json", role: "local-validation", content: localValidationContent },
     {
       name: "README-CAMOTICS-RESULT.md",
+      role: "operator-readme",
       content: Buffer.from([
         "# HeDiao3D Material-Removal Result Bundle",
         "",
@@ -460,7 +601,9 @@ function createResultBundle({ resultPath, validationPath, artifactEvidence }) {
         "Included files:",
         "- camotics-result.json",
         "- camotics-result-local-validation.json",
+        "- camotics-result-bundle-manifest.json",
         "- camotics-preview.png and/or camotics-material-removal.stl when available",
+        "- residualValidation summary from both result and local validation when provided",
         "",
         "This bundle is CAMotics/equivalent material-removal evidence only. It does not unlock production NC by itself.",
         ""
@@ -468,12 +611,69 @@ function createResultBundle({ resultPath, validationPath, artifactEvidence }) {
     }
   ];
   if (artifactEvidence?.hasScreenshot && artifactEvidence.screenshot?.path) {
-    files.push({ name: "camotics-preview.png", content: readFileSync(artifactEvidence.screenshot.path) });
+    files.push({ name: "camotics-preview.png", role: "visual-evidence", content: readFileSync(artifactEvidence.screenshot.path) });
   }
   if (artifactEvidence?.hasMaterialMesh && artifactEvidence.materialMesh?.path) {
-    files.push({ name: "camotics-material-removal.stl", content: readFileSync(artifactEvidence.materialMesh.path) });
+    files.push({ name: "camotics-material-removal.stl", role: "material-removal-mesh", content: readFileSync(artifactEvidence.materialMesh.path) });
   }
+  const manifest = createResultBundleManifest(files, resultContent, localValidationContent);
+  files.splice(2, 0, {
+    name: "camotics-result-bundle-manifest.json",
+    role: "bundle-manifest",
+    content: Buffer.from(JSON.stringify(manifest, null, 2), "utf8")
+  });
   return createZip(files);
+}
+
+function createResultBundleManifest(files, resultContent, localValidationContent) {
+  let result = null;
+  let localValidation = null;
+  try {
+    result = JSON.parse(resultContent.toString("utf8"));
+  } catch {}
+  try {
+    localValidation = JSON.parse(localValidationContent.toString("utf8"));
+  } catch {}
+  return {
+    schema: "hediao3d.camotics-result-bundle-manifest.v1",
+    createdAt: new Date().toISOString(),
+    generator: "v3-camotics-material-removal-validate.mjs",
+    purpose: "Uploadable CAMotics/equivalent material-removal evidence bundle for one HeDiao3D V3 job.",
+    jobId: result?.jobId ?? null,
+    result: {
+      schema: result?.schema ?? null,
+      synthetic: result?.synthetic ?? null,
+      riskLevel: result?.riskLevel ?? null,
+      preferredGcodeSha256: result?.inputs?.preferredGcodeSha256 ?? null,
+      camoticsCliRunPackageSha256: result?.inputs?.camoticsCliRunPackageSha256 ?? null,
+      machineContext: result?.inputs?.machineContext ?? null,
+      upstreamCamEvidence: result?.inputs?.upstreamCamEvidence ?? null,
+      residualValidation: result?.residualValidation ?? result?.metrics?.residualValidation ?? null
+    },
+    localValidation: {
+      schema: localValidation?.schema ?? null,
+      ok: Boolean(localValidation?.ok),
+      productionEvidenceEligible: Boolean(localValidation?.productionEvidenceEligible),
+      residualValidation: localValidation?.residualValidation ?? null,
+      residualProofChain: localValidation?.residualProofChain ?? null,
+      missing: Array.isArray(localValidation?.missing) ? localValidation.missing : []
+    },
+    files: files.map((file) => {
+      const data = Buffer.isBuffer(file.content) ? file.content : Buffer.from(String(file.content), "utf8");
+      return {
+        filename: file.name,
+        role: file.role ?? "artifact",
+        sizeBytes: data.length,
+        sha256: createHash("sha256").update(data).digest("hex")
+      };
+    }),
+    safetyLocks: {
+      productionUnlockFromBundle: false,
+      requiresServerImportAudit: true,
+      requiresReadinessRegeneration: true,
+      note: "This bundle can provide material-removal evidence only after HeDiao3D verifies hashes, local validation, motion profile and machine context."
+    }
+  };
 }
 
 function createZip(files) {

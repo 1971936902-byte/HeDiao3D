@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 
 const port = Number(process.env.V3_NEUTRAL_ADAPTER_PORT ?? 8791);
 const baseUrl = `http://127.0.0.1:${port}`;
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {

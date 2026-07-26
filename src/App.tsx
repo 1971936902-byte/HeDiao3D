@@ -459,13 +459,23 @@ type V3OrchestratorJob = {
             engineeringSimulationAllowed?: boolean;
             productionEvidenceAllowed?: boolean;
             productionResidualEvidenceReady?: boolean;
+            upstreamDeclaredProductionResidualEvidenceReady?: boolean;
             upstreamProductionResidualEvidenceReady?: boolean;
             localProductionResidualEvidenceReady?: boolean;
+            upstreamUnsafeProductionClaim?: boolean;
+            localUnsafeProductionClaim?: boolean;
             residualBasis?: string;
             residualValidation?: {
               schema?: string;
               status?: string;
               productionResidualEvidenceReady?: boolean;
+              localValidationBinding?: {
+                status?: string;
+                localValidationOk?: boolean;
+                localProductionEvidenceEligible?: boolean;
+                localProductionResidualEvidenceReady?: boolean;
+                summary?: string | null;
+              } | null;
               maxGougeMm?: number | null;
               maxUndercutMm?: number | null;
               maxResidualStockMm?: number | null;
@@ -1102,6 +1112,42 @@ type V3OrchestratorJob = {
           summary: string;
           evidence: string[];
         }>;
+        productionReadinessAudit?: {
+          status: string;
+          allowProductionPackage: boolean;
+          passCount: number;
+          reviewCount: number;
+          blockCount: number;
+          materialRemovalGate?: {
+            id?: string | null;
+            status?: string | null;
+            summary?: string | null;
+            residualClosureStatus?: string | null;
+            residualUnsafeProductionClaim?: boolean | null;
+            residualLocalValidationBindingStatus?: string | null;
+            residualTopBlockers?: string[];
+          } | null;
+          airRunGate?: {
+            id?: string | null;
+            status?: string | null;
+            summary?: string | null;
+            airRunEvidenceStatus?: string | null;
+            airRunPackageBindingStatus?: string | null;
+          } | null;
+          fieldPackageGate?: {
+            id?: string | null;
+            status?: string | null;
+            summary?: string | null;
+            fieldProofChainStatus?: string | null;
+            productionFieldEvidenceReady?: boolean | null;
+            fieldCompletenessStatus?: string | null;
+            fieldCompletenessMissingCount?: number | null;
+            fieldCompletenessMissingChecks?: string[];
+            fieldBindingStatus?: string | null;
+            machineBindingStatus?: string | null;
+            trialBindingStatus?: string | null;
+          } | null;
+        } | null;
         crossChecks?: {
           unlockMatrixPass?: boolean;
           realMaterialRemovalVerified?: boolean;
@@ -1118,6 +1164,9 @@ type V3OrchestratorJob = {
           latestMachineAcceptanceOutcome?: string | null;
           machineAcceptancePassed?: boolean;
           machineAcceptanceIntegrityBound?: boolean;
+          fieldEvidenceCompletenessStatus?: string | null;
+          fieldEvidenceCompletenessMissingCount?: number;
+          fieldEvidenceCompletenessMissingChecks?: string[];
           trialFeedbackRecords?: number;
           optimizationStatus?: string | null;
         };
@@ -1594,6 +1643,8 @@ type V3OpenCamLibProductionGapReview = {
   schema?: string;
   level?: string;
   productionCandidateReady?: boolean;
+  downstreamProductionEvidenceReady?: boolean;
+  productionUnlockReady?: boolean;
   criticalCount?: number;
   reviewCount?: number;
   productionBlockerCount?: number;
@@ -1607,6 +1658,58 @@ type V3OpenCamLibProductionGapReview = {
   }>;
   nextActions?: string[];
   productionBoundary?: string;
+} | null;
+
+type V3OpenCamLibDownstreamEvidencePlan = {
+  schema?: string;
+  status?: string;
+  productionUnlockReady?: boolean;
+  candidateReady?: boolean;
+  materialSimulationReady?: boolean;
+  residualClosed?: boolean;
+  unsafeResidualClaim?: boolean;
+  gateCount?: number;
+  openGateCount?: number;
+  gates?: Array<{
+    id?: string;
+    title?: string;
+    status?: string;
+    summary?: string;
+    requiredEvidence?: string[];
+  }>;
+  nextUploads?: string[];
+  productionBoundary?: string;
+} | null;
+
+type V3OpenCamLibNextProductionCandidateActions = {
+  schema?: string;
+  status?: string;
+  productionCandidateReady?: boolean;
+  productionUnlockReady?: boolean;
+  blockerCount?: number;
+  downstreamOpenGateCount?: number;
+  blockingReasons?: string[];
+  commands?: string[];
+  expectedArtifacts?: string[];
+  uploadSequence?: string[];
+  productionBoundary?: string;
+} | null;
+
+type V3OpenCamLibProductionCandidatePromotion = {
+  schema?: string;
+  status?: string;
+  productionCandidateReady?: boolean;
+  productionUnlockReady?: boolean;
+  evidenceClass?: string | null;
+  blockingCount?: number;
+  firstBlockingCriterion?: {
+    id?: string;
+    layer?: string;
+    status?: string;
+    summary?: string;
+  } | null;
+  nextAction?: string | null;
+  nextActions?: string[];
 } | null;
 
 type V3ContactValidationFailure = {
@@ -1692,6 +1795,7 @@ type V3ReadinessSummary = {
       id: string;
       title: string;
       status: string;
+      evidence: string[];
       missing: string[];
       nextActions: string[];
     }>;
@@ -1760,6 +1864,9 @@ type V3ReadinessSummary = {
       contactValidationTopErrors?: string[];
       contactValidationFailedChecks?: V3ContactValidationFailure[];
       productionGapReview?: V3OpenCamLibProductionGapReview;
+      downstreamEvidencePlan?: V3OpenCamLibDownstreamEvidencePlan;
+      nextProductionCandidateActions?: V3OpenCamLibNextProductionCandidateActions;
+      productionCandidatePromotion?: V3OpenCamLibProductionCandidatePromotion;
       summary?: string | null;
     } | null;
     openCamLibRealCandidate?: {
@@ -1774,6 +1881,9 @@ type V3ReadinessSummary = {
       blockingCount?: number;
       firstBlocking?: string | null;
       productionGapReview?: V3OpenCamLibProductionGapReview;
+      downstreamEvidencePlan?: V3OpenCamLibDownstreamEvidencePlan;
+      nextProductionCandidateActions?: V3OpenCamLibNextProductionCandidateActions;
+      productionCandidatePromotion?: V3OpenCamLibProductionCandidatePromotion;
     } | null;
     contactValidation?: {
       level?: string | null;
@@ -1819,7 +1929,9 @@ type V3ReadinessSummary = {
     exitCode: number | null;
     failedCount: number;
     blockingFailedCount?: number;
+    runbookReviewSafe?: boolean;
     productionSafe?: boolean;
+    productionSafeReason?: string | null;
     identityValid?: boolean;
     linuxEvidence?: {
       status?: string;
@@ -1882,10 +1994,20 @@ type V3ReadinessSummary = {
               summary?: string | null;
             } | null;
             productionResidualEvidenceReady?: boolean;
+            unsafeProductionClaim?: boolean;
+            residualProofSource?: {
+              status?: string | null;
+              ready?: boolean;
+              proofStatus?: string | null;
+              productionResidualEvidenceReady?: boolean;
+              upstreamStatus?: string | null;
+              upstreamCandidatePackageStatus?: string | null;
+            } | null;
             missingForProduction?: string[];
             summary?: string | null;
           } | null;
           productionGapReview?: V3OpenCamLibProductionGapReview;
+          downstreamEvidencePlan?: V3OpenCamLibDownstreamEvidencePlan;
           candidatePackageStep?: string;
           candidatePackage?: {
             filename?: string;
@@ -1893,12 +2015,23 @@ type V3ReadinessSummary = {
             level?: string | null;
             status?: string | null;
             sha256?: string | null;
+            readyForImport?: boolean;
+            generatedArtifacts?: {
+              status?: string | null;
+              bundleShaMatches?: boolean;
+              validationReportContentSha256?: string | null;
+              candidatePackageBundleSha256?: string | null;
+              actualBundleSha256?: string | null;
+              bundleExists?: boolean;
+              summary?: string | null;
+            } | null;
           } | null;
         };
         camotics?: {
           productionEvidenceEligible?: boolean;
           upstreamEvidenceRequired?: boolean;
           upstreamEvidenceStatus?: string;
+          upstreamMaterialUnsafeProductionClaim?: boolean;
           upstreamEvidence?: {
             required?: boolean;
             status?: string;
@@ -1909,6 +2042,20 @@ type V3ReadinessSummary = {
             mismatchCount?: number;
             candidatePackageValidationBound?: boolean;
             candidatePackageBundleBound?: boolean;
+            candidatePackage?: {
+              status?: string | null;
+              bundleShaMatches?: boolean;
+              summary?: string | null;
+            } | null;
+            materialRemovalReadiness?: {
+              status?: string | null;
+              level?: string | null;
+              readyForMaterialRemovalSimulation?: boolean;
+              productionResidualEvidenceReady?: boolean;
+              unsafeProductionClaim?: boolean;
+              missingForProduction?: string[];
+              summary?: string | null;
+            } | null;
             files?: Array<{
               key?: string | null;
               filename?: string | null;
@@ -2622,6 +2769,10 @@ export function App() {
       byName.get("open-source-cam-execution-plan.json")
     ].filter((file): file is NonNullable<typeof file> => Boolean(file));
   }, [v3Job]);
+  const v3GoalAuditFieldGateEvidence = useMemo(
+    () => getGoalAuditFieldGateEvidence(v3Readiness?.goalAudit ?? null),
+    [v3Readiness]
+  );
   const v3SafeTrialPlanFile = useMemo(
     () => findV3DeliveryFile(v3Job, "safe-trial-execution-plan.json"),
     [v3Job]
@@ -5263,8 +5414,8 @@ export function App() {
 
   const handleLoadLocalMeshyResult = () => {
     releaseImportedModelObjectUrl();
-    setAiMeshUrl("/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb");
-    setAiMeshStlUrl("/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl");
+    setAiMeshUrl("/meshy-results/material01-meshy.glb");
+    setAiMeshStlUrl("/meshy-results/material01-meshy.stl");
     setOriginalModelFileName(null);
     setModelSubStage("inspection");
     setMeshQuality(null);
@@ -6745,6 +6896,11 @@ export function App() {
                       {v3Readiness.goalAudit.nextBestActions[0] ? ` · 下一步：${v3Readiness.goalAudit.nextBestActions[0]}` : ""}
                     </small>
                   )}
+                  {v3GoalAuditFieldGateEvidence.length > 0 && (
+                    <small className={v3Readiness.goalAudit?.productionAllowed ? "v3-inline-ok" : "v3-inline-critical"}>
+                      现场门禁：{v3GoalAuditFieldGateEvidence.join(" · ")}
+                    </small>
+                  )}
                   {!V3_TRIAL_FOCUSED_UI && <>
                   {v3Readiness.nativeCam && (
                     <>
@@ -6814,6 +6970,21 @@ export function App() {
                       OpenCAMLib差距审查：{formatOpenCamLibProductionGapReview(getNativeOpenCamLibProductionGapReview(v3Readiness.nativeCamRealOutputAcceptance))}
                     </small>
                   )}
+                  {getNativeOpenCamLibProductionCandidatePromotion(v3Readiness.nativeCamRealOutputAcceptance) && (
+                    <small className={formatOpenCamLibPromotionClass(getNativeOpenCamLibProductionCandidatePromotion(v3Readiness.nativeCamRealOutputAcceptance))}>
+                      OpenCAMLib候选升级：{formatOpenCamLibProductionCandidatePromotion(getNativeOpenCamLibProductionCandidatePromotion(v3Readiness.nativeCamRealOutputAcceptance))}
+                    </small>
+                  )}
+                  {getNativeOpenCamLibDownstreamEvidencePlan(v3Readiness.nativeCamRealOutputAcceptance) && (
+                    <small className="v3-inline-warning">
+                      OpenCAMLib下游计划：{formatOpenCamLibDownstreamEvidencePlan(getNativeOpenCamLibDownstreamEvidencePlan(v3Readiness.nativeCamRealOutputAcceptance))}
+                    </small>
+                  )}
+                  {getNativeOpenCamLibNextProductionCandidateActions(v3Readiness.nativeCamRealOutputAcceptance) && (
+                    <small className="v3-inline-warning">
+                      OpenCAMLib下一步：{formatOpenCamLibNextProductionCandidateActions(getNativeOpenCamLibNextProductionCandidateActions(v3Readiness.nativeCamRealOutputAcceptance))}
+                    </small>
+                  )}
                   {formatNativeOpenCamLibStrictContactFailure(v3Readiness.nativeCamRealOutputAcceptance) && (
                     <small className="v3-inline-critical">
                       严格接触失败：{formatNativeOpenCamLibStrictContactFailure(v3Readiness.nativeCamRealOutputAcceptance)}
@@ -6879,7 +7050,8 @@ export function App() {
                   </small>
                   <small className={v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "v3-inline-ok" : "v3-inline-critical" : "v3-inline-warning"}>
                     验收脚本：{v3Readiness.runbookResult ? v3Readiness.runbookResult.ok ? "通过" : `失败 ${v3Readiness.runbookResult.failedCount} 项` : "未运行"}
-                    {v3Readiness.runbookResult ? ` · 阻断 ${v3Readiness.runbookResult.blockingFailedCount ?? "-"} · 身份 ${v3Readiness.runbookResult.identityValid ? "已绑定" : "待复核"} · safe ${v3Readiness.runbookResult.productionSafe ? "yes" : "no"}` : ""}
+                    {v3Readiness.runbookResult ? ` · 阻断 ${v3Readiness.runbookResult.blockingFailedCount ?? "-"} · 身份 ${v3Readiness.runbookResult.identityValid ? "已绑定" : "待复核"} · 审查 ${v3Readiness.runbookResult.runbookReviewSafe ? "ready" : "blocked"} · 生产 ${v3Readiness.runbookResult.productionSafe ? "safe" : "locked"}` : ""}
+                    {v3Readiness.runbookResult?.productionSafeReason ? ` · ${v3Readiness.runbookResult.productionSafeReason}` : ""}
                     {v3Readiness.runbookResult?.failedSteps[0] ? ` · ${v3Readiness.runbookResult.failedSteps[0].title}` : ""}
                   </small>
                   {v3Readiness.runbookResult?.linuxEvidence && (
@@ -7800,6 +7972,36 @@ export function App() {
                         .join("、")}
                     </small>
                   ) : null}
+                  {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit && (
+                    <small className={v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.allowProductionPackage ? "v3-inline-ok" : "v3-inline-critical"}>
+                      生产审计门禁：
+                      材料去除 {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.materialRemovalGate?.status ?? "missing"}
+                      {" · "}
+                      离料空跑 {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.airRunGate?.status ?? "missing"}
+                      {" · "}
+                      现场同包 {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate?.status ?? "missing"}
+                      {" · "}
+                      生产包 {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.allowProductionPackage ? "允许" : "锁定"}
+                      {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.materialRemovalGate?.residualClosureStatus
+                        ? ` · 残料闭合 ${v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.materialRemovalGate.residualClosureStatus}`
+                        : ""}
+                      {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.materialRemovalGate?.residualUnsafeProductionClaim
+                        ? " · 危险残料声明"
+                        : ""}
+                      {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.airRunGate?.airRunPackageBindingStatus
+                        ? ` · 空跑绑定 ${v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.airRunGate.airRunPackageBindingStatus}`
+                        : ""}
+                      {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate?.fieldBindingStatus
+                        ? ` · 现场绑定 ${v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate.fieldBindingStatus}`
+                        : ""}
+                      {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate?.fieldCompletenessStatus
+                        ? ` · 现场完整性 ${v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate.fieldCompletenessStatus}`
+                        : ""}
+                      {v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate?.fieldCompletenessMissingCount
+                        ? ` · 缺 ${v3Job.result.summary.productionEvidenceDossier.productionReadinessAudit.fieldPackageGate.fieldCompletenessMissingCount} 项`
+                        : ""}
+                    </small>
+                  )}
                   {v3Job.result.summary.productionEvidenceDossier.evidenceItems?.length ? (
                     <div className="v3-evidence-grid compact">
                       {v3Job.result.summary.productionEvidenceDossier.evidenceItems.slice(0, 6).map((item) => (
@@ -9133,6 +9335,13 @@ function createTaskJobLog(message: string): TaskJobLog {
   };
 }
 
+function getGoalAuditFieldGateEvidence(goalAudit: V3ReadinessSummary["goalAudit"]) {
+  const fieldLayer = goalAudit?.layers.find((layer) => layer.id === "field-evidence-closure");
+  return (fieldLayer?.evidence ?? [])
+    .filter((item) => item.includes("材料去除/残料门禁") || item.includes("离料空跑门禁") || item.includes("现场同包门禁"))
+    .slice(0, 3);
+}
+
 function formatTaskJobStatus(status: TaskJob["status"]) {
   if (status === "running") return "运行中";
   if (status === "done") return "完成";
@@ -9203,6 +9412,12 @@ function createProductionCrossCheckTiles(crossChecks: NonNullable<NonNullable<Ta
       value: crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "通过" : "未解锁",
       detail: `记录 ${crossChecks.machineAcceptanceRecords ?? 0} / 最新 ${crossChecks.latestMachineAcceptanceOutcome ?? "无"} / 完整性 ${crossChecks.machineAcceptanceIntegrityBound ? "已绑定" : "未绑定"}`,
       level: crossChecks.machineAcceptancePassed && crossChecks.machineAcceptanceIntegrityBound ? "ok" : "critical"
+    },
+    {
+      label: "现场完整性",
+      value: crossChecks.fieldEvidenceCompletenessStatus === "pass" ? "完整" : "待补齐",
+      detail: `状态：${crossChecks.fieldEvidenceCompletenessStatus ?? "missing"} / 缺失 ${crossChecks.fieldEvidenceCompletenessMissingCount ?? 0} 项${crossChecks.fieldEvidenceCompletenessMissingChecks?.length ? ` / ${crossChecks.fieldEvidenceCompletenessMissingChecks.slice(0, 3).join("、")}` : ""}`,
+      level: crossChecks.fieldEvidenceCompletenessStatus === "pass" ? "ok" : "critical"
     },
     {
       label: "试雕反馈",
@@ -9636,16 +9851,29 @@ function formatLinuxOpenCamLibEvidence(openCamLib: NonNullable<NonNullable<NonNu
   const packageStep = openCamLib?.candidatePackageStep ?? openCamLib?.candidatePackage?.status ?? "";
   const packageStepStatus = packageStep ? `预检 ${formatLinuxEvidenceStepStatus(packageStep)}` : "";
   const packageFile = openCamLib?.candidatePackage?.exists ? "证据JSON已回填" : "";
+  const packageGenerated = openCamLib?.candidatePackage?.generatedArtifacts?.bundleShaMatches
+    ? "候选包generatedArtifacts已匹配"
+    : openCamLib?.candidatePackage?.generatedArtifacts?.status === "mismatch"
+      ? "候选包generatedArtifacts不匹配"
+      : "";
   const machineFit = formatLinuxOpenCamLibMachineFit(openCamLib?.candidateMachineFit);
   const materialRemoval = formatLinuxOpenCamLibMaterialRemovalReadiness(openCamLib?.materialRemovalReadiness);
+  const promotion = formatOpenCamLibProductionCandidatePromotion(openCamLib?.productionCandidatePromotion as V3OpenCamLibProductionCandidatePromotion);
   const productionGap = formatOpenCamLibProductionGapReview(openCamLib?.productionGapReview);
+  const downstreamPlan = formatOpenCamLibDownstreamEvidencePlan(openCamLib?.downstreamEvidencePlan);
   const blocker = openCamLib?.candidatePackageBlockedReason || openCamLib?.firstBlocking;
-  return [candidate, coverage, protectedZones, machineFit, materialRemoval, productionGap ? `差距 ${productionGap}` : "", packageStatus, packageStepStatus, packageFile, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
+  return [candidate, coverage, protectedZones, machineFit, materialRemoval, promotion ? `候选升级 ${promotion}` : "", productionGap ? `差距 ${productionGap}` : "", downstreamPlan ? `下游计划 ${downstreamPlan}` : "", packageStatus, packageStepStatus, packageFile, packageGenerated, blocker ? `阻断 ${blocker}` : ""].filter(Boolean).join(" · ");
 }
 
 function getNativeOpenCamLibProductionGapReview(acceptance: V3ReadinessSummary["nativeCamRealOutputAcceptance"]) {
   return acceptance?.openCamLibRealCandidate?.productionGapReview
     ?? acceptance?.openCamLibRealCandidateStatus?.productionGapReview
+    ?? null;
+}
+
+function getNativeOpenCamLibProductionCandidatePromotion(acceptance: V3ReadinessSummary["nativeCamRealOutputAcceptance"]) {
+  return acceptance?.openCamLibRealCandidate?.productionCandidatePromotion
+    ?? acceptance?.openCamLibRealCandidateStatus?.productionCandidatePromotion
     ?? null;
 }
 
@@ -9664,6 +9892,57 @@ function formatNativeOpenCamLibStrictContactFailure(acceptance: V3ReadinessSumma
   return [firstError, check].filter(Boolean).join(" / ");
 }
 
+function getNativeOpenCamLibDownstreamEvidencePlan(acceptance: V3ReadinessSummary["nativeCamRealOutputAcceptance"]) {
+  return acceptance?.openCamLibRealCandidate?.downstreamEvidencePlan
+    ?? acceptance?.openCamLibRealCandidateStatus?.downstreamEvidencePlan
+    ?? null;
+}
+
+function getNativeOpenCamLibNextProductionCandidateActions(acceptance: V3ReadinessSummary["nativeCamRealOutputAcceptance"]) {
+  return acceptance?.openCamLibRealCandidate?.nextProductionCandidateActions
+    ?? acceptance?.openCamLibRealCandidateStatus?.nextProductionCandidateActions
+    ?? null;
+}
+
+function formatOpenCamLibDownstreamEvidencePlan(plan: V3OpenCamLibDownstreamEvidencePlan) {
+  if (!plan) return "";
+  const status = plan.status ?? "missing";
+  const production = plan.productionUnlockReady ? "可解锁生产" : "不解锁生产";
+  const residual = plan.residualClosed ? "残料已闭合" : plan.unsafeResidualClaim ? "危险残料声明" : "残料待证据";
+  const openGateCount = Number(plan.openGateCount ?? plan.gates?.filter((gate) => gate.status !== "pass" && gate.status !== "ready").length ?? 0);
+  const firstOpen = plan.gates?.find((gate) => gate.status !== "pass" && gate.status !== "ready")?.title;
+  return [status, residual, production, `open ${openGateCount}`, firstOpen ? `首项 ${firstOpen}` : ""].filter(Boolean).join(" · ");
+}
+
+function formatOpenCamLibNextProductionCandidateActions(actions: V3OpenCamLibNextProductionCandidateActions) {
+  if (!actions) return "";
+  const status = actions.status ?? "unknown";
+  const production = actions.productionUnlockReady ? "可解锁生产" : "不解锁生产";
+  const firstCommand = actions.commands?.[0] ? `命令 ${actions.commands[0]}` : "";
+  const artifacts = Array.isArray(actions.expectedArtifacts) ? `产物 ${actions.expectedArtifacts.length}` : "";
+  const blockers = Number(actions.blockerCount ?? 0) > 0 ? `阻断 ${actions.blockerCount}` : "";
+  return [status, production, blockers, firstCommand, artifacts].filter(Boolean).join(" · ");
+}
+
+function formatOpenCamLibPromotionClass(promotion: V3OpenCamLibProductionCandidatePromotion) {
+  if (!promotion) return "v3-inline-warning";
+  if (promotion.productionCandidateReady) return "v3-inline-ok";
+  return (promotion.blockingCount ?? 0) > 0 ? "v3-inline-critical" : "v3-inline-warning";
+}
+
+function formatOpenCamLibProductionCandidatePromotion(promotion: V3OpenCamLibProductionCandidatePromotion) {
+  if (!promotion) return "";
+  const status = promotion.status ?? "unknown";
+  const production = promotion.productionUnlockReady ? "可解锁生产" : "不解锁生产";
+  const ready = promotion.productionCandidateReady ? "候选ready" : "候选未闭合";
+  const blocking = Number(promotion.blockingCount ?? 0) > 0 ? `阻断 ${promotion.blockingCount}` : "";
+  const first = promotion.firstBlockingCriterion?.id
+    ? `首项 ${promotion.firstBlockingCriterion.id}${promotion.firstBlockingCriterion.summary ? `：${promotion.firstBlockingCriterion.summary}` : ""}`
+    : "";
+  const action = promotion.nextAction ?? promotion.nextActions?.[0] ?? "";
+  return [status, ready, production, blocking, first, action ? `下一步 ${action}` : ""].filter(Boolean).join(" · ");
+}
+
 function formatOpenCamLibProductionGapClass(review: V3OpenCamLibProductionGapReview) {
   if (!review) return "v3-inline-warning";
   if ((review.criticalCount ?? 0) > 0) return "v3-inline-critical";
@@ -9680,7 +9959,9 @@ function formatOpenCamLibProductionGapReview(review: V3OpenCamLibProductionGapRe
   const gapCount = Number(review.gapCount ?? (review.topGaps?.length ?? 0));
   const firstGap = review.topGaps?.[0]?.summary ? `首项 ${review.topGaps[0].summary}` : "";
   const candidate = review.productionCandidateReady ? "候选可进入下游证据链" : "候选未闭合";
-  return [level, candidate, `critical ${critical}`, `productionBlocker ${productionBlockers}`, `review ${reviewCount}`, `gaps ${gapCount}`, firstGap].filter(Boolean).join(" · ");
+  const downstream = review.downstreamProductionEvidenceReady ? "下游证据已闭合" : "下游证据未闭合";
+  const productionUnlock = review.productionUnlockReady ? "可解锁生产" : "不解锁生产";
+  return [level, candidate, downstream, productionUnlock, `critical ${critical}`, `productionBlocker ${productionBlockers}`, `review ${reviewCount}`, `gaps ${gapCount}`, firstGap].filter(Boolean).join(" · ");
 }
 
 function formatLinuxOpenCamLibMachineFit(machineFit: NonNullable<NonNullable<NonNullable<NonNullable<V3Readiness["runbookResult"]>["linuxEvidence"]>["evidenceChain"]>["openCamLib"]>["candidateMachineFit"]) {
@@ -9707,13 +9988,17 @@ function formatLinuxOpenCamLibMaterialRemovalReadiness(readiness: NonNullable<No
   const level = readiness.level ?? "missing";
   const sim = readiness.readyForMaterialRemovalSimulation ? "可进仿真" : "仿真未就绪";
   const residual = readiness.productionResidualEvidenceReady ? "残料证据ready" : "残料证据未闭合";
+  const unsafe = readiness.unsafeProductionClaim ? "危险残料声明" : "";
+  const proofSource = readiness.residualProofSource
+    ? `残料proof源 ${readiness.residualProofSource.status ?? "unknown"}${readiness.residualProofSource.ready ? "/已绑定" : "/未绑定"}${readiness.residualProofSource.upstreamStatus ? `/上游${readiness.residualProofSource.upstreamStatus}` : ""}`
+    : "";
   const simulationQuality = readiness.simulationQuality
     ? `仿真质量 ${readiness.simulationQuality.level ?? "unknown"}${Number.isFinite(Number(readiness.simulationQuality.riskCount)) ? `/风险${readiness.simulationQuality.riskCount}` : ""}`
     : "";
   const missing = Array.isArray(readiness.missingForProduction) && readiness.missingForProduction.length
     ? `缺 ${readiness.missingForProduction.length}项`
     : "";
-  return [`材料去除 ${level}`, sim, simulationQuality, residual, missing].filter(Boolean).join(" · ");
+  return [`材料去除 ${level}`, sim, simulationQuality, residual, proofSource, unsafe, missing].filter(Boolean).join(" · ");
 }
 
 function formatResidualClosureReview(review: NonNullable<NonNullable<NonNullable<V3OrchestratorJob["result"]>["summary"]["productionGate"]>["simulationEvidence"]>["residualClosureReview"]) {
@@ -9747,8 +10032,20 @@ function formatLinuxCamoticsUpstreamEvidence(camotics: NonNullable<NonNullable<N
   const matched = `${evidence?.matchedCount ?? 0}/${evidence?.expectedCount ?? 0}`;
   const candidateValidation = evidence?.candidatePackageValidationBound ? "候选包预检已绑定" : "候选包预检未绑定";
   const candidateBundle = evidence?.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
+  const candidateGenerated = evidence?.candidatePackage?.bundleShaMatches
+    ? "候选包generatedArtifacts已匹配"
+    : evidence?.candidatePackage?.status === "mismatch"
+      ? "候选包generatedArtifacts不匹配"
+      : "";
+  const materialReadiness = evidence?.materialRemovalReadiness;
+  const unsafeMaterial = camotics?.upstreamMaterialUnsafeProductionClaim || materialReadiness?.unsafeProductionClaim
+    ? "上游危险残料声明"
+    : "";
+  const material = materialReadiness
+    ? `材料准备${materialReadiness.readyForMaterialRemovalSimulation ? "可进仿真" : "未就绪"}/残料${materialReadiness.productionResidualEvidenceReady ? "已闭合" : "未闭合"}`
+    : "";
   const mismatches = evidence?.mismatchCount ? `不匹配 ${evidence.mismatchCount}` : "";
-  return [statusText, `哈希 ${matched}`, candidateValidation, candidateBundle, mismatches].filter(Boolean).join(" · ");
+  return [statusText, `哈希 ${matched}`, candidateValidation, candidateBundle, candidateGenerated, material, unsafeMaterial, mismatches].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamJobEvidenceStatus(status: any) {
@@ -9765,7 +10062,19 @@ function formatLinuxCamJobEvidenceStatus(status: any) {
     : "";
   const nativeCam = status.nativeCamBundle === "present" ? "Native CAM已生成" : "缺Native CAM包";
   const camotics = status.camoticsBundle === "present" ? "CAMotics已生成" : "缺CAMotics包";
-  return [phase, packageFiles, nativeCam, camotics].filter(Boolean).join(" · ");
+  const localValidation = status.camoticsLocalValidationDetail;
+  const local = localValidation
+    ? `本地校验${localValidation.status === "ready" ? "ready" : localValidation.status ?? "unknown"}`
+    : status.camoticsLocalValidation === "present"
+      ? "本地校验已导入"
+      : "缺本地校验";
+  const candidate = localValidation?.candidatePackageStatus
+    ? `候选包${localValidation.candidatePackageStatus}${localValidation.candidatePackageBundleShaMatches ? "/bundle匹配" : ""}`
+    : "";
+  const residualProof = localValidation?.residualProofChain
+    ? `残料proof ${localValidation.residualProofChain.status ?? "unknown"}${localValidation.residualProofChain.productionResidualEvidenceReady ? "/已闭合" : "/未闭合"}`
+    : "";
+  return [phase, packageFiles, nativeCam, camotics, local, candidate, residualProof].filter(Boolean).join(" · ");
 }
 
 function formatLinuxCamJobUploadPlan(plan: any) {
@@ -9806,7 +10115,12 @@ function formatLinuxCamEvidenceUploadReport(report: any) {
   const planned = report.plannedCount ?? 0;
   const total = report.uploadCount ?? uploaded + planned;
   const mode = report.dryRun ? "dry-run" : "已执行";
-  return [`${mode}`, `上传 ${uploaded}/${total}`, report.summary].filter(Boolean).join(" · ");
+  const local = report.localValidationSummary;
+  const localStatus = local?.camoticsLocalValidationStatus ? `本地校验${local.camoticsLocalValidationStatus}` : "";
+  const residualProof = local?.residualProofChain
+    ? `残料proof ${local.residualProofChain.status ?? "unknown"}${local.residualProofChain.productionResidualEvidenceReady ? "/已闭合" : "/未闭合"}`
+    : "";
+  return [`${mode}`, `上传 ${uploaded}/${total}`, localStatus, residualProof, report.summary].filter(Boolean).join(" · ");
 }
 
 function formatLockedProductionPackageGuidance(data: any) {
@@ -9815,6 +10129,9 @@ function formatLockedProductionPackageGuidance(data: any) {
   const evidenceReview = guidance?.evidenceReviewPackageUrl ? "可下载证据审查包复核缺口" : "";
   const materialRemovalGate = formatLockedProductionMaterialRemovalGuidance(guidance?.materialRemovalGate)
     || formatProductionReadinessMaterialRemovalGate(data?.productionReadinessAudit ?? guidance?.productionReadinessAudit);
+  const airRunGate = formatLockedProductionAirRunGuidance(guidance?.airRunGate);
+  const fieldEvidenceGate = formatLockedProductionFieldEvidenceGuidance(guidance?.fieldEvidenceGate);
+  const runbookBoundary = formatLockedProductionRunbookBoundary(guidance?.runbookBoundary);
   const closure = guidance?.closureAudit
     ? `生产闭环审计 ${formatProductionClosureStatus(guidance.closureAudit.status ?? "unknown")}：${guidance.closureAudit.nextActions?.[0]?.title ?? guidance.closureAudit.summary ?? "查看 production-closure-audit.md"}`
     : "";
@@ -9827,7 +10144,52 @@ function formatLockedProductionPackageGuidance(data: any) {
   const gap = Array.isArray(guidance?.evidenceGaps) && guidance.evidenceGaps[0]
     ? `证据缺口 ${guidance.evidenceGaps[0].label ?? guidance.evidenceGaps[0].id}: ${guidance.evidenceGaps[0].summary ?? guidance.evidenceGaps[0].status}`
     : data?.summary ?? data?.error ?? "生产证据尚未闭环";
-  return [safeTrial, evidenceReview, materialRemovalGate, closure, readFirst, neverRun, gap].filter(Boolean).join("；");
+  return [safeTrial, evidenceReview, materialRemovalGate, airRunGate, fieldEvidenceGate, runbookBoundary, closure, readFirst, neverRun, gap].filter(Boolean).join("；");
+}
+
+function formatLockedProductionRunbookBoundary(boundary: any) {
+  if (!boundary || typeof boundary !== "object") return "";
+  const review = boundary.runbookReviewSafe ? "ready" : "blocked";
+  const production = boundary.productionSafe ? "safe" : "locked";
+  const reason = boundary.productionSafeReason ? `，${boundary.productionSafeReason}` : "";
+  return `Runbook审查 ${review} / 生产 ${production}${reason}`;
+}
+
+function formatLockedProductionAirRunGuidance(gate: any) {
+  if (!gate || typeof gate !== "object") return "";
+  const status = gate.status === "pass"
+    ? "已通过"
+    : gate.status === "block"
+      ? "阻断"
+      : "待复核";
+  const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
+    ? `，失败项 ${gate.failedChecks.slice(0, 3).map((check: any) => check.id ?? check.status ?? "unknown").join("、")}`
+    : "";
+  const binding = gate.packageBindingStatus ? `，同包绑定 ${gate.packageBindingStatus}` : "";
+  const nextAction = Array.isArray(gate.nextActions) && gate.nextActions[0]
+    ? `，下一步 ${gate.nextActions[0]}`
+    : "";
+  return `离料空跑门禁 ${status}：${gate.summary ?? "离料空跑证据未闭合"}${binding}${failed}${nextAction}`;
+}
+
+function formatLockedProductionFieldEvidenceGuidance(gate: any) {
+  if (!gate || typeof gate !== "object") return "";
+  const status = gate.status === "pass"
+    ? "已通过"
+    : gate.status === "block"
+      ? "阻断"
+      : "待复核";
+  const files = Array.isArray(gate.mismatchedFiles) && gate.mismatchedFiles.length
+    ? `，不匹配文件 ${gate.mismatchedFiles.slice(0, 3).map((file: any) => file.filename ?? "unknown").join("、")}`
+    : "";
+  const binding = gate.bindingStatus ? `，同包绑定 ${gate.bindingStatus}` : "";
+  const proof = gate.proofChainStatus ? `，证据链 ${gate.proofChainStatus}` : "";
+  const machine = gate.machineBindingStatus ? `，机床验收 ${gate.machineBindingStatus}` : "";
+  const trial = gate.trialBindingStatus ? `，试雕反馈 ${gate.trialBindingStatus}` : "";
+  const nextAction = Array.isArray(gate.nextActions) && gate.nextActions[0]
+    ? `，下一步 ${gate.nextActions[0]}`
+    : "";
+  return `现场同包证据 ${status}：${gate.summary ?? "试雕反馈和机床验收未绑定同一加工包"}${proof}${binding}${machine}${trial}${files}${nextAction}`;
 }
 
 function formatLockedProductionMaterialRemovalGuidance(gate: any) {
@@ -9837,11 +10199,22 @@ function formatLockedProductionMaterialRemovalGuidance(gate: any) {
     : gate.status === "block"
       ? "阻断"
       : "待复核";
+  const residualLocalValidationBindingStatus = gate.residualLocalValidationBindingStatus ?? gate.residualLocalValidationBinding?.status ?? "not-required";
+  const unsafeResidualClaim = gate.residualUnsafeProductionClaim ? "，存在危险残料声明，请撤销 productionResidualEvidenceReady=true 并补 measured/swept-volume 验证" : "";
+  const localValidationHint = !["matched", "not-required"].includes(residualLocalValidationBindingStatus)
+    ? `，本地残料校验绑定 ${residualLocalValidationBindingStatus}，请重新运行 camotics-result-validate.js`
+    : "";
+  const residualProofCrossCheckStatus = gate.residualProofCrossCheckStatus ?? gate.residualProofCrossCheck?.status ?? null;
+  const residualProofHint = residualProofCrossCheckStatus === "mismatch"
+    ? "，Linux上传报告与CAMotics导入审计的残料proof不一致，请重新上传或复核结果包"
+    : residualProofCrossCheckStatus && !["matched", "missing"].includes(residualProofCrossCheckStatus)
+      ? `，残料proof交叉核验 ${residualProofCrossCheckStatus}`
+      : "";
   const nextAction = Array.isArray(gate.nextActions) && gate.nextActions[0]
     ? `，下一步 ${gate.nextActions[0]}`
     : "";
   const residual = gate.residualEvidenceRequired === false ? "" : "，需补残料/过切闭环证据";
-  return `材料去除/残料门禁 ${status}：${gate.summary ?? "材料去除仿真和残料/过切证据未闭合"}${residual}${nextAction}`;
+  return `材料去除/残料门禁 ${status}：${gate.summary ?? "材料去除仿真和残料/过切证据未闭合"}${residual}${unsafeResidualClaim}${localValidationHint}${residualProofHint}${nextAction}`;
 }
 
 function formatProductionReadinessMaterialRemovalGate(audit: any) {
@@ -9857,10 +10230,21 @@ function formatProductionReadinessMaterialRemovalGate(audit: any) {
   const residualHint = /残料|过切|residual|gouge/i.test(`${gate.summary ?? ""} ${gate.detail ?? ""} ${gate.reason ?? ""}`)
     ? ""
     : "，需补残料/过切闭环证据";
+  const residualLocalValidationBindingStatus = gate.residualLocalValidationBindingStatus ?? gate.residualLocalValidationBinding?.status ?? "not-required";
+  const unsafeResidualClaim = gate.residualUnsafeProductionClaim ? "，存在危险残料声明，请撤销 productionResidualEvidenceReady=true 并补 measured/swept-volume 验证" : "";
+  const localValidationHint = !["matched", "not-required"].includes(residualLocalValidationBindingStatus)
+    ? `，本地残料校验绑定 ${residualLocalValidationBindingStatus}，请重新运行 camotics-result-validate.js`
+    : "";
+  const residualProofCrossCheckStatus = gate.residualProofCrossCheckStatus ?? gate.residualProofCrossCheck?.status ?? null;
+  const residualProofHint = residualProofCrossCheckStatus === "mismatch"
+    ? "，Linux上传报告与CAMotics导入审计的残料proof不一致，请重新上传或复核结果包"
+    : residualProofCrossCheckStatus && !["matched", "missing"].includes(residualProofCrossCheckStatus)
+      ? `，残料proof交叉核验 ${residualProofCrossCheckStatus}`
+      : "";
   const nextAction = Array.isArray(gate.nextActions) && gate.nextActions[0]
     ? `，下一步 ${gate.nextActions[0]}`
     : "";
-  return `材料去除/残料门禁 ${status}：${gate.summary ?? "材料去除仿真和残料/过切证据未闭合"}${residualHint}${nextAction}`;
+  return `材料去除/残料门禁 ${status}：${gate.summary ?? "材料去除仿真和残料/过切证据未闭合"}${residualHint}${unsafeResidualClaim}${localValidationHint}${residualProofHint}${nextAction}`;
 }
 
 function createLockedProductionPackageTaskLinks(data: any) {

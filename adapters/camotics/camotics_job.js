@@ -517,6 +517,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       message: upstreamCamEvidence.summary
     },
     {
+      id: "upstreamCandidatePackage",
+      ok: upstreamCamEvidence.candidatePackage?.ok !== false,
+      message: upstreamCamEvidence.candidatePackage?.summary ?? "Upstream OpenCAMLib candidate package summary was not required."
+    },
+    {
       id: "upstreamMachineFit",
       ok: upstreamCamEvidence.machineFit?.ok !== false,
       message: upstreamCamEvidence.machineFit?.summary ?? "Upstream candidate machine-fit was not required."
@@ -540,6 +545,11 @@ function evaluateCamoticsEvidence(result, inputIdentity = null, artifactEvidence
       id: "riskReady",
       ok: result?.riskLevel === "ready",
       message: "riskLevel must be ready."
+    },
+    {
+      id: "residualProductionClaim",
+      ok: !residualValidation.unsafeProductionClaim,
+      message: "result residualValidation must not claim productionResidualEvidenceReady=true unless measured/swept-volume residual proof is complete and within tolerance."
     }
   ];
   const missing = checks.filter((check) => !check.ok).map((check) => check.id);
@@ -620,6 +630,8 @@ function evaluateResidualValidation(result) {
   const undercutOk = maxUndercutMm !== null && maxUndercutMm <= undercutToleranceMm;
   const present = maxGougeMm !== null || maxUndercutMm !== null || maxResidualStockMm !== null || Boolean(validationBasis || evidenceClass || measured);
   const ready = basisOk && gougeOk && undercutOk;
+  const declaredProductionResidualEvidenceReady = raw.productionResidualEvidenceReady === true;
+  const unsafeProductionClaim = declaredProductionResidualEvidenceReady && !ready;
   const checks = [
     { id: "residual-basis", status: basisOk ? "pass" : present ? "fail" : "missing", summary: basisOk ? "Residual evidence basis is measured or validated." : "Residual evidence must be measured or backed by swept-volume/material-removal/validated evidence.", measured, validationBasis: validationBasis || null, evidenceClass: evidenceClass || null },
     { id: "max-gouge", status: gougeOk ? "pass" : present ? "fail" : "missing", summary: maxGougeMm === null ? "maxGougeMm is missing." : `maxGougeMm=${maxGougeMm}mm, tolerance=${gougeToleranceMm}mm.`, reported: maxGougeMm, tolerance: gougeToleranceMm },
@@ -629,6 +641,8 @@ function evaluateResidualValidation(result) {
     schema: "hediao3d.residual-validation.v1",
     status: ready ? "ready" : present ? "review" : "missing",
     productionResidualEvidenceReady: ready,
+    declaredProductionResidualEvidenceReady,
+    unsafeProductionClaim,
     present,
     measured,
     validationBasis: validationBasis || null,
@@ -654,6 +668,12 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
       status: "not-required",
       required: false,
       presentCount: Number(expected?.presentCount ?? 0),
+      candidatePackage: {
+        ok: true,
+        status: "not-required",
+        required: false,
+        summary: "No upstream OpenCAMLib candidate package summary was captured in the run package."
+      },
       machineFit: {
         ok: true,
         status: "not-required",
@@ -690,7 +710,8 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
     && mismatches.length === 0;
   const machineFit = evaluateUpstreamMachineFit(imported?.candidateMachineFit, expected?.candidateMachineFit);
   const materialRemovalReadiness = evaluateUpstreamMaterialRemovalReadiness(imported?.materialRemovalReadiness, expected?.materialRemovalReadiness);
-  const allOk = fileBindingOk && machineFit.ok && materialRemovalReadiness.ok;
+  const candidatePackage = evaluateUpstreamCandidatePackage(imported?.candidatePackage, expected?.candidatePackage);
+  const allOk = fileBindingOk && candidatePackage.ok && machineFit.ok && materialRemovalReadiness.ok;
   return {
     ok: allOk,
     status: allOk ? "matched" : "mismatch",
@@ -698,15 +719,58 @@ function evaluateUpstreamCamEvidenceBinding(imported, expected) {
     expectedCount: expectedFiles.length,
     importedCount: importedFiles.length,
     mismatches,
+    candidatePackage,
     machineFit,
     materialRemovalReadiness,
     summary: allOk
       ? "Imported CAMotics result is hash-bound to the upstream Native CAM/OpenCAMLib evidence captured by the run package."
-      : machineFit.ok && materialRemovalReadiness.ok
+      : candidatePackage.ok && machineFit.ok && materialRemovalReadiness.ok
         ? "Imported CAMotics result is missing or mismatching upstream Native CAM/OpenCAMLib evidence hashes."
-        : !machineFit.ok
+        : !candidatePackage.ok
+          ? `Imported CAMotics result is bound to an unacceptable OpenCAMLib candidate package: ${candidatePackage.summary}`
+          : !machineFit.ok
           ? `Imported CAMotics result is bound to an unacceptable upstream machine-fit: ${machineFit.summary}`
           : `Imported CAMotics result is bound to upstream material-removal readiness that cannot enter simulation: ${materialRemovalReadiness.summary}`
+  };
+}
+
+function evaluateUpstreamCandidatePackage(importedPackage, expectedPackage) {
+  if (!expectedPackage) {
+    return {
+      ok: true,
+      status: "not-required",
+      required: false,
+      summary: "No upstream OpenCAMLib candidate package summary was captured in the run package."
+    };
+  }
+  const schemaOk = importedPackage?.schema === (expectedPackage.schema ?? "hediao3d.opencamlib-candidate-package-summary.v1");
+  const levelOk = importedPackage?.level === expectedPackage.level;
+  const readyForImportOk = Boolean(importedPackage?.readyForImport) === Boolean(expectedPackage.readyForImport);
+  const bundleShaOk = normalizeSha(importedPackage?.candidatePackageBundleSha256) === normalizeSha(expectedPackage.candidatePackageBundleSha256)
+    && normalizeSha(importedPackage?.actualBundleSha256) === normalizeSha(expectedPackage.actualBundleSha256)
+    && Boolean(importedPackage?.bundleShaMatches) === true
+    && Boolean(expectedPackage.bundleShaMatches) === true
+    && normalizeSha(importedPackage?.candidatePackageBundleSha256) === normalizeSha(importedPackage?.actualBundleSha256);
+  const reportDigestOk = String(importedPackage?.validationReportContentSha256 ?? "") === String(expectedPackage.validationReportContentSha256 ?? "");
+  const ok = schemaOk && levelOk && readyForImportOk && bundleShaOk && reportDigestOk;
+  return {
+    ok,
+    status: ok ? "matched" : "mismatch",
+    required: true,
+    schemaOk,
+    levelOk,
+    readyForImportOk,
+    bundleShaOk,
+    reportDigestOk,
+    expectedLevel: expectedPackage.level ?? null,
+    importedLevel: importedPackage?.level ?? null,
+    expectedBundleSha256: expectedPackage.candidatePackageBundleSha256 ?? null,
+    importedBundleSha256: importedPackage?.candidatePackageBundleSha256 ?? null,
+    importedActualBundleSha256: importedPackage?.actualBundleSha256 ?? null,
+    expectedActualBundleSha256: expectedPackage.actualBundleSha256 ?? null,
+    summary: ok
+      ? "Upstream OpenCAMLib candidate package report and bundle generated-artifact identity match the run package."
+      : `Expected candidate package level=${expectedPackage.level ?? "missing"} and bundle sha=${expectedPackage.candidatePackageBundleSha256 ?? "missing"}; got level=${importedPackage?.level ?? "missing"} and bundle sha=${importedPackage?.candidatePackageBundleSha256 ?? "missing"}.`
   };
 }
 
@@ -1055,4 +1119,10 @@ function isVFlat25(s) {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizeSha(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value.trim())
+    ? value.trim().toLowerCase()
+    : "";
 }

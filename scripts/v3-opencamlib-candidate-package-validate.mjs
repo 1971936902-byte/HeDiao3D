@@ -16,12 +16,14 @@ const validatorPath = resolvePath(args.validator, defaultValidatorPath);
 const neutralPath = resolvePath(args.neutral, join(root, "neutral-toolpath.json"));
 const planPath = resolvePath(args.plan, join(root, "opencamlib-kernel-plan.json"));
 const contactPath = resolvePath(args.contact, join(root, "opencamlib-cutter-contact-report.json"));
+const camoticsLocalValidationPath = resolvePath(args.camoticsLocalValidation ?? args["camotics-local-validation"] ?? args.localValidation ?? args["local-validation"], join(root, "camotics-result-local-validation.json"));
 const explicitModelPath = args.model ? resolve(String(args.model)) : null;
 
 const files = {
   neutral: createFileIdentity(neutralPath, "neutral-toolpath.json"),
   plan: createFileIdentity(planPath, "opencamlib-kernel-plan.json"),
   contact: createFileIdentity(contactPath, "opencamlib-cutter-contact-report.json"),
+  camoticsLocalValidation: createFileIdentity(camoticsLocalValidationPath, "camotics-result-local-validation.json"),
   validator: createFileIdentity(validatorPath, "opencamlib-contact-output-validate.mjs")
 };
 const plan = files.plan.exists ? readJson(planPath, "OpenCAMLib kernel plan") : null;
@@ -31,14 +33,14 @@ const modelPath = explicitModelPath ?? resolveModelPath(plan, planPath);
 files.model = createFileIdentity(modelPath, modelPath ? basename(modelPath) : "model");
 
 const missing = Object.entries(files)
-  .filter(([key, file]) => key !== "model" && !file.exists)
+  .filter(([key, file]) => !["model", "camoticsLocalValidation"].includes(key) && !file.exists)
   .map(([key, file]) => `${key}: ${file.path}`);
 if (!files.model.exists) missing.push(`model: ${files.model.path ?? "missing"}`);
 
 let contactValidation = null;
 let validatorRun = null;
 if (missing.length === 0) {
-  validatorRun = spawnSync(process.execPath, [
+  const validatorArgs = [
     validatorPath,
     "--neutral", neutralPath,
     "--plan", planPath,
@@ -46,7 +48,11 @@ if (missing.length === 0) {
     "--contact", contactPath,
     "--out", join(dirname(outPath), "opencamlib-contact-output-validation.json"),
     "--strict", String(strict)
-  ], {
+  ];
+  if (files.camoticsLocalValidation.exists) {
+    validatorArgs.push("--camotics-local-validation", camoticsLocalValidationPath);
+  }
+  validatorRun = spawnSync(process.execPath, validatorArgs, {
     cwd: process.cwd(),
     encoding: "utf8",
     windowsHide: true
@@ -65,9 +71,10 @@ if (machineFit.level === "critical") {
   blockers.push(`neutral machine-fit preflight is critical: ${machineFit.summary}`);
 }
 const level = blockers.length ? "critical" : "ready";
-const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit });
 const handoffContract = createHandoffContract({ level, files, contactValidation, machineFit });
-const materialRemovalReadiness = summarizeMaterialRemovalReadiness(contact?.materialRemovalReadiness);
+const materialRemovalReadiness = summarizeMaterialRemovalReadiness(contact?.materialRemovalReadiness, contactValidation);
+const downstreamEvidencePlan = createDownstreamEvidencePlan({ level, contactValidation, machineFit, materialRemovalReadiness, blockers });
+const artifactManifest = createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit, materialRemovalReadiness, downstreamEvidencePlan });
 const productionGapReview = createProductionGapReview({ level, missing, blockers, contactValidation, machineFit, materialRemovalReadiness, artifactManifest, handoffContract });
 const report = {
   schema: "hediao3d.opencamlib-candidate-package-validation.v1",
@@ -80,6 +87,7 @@ const report = {
   handoffContract,
   machineFit,
   materialRemovalReadiness,
+  downstreamEvidencePlan,
   productionGapReview,
   contactValidation: contactValidation ? createContactValidationSummary(contactValidation) : null,
   validatorRun: validatorRun ? {
@@ -88,6 +96,7 @@ const report = {
     stderrTail: validatorRun.stderr.slice(-1200)
   } : null,
   blockers,
+  generatedArtifacts: null,
   nextActions: level === "ready"
     ? [
       machineFit.level === "review"
@@ -102,16 +111,39 @@ const report = {
   productionBoundary: "This preflight proves only the OpenCAMLib candidate package contract. HeDiao3D still requires postprocess, CAMotics/material-removal, air-run, trial feedback and machine acceptance."
 };
 
+attachGeneratedArtifactSummaries(report, outPath, bundlePath, null);
 writeFileSync(outPath, JSON.stringify(report, null, 2), "utf8");
 writeFileSync(bundlePath, createZip(createBundleFiles(report, outPath, files)), "binary");
+attachGeneratedArtifactSummaries(report, outPath, bundlePath, createFileIdentity(bundlePath, "opencamlib-candidate-package-bundle.zip"));
+writeFileSync(outPath, JSON.stringify(report, null, 2), "utf8");
 console.log(JSON.stringify(report, null, 2));
 
 if (strict && level === "critical") {
   process.exitCode = 3;
 }
 
-function summarizeMaterialRemovalReadiness(readiness) {
+function summarizeMaterialRemovalReadiness(readiness, contactValidation = null) {
+  const externalResidualProof = createExternalResidualProofSummary(contactValidation);
   if (!readiness || typeof readiness !== "object") {
+    if (externalResidualProof?.ready) {
+      return {
+        schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+        level: "ready-for-camotics-or-equivalent",
+        readyForMaterialRemovalSimulation: true,
+        productionResidualEvidenceReady: true,
+        unsafeProductionClaim: false,
+        residualProofSource: externalResidualProof,
+        simulationQuality: {
+          schema: "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+          level: "production-residual-proof-bound",
+          engineeringSimulationAllowed: true,
+          productionEvidenceAllowed: true,
+          risks: []
+        },
+        missingForProduction: [],
+        summary: "Bound CAMotics/equivalent local validation supplied production residual proof for this OpenCAMLib candidate."
+      };
+    }
     return {
       schema: "hediao3d.opencamlib-material-removal-readiness.v1",
       level: "missing",
@@ -131,22 +163,68 @@ function summarizeMaterialRemovalReadiness(readiness) {
   const simulationQuality = readiness.simulationQuality && typeof readiness.simulationQuality === "object"
     ? readiness.simulationQuality
     : {};
+  const productionResidualEvidenceReady = Boolean(readiness.productionResidualEvidenceReady) || Boolean(externalResidualProof?.ready);
+  const residualProofSource = externalResidualProof ?? createRawResidualProofSourceSummary(readiness.residualProofSource);
+  const productionEvidenceAllowed = simulationQuality.productionEvidenceAllowed === true || Boolean(externalResidualProof?.ready);
+  const missingForProduction = Array.isArray(readiness.missingForProduction)
+    ? readiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 24)
+    : [];
+  const effectiveMissingForProduction = externalResidualProof?.ready
+    ? missingForProduction.filter((item) => !/camotics|material-removal result|residual|gouge/i.test(item))
+    : missingForProduction;
+  const unsafeProductionClaim = productionResidualEvidenceReady && !externalResidualProof?.ready && (simulationQuality.productionEvidenceAllowed === false || missingForProduction.length > 0);
   return {
     schema: readiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1",
     level: readiness.level ?? (readiness.readyForMaterialRemovalSimulation ? "ready-for-camotics-or-equivalent" : "blocked"),
     readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
-    productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
+    productionResidualEvidenceReady,
+    unsafeProductionClaim,
+    residualProofSource,
     simulationQuality: {
       schema: simulationQuality.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1",
-      level: simulationQuality.level ?? "review",
+      level: externalResidualProof?.ready ? "production-residual-proof-bound" : simulationQuality.level ?? "review",
       engineeringSimulationAllowed: Boolean(simulationQuality.engineeringSimulationAllowed),
-      productionEvidenceAllowed: Boolean(simulationQuality.productionEvidenceAllowed),
+      productionEvidenceAllowed,
       risks: Array.isArray(simulationQuality.risks) ? simulationQuality.risks.map((item) => String(item)).slice(0, 24) : []
     },
-    missingForProduction: Array.isArray(readiness.missingForProduction)
-      ? readiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 24)
-      : [],
-    summary: readiness.summary ?? "OpenCAMLib output can proceed to CAMotics/equivalent material-removal simulation as engineering evidence."
+    missingForProduction: effectiveMissingForProduction,
+    summary: externalResidualProof?.ready
+      ? "OpenCAMLib candidate has bound CAMotics/equivalent residual proof; continue field evidence before production."
+      : readiness.summary ?? "OpenCAMLib output can proceed to CAMotics/equivalent material-removal simulation as engineering evidence."
+  };
+}
+
+function createExternalResidualProofSummary(contactValidation) {
+  const checks = Array.isArray(contactValidation?.checks) ? contactValidation.checks : [];
+  const proofCheck = checks.find((check) => check?.id === "contact-residual-external-proof-chain");
+  if (!proofCheck) return null;
+  return {
+    schema: "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: proofCheck.status === "pass" ? "bound" : "blocked",
+    ready: proofCheck.status === "pass",
+    proofSchema: proofCheck.proofSchema ?? null,
+    proofStatus: proofCheck.proofStatus ?? null,
+    localValidationOk: Boolean(proofCheck.localValidationOk),
+    productionResidualEvidenceReady: Boolean(proofCheck.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(proofCheck.unsafeProductionClaim),
+    upstreamStatus: proofCheck.upstreamStatus ?? "missing",
+    upstreamCandidatePackageStatus: proofCheck.upstreamCandidatePackageStatus ?? "missing"
+  };
+}
+
+function createRawResidualProofSourceSummary(source) {
+  if (!source || typeof source !== "object") return null;
+  return {
+    schema: source.schema ?? "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: source.status ?? "unknown",
+    ready: Boolean(source.ready),
+    proofSchema: source.proofSchema ?? null,
+    proofStatus: source.proofStatus ?? null,
+    localValidationOk: Boolean(source.localValidationOk),
+    productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(source.unsafeProductionClaim),
+    upstreamStatus: source.upstreamStatus ?? null,
+    upstreamCandidatePackageStatus: source.upstreamCandidatePackageStatus ?? null
   };
 }
 
@@ -245,6 +323,22 @@ function createProductionGapReview({ level, missing, blockers, contactValidation
       materialRemovalReadiness?.missingForProduction ?? ["measured-or-swept-volume-validated residual evidence"]
     );
   }
+  const failedContactChecks = Array.isArray(contactValidation?.checks) ? contactValidation.checks : [];
+  const unsafeContactResidualClaim = failedContactChecks.some((check) => check?.id === "contact-residual-production-claim" && check?.status === "fail");
+  if (materialRemovalReadiness?.unsafeProductionClaim || unsafeContactResidualClaim) {
+    addGap(
+      "unsafe-residual-production-claim",
+      "residual-gouge",
+      "critical",
+      "blocked",
+      "OpenCAMLib evidence declares production residual closure before measured/swept-volume material-removal proof is complete.",
+      [
+        materialRemovalReadiness?.unsafeProductionClaim ? "materialRemovalReadiness.unsafeProductionClaim=true" : "",
+        unsafeContactResidualClaim ? "contact-residual-production-claim failed" : "",
+        ...(materialRemovalReadiness?.missingForProduction ?? [])
+      ]
+    );
+  }
   if (artifactManifest?.readyForImport !== true || handoffContract?.status !== "ready-for-hediao3d-import") {
     addGap(
       "hediao3d-import-contract-not-ready",
@@ -258,10 +352,14 @@ function createProductionGapReview({ level, missing, blockers, contactValidation
   const criticalCount = gaps.filter((gap) => gap.severity === "critical").length;
   const reviewCount = gaps.filter((gap) => gap.severity === "review").length;
   const productionBlockerCount = gaps.filter((gap) => gap.severity === "production-blocker").length;
+  const productionCandidateReady = criticalCount === 0 && level === "ready";
+  const downstreamProductionEvidenceReady = productionCandidateReady && reviewCount === 0 && productionBlockerCount === 0;
   return {
     schema: "hediao3d.opencamlib-production-gap-review.v1",
     level: criticalCount ? "blocked" : productionBlockerCount ? "candidate-ready-needs-downstream-evidence" : reviewCount ? "review" : level === "ready" ? "candidate-ready-for-downstream-evidence" : "blocked",
-    productionCandidateReady: criticalCount === 0 && level === "ready",
+    productionCandidateReady,
+    downstreamProductionEvidenceReady,
+    productionUnlockReady: false,
     criticalCount,
     reviewCount,
     productionBlockerCount,
@@ -329,7 +427,33 @@ function createContactValidationSummary(value) {
     warningCount: warnings.length,
     firstError: errors[0] ?? null,
     topErrors,
-    failedChecks
+    failedChecks,
+    productionCandidatePromotion: createProductionCandidatePromotionSummary(value.productionCandidatePromotion)
+  };
+}
+
+function createProductionCandidatePromotionSummary(promotion) {
+  if (!promotion || typeof promotion !== "object") return null;
+  return {
+    schema: promotion.schema ?? "hediao3d.opencamlib-production-candidate-promotion.v1",
+    status: promotion.status ?? "unknown",
+    productionCandidateReady: Boolean(promotion.productionCandidateReady),
+    productionUnlockReady: Boolean(promotion.productionUnlockReady),
+    evidenceClass: promotion.evidenceClass ?? null,
+    qualityLevel: promotion.qualityLevel ?? null,
+    criterionCount: Number(promotion.criterionCount ?? 0),
+    passedCount: Number(promotion.passedCount ?? 0),
+    blockingCount: Number(promotion.blockingCount ?? 0),
+    blockingCriteria: Array.isArray(promotion.blockingCriteria)
+      ? promotion.blockingCriteria.slice(0, 8).map((item) => ({
+        id: item?.id ?? "unknown-criterion",
+        layer: item?.layer ?? "unknown",
+        status: item?.status ?? "fail",
+        summary: item?.summary ?? ""
+      }))
+      : [],
+    nextActions: Array.isArray(promotion.nextActions) ? promotion.nextActions.slice(0, 4).map((item) => String(item)) : [],
+    productionBoundary: promotion.productionBoundary ?? "This promotion audit never unlocks production NC by itself."
   };
 }
 
@@ -366,25 +490,182 @@ function createFailedCheckEvidence(value, limit = 4) {
     .filter(Boolean);
 }
 
-function createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit }) {
+function createArtifactManifest({ files, outPath, bundlePath, contactValidation, machineFit, materialRemovalReadiness, downstreamEvidencePlan }) {
   const entries = [
     createManifestEntry("neutral-toolpath", files.neutral, "required", "HeDiao3D imports this neutral cutter-contact point path before rotary-Y postprocessing."),
     createManifestEntry("opencamlib-kernel-plan", files.plan, "required", "Hash-bound CAM kernel plan used by the real OpenCAMLib run."),
     createManifestEntry("cutter-contact-report", files.contact, "required", "Strict cutter-contact, tool, residual and identity evidence."),
+    createManifestEntry("camotics-local-validation", files.camoticsLocalValidation, "optional-proof", "Optional same-job CAMotics/equivalent local validation used only as a bound residual/gouge proof source for contact promotion."),
     createManifestEntry("source-model", files.model, "required", "Source/repaired mesh identity. The bundle records this hash but does not include the model by default."),
-    createManifestEntry("contact-output-validator", files.validator, "audit", "Validator script version used for this preflight."),
-    createManifestEntry("candidate-package-validation", createFileIdentity(outPath, "opencamlib-candidate-package-validation.json"), "generated", "This report."),
-    createManifestEntry("candidate-package-bundle", createFileIdentity(bundlePath, "opencamlib-candidate-package-bundle.zip"), "generated", "Lightweight evidence ZIP for job audit.")
+    createManifestEntry("contact-output-validator", files.validator, "audit", "Validator script version used for this preflight.")
   ];
   return {
     schema: "hediao3d.opencamlib-candidate-artifact-manifest.v1",
     readyForImport: contactValidation?.level === "ready" && machineFit?.level !== "critical" && entries.every((entry) => entry.required !== true || entry.exists),
     evidenceClass: contactValidation?.evidenceClass ?? "missing",
+    strictContactValidation: contactValidation ? createContactValidationSummary(contactValidation) : null,
     machineFitLevel: machineFit?.level ?? "missing",
+    machineFitSummary: machineFit?.summary ?? null,
+    materialRemovalReadiness,
+    downstreamEvidencePlan,
+    generatedArtifactTargets: {
+      candidatePackageValidation: createGeneratedArtifactTarget(outPath, "opencamlib-candidate-package-validation.json", "Disk validation report. Its contentSha256 uses report JSON with generatedArtifacts removed to avoid self-reference."),
+      candidatePackageBundle: createGeneratedArtifactTarget(bundlePath, "opencamlib-candidate-package-bundle.zip", "Lightweight evidence ZIP. Its final sha256 is recorded in generatedArtifacts after the ZIP is written.")
+    },
+    generatedArtifacts: null,
     entries,
     missingRequired: entries.filter((entry) => entry.required && !entry.exists).map((entry) => entry.filename ?? entry.kind),
     productionBoundary: "These artifacts can enter HeDiao3D as CAM evidence only; they do not bypass material-removal simulation, air-run, trial feedback or machine acceptance."
   };
+}
+
+function createDownstreamEvidencePlan({ level, contactValidation, machineFit, materialRemovalReadiness, blockers }) {
+  const candidateReady = level === "ready" && contactValidation?.level === "ready" && machineFit?.level !== "critical";
+  const materialSimulationReady = Boolean(materialRemovalReadiness?.readyForMaterialRemovalSimulation);
+  const residualClosed = Boolean(materialRemovalReadiness?.productionResidualEvidenceReady) && !materialRemovalReadiness?.unsafeProductionClaim;
+  const unsafeResidualClaim = Boolean(materialRemovalReadiness?.unsafeProductionClaim)
+    || Boolean(contactValidation?.failedChecks?.some((check) => check?.id === "contact-residual-production-claim"))
+    || Boolean(contactValidation?.checks?.some((check) => check?.id === "contact-residual-production-claim" && check?.status === "fail"));
+  const gate = (id, title, status, summary, requiredEvidence = []) => ({
+    id,
+    title,
+    status,
+    summary,
+    requiredEvidence: requiredEvidence.filter(Boolean).map((item) => String(item)).slice(0, 12)
+  });
+  const gates = [
+    gate(
+      "opencamlib-candidate-import",
+      "OpenCAMLib production-candidate import",
+      candidateReady ? "pass" : "blocked",
+      candidateReady
+        ? "Strict contact, identity and machine-fit preflight can enter HeDiao3D as CAM candidate evidence."
+        : "OpenCAMLib candidate cannot be imported as production-candidate evidence yet.",
+      candidateReady ? [] : blockers
+    ),
+    gate(
+      "material-removal-simulation",
+      "CAMotics/equivalent material-removal simulation",
+      candidateReady && materialSimulationReady ? "ready-to-run" : "blocked",
+      candidateReady && materialSimulationReady
+        ? "Run CAMotics or an equivalent material-removal simulator against this same candidate and job package."
+        : materialRemovalReadiness?.summary ?? "Material-removal simulation is not ready from this candidate package.",
+      ["camotics-result.json", "camotics-result-local-validation.json", "upstreamCamEvidence sha256 binding"]
+    ),
+    gate(
+      "residual-gouge-validation",
+      "Measured or swept-volume residual/gouge validation",
+      residualClosed ? "pass" : unsafeResidualClaim ? "blocked" : "needs-evidence",
+      residualClosed
+        ? "Residual/gouge production evidence is declared closed by measured or swept-volume/material-removal validation."
+        : unsafeResidualClaim
+          ? "Residual production closure was claimed unsafely; regenerate evidence before any production review."
+          : "Provide residualValidation with measured or swept-volume/material-removal validated gouge and undercut values.",
+      ["residualValidation.maxGougeMm", "residualValidation.maxUndercutMm", "validationBasis=measured or swept-volume-validated"]
+    ),
+    gate(
+      "local-validation-binding",
+      "Local validation bundle binding",
+      "needs-evidence",
+      "Import must include the validator's local result bundle so residual and material-removal claims are hash-bound to the same job.",
+      ["camotics-result-bundle.zip", "camotics-result-local-validation.json", "candidate package sha256"]
+    ),
+    gate(
+      "air-run-evidence",
+      "Rotary calibration and full air-run evidence",
+      "needs-field-evidence",
+      "Production remains locked until rotary calibration air-run and full off-material air-run are recorded against the same package hash.",
+      ["rotary-calibration-airrun.nc result", "air-run.nc result", "operator confirmation", "package-integrity sha256"]
+    ),
+    gate(
+      "trial-feedback",
+      "Low-risk soft-material trial feedback",
+      "needs-field-evidence",
+      "Production remains locked until low-risk trial carving feedback is recorded for the same job/package.",
+      ["trial material", "photos or inspection notes", "defects", "runtime/feed overrides"]
+    ),
+    gate(
+      "machine-acceptance",
+      "Machine/controller acceptance",
+      "needs-field-evidence",
+      "Production remains locked until the target controller, rotary-Y mapping and package hash are accepted for the actual machine.",
+      ["machine profile", "controller dialect", "rotary wrap calibration", "operator acceptance"]
+    )
+  ];
+  return {
+    schema: "hediao3d.opencamlib-downstream-evidence-plan.v1",
+    status: candidateReady
+      ? residualClosed
+        ? "candidate-ready-field-evidence-required"
+        : "candidate-ready-material-removal-required"
+      : "blocked-at-candidate-preflight",
+    productionUnlockReady: false,
+    candidateReady,
+    materialSimulationReady,
+    residualClosed,
+    unsafeResidualClaim,
+    gates,
+    nextUploads: [
+      "native-cam-real-output-bundle.zip",
+      "camotics-result-bundle.zip",
+      "air-run evidence",
+      "trial-feedback evidence",
+      "machine-acceptance evidence"
+    ],
+    productionBoundary: "This plan is an evidence checklist for the same job/package. It does not unlock production NC."
+  };
+}
+
+function createGeneratedArtifactTarget(path, fallbackName, description) {
+  return {
+    path,
+    filename: path ? basename(path) : fallbackName,
+    description
+  };
+}
+
+function attachGeneratedArtifactSummaries(report, outPath, bundlePath, bundleIdentity) {
+  const validationReport = {
+    path: outPath,
+    filename: basename(outPath),
+    contentSha256: createReportContentSha256(report),
+    digestBasis: "report-json-without-generatedArtifacts",
+    description: "Validation report content digest. This avoids self-referential hashes and never reuses stale on-disk output."
+  };
+  const candidatePackageBundle = bundleIdentity
+    ? {
+      path: bundleIdentity.path,
+      filename: bundleIdentity.filename,
+      exists: bundleIdentity.exists,
+      sizeBytes: bundleIdentity.sizeBytes,
+      sha256: bundleIdentity.sha256,
+      description: "Final ZIP identity after writing this run's candidate package bundle."
+    }
+    : {
+      path: bundlePath,
+      filename: basename(bundlePath),
+      exists: false,
+      sizeBytes: 0,
+      sha256: null,
+      description: "Final ZIP identity is populated in the disk report after the bundle is written."
+    };
+  report.generatedArtifacts = {
+    schema: "hediao3d.opencamlib-candidate-generated-artifacts.v1",
+    validationReport,
+    candidatePackageBundle
+  };
+  if (report.artifactManifest) {
+    report.artifactManifest.generatedArtifacts = report.generatedArtifacts;
+  }
+}
+
+function createReportContentSha256(report) {
+  const copy = JSON.parse(JSON.stringify(report));
+  delete copy.generatedArtifacts;
+  if (copy.artifactManifest && typeof copy.artifactManifest === "object") {
+    delete copy.artifactManifest.generatedArtifacts;
+  }
+  return createHash("sha256").update(JSON.stringify(copy, null, 2)).digest("hex");
 }
 
 function createManifestEntry(kind, identity, role, description) {
@@ -619,7 +900,8 @@ function createBundleFiles(report, reportPath, identities) {
     { name: "opencamlib-candidate-package-validation.json", content: Buffer.from(JSON.stringify(report, null, 2), "utf8") },
     { name: "opencamlib-candidate-artifact-manifest.json", content: Buffer.from(JSON.stringify(report.artifactManifest, null, 2), "utf8") },
     { name: "opencamlib-neutral-handoff-contract.json", content: Buffer.from(JSON.stringify(report.handoffContract, null, 2), "utf8") },
-    { name: "opencamlib-production-gap-review.json", content: Buffer.from(JSON.stringify(report.productionGapReview, null, 2), "utf8") }
+    { name: "opencamlib-production-gap-review.json", content: Buffer.from(JSON.stringify(report.productionGapReview, null, 2), "utf8") },
+    { name: "opencamlib-downstream-evidence-plan.json", content: Buffer.from(JSON.stringify(report.downstreamEvidencePlan, null, 2), "utf8") }
   ];
   for (const [key, identity] of Object.entries(identities)) {
     if (!identity.exists || key === "model" || key === "validator") continue;
@@ -643,6 +925,8 @@ function createBundleFiles(report, reportPath, identities) {
       "- The package is report-only until every HeDiao3D production gate passes.",
       "- The model file is not included by default; use the recorded sha256 to verify the exact source/repaired mesh.",
       "- opencamlib-production-gap-review.json lists the remaining CAM, machine, simulation and field-evidence gaps.",
+      "- opencamlib-downstream-evidence-plan.json lists the same-job evidence still required after this OpenCAMLib candidate.",
+      "- Production remains locked until material-removal, residual/gouge, air-run, trial feedback and machine acceptance are all hash-bound.",
       ""
     ].join("\n"), "utf8")
   });

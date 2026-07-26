@@ -1,5 +1,5 @@
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {
@@ -211,6 +211,8 @@ async function main() {
   });
   assert(feedback.productionEvidenceDossier?.crossChecks?.fieldEvidencePackageBinding?.status === "matched", "trial feedback and machine acceptance should bind the same package files");
   assert(feedback.productionEvidenceDossier.crossChecks.fieldEvidencePackageBinding.sharedFiles?.some((file) => file.filename === "toolpath.nc" && file.status === "matched"), "field package binding should include matched toolpath.nc");
+  assert(feedback.productionEvidenceDossier.crossChecks.fieldEvidenceCompleteness?.missingChecks?.includes("trial-photo-evidence"), "field completeness should require trial photo evidence before production field proof");
+  assert(feedback.productionEvidenceDossier.crossChecks.fieldEvidenceProofChain?.productionFieldEvidenceReady === false, "package-bound field evidence without complete trial photo evidence must not close production field proof");
   assert(feedback.productionClosureAudit?.steps?.some((step) => step.id === "trial-feedback-and-acceptance"), "feedback response should refresh production closure audit after field evidence binding");
 
   const deliveryManifest = await getArtifactJson(job.id, "delivery-manifest.json");

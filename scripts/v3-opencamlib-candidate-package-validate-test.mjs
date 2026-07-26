@@ -37,6 +37,8 @@ try {
   assert(readyReport.schema === "hediao3d.opencamlib-candidate-package-validation.v1", "candidate package schema mismatch");
   assert(readyReport.level === "ready", `ready candidate package level mismatch: ${readyReport.level}`);
   assert(readyReport.contactValidation?.level === "ready", "ready package should include ready contact validation");
+  assert(readyReport.contactValidation?.productionCandidatePromotion?.status === "production-candidate-ready", "ready package should preserve production candidate promotion audit");
+  assert(readyReport.contactValidation?.productionCandidatePromotion?.productionUnlockReady === false, "package promotion audit must preserve production lock");
   assert(readyReport.machineFit?.schema === "hediao3d.opencamlib-candidate-machine-fit-preflight.v1", "ready package should include machine-fit preflight");
   assert(["ok", "review"].includes(readyReport.machineFit?.level), `ready machine-fit should be ok/review, got ${readyReport.machineFit?.level}`);
   assert(readyReport.artifactManifest?.machineFitLevel === readyReport.machineFit.level, "artifact manifest should expose machine-fit level");
@@ -47,10 +49,107 @@ try {
   assert(readyReport.handoffContract?.strictAcceptance?.neutralHashBound === true, "ready handoff contract should confirm neutral hash binding");
   assert(readyReport.handoffContract?.strictAcceptance?.machineFitLevel === readyReport.machineFit.level, "handoff contract should expose machine-fit level");
   assert(readyReport.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "ready package should include production gap review");
-  assert(readyReport.productionGapReview?.productionCandidateReady === true, "ready package should clear OpenCAMLib production gap review");
+  assert(readyReport.productionGapReview?.productionCandidateReady === true, "ready package should expose OpenCAMLib candidate import readiness");
+  assert(readyReport.productionGapReview?.downstreamProductionEvidenceReady === false, "candidate package should not claim downstream production evidence while residual proof is open");
+  assert(readyReport.productionGapReview?.productionUnlockReady === false, "candidate package gap review must never unlock production by itself");
+  assert(readyReport.downstreamEvidencePlan?.schema === "hediao3d.opencamlib-downstream-evidence-plan.v1", "ready package should include downstream evidence plan");
+  assert(readyReport.downstreamEvidencePlan?.status === "candidate-ready-material-removal-required", `ready downstream evidence plan status mismatch: ${readyReport.downstreamEvidencePlan?.status}`);
+  assert(readyReport.downstreamEvidencePlan?.productionUnlockReady === false, "downstream evidence plan must never unlock production by itself");
+  assert(readyReport.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "material-removal-simulation" && gate.status === "ready-to-run"), "downstream plan should mark material-removal simulation as ready-to-run");
+  assert(readyReport.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "residual-gouge-validation" && gate.status === "needs-evidence"), "downstream plan should keep residual/gouge validation open");
+  assert(readyReport.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "air-run-evidence" && gate.status === "needs-field-evidence"), "downstream plan should require air-run evidence");
+  assert(readyReport.artifactManifest?.downstreamEvidencePlan?.schema === "hediao3d.opencamlib-downstream-evidence-plan.v1", "artifact manifest should mirror downstream evidence plan");
   assert(readyReport.files.neutral?.sha256 === sha256File(neutralPath), "ready package should hash neutral output");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-validation.json")), "candidate package report should be written");
   assert(existsSync(join(workDir, "opencamlib-candidate-package-bundle.zip")), "candidate package bundle should be written");
+  const readyDiskReport = JSON.parse(readFileSync(join(workDir, "opencamlib-candidate-package-validation.json"), "utf8"));
+  const readyBundlePath = join(workDir, "opencamlib-candidate-package-bundle.zip");
+  assert(readyReport.generatedArtifacts?.schema === "hediao3d.opencamlib-candidate-generated-artifacts.v1", "ready package should expose generated artifact identities");
+  assert(readyReport.generatedArtifacts?.candidatePackageBundle?.sha256 === sha256File(readyBundlePath), "stdout report should hash the freshly written candidate bundle");
+  assert(readyDiskReport.generatedArtifacts?.candidatePackageBundle?.sha256 === sha256File(readyBundlePath), "disk report should hash the freshly written candidate bundle");
+  assert(readyReport.generatedArtifacts?.validationReport?.contentSha256 === readyReport.artifactManifest?.generatedArtifacts?.validationReport?.contentSha256, "artifact manifest should mirror validation report content digest");
+  const readyBundleManifest = readZipJson(readFileSync(readyBundlePath), "opencamlib-candidate-artifact-manifest.json");
+  assert(readyBundleManifest.strictContactValidation?.level === "ready", "bundle manifest should preserve strict contact validation summary");
+  assert(readyBundleManifest.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "bundle manifest should preserve material-removal simulation readiness");
+  assert(readyBundleManifest.materialRemovalReadiness?.productionResidualEvidenceReady === false, "bundle manifest should preserve residual production boundary");
+  assert(readyBundleManifest.downstreamEvidencePlan?.productionUnlockReady === false, "bundle manifest should preserve downstream production lock");
+  assert(readyBundleManifest.generatedArtifacts?.candidatePackageBundle?.sha256 === null, "bundle manifest must not reuse stale bundle sha before the ZIP exists");
+  const readyBundleEvidencePlan = readZipJson(readFileSync(readyBundlePath), "opencamlib-downstream-evidence-plan.json");
+  assert(readyBundleEvidencePlan.gates?.some((gate) => gate.id === "machine-acceptance" && gate.status === "needs-field-evidence"), "bundle should include machine acceptance gate in downstream evidence plan");
+  const readyBundleReadme = readZipText(readFileSync(readyBundlePath), "README-OPENCAMLIB-CANDIDATE.md");
+  assert(readyBundleReadme.includes("opencamlib-downstream-evidence-plan.json"), "candidate README should mention downstream evidence plan");
+  assert(readyBundleReadme.includes("Production remains locked"), "candidate README should preserve production lock language");
+
+  const boundResidualProofDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-bound-residual-proof-"));
+  const boundResidualModelPath = join(boundResidualProofDir, "repaired-model.stl");
+  const boundResidualPlanPath = join(boundResidualProofDir, "opencamlib-kernel-plan.json");
+  const boundResidualNeutralPath = join(boundResidualProofDir, "neutral-toolpath.json");
+  const boundResidualContactPath = join(boundResidualProofDir, "opencamlib-cutter-contact-report.json");
+  writeFileSync(boundResidualModelPath, createStl(), "utf8");
+  writeFileSync(boundResidualPlanPath, JSON.stringify(createPlan(boundResidualModelPath), null, 2), "utf8");
+  const boundResidualNeutral = createNeutral(boundResidualContactPath);
+  const boundResidualNeutralSha = sha256JsonWithoutContact(boundResidualNeutral);
+  const boundResidualContact = createContact({
+    modelSha: sha256File(boundResidualModelPath),
+    planSha: sha256File(boundResidualPlanPath),
+    neutralSha: boundResidualNeutralSha,
+    externalResidualProofRequired: true
+  });
+  boundResidualNeutral.cutterContactReport = boundResidualContact;
+  writeFileSync(boundResidualNeutralPath, JSON.stringify(boundResidualNeutral, null, 2), "utf8");
+  writeFileSync(boundResidualContactPath, JSON.stringify(boundResidualContact, null, 2), "utf8");
+  writeFileSync(join(boundResidualProofDir, "camotics-result-local-validation.json"), JSON.stringify(createCamoticsLocalValidation(), null, 2), "utf8");
+  const boundResidualProof = spawnSync(node, [validator, "--root", boundResidualProofDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(boundResidualProof.status === 0, `bound residual proof package should pass strict mode, got ${boundResidualProof.status}: ${boundResidualProof.stdout}`);
+  const boundResidualProofReport = JSON.parse(boundResidualProof.stdout);
+  assert(boundResidualProofReport.contactValidation?.productionCandidatePromotion?.status === "production-candidate-ready", "bound residual proof package should preserve ready promotion");
+  assert(boundResidualProofReport.contactValidation?.failedCheckCount === 0, "bound residual proof package should have no failed contact checks");
+  assert(boundResidualProofReport.files?.camoticsLocalValidation?.exists === true, "candidate package should auto-discover camotics-result-local-validation.json");
+  assert(boundResidualProofReport.artifactManifest?.entries?.some((entry) => entry.kind === "camotics-local-validation" && entry.exists === true && entry.required === false), "artifact manifest should record optional residual proof file");
+  assert(boundResidualProofReport.materialRemovalReadiness?.productionResidualEvidenceReady === true, "bound residual proof should close candidate residual readiness");
+  assert(boundResidualProofReport.materialRemovalReadiness?.residualProofSource?.ready === true, "candidate package should expose bound residual proof source");
+  assert(boundResidualProofReport.downstreamEvidencePlan?.status === "candidate-ready-field-evidence-required", `bound residual proof should move downstream plan to field evidence, got ${boundResidualProofReport.downstreamEvidencePlan?.status}`);
+  assert(boundResidualProofReport.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "residual-gouge-validation" && gate.status === "pass"), "downstream plan should mark residual/gouge validation pass from bound proof");
+  assert(boundResidualProofReport.downstreamEvidencePlan?.productionUnlockReady === false, "bound residual proof must not unlock production");
+  rmSync(boundResidualProofDir, { recursive: true, force: true });
+
+  const unsafeResidualClaimDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-unsafe-residual-claim-"));
+  const unsafeResidualClaimModelPath = join(unsafeResidualClaimDir, "repaired-model.stl");
+  const unsafeResidualClaimPlanPath = join(unsafeResidualClaimDir, "opencamlib-kernel-plan.json");
+  const unsafeResidualClaimNeutralPath = join(unsafeResidualClaimDir, "neutral-toolpath.json");
+  const unsafeResidualClaimContactPath = join(unsafeResidualClaimDir, "opencamlib-cutter-contact-report.json");
+  writeFileSync(unsafeResidualClaimModelPath, createStl(), "utf8");
+  writeFileSync(unsafeResidualClaimPlanPath, JSON.stringify(createPlan(unsafeResidualClaimModelPath), null, 2), "utf8");
+  const unsafeResidualClaimNeutral = createNeutral(unsafeResidualClaimContactPath);
+  const unsafeResidualClaimNeutralSha = sha256JsonWithoutContact(unsafeResidualClaimNeutral);
+  const unsafeResidualClaimContact = createContact({
+    modelSha: sha256File(unsafeResidualClaimModelPath),
+    planSha: sha256File(unsafeResidualClaimPlanPath),
+    neutralSha: unsafeResidualClaimNeutralSha,
+    unsafeResidualProductionClaim: true
+  });
+  unsafeResidualClaimNeutral.cutterContactReport = unsafeResidualClaimContact;
+  writeFileSync(unsafeResidualClaimNeutralPath, JSON.stringify(unsafeResidualClaimNeutral, null, 2), "utf8");
+  writeFileSync(unsafeResidualClaimContactPath, JSON.stringify(unsafeResidualClaimContact, null, 2), "utf8");
+  const unsafeResidualClaim = spawnSync(node, [validator, "--root", unsafeResidualClaimDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(unsafeResidualClaim.status === 3, `unsafe residual production claim package should fail strict mode, got ${unsafeResidualClaim.status}: ${unsafeResidualClaim.stdout}`);
+  const unsafeResidualClaimReport = JSON.parse(unsafeResidualClaim.stdout);
+  assert(unsafeResidualClaimReport.level === "critical", "unsafe residual production claim package should be critical");
+  assert(unsafeResidualClaimReport.materialRemovalReadiness?.unsafeProductionClaim === true, "candidate package should preserve unsafe material-removal production claim");
+  assert(unsafeResidualClaimReport.contactValidation?.failedChecks?.some((check) => check.id === "contact-residual-production-claim"), "candidate package should expose failed residual production claim check");
+  assert(unsafeResidualClaimReport.productionGapReview?.gaps?.some((gap) => gap.id === "unsafe-residual-production-claim" && gap.severity === "critical"), "candidate package gap review should flag unsafe residual production claim");
+  assert(unsafeResidualClaimReport.productionGapReview?.gaps?.some((gap) => gap.id === "strict-contact-validation-not-ready"), "unsafe residual production claim should keep strict contact validation blocked");
+  assert(unsafeResidualClaimReport.downstreamEvidencePlan?.unsafeResidualClaim === true, "downstream evidence plan should preserve unsafe residual claim");
+  assert(unsafeResidualClaimReport.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "residual-gouge-validation" && gate.status === "blocked"), "downstream evidence plan should block unsafe residual claim");
+  rmSync(unsafeResidualClaimDir, { recursive: true, force: true });
 
   const blockedDir = mkdtempSync(join(tmpdir(), "hediao3d-opencamlib-candidate-package-blocked-"));
   writeFileSync(join(blockedDir, "repaired-model.stl"), createStl(), "utf8");
@@ -168,6 +267,8 @@ try {
   const experimentalReport = JSON.parse(experimental.stdout);
   assert(experimentalReport.level === "critical", "experimental package should be critical in strict candidate preflight");
   assert(experimentalReport.contactValidation?.evidenceClass === "experimental-real-api", "experimental package should expose contact evidence class");
+  assert(experimentalReport.contactValidation?.productionCandidatePromotion?.status === "blocked", "experimental package should preserve blocked promotion audit");
+  assert(experimentalReport.contactValidation?.productionCandidatePromotion?.blockingCriteria?.some((item) => item.id === "experimental-real-api-boundary"), "experimental package promotion audit should name experimental boundary");
   assert(experimentalReport.contactValidation?.topErrors?.some((item) => /experimental OpenCAMLib real API/.test(item)), "experimental package should expose strict contact top errors");
   assert(experimentalReport.contactValidation?.failedChecks?.some((check) => check.id === "experimental-real-api-boundary"), "experimental package should expose failed experimental boundary check");
   assert(experimentalReport.artifactManifest?.evidenceClass === "experimental-real-api", "experimental artifact manifest should expose evidence class");
@@ -250,7 +351,7 @@ function createNeutralWithoutRotary(contactPath) {
   };
 }
 
-function createContact({ modelSha, planSha, neutralSha }) {
+function createContact({ modelSha, planSha, neutralSha, unsafeResidualProductionClaim = false, externalResidualProofRequired = false }) {
   return {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     jobId: "candidate-package-test",
@@ -285,11 +386,29 @@ function createContact({ modelSha, planSha, neutralSha }) {
       }
     },
     residualMaterial: {
-      measured: true,
-      validationBasis: "swept-volume-validated-fixture",
-      maxGougeMm: 0.01,
-      maxUndercutMm: 0.03,
+      measured: !unsafeResidualProductionClaim && !externalResidualProofRequired,
+      validationBasis: unsafeResidualProductionClaim || externalResidualProofRequired ? "engineering-estimate" : "swept-volume-validated-fixture",
+      productionResidualEvidenceReady: unsafeResidualProductionClaim,
+      ...(externalResidualProofRequired ? {} : {
+        maxGougeMm: 0.01,
+        maxUndercutMm: 0.03
+      }),
       residualVolumeMm3: 0.4
+    },
+    materialRemovalReadiness: {
+      schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+      level: "ready-for-camotics-or-equivalent",
+      readyForMaterialRemovalSimulation: true,
+      productionResidualEvidenceReady: unsafeResidualProductionClaim,
+      simulationQuality: {
+        schema: "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+        level: "engineering",
+        engineeringSimulationAllowed: true,
+        productionEvidenceAllowed: false,
+        risks: ["requires-camotics-or-equivalent-material-removal-validation"]
+      },
+      missingForProduction: ["camotics-result.json or equivalent material-removal result", "air-run/trial evidence"],
+      summary: "OpenCAMLib candidate can feed downstream material-removal simulation, but production residual evidence remains open."
     },
     tolerances: {
       maxGougeMm: 0.03,
@@ -376,6 +495,76 @@ function sha256JsonWithoutContact(value) {
 
 function sha256Text(text) {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function createCamoticsLocalValidation() {
+  return {
+    schema: "hediao3d.camotics-result-local-validation.v1",
+    ok: true,
+    level: "ready",
+    residualValidation: {
+      schema: "hediao3d.residual-validation.v1",
+      status: "ready",
+      productionResidualEvidenceReady: true,
+      unsafeProductionClaim: false,
+      measured: false,
+      validationBasis: "material-removal-validated",
+      evidenceClass: "swept-volume",
+      maxGougeMm: 0.01,
+      maxUndercutMm: 0.03,
+      maxResidualStockMm: 0.06
+    },
+    residualProofChain: {
+      schema: "hediao3d.camotics-residual-proof-chain.v1",
+      status: "production-residual-proof-bound",
+      productionResidualEvidenceReady: true,
+      unsafeProductionClaim: false,
+      upstreamCamEvidence: {
+        status: "matched",
+        candidatePackageStatus: "matched",
+        machineFitStatus: "matched",
+        materialReadinessStatus: "matched"
+      },
+      residualValidation: {
+        status: "ready",
+        measured: false,
+        validationBasis: "material-removal-validated",
+        evidenceClass: "swept-volume",
+        maxGougeMm: 0.01,
+        maxUndercutMm: 0.03,
+        maxResidualStockMm: 0.06
+      }
+    }
+  };
+}
+
+function readZipJson(bytes, filename) {
+  return JSON.parse(readZipText(bytes, filename));
+}
+
+function readZipText(bytes, filename) {
+  let offset = 0;
+  while (offset < bytes.length - 4) {
+    const signature = bytes.readUInt32LE(offset);
+    if (signature === 0x04034b50) {
+      const compressedSize = bytes.readUInt32LE(offset + 18);
+      const fileNameLength = bytes.readUInt16LE(offset + 26);
+      const extraLength = bytes.readUInt16LE(offset + 28);
+      const nameStart = offset + 30;
+      const nameEnd = nameStart + fileNameLength;
+      const name = bytes.subarray(nameStart, nameEnd).toString("utf8");
+      const contentStart = nameEnd + extraLength;
+      const contentEnd = contentStart + compressedSize;
+      if (name === filename) {
+        return bytes.subarray(contentStart, contentEnd).toString("utf8");
+      }
+      offset = contentEnd;
+      continue;
+    }
+    if (signature === 0x02014b50 || signature === 0x06054b50) break;
+    offset += 1;
+  }
+  throw new Error(`ZIP entry not found: ${filename}`);
 }
 
 function assert(condition, message) {

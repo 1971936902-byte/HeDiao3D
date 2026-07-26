@@ -87,7 +87,7 @@ blockers=[]
 
 ```text
 jobId=970989c4-c357-4360-94e8-931fa3e55bab
-model=/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl
+model=/meshy-results/material01-meshy.stl
 toolpathPoints=8979
 packageLevel=trial-only
 allowAirRun=true
@@ -268,8 +268,8 @@ packageLevel=blocked
 已将本地固定佛头样件同步到服务器：
 
 ```text
-/opt/hediao3d/public/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb
-/opt/hediao3d/public/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl
+/opt/hediao3d/public/meshy-results/material01-meshy.glb
+/opt/hediao3d/public/meshy-results/material01-meshy.stl
 ```
 
 验证：
@@ -465,4 +465,64 @@ npm run test:v3:camotics-result-api
 npm run test:v3:opencamlib-contact-validate
 npm run test:v3:opencamlib-candidate-package
 npm run test:v3:native-cam-package-self-check
+```
+
+## 2026-07-26 新 Linux 环境接入复核
+
+用户提供的新 SSH 环境已验证可登录，但初始状态不是此前文档中的 `/opt/hediao3d` 部署目录。已在新环境重新建立 V3 工作区：
+
+```text
+系统: Ubuntu 22.04.3 LTS
+主机名: ubuntu22
+项目路径: /opt/hediao3d/HeDiao3D
+Node.js: v20.20.2
+npm: 10.8.2
+分支: HeDiao3D_V3
+```
+
+已完成：
+
+```bash
+git clone --branch HeDiao3D_V3 https://github.com/1971936902-byte/HeDiao3D.git /opt/hediao3d/HeDiao3D
+npm ci --no-audit --no-fund
+python3 -m pip install opencamlib
+```
+
+本次服务器侧验证：
+
+```text
+npm run test:v3:architecture: 通过
+npm run test:v3:machine-contract: 通过
+npm run test:v3:mvp-basic: 通过
+npm run test:v3:mvp-release: 通过
+npm run build: 通过
+npm run test:v3:opencamlib-probe: 通过，level=ready，selectedModule=opencamlib.ocl，dropCutterReady=true
+npm run test:v3:opencamlib-contact-spike: 通过，level=ready，checks=8
+npm run test:v3:opencamlib-runner: 通过，readinessLevel=ready-for-real-contact-runner
+npm run test:v3:native-cam-package-self-check: 通过，readyLevel=ready，checks=88，diagnosticsLevel=ready
+npm run test:v3:opencamlib-small-loop: 通过，resultEngine=opencamlib，neutralPoints=48，packageLevel=blocked，production=false
+```
+
+Native CAM 总检查从初始缺失推进到 OpenCAMLib 单项可用：
+
+```text
+安装前:
+level=missing
+ready=0/4
+blocked=FreeCAD, BlenderCAM/FabexCNC, OpenCAMLib, CAMotics
+
+安装 OpenCAMLib 后:
+level=partial
+ready=1/4
+ready=OpenCAMLib
+blocked=FreeCAD CAM, BlenderCAM/FabexCNC, CAMotics
+```
+
+当前结论：
+
+```text
+1. 新 Linux 环境已经可以作为 OpenCAMLib P0 真实候选链路的基础环境。
+2. 服务器还不能宣称 Native CAM 全就绪；FreeCAD、Blender/FabexCNC、CAMotics 仍缺安装或命令探测。
+3. 即使 OpenCAMLib runtime/probe/contact spike/runner contract 已 ready，正式生产 NC 仍保持 fail-closed。
+4. 下一步应优先在该服务器继续跑 OpenCAMLib real-candidate 输入包和候选包预检，再补 CAMotics 或等效材料去除仿真。
 ```

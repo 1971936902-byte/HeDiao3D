@@ -707,7 +707,16 @@ function createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, ada
   const trialFeedbackReady = Boolean(latestTrialFeedback?.latestOutcome === "success" && latestTrialFeedback?.latestDownloadIntegrityBound === "matched");
   const machineAcceptanceReady = Boolean(latestMachineAcceptance?.latestOutcome === "success" && latestMachineAcceptance?.latestAllRequiredPassed && latestMachineAcceptance?.latestDownloadIntegrityBound === "matched");
   const fieldReady = trialFeedbackReady && machineAcceptanceReady;
-  const productionAuditReady = Boolean(latestEvidenceDossier?.crossChecks?.productionReadinessAudit?.allowProductionPackage === true);
+  const productionAudit = latestEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const productionAuditReady = Boolean(productionAudit?.allowProductionPackage === true);
+  const productionAuditGates = Array.isArray(productionAudit?.gates) ? productionAudit.gates : [];
+  const productionAuditGateById = new Map(productionAuditGates.map((gate) => [gate.id, gate]));
+  const materialRemovalGate = productionAudit?.materialRemovalGate
+    ?? createEvidenceReviewAuditGateSummary(productionAuditGateById.get("material-removal-proof"));
+  const airRunGate = productionAudit?.airRunGate
+    ?? createEvidenceReviewAuditGateSummary(productionAuditGateById.get("air-run-proof"));
+  const fieldPackageGate = productionAudit?.fieldPackageGate
+    ?? createEvidenceReviewAuditGateSummary(productionAuditGateById.get("field-package-proof"));
 
   const layers = [
     createV3GoalAuditLayer({
@@ -813,11 +822,17 @@ function createV3GoalAudit({ gates, diagnostics, nativeCam, camServerConfig, ada
       evidence: [
         `试雕反馈: ${latestTrialFeedback?.recordCount ?? 0} / ${latestTrialFeedback?.latestOutcome ?? "missing"} / bound=${latestTrialFeedback?.latestDownloadIntegrityBound ?? "missing"}`,
         `机床验收: ${latestMachineAcceptance?.recordCount ?? 0} / ${latestMachineAcceptance?.latestOutcome ?? "missing"} / bound=${latestMachineAcceptance?.latestDownloadIntegrityBound ?? "missing"}`,
-        `productionReadinessAudit: ${latestEvidenceDossier?.crossChecks?.productionReadinessAudit?.status ?? "missing"} / allow=${productionAuditReady ? "yes" : "no"}`
+        `productionReadinessAudit: ${productionAudit?.status ?? "missing"} / allow=${productionAuditReady ? "yes" : "no"}`,
+        `材料去除/残料门禁: ${formatReadinessMaterialRemovalGate(materialRemovalGate)}`,
+        `离料空跑门禁: ${airRunGate ? `${airRunGate.status ?? "unknown"} / evidence=${airRunGate.airRunEvidenceStatus ?? airRunGate.evidenceStatus ?? "missing"} / packageBinding=${airRunGate.airRunPackageBindingStatus ?? airRunGate.packageBindingStatus ?? "missing"}` : "missing"}`,
+        `现场同包门禁: ${fieldPackageGate ? `${fieldPackageGate.status ?? "unknown"} / binding=${fieldPackageGate.fieldBindingStatus ?? fieldPackageGate.bindingStatus ?? "missing"} / machine=${fieldPackageGate.machineBindingStatus ?? "missing"} / trial=${fieldPackageGate.trialBindingStatus ?? "missing"}` : "missing"}`
       ],
       missing: [
         ...(!trialFeedbackReady ? ["缺少成功且绑定当前下载包哈希的试雕反馈"] : []),
         ...(!machineAcceptanceReady ? ["缺少成功且绑定当前下载包哈希的机床验收"] : []),
+        ...(materialRemovalGate?.status === "pass" ? [] : [`材料去除/残料门禁未通过：${materialRemovalGate?.summary ?? "missing"}`]),
+        ...(airRunGate?.status === "pass" ? [] : [`离料空跑门禁未通过：${airRunGate?.summary ?? "missing"}`]),
+        ...(fieldPackageGate?.status === "pass" ? [] : [`现场同包门禁未通过：${fieldPackageGate?.summary ?? "missing"}`]),
         ...(!productionAuditReady ? ["productionReadinessAudit 尚未允许正式生产包"] : [])
       ],
       nextActions: [
@@ -999,9 +1014,9 @@ function createV3ReadinessGates({ diagnostics, nativeCam, adapterValidation, nat
     if (runbookResult.failedSteps.some((step) => step.blocksProduction)) blockers.push(message);
     else warnings.push(message);
     nextActions.push("查看 runbook result JSON，优先修复失败步骤后重新运行验收脚本。");
-  } else if (!runbookResult.productionSafe) {
-    blockers.push("V3 验收脚本已执行，但生产安全标记未通过。");
-    nextActions.push("确认 runbook 的 blockingFailedCount 为 0 且 productionSafe=true 后再重新生成总门禁。");
+  } else if (!runbookResult.runbookReviewSafe) {
+    blockers.push("V3 验收脚本已执行，但脚本结果或 Linux 证据链尚不可作为审查证据。");
+    nextActions.push("确认 runbook 的 blockingFailedCount 为 0、身份绑定有效、Linux evidenceChain 为 ready-for-review 后再重新生成总门禁。");
   }
 
   if (!externalHandoff) {
@@ -1954,6 +1969,16 @@ function createProductionEvidenceCrossChecksFromArtifacts(workDir) {
 }
 
 function createProductionEvidenceCrossChecksSummary(crossChecks) {
+  const productionReadinessAudit = crossChecks.productionReadinessAudit ?? null;
+  const productionReadinessGates = Array.isArray(productionReadinessAudit?.gates) ? productionReadinessAudit.gates : [];
+  const productionReadinessGateById = new Map(productionReadinessGates.map((gate) => [gate.id, gate]));
+  const fieldPackageGateSummary = productionReadinessAudit?.fieldPackageGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("field-package-proof"));
+  const fieldCompletenessSource = crossChecks.fieldEvidenceCompleteness && typeof crossChecks.fieldEvidenceCompleteness === "object"
+    ? crossChecks.fieldEvidenceCompleteness
+    : crossChecks.fieldEvidenceProofChain?.fieldCompleteness && typeof crossChecks.fieldEvidenceProofChain.fieldCompleteness === "object"
+      ? crossChecks.fieldEvidenceProofChain.fieldCompleteness
+      : null;
   return {
     unlockMatrixPass: Boolean(crossChecks.unlockMatrixPass),
     realMaterialRemovalVerified: Boolean(crossChecks.realMaterialRemovalVerified),
@@ -1978,19 +2003,32 @@ function createProductionEvidenceCrossChecksSummary(crossChecks) {
     machineAcceptanceIntegrityBound: Boolean(crossChecks.machineAcceptanceIntegrityBound),
     rotaryCalibrationPassed: Boolean(crossChecks.rotaryCalibrationPassed),
     rotaryCalibrationStatus: crossChecks.rotaryCalibrationStatus ?? "missing",
+    fieldEvidenceCompletenessStatus: fieldCompletenessSource?.status ?? crossChecks.fieldEvidenceProofChain?.fieldCompletenessStatus ?? fieldPackageGateSummary?.fieldCompletenessStatus ?? "missing",
+    fieldEvidenceCompletenessMissingCount: Number(fieldCompletenessSource?.missingCount ?? fieldPackageGateSummary?.fieldCompletenessMissingCount ?? 0),
+    fieldEvidenceCompletenessMissingChecks: Array.isArray(fieldCompletenessSource?.missingChecks)
+      ? fieldCompletenessSource.missingChecks.slice(0, 8)
+      : Array.isArray(fieldPackageGateSummary?.fieldCompletenessMissingChecks)
+        ? fieldPackageGateSummary.fieldCompletenessMissingChecks.slice(0, 8)
+        : [],
     trialFeedbackRecords: Number(crossChecks.trialFeedbackRecords ?? 0),
     latestTrialFeedbackOutcome: crossChecks.latestTrialFeedbackOutcome ?? null,
     trialFeedbackPassed: Boolean(crossChecks.trialFeedbackPassed),
     trialFeedbackIntegrityBound: Boolean(crossChecks.trialFeedbackIntegrityBound),
-    productionReadinessAudit: crossChecks.productionReadinessAudit
+    productionReadinessAudit: productionReadinessAudit
       ? {
-        schema: crossChecks.productionReadinessAudit.schema ?? "hediao3d.production-readiness-audit.v1",
-        status: crossChecks.productionReadinessAudit.status ?? "unknown",
-        allowProductionPackage: Boolean(crossChecks.productionReadinessAudit.allowProductionPackage),
-        passCount: Number(crossChecks.productionReadinessAudit.passCount ?? 0),
-        reviewCount: Number(crossChecks.productionReadinessAudit.reviewCount ?? 0),
-        blockCount: Number(crossChecks.productionReadinessAudit.blockCount ?? 0),
-        summary: crossChecks.productionReadinessAudit.summary ?? null
+        schema: productionReadinessAudit.schema ?? "hediao3d.production-readiness-audit.v1",
+        status: productionReadinessAudit.status ?? "unknown",
+        allowProductionPackage: Boolean(productionReadinessAudit.allowProductionPackage),
+        passCount: Number(productionReadinessAudit.passCount ?? 0),
+        reviewCount: Number(productionReadinessAudit.reviewCount ?? 0),
+        blockCount: Number(productionReadinessAudit.blockCount ?? 0),
+        summary: productionReadinessAudit.summary ?? null,
+        materialRemovalGate: productionReadinessAudit.materialRemovalGate
+          ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("material-removal-proof")),
+        airRunGate: productionReadinessAudit.airRunGate
+          ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("air-run-proof")),
+        fieldPackageGate: productionReadinessAudit.fieldPackageGate
+          ?? fieldPackageGateSummary
       }
       : null,
     optimizationStatus: crossChecks.optimizationStatus ?? null
@@ -2312,12 +2350,15 @@ function createNativeCamRealOutputAcceptancePublicSummary(report, acceptanceId) 
       })) : [],
       contactValidationPathCoverage: report.openCamLibRealCandidate.contactValidationPathCoverage ?? null,
       protectedZones: report.openCamLibRealCandidate.protectedZones ?? null,
+      productionCandidatePromotion: createOpenCamLibProductionCandidatePromotionSummary(report.openCamLibRealCandidate.productionCandidatePromotion),
       candidateMachineFit: report.openCamLibRealCandidate.candidateMachineFit ?? null,
       materialRemovalReadiness: report.openCamLibRealCandidate.materialRemovalReadiness ?? null,
       candidatePackageLevel: report.openCamLibRealCandidate.candidatePackageLevel ?? null,
       candidatePackageBlockedReason: report.openCamLibRealCandidate.candidatePackageBlockedReason ?? null,
       candidateReadyForImport: Boolean(report.openCamLibRealCandidate.candidateReadyForImport),
       productionGapReview: createOpenCamLibProductionGapReviewSummary(report.openCamLibRealCandidate.productionGapReview),
+      downstreamEvidencePlan: createOpenCamLibDownstreamEvidencePlanSummary(report.openCamLibRealCandidate.downstreamEvidencePlan),
+      nextProductionCandidateActions: createOpenCamLibNextProductionCandidateActionsSummary(report.openCamLibRealCandidate.nextProductionCandidateActions),
       blockingCount: Number(report.openCamLibRealCandidate.blockingCount ?? 0),
       firstBlocking: report.openCamLibRealCandidate.firstBlocking ?? null,
       sha256: report.openCamLibRealCandidate.sha256 ?? null
@@ -2394,7 +2435,10 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
   const protectedZones = report.protectedZones ?? null;
   const candidateMachineFit = report.candidateMachineFit ?? null;
   const materialRemovalReadiness = report.materialRemovalReadiness ?? null;
+  const productionCandidatePromotion = createOpenCamLibProductionCandidatePromotionSummary(report.productionCandidatePromotion);
   const productionGapReview = createOpenCamLibProductionGapReviewSummary(report.productionGapReview);
+  const downstreamEvidencePlan = createOpenCamLibDownstreamEvidencePlanSummary(report.downstreamEvidencePlan);
+  const nextProductionCandidateActions = createOpenCamLibNextProductionCandidateActionsSummary(report.nextProductionCandidateActions);
   const topErrors = Array.isArray(report.contactValidationTopErrors)
     ? report.contactValidationTopErrors.slice(0, 6).map((item) => String(item))
     : createContactValidationTopErrors(report.contactValidation);
@@ -2419,20 +2463,94 @@ function createOpenCamLibRealCandidateStatus(realCandidate) {
     productionLocked: report.productionLocked !== false,
     contactValidationLevel: report.contactValidationLevel ?? null,
     contactEvidenceClass: report.contactEvidenceClass ?? null,
-    contactValidationTopErrors: topErrors,
-    contactValidationFailedChecks: failedChecks,
-    contactValidationPathCoverage,
-    protectedZones,
-    candidateMachineFit,
-    materialRemovalReadiness,
-    productionGapReview,
+    firstContactValidationError: topErrors[0] ?? null,
+    firstContactValidationFailedCheck: failedChecks[0]
+      ? {
+          id: failedChecks[0].id,
+          status: failedChecks[0].status,
+          summary: String(failedChecks[0].summary ?? "").slice(0, 160)
+        }
+      : null,
+    contactValidationPathCoverage: contactValidationPathCoverage ? {
+      schema: contactValidationPathCoverage.schema ?? "hediao3d.opencamlib-contact-path-coverage-summary.v1",
+      status: contactValidationPathCoverage.status ?? "missing",
+      ready: Boolean(contactValidationPathCoverage.ready)
+    } : null,
+    protectedZones: protectedZones ? {
+      schema: protectedZones.schema ?? "hediao3d.opencamlib-protected-zones-summary.v1",
+      status: protectedZones.status ?? "missing",
+      ready: Boolean(protectedZones.ready)
+    } : null,
+    productionCandidatePromotion,
+    machineFitLevel: candidateMachineFit?.level ?? null,
+    materialRemovalReadinessLevel: materialRemovalReadiness?.level ?? null,
+    materialRemovalReadyForSimulation: Boolean(materialRemovalReadiness?.readyForMaterialRemovalSimulation),
+    productionGapReview: productionGapReview ? {
+      schema: productionGapReview.schema,
+      level: productionGapReview.level,
+      productionCandidateReady: productionGapReview.productionCandidateReady,
+      downstreamProductionEvidenceReady: productionGapReview.downstreamProductionEvidenceReady,
+      productionUnlockReady: productionGapReview.productionUnlockReady,
+      criticalCount: productionGapReview.criticalCount,
+      productionBlockerCount: productionGapReview.productionBlockerCount,
+      gapCount: productionGapReview.gapCount
+    } : null,
     candidatePackageLevel: report.candidatePackageLevel ?? null,
     candidatePackageBlockedReason: report.candidatePackageBlockedReason ?? null,
     candidateReadyForImport: Boolean(report.candidateReadyForImport),
     blockingCount,
+    downstreamEvidencePlan: downstreamEvidencePlan ? {
+      schema: downstreamEvidencePlan.schema,
+      status: downstreamEvidencePlan.status,
+      productionUnlockReady: downstreamEvidencePlan.productionUnlockReady,
+      openGateCount: downstreamEvidencePlan.openGateCount,
+      unsafeResidualClaim: downstreamEvidencePlan.unsafeResidualClaim
+    } : null,
+    nextProductionCandidateActions,
     summary: ready
       ? "OpenCAMLib one-command real candidate chain is ready for HeDiao3D import review."
       : `OpenCAMLib one-command real candidate chain 未就绪：level=${report.level ?? "missing"}，blocking=${blockingCount}。`
+  };
+}
+
+function createOpenCamLibNextProductionCandidateActionsSummary(actions) {
+  if (!actions || typeof actions !== "object") return null;
+  return {
+    schema: actions.schema ?? "hediao3d.opencamlib-next-production-candidate-actions.v1",
+    status: actions.status ?? "unknown",
+    productionCandidateReady: Boolean(actions.productionCandidateReady),
+    productionUnlockReady: Boolean(actions.productionUnlockReady),
+    blockerCount: Number(actions.blockerCount ?? 0),
+    downstreamOpenGateCount: Number(actions.downstreamOpenGateCount ?? 0),
+    blockingReasons: Array.isArray(actions.blockingReasons) ? actions.blockingReasons.slice(0, 6).map((item) => String(item)) : [],
+    commands: Array.isArray(actions.commands) ? actions.commands.slice(0, 6).map((item) => String(item)) : [],
+    expectedArtifacts: Array.isArray(actions.expectedArtifacts) ? actions.expectedArtifacts.slice(0, 8).map((item) => String(item)) : [],
+    uploadSequence: Array.isArray(actions.uploadSequence) ? actions.uploadSequence.slice(0, 8).map((item) => String(item)) : [],
+    productionBoundary: actions.productionBoundary ?? "These actions do not unlock production NC."
+  };
+}
+
+function createOpenCamLibProductionCandidatePromotionSummary(promotion) {
+  if (!promotion || typeof promotion !== "object") return null;
+  return {
+    schema: promotion.schema ?? "hediao3d.opencamlib-production-candidate-promotion.v1",
+    status: promotion.status ?? "unknown",
+    productionCandidateReady: Boolean(promotion.productionCandidateReady),
+    productionUnlockReady: Boolean(promotion.productionUnlockReady),
+    evidenceClass: promotion.evidenceClass ?? null,
+    criterionCount: Number(promotion.criterionCount ?? 0),
+    passedCount: Number(promotion.passedCount ?? 0),
+    blockingCount: Number(promotion.blockingCount ?? 0),
+    firstBlockingCriterion: Array.isArray(promotion.blockingCriteria) && promotion.blockingCriteria[0]
+      ? {
+          id: promotion.blockingCriteria[0].id ?? "unknown-criterion",
+          layer: promotion.blockingCriteria[0].layer ?? "unknown",
+          status: promotion.blockingCriteria[0].status ?? "fail",
+          summary: promotion.blockingCriteria[0].summary ?? ""
+        }
+      : null,
+    nextActions: Array.isArray(promotion.nextActions) ? promotion.nextActions.slice(0, 3).map((item) => String(item)) : [],
+    productionBoundary: promotion.productionBoundary ?? "This promotion audit never unlocks production NC by itself."
   };
 }
 
@@ -2447,19 +2565,38 @@ function createOpenCamLibProductionGapReviewSummary(review) {
     schema: review.schema ?? "hediao3d.opencamlib-production-gap-review.v1",
     level: review.level ?? "blocked",
     productionCandidateReady: Boolean(review.productionCandidateReady),
+    downstreamProductionEvidenceReady: Boolean(review.downstreamProductionEvidenceReady),
+    productionUnlockReady: Boolean(review.productionUnlockReady),
     criticalCount: Number(review.criticalCount ?? gaps.filter((gap) => gap?.severity === "critical").length),
     reviewCount: Number(review.reviewCount ?? gaps.filter((gap) => gap?.severity === "review").length),
     productionBlockerCount: Number(review.productionBlockerCount ?? gaps.filter((gap) => gap?.severity === "production-blocker").length),
     gapCount: Number(review.gapCount ?? gaps.length),
-    topGaps: gaps.slice(0, 6).map((gap) => ({
+    topGaps: gaps.slice(0, 3).map((gap) => ({
       id: gap?.id ?? "unknown-gap",
-      layer: gap?.layer ?? "unknown",
       severity: gap?.severity ?? "critical",
       status: gap?.status ?? "blocked",
-      summary: gap?.summary ?? ""
-    })),
-    nextActions: Array.isArray(review.nextActions) ? review.nextActions.slice(0, 4).map((item) => String(item)) : [],
-    productionBoundary: review.productionBoundary ?? "This review never unlocks production NC by itself."
+      summary: String(gap?.summary ?? "").slice(0, 160)
+    }))
+  };
+}
+
+function createOpenCamLibDownstreamEvidencePlanSummary(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  const gates = Array.isArray(plan.gates) ? plan.gates : [];
+  return {
+    schema: plan.schema ?? "hediao3d.opencamlib-downstream-evidence-plan.v1",
+    status: plan.status ?? "unknown",
+    productionUnlockReady: Boolean(plan.productionUnlockReady),
+    candidateReady: Boolean(plan.candidateReady),
+    materialSimulationReady: Boolean(plan.materialSimulationReady),
+    residualClosed: Boolean(plan.residualClosed),
+    unsafeResidualClaim: Boolean(plan.unsafeResidualClaim),
+    gateCount: Number(plan.gateCount ?? gates.length),
+    openGateCount: Number(plan.openGateCount ?? gates.filter((gate) => !["pass", "ready"].includes(String(gate?.status ?? ""))).length),
+    gates: gates.slice(0, 4).map((gate) => ({
+      id: gate?.id ?? "unknown-gate",
+      status: gate?.status ?? "unknown"
+    }))
   };
 }
 
@@ -2524,10 +2661,22 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     ?? nativeCandidate?.materialRemovalReadiness
     ?? chainOpenCamLib?.materialRemovalReadiness
     ?? null;
+  const productionCandidatePromotion = createOpenCamLibProductionCandidatePromotionSummary(
+    nativeCandidateStatus?.productionCandidatePromotion
+    ?? nativeCandidate?.productionCandidatePromotion
+    ?? chainOpenCamLib?.productionCandidatePromotion
+    ?? null
+  );
   const productionGapReview = createOpenCamLibProductionGapReviewSummary(
     nativeCandidateStatus?.productionGapReview
     ?? nativeCandidate?.productionGapReview
     ?? chainOpenCamLib?.productionGapReview
+    ?? null
+  );
+  const downstreamEvidencePlan = createOpenCamLibDownstreamEvidencePlanSummary(
+    nativeCandidateStatus?.downstreamEvidencePlan
+    ?? nativeCandidate?.downstreamEvidencePlan
+    ?? chainOpenCamLib?.downstreamEvidencePlan
     ?? null
   );
   const status = realCandidateReady && contactPathCoverage?.ready && protectedZones?.ready && candidatePackageReadyForImport
@@ -2558,12 +2707,14 @@ function createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRea
     candidatePackageBlockedReason,
     candidateMachineFit,
     materialRemovalReadiness,
+    productionCandidatePromotion,
     productionGapReview,
+    downstreamEvidencePlan,
     firstBlocking: blocker,
     summary: status === "ready-for-review"
       ? "Linux OpenCAMLib 真实候选链路已具备可回填复核证据；仍需同 job 的材料去除、空跑和试雕证据后才可生产解锁。"
       : status === "review"
-        ? `Linux OpenCAMLib 真实候选链路需复核：coverage=${contactPathCoverage?.status ?? "missing"}，protectedZones=${protectedZones?.status ?? "missing"}，candidate=${candidatePackageLevel}，blocked=${blocker ?? "无明确阻断原因"}。`
+        ? `Linux OpenCAMLib 真实候选链路需复核：coverage=${contactPathCoverage?.status ?? "missing"}，protectedZones=${protectedZones?.status ?? "missing"}，candidate=${candidatePackageLevel}，promotion=${productionCandidatePromotion?.status ?? "missing"}，blocked=${blocker ?? "无明确阻断原因"}。`
         : "Linux OpenCAMLib 真实候选链路未回填；离线加工包不能证明真实 drop-cutter/cutter-contact 输出。"
   };
 }
@@ -2820,7 +2971,14 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     };
   const candidateMachineFit = candidatePackage?.machineFit ?? contactReport?.candidateMachineFit ?? null;
   const materialRemovalReadiness = contactReport?.materialRemovalReadiness ?? null;
+  const productionCandidatePromotion = createOpenCamLibProductionCandidatePromotionSummary(contactValidation?.productionCandidatePromotion);
   const productionGapReview = createOpenCamLibProductionGapReviewSummary(report?.productionGapReview ?? candidatePackage?.productionGapReview ?? null);
+  const downstreamEvidencePlan = createOpenCamLibDownstreamEvidencePlanSummary(
+    report?.downstreamEvidencePlan
+    ?? candidatePackage?.downstreamEvidencePlan
+    ?? contactReport?.downstreamEvidencePlan
+    ?? null
+  );
   const topErrors = createContactValidationTopErrors(contactValidation);
   const failedChecks = createContactValidationFailedChecks(contactValidation);
   return {
@@ -2836,12 +2994,15 @@ function createOpenCamLibRealCandidateSummary(report, rawBytes = null) {
     contactValidationFailedChecks: failedChecks,
     contactValidationPathCoverage,
     protectedZones,
+    productionCandidatePromotion,
     candidateMachineFit,
     materialRemovalReadiness,
     candidatePackageLevel: candidatePackage?.level ?? null,
     candidatePackageBlockedReason: candidatePackage?.blockedReason ?? null,
     candidateReadyForImport: Boolean(candidatePackage?.readyForImport),
     productionGapReview,
+    downstreamEvidencePlan,
+    nextProductionCandidateActions: createOpenCamLibNextProductionCandidateActionsSummary(report?.nextProductionCandidateActions),
     blockingCount: blocking.length,
     firstBlocking: blocking[0] ?? null,
     sha256: rawBytes ? createHash("sha256").update(rawBytes).digest("hex") : null
@@ -2997,17 +3158,27 @@ async function importV3ReadinessRunbookResult(req, res) {
     ok: Boolean(imported.ok),
     failedCount: Number(imported.failedCount ?? 0),
     blockingFailedCount: Number(imported.blockingFailedCount ?? 0),
+    runbookReviewSafe: Boolean(imported.runbookReviewSafe),
     productionSafe: Boolean(imported.productionSafe),
+    productionSafeReason: imported.productionSafeReason ?? (
+      imported.productionSafe
+        ? "Runbook import was evaluated as production-safe."
+        : "Runbook import does not unlock production NC by itself; full same-job production evidence must be validated by HeDiao3D."
+    ),
     linuxEvidence: {
       status: linuxEvidence.status,
       foundCount: linuxEvidence.foundCount,
       requiredFoundCount: linuxEvidence.requiredFoundCount,
       missingRequired: linuxEvidence.missingRequired,
+      validationIssues: linuxEvidence.validationIssues,
       files: linuxEvidence.files.map((file) => ({
         filename: file.filename,
         status: file.status,
         schema: file.schema,
-        sizeBytes: file.sizeBytes
+        sizeBytes: file.sizeBytes,
+        sha256: file.sha256,
+        duplicateCount: file.duplicateCount,
+        duplicateEntries: file.duplicateEntries
       }))
     }
   }, null, 2), "utf8");
@@ -3031,6 +3202,7 @@ function createEmptyV3RunbookLinuxEvidence() {
     foundCount: 0,
     requiredFoundCount: 0,
     missingRequired: ["native-cam-closed-loop-check.json", "camotics-result-local-validation.json"],
+    validationIssues: [],
     files: []
   };
 }
@@ -3045,9 +3217,22 @@ function extractV3RunbookLinuxEvidence(zipBundle) {
     { filename: "camotics-result.json", required: false },
     { filename: "camotics-cli-run-package.json", required: false }
   ];
-  const entriesByBaseName = new Map((zipBundle.entries ?? []).map((entry) => [entry.name.toLowerCase().split("/").pop(), entry]));
+  const entriesByBaseName = new Map();
+  for (const entry of zipBundle.entries ?? []) {
+    const baseName = entry.name.toLowerCase().split("/").pop();
+    if (!entriesByBaseName.has(baseName)) entriesByBaseName.set(baseName, []);
+    entriesByBaseName.get(baseName).push(entry);
+  }
   const files = evidenceSpecs.map((spec) => {
-    const entry = entriesByBaseName.get(spec.filename.toLowerCase());
+    const entries = entriesByBaseName.get(spec.filename.toLowerCase()) ?? [];
+    const duplicateEntries = entries.length > 1
+      ? entries.map((entry) => ({
+          name: entry.name,
+          sizeBytes: entry.content.length,
+          sha256: createHash("sha256").update(entry.content).digest("hex")
+        })).slice(0, 8)
+      : [];
+    const entry = entries[0];
     if (!entry) {
       return {
         filename: spec.filename,
@@ -3055,9 +3240,13 @@ function extractV3RunbookLinuxEvidence(zipBundle) {
         status: "missing",
         schema: null,
         sizeBytes: 0,
+        sha256: null,
+        duplicateCount: 0,
+        duplicateEntries: [],
         json: null
       };
     }
+    const sha256 = createHash("sha256").update(entry.content).digest("hex");
     try {
       const parsed = parseJsonBuffer(entry.content, spec.filename);
       return {
@@ -3066,6 +3255,9 @@ function extractV3RunbookLinuxEvidence(zipBundle) {
         status: "imported",
         schema: parsed?.schema ?? null,
         sizeBytes: entry.content.length,
+        sha256,
+        duplicateCount: entries.length,
+        duplicateEntries,
         json: parsed
       };
     } catch {
@@ -3075,6 +3267,9 @@ function extractV3RunbookLinuxEvidence(zipBundle) {
         status: "invalid-json",
         schema: null,
         sizeBytes: entry.content.length,
+        sha256,
+        duplicateCount: entries.length,
+        duplicateEntries,
         json: null
       };
     }
@@ -3084,20 +3279,202 @@ function extractV3RunbookLinuxEvidence(zipBundle) {
     .filter((file) => file.required && file.status !== "imported")
     .map((file) => file.filename);
   const closedLoop = files.find((file) => file.filename === "native-cam-closed-loop-check.json")?.json ?? null;
+  const camoticsLocalValidation = files.find((file) => file.filename === "camotics-result-local-validation.json")?.json ?? null;
   const evidenceChain = createV3RunbookLinuxEvidenceChainSummary(closedLoop?.evidenceChain);
+  const validationIssues = [
+    ...files.filter((file) => file.duplicateCount > 1).map((file) => ({
+      id: "duplicate-linux-evidence-file",
+      filename: file.filename,
+      status: "duplicate-basename",
+      summary: `${file.filename} appears ${file.duplicateCount} times in the runbook ZIP; upload a bundle with one unambiguous evidence file.`
+    })),
+    ...(closedLoop && closedLoop.schema !== "hediao3d.native-cam-closed-loop-check.v1" ? [{
+      id: "native-cam-closed-loop-check",
+      filename: "native-cam-closed-loop-check.json",
+      status: "schema-mismatch",
+      summary: "native-cam-closed-loop-check.json must use schema hediao3d.native-cam-closed-loop-check.v1."
+    }] : []),
+    ...(closedLoop && closedLoop.ok !== true ? [{
+      id: "native-cam-closed-loop-check",
+      filename: "native-cam-closed-loop-check.json",
+      status: "not-ok",
+      summary: "native-cam-closed-loop-check.json did not report ok=true."
+    }] : []),
+    ...(closedLoop && (!closedLoop.evidenceChain || typeof closedLoop.evidenceChain !== "object") ? [{
+      id: "native-cam-closed-loop-evidence-chain",
+      filename: "native-cam-closed-loop-check.json",
+      status: "missing-evidence-chain",
+      summary: "native-cam-closed-loop-check.json must include evidenceChain before Linux runbook evidence is ready."
+    }] : []),
+    ...(closedLoop?.evidenceChain && typeof closedLoop.evidenceChain === "object" && closedLoop.evidenceChain.schema !== "hediao3d.native-cam-linux-evidence-chain.v1" ? [{
+      id: "native-cam-closed-loop-evidence-chain",
+      filename: "native-cam-closed-loop-check.json",
+      status: "schema-mismatch",
+      summary: "native-cam-closed-loop-check.json evidenceChain must use schema hediao3d.native-cam-linux-evidence-chain.v1."
+    }] : []),
+    ...(closedLoop?.evidenceChain && typeof closedLoop.evidenceChain === "object" && closedLoop.evidenceChain.schema === "hediao3d.native-cam-linux-evidence-chain.v1"
+      ? [
+          ...createV3RunbookEvidenceChainCrossCheckIssues(closedLoop.evidenceChain),
+          ...createV3RunbookEvidenceChainComponentIssues(closedLoop.evidenceChain)
+        ]
+      : []),
+    ...(camoticsLocalValidation && camoticsLocalValidation.schema !== "hediao3d.camotics-result-local-validation.v1" ? [{
+      id: "camotics-result-local-validation",
+      filename: "camotics-result-local-validation.json",
+      status: "schema-mismatch",
+      summary: "camotics-result-local-validation.json must use schema hediao3d.camotics-result-local-validation.v1."
+    }] : []),
+    ...(camoticsLocalValidation && (camoticsLocalValidation.ok !== true || camoticsLocalValidation.productionEvidenceEligible !== true) ? [{
+      id: "camotics-result-local-validation",
+      filename: "camotics-result-local-validation.json",
+      status: camoticsLocalValidation.ok === true ? "not-production-eligible" : "not-ok",
+      summary: "camotics-result-local-validation.json must report ok=true and productionEvidenceEligible=true before Linux runbook evidence is ready."
+    }] : []),
+    ...(camoticsLocalValidation ? createCamoticsLocalResidualProofIssues(camoticsLocalValidation) : [])
+  ];
+  const structuralValidationIssues = validationIssues.filter((issue) => !["cross-check-not-ready", "component-not-ready"].includes(issue.status));
   return {
     schema: "hediao3d.v3-runbook-linux-evidence.v1",
     status: missingRequired.length
       ? "incomplete"
-      : evidenceChain?.status === "blocked"
+      : structuralValidationIssues.length
+        ? "invalid-linux-evidence"
+      : !isV3RunbookEvidenceChainReadyForReview(evidenceChain)
         ? "blocked-evidence-chain"
         : "ready-for-review",
     foundCount: found.length,
     requiredFoundCount: files.filter((file) => file.required && file.status === "imported").length,
     missingRequired,
+    validationIssues,
     evidenceChain,
     files
   };
+}
+
+function createCamoticsLocalResidualProofIssues(camoticsLocalValidation) {
+  const residualValidation = camoticsLocalValidation?.residualValidation && typeof camoticsLocalValidation.residualValidation === "object"
+    ? camoticsLocalValidation.residualValidation
+    : null;
+  const residualProofChain = camoticsLocalValidation?.residualProofChain && typeof camoticsLocalValidation.residualProofChain === "object"
+    ? camoticsLocalValidation.residualProofChain
+    : null;
+  const claimsProductionResidualReady = residualValidation?.productionResidualEvidenceReady === true
+    || camoticsLocalValidation?.productionResidualEvidenceReady === true;
+  return [
+    ...(residualProofChain && residualProofChain.schema !== "hediao3d.camotics-residual-proof-chain.v1" ? [{
+      id: "camotics-residual-proof-chain",
+      filename: "camotics-result-local-validation.json",
+      status: "schema-mismatch",
+      summary: "camotics-result-local-validation.json residualProofChain must use schema hediao3d.camotics-residual-proof-chain.v1."
+    }] : []),
+    ...(claimsProductionResidualReady && !residualProofChain ? [{
+      id: "camotics-residual-proof-chain",
+      filename: "camotics-result-local-validation.json",
+      status: "missing-residual-proof-chain",
+      summary: "camotics-result-local-validation.json claims production residual evidence, but residualProofChain is missing."
+    }] : []),
+    ...(claimsProductionResidualReady && residualProofChain && residualProofChain.productionResidualEvidenceReady !== true ? [{
+      id: "camotics-residual-proof-chain",
+      filename: "camotics-result-local-validation.json",
+      status: residualProofChain.unsafeProductionClaim ? "unsafe-residual-claim" : "not-production-ready",
+      summary: "camotics-result-local-validation.json claims production residual evidence, but residualProofChain is not production-ready."
+    }] : [])
+  ];
+}
+
+function createV3RunbookEvidenceChainCrossCheckIssues(evidenceChain) {
+  if (!evidenceChain || typeof evidenceChain !== "object") return [];
+  const crossChecks = evidenceChain.crossChecks && typeof evidenceChain.crossChecks === "object"
+    ? evidenceChain.crossChecks
+    : {};
+  const expected = [
+    ["nativeRealOutputStep", "pass"],
+    ["camoticsValidationStep", "pass"],
+    ["candidatePackageStep", "pass"],
+    ["camoticsUpstreamEvidenceMatched", true],
+    ["camoticsUpstreamMaterialReadinessMatched", true],
+    ["materialRemovalBoundToUpstreamCam", true]
+  ];
+  return expected
+    .filter(([field, expectedValue]) => crossChecks[field] !== expectedValue)
+    .map(([field, expectedValue]) => ({
+      id: "native-cam-closed-loop-cross-check",
+      filename: "native-cam-closed-loop-check.json",
+      status: "cross-check-not-ready",
+      field,
+      expected: expectedValue,
+      actual: crossChecks[field] ?? null,
+      summary: `native-cam-closed-loop-check.json evidenceChain.crossChecks.${field} must be ${String(expectedValue)} before Linux evidence is ready.`
+    }));
+}
+
+function isV3RunbookEvidenceChainReadyForReview(evidenceChain) {
+  if (!["ready-or-awaiting-inputs", "ready-for-review"].includes(evidenceChain?.status)) return false;
+  return createV3RunbookEvidenceChainCrossCheckIssues(evidenceChain).length === 0
+    && createV3RunbookEvidenceChainComponentIssues(evidenceChain).length === 0;
+}
+
+function createV3RunbookEvidenceChainComponentIssues(evidenceChain) {
+  if (!evidenceChain || typeof evidenceChain !== "object") return [];
+  const nativeCam = evidenceChain.nativeCam && typeof evidenceChain.nativeCam === "object" ? evidenceChain.nativeCam : {};
+  const openCamLib = evidenceChain.openCamLib && typeof evidenceChain.openCamLib === "object" ? evidenceChain.openCamLib : {};
+  const productionGapReview = openCamLib.productionGapReview && typeof openCamLib.productionGapReview === "object" ? openCamLib.productionGapReview : {};
+  const downstreamEvidencePlan = openCamLib.downstreamEvidencePlan && typeof openCamLib.downstreamEvidencePlan === "object" ? openCamLib.downstreamEvidencePlan : {};
+  const productionCandidatePromotion = openCamLib.productionCandidatePromotion && typeof openCamLib.productionCandidatePromotion === "object" ? openCamLib.productionCandidatePromotion : {};
+  const candidateMachineFit = openCamLib.candidateMachineFit && typeof openCamLib.candidateMachineFit === "object" ? openCamLib.candidateMachineFit : {};
+  const candidateMachineFitChecks = candidateMachineFit.checks && typeof candidateMachineFit.checks === "object" ? candidateMachineFit.checks : {};
+  const candidateMachineFitRiskCounts = candidateMachineFit.riskCounts && typeof candidateMachineFit.riskCounts === "object" ? candidateMachineFit.riskCounts : {};
+  const camotics = evidenceChain.camotics && typeof evidenceChain.camotics === "object" ? evidenceChain.camotics : {};
+  const camoticsUpstreamEvidence = camotics.upstreamEvidence && typeof camotics.upstreamEvidence === "object" ? camotics.upstreamEvidence : {};
+  const camoticsMaterialReadiness = camoticsUpstreamEvidence.materialRemovalReadiness && typeof camoticsUpstreamEvidence.materialRemovalReadiness === "object"
+    ? camoticsUpstreamEvidence.materialRemovalReadiness
+    : {};
+  const checks = [
+    ["nativeCam.targetMachineBoundaryStatus", nativeCam.targetMachineBoundaryStatus, "matched"],
+    ["nativeCam.sourceReportBindingStatus", nativeCam.sourceReportBindingStatus, "matched"],
+    ["nativeCam.contactValidationStatus", nativeCam.contactValidationStatus, "ready"],
+    ["nativeCam.productionCandidateCount", Number(nativeCam.productionCandidateCount ?? 0) > 0, true],
+    ["openCamLib.realCandidateReady", Boolean(openCamLib.realCandidateReady), true],
+    ["openCamLib.contactPathCoverage.ready", Boolean(openCamLib.contactPathCoverage?.ready), true],
+    ["openCamLib.protectedZonesReady", Boolean(openCamLib.protectedZonesReady), true],
+    ["openCamLib.candidatePackageReadyForImport", Boolean(openCamLib.candidatePackageReadyForImport), true],
+    ["openCamLib.productionCandidatePromotion.productionCandidateReady", Boolean(productionCandidatePromotion.productionCandidateReady), true],
+    ["openCamLib.productionCandidatePromotion.productionUnlockReady", Boolean(productionCandidatePromotion.productionUnlockReady), false],
+    ["openCamLib.productionGapReview.productionCandidateReady", Boolean(productionGapReview.productionCandidateReady), true],
+    ["openCamLib.productionGapReview.productionUnlockReady", Boolean(productionGapReview.productionUnlockReady), false],
+    ...(openCamLib.downstreamEvidencePlan ? [
+      ["openCamLib.downstreamEvidencePlan.productionUnlockReady", Boolean(downstreamEvidencePlan.productionUnlockReady), false],
+      ["openCamLib.downstreamEvidencePlan.unsafeResidualClaim", Boolean(downstreamEvidencePlan.unsafeResidualClaim), false]
+    ] : []),
+    ["openCamLib.candidateMachineFit.level", candidateMachineFit.level, "ok"],
+    ["openCamLib.candidateMachineFit.checks.rotaryCoordinatePresent", Boolean(candidateMachineFitChecks.rotaryCoordinatePresent), true],
+    ["openCamLib.candidateMachineFit.checks.protectedZoneClean", Boolean(candidateMachineFitChecks.protectedZoneClean), true],
+    ["openCamLib.candidateMachineFit.checks.depthWithinLimit", Boolean(candidateMachineFitChecks.depthWithinLimit), true],
+    ["openCamLib.candidateMachineFit.riskCounts.holdZonePointCount", Number(candidateMachineFitRiskCounts.holdZonePointCount ?? 0), 0],
+    ["openCamLib.candidateMachineFit.riskCounts.deepPointCount", Number(candidateMachineFitRiskCounts.deepPointCount ?? 0), 0],
+    ["openCamLib.candidateMachineFit.riskCounts.invalidPointCount", Number(candidateMachineFitRiskCounts.invalidPointCount ?? 0), 0],
+    ["openCamLib.candidateMachineFit.riskCounts.missingRotaryCount", Number(candidateMachineFitRiskCounts.missingRotaryCount ?? 0), 0],
+    ["camotics.productionEvidenceEligible", Boolean(camotics.productionEvidenceEligible), true],
+    ["camotics.upstreamEvidenceStatus", camotics.upstreamEvidenceStatus, "matched"],
+    ["camotics.upstreamMaterialReadinessStatus", camotics.upstreamMaterialReadinessStatus, "matched"],
+    ["camotics.upstreamMaterialReadyForSimulation", Boolean(camotics.upstreamMaterialReadyForSimulation), true],
+    ["camotics.upstreamMaterialUnsafeProductionClaim", Boolean(camotics.upstreamMaterialUnsafeProductionClaim), false],
+    ["camotics.upstreamEvidence.candidatePackageValidationBound", Boolean(camoticsUpstreamEvidence.candidatePackageValidationBound), true],
+    ["camotics.upstreamEvidence.candidatePackageBundleBound", Boolean(camoticsUpstreamEvidence.candidatePackageBundleBound), true],
+    ["camotics.upstreamEvidence.materialRemovalReadiness.status", camoticsMaterialReadiness.status, "matched"],
+    ["camotics.upstreamEvidence.materialRemovalReadiness.unsafeProductionClaim", Boolean(camoticsMaterialReadiness.unsafeProductionClaim), false]
+  ];
+  return checks
+    .filter(([, actual, expected]) => actual !== expected)
+    .map(([field, actual, expected]) => ({
+      id: "native-cam-closed-loop-component-check",
+      filename: "native-cam-closed-loop-check.json",
+      status: "component-not-ready",
+      field,
+      expected,
+      actual: actual ?? null,
+      summary: `native-cam-closed-loop-check.json evidenceChain.${field} must be ${String(expected)} before Linux evidence is ready.`
+    }));
 }
 
 function createV3RunbookLinuxEvidenceChainSummary(chain) {
@@ -3129,9 +3506,12 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       candidateMachineFit: chain.openCamLib?.candidateMachineFit && typeof chain.openCamLib.candidateMachineFit === "object"
         ? createRunbookMachineFitSummary(chain.openCamLib.candidateMachineFit)
         : null,
+      materialRemovalReadiness: summarizeOpenCamLibMaterialRemovalReadiness(chain.openCamLib?.materialRemovalReadiness),
+      productionCandidatePromotion: createOpenCamLibProductionCandidatePromotionSummary(chain.openCamLib?.productionCandidatePromotion),
       productionGapReview: createOpenCamLibProductionGapReviewSummary(chain.openCamLib?.productionGapReview),
+      downstreamEvidencePlan: createOpenCamLibDownstreamEvidencePlanSummary(chain.openCamLib?.downstreamEvidencePlan),
       candidatePackageStep: chain.crossChecks?.candidatePackageStep ?? "missing",
-      candidatePackage: chain.openCamLib?.candidatePackage ?? null
+      candidatePackage: summarizeOpenCamLibCandidatePackage(chain.openCamLib?.candidatePackage)
     },
     camotics: {
       productionEvidenceEligible: Boolean(chain.camotics?.productionEvidenceEligible),
@@ -3140,6 +3520,7 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       upstreamMaterialReadinessStatus: chain.camotics?.upstreamMaterialReadinessStatus ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.status ?? "not-required",
       upstreamMaterialReadyForSimulation: Boolean(chain.camotics?.upstreamMaterialReadyForSimulation ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.readyForMaterialRemovalSimulation),
       upstreamMaterialResidualEvidenceReady: Boolean(chain.camotics?.upstreamMaterialResidualEvidenceReady ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady),
+      upstreamMaterialUnsafeProductionClaim: Boolean(chain.camotics?.upstreamMaterialUnsafeProductionClaim ?? chain.camotics?.upstreamEvidence?.materialRemovalReadiness?.unsafeProductionClaim),
       upstreamEvidence: chain.camotics?.upstreamEvidence && typeof chain.camotics.upstreamEvidence === "object"
         ? {
             required: Boolean(chain.camotics.upstreamEvidence.required),
@@ -3151,7 +3532,8 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
             mismatchCount: Number(chain.camotics.upstreamEvidence.mismatchCount ?? 0),
             candidatePackageValidationBound: Boolean(chain.camotics.upstreamEvidence.candidatePackageValidationBound),
             candidatePackageBundleBound: Boolean(chain.camotics.upstreamEvidence.candidatePackageBundleBound),
-            materialRemovalReadiness: chain.camotics.upstreamEvidence.materialRemovalReadiness ?? null,
+            candidatePackage: summarizeCamoticsUpstreamCandidatePackage(chain.camotics.upstreamEvidence.candidatePackage),
+            materialRemovalReadiness: summarizeCamoticsUpstreamMaterialRemovalReadiness(chain.camotics.upstreamEvidence.materialRemovalReadiness),
             files: Array.isArray(chain.camotics.upstreamEvidence.files)
               ? chain.camotics.upstreamEvidence.files.slice(0, 12).map((file) => ({
                   key: file.key ?? null,
@@ -3172,6 +3554,70 @@ function createV3RunbookLinuxEvidenceChainSummary(chain) {
       camoticsUpstreamMaterialReadinessMatched: Boolean(chain.crossChecks?.camoticsUpstreamMaterialReadinessMatched),
       materialRemovalBoundToUpstreamCam: Boolean(chain.crossChecks?.materialRemovalBoundToUpstreamCam)
     }
+  };
+}
+
+function summarizeOpenCamLibMaterialRemovalReadiness(readiness) {
+  if (!readiness || typeof readiness !== "object") return null;
+  const simulationQuality = readiness.simulationQuality && typeof readiness.simulationQuality === "object"
+    ? readiness.simulationQuality
+    : null;
+  return {
+    schema: readiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1",
+    level: readiness.level ?? "missing",
+    status: readiness.status ?? null,
+    readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
+    productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(readiness.unsafeProductionClaim),
+    residualProofSource: readiness.residualProofSource && typeof readiness.residualProofSource === "object" ? {
+      schema: readiness.residualProofSource.schema ?? "hediao3d.opencamlib-bound-residual-proof-source.v1",
+      status: readiness.residualProofSource.status ?? "unknown",
+      ready: Boolean(readiness.residualProofSource.ready),
+      proofStatus: readiness.residualProofSource.proofStatus ?? null,
+      productionResidualEvidenceReady: Boolean(readiness.residualProofSource.productionResidualEvidenceReady),
+      upstreamStatus: readiness.residualProofSource.upstreamStatus ?? null,
+      upstreamCandidatePackageStatus: readiness.residualProofSource.upstreamCandidatePackageStatus ?? null
+    } : null,
+    simulationQuality: simulationQuality ? {
+      schema: simulationQuality.schema ?? "hediao3d.opencamlib-material-removal-simulation-quality.v1",
+      level: simulationQuality.level ?? null,
+      engineeringSimulationAllowed: Boolean(simulationQuality.engineeringSimulationAllowed),
+      productionEvidenceAllowed: Boolean(simulationQuality.productionEvidenceAllowed),
+      riskCount: Number.isFinite(Number(simulationQuality.riskCount)) ? Number(simulationQuality.riskCount) : null,
+      risks: Array.isArray(simulationQuality.risks) ? simulationQuality.risks.map((item) => String(item)).filter(Boolean).slice(0, 8) : [],
+      summary: simulationQuality.summary ?? null
+    } : null,
+    missingForProduction: Array.isArray(readiness.missingForProduction)
+      ? readiness.missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 8)
+      : [],
+    summary: readiness.summary ?? null
+  };
+}
+
+function summarizeOpenCamLibCandidatePackage(candidatePackage) {
+  if (!candidatePackage || typeof candidatePackage !== "object") return null;
+  const generated = candidatePackage.generatedArtifacts && typeof candidatePackage.generatedArtifacts === "object"
+    ? candidatePackage.generatedArtifacts
+    : null;
+  return {
+    filename: candidatePackage.filename ?? "opencamlib-candidate-package-validation.json",
+    exists: Boolean(candidatePackage.exists),
+    schema: candidatePackage.schema ?? null,
+    level: candidatePackage.level ?? null,
+    status: candidatePackage.status ?? null,
+    ok: typeof candidatePackage.ok === "boolean" ? candidatePackage.ok : null,
+    sha256: candidatePackage.sha256 ?? null,
+    readyForImport: Boolean(candidatePackage.readyForImport),
+    generatedArtifacts: generated ? {
+      schema: generated.schema ?? null,
+      status: generated.status ?? (generated.bundleShaMatches === true ? "matched" : generated.bundleShaMatches === false ? "mismatch" : "missing"),
+      bundleShaMatches: Boolean(generated.bundleShaMatches),
+      validationReportContentSha256: generated.validationReportContentSha256 ?? null,
+      candidatePackageBundleSha256: generated.candidatePackageBundleSha256 ?? null,
+      actualBundleSha256: generated.actualBundleSha256 ?? null,
+      bundleExists: Boolean(generated.bundleExists),
+      summary: generated.summary ?? null
+    } : null
   };
 }
 
@@ -3213,9 +3659,10 @@ function createRunbookMachineFitSummary(machineFit) {
 function extractV3RunbookResultZipBundle(value) {
   const buffer = decodeInlineFile(value);
   const entries = extractZipEntries(buffer);
-  const findEntry = (predicate) => entries.find((entry) => predicate(entry.name.toLowerCase()));
-  const resultEntry = findEntry((name) => /(^|\/)v3-acceptance-runbook-result\.json$/.test(name));
+  const resultEntries = entries.filter((entry) => /(^|\/)v3-acceptance-runbook-result\.json$/.test(entry.name.toLowerCase()));
+  const resultEntry = resultEntries[0];
   if (!resultEntry) throw new Error("ZIP 中找不到 v3-acceptance-runbook-result.json。");
+  if (resultEntries.length > 1) throw new Error("ZIP 中存在多个 v3-acceptance-runbook-result.json，请保留唯一的 runbook result。");
   return {
     sourceBuffer: buffer,
     sourceName: "v3-acceptance-runbook-result-bundle.zip",
@@ -3281,7 +3728,16 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     && new Date(result.runbookGeneratedAt).getTime() <= new Date(result.createdAt).getTime();
   const identityValid = Boolean(readinessReportId && result.readinessCreatedAt && result.runbookGeneratedAt && linkedReadinessReportExists && timeOrderValid);
   const linuxEvidenceReady = result.linuxEvidence?.status === "ready-for-review";
-  const linuxEvidenceChainReady = !result.linuxEvidence?.evidenceChain || result.linuxEvidence.evidenceChain.status !== "blocked";
+  const linuxEvidenceChainReady = isV3RunbookEvidenceChainReadyForReview(result.linuxEvidence?.evidenceChain);
+  const linuxProductionUnlockReady = Boolean(
+    result.linuxEvidence?.evidenceChain?.openCamLib?.productionGapReview?.productionUnlockReady === true
+    && result.linuxEvidence?.evidenceChain?.openCamLib?.productionGapReview?.downstreamProductionEvidenceReady === true
+  );
+  const exitCode = Number.isFinite(Number(result.exitCode)) ? Number(result.exitCode) : null;
+  const failedCount = Number.isFinite(Number(result.failedCount)) ? Number(result.failedCount) : failedSteps.length;
+  const stepFailurePresent = failedSteps.length > 0 || steps.some((step) => step?.ok === false);
+  const runbookExecutionPassed = Boolean(result.ok) && failedCount === 0 && !stepFailurePresent && (exitCode === null || exitCode === 0);
+  const runbookReviewSafe = runbookExecutionPassed && identityValid && blockingFailedCount === 0 && linuxEvidenceReady && linuxEvidenceChainReady;
   return {
     schema: result.schema ?? "unknown",
     readinessReportId,
@@ -3289,8 +3745,8 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     runbookGeneratedAt: result.runbookGeneratedAt ?? null,
     createdAt: result.createdAt ?? null,
     ok: Boolean(result.ok),
-    exitCode: Number.isFinite(Number(result.exitCode)) ? Number(result.exitCode) : null,
-    failedCount: Number.isFinite(Number(result.failedCount)) ? Number(result.failedCount) : failedSteps.length,
+    exitCode,
+    failedCount,
     blockingFailedCount,
     failedSteps: failedSteps.slice(0, 8).map((step) => ({
       id: step.id ?? "unknown",
@@ -3301,7 +3757,13 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
     stepCount: steps.length,
     commandCount,
     blockingStepCountAtReport: Number.isFinite(Number(result.blockingStepCountAtReport)) ? Number(result.blockingStepCountAtReport) : null,
-    productionSafe: Boolean(result.productionSafe) && identityValid && blockingFailedCount === 0 && linuxEvidenceReady && linuxEvidenceChainReady,
+    runbookReviewSafe,
+    productionSafe: Boolean(result.productionSafe) && runbookReviewSafe && linuxProductionUnlockReady,
+    productionSafeReason: result.productionSafeReason ?? (
+      Boolean(result.productionSafe) && runbookReviewSafe && linuxProductionUnlockReady
+        ? "Runbook result and Linux production evidence chain were evaluated as production-safe."
+        : "Runbook result is review evidence only; production remains locked until the full same-job evidence chain is validated."
+    ),
     identityValid,
     linkedReadinessReportExists,
     environment: result.environment && typeof result.environment === "object" ? {
@@ -3316,6 +3778,15 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
       foundCount: Number(result.linuxEvidence.foundCount ?? 0),
       requiredFoundCount: Number(result.linuxEvidence.requiredFoundCount ?? 0),
       missingRequired: Array.isArray(result.linuxEvidence.missingRequired) ? result.linuxEvidence.missingRequired.slice(0, 8) : [],
+      validationIssues: Array.isArray(result.linuxEvidence.validationIssues) ? result.linuxEvidence.validationIssues.slice(0, 16).map((issue) => ({
+        id: issue.id ?? "unknown",
+        filename: issue.filename ?? null,
+        status: issue.status ?? "unknown",
+        field: issue.field ?? null,
+        expected: issue.expected ?? null,
+        actual: issue.actual ?? null,
+        summary: issue.summary ?? null
+      })) : [],
       evidenceChain: result.linuxEvidence.evidenceChain ? createV3RunbookLinuxEvidenceChainSummary(result.linuxEvidence.evidenceChain) : null,
       files: Array.isArray(result.linuxEvidence.files)
         ? result.linuxEvidence.files.slice(0, 12).map((file) => ({
@@ -3323,7 +3794,9 @@ function createV3RunbookResultPublicSummary(result, resultPath) {
           required: Boolean(file.required),
           status: file.status ?? "unknown",
           schema: file.schema ?? null,
-          sizeBytes: Number(file.sizeBytes ?? 0)
+          sizeBytes: Number(file.sizeBytes ?? 0),
+          sha256: file.sha256 ?? null,
+          duplicateCount: Number(file.duplicateCount ?? 0)
         }))
         : []
     } : null,
@@ -3543,7 +4016,7 @@ function createV3ReadinessPublicSummary(report, reportId) {
       } : null
     } : null,
     nativeCamRealOutputAcceptance: createNativeCamRealOutputAcceptanceReadinessSummary(report.nativeCamRealOutputAcceptance),
-    runbookResult: report.runbookResult ?? null,
+    runbookResult: createCompactV3RunbookResultForReadiness(report.runbookResult),
     externalHandoff: report.externalHandoff ?? null,
     externalCamHandoffs: createExternalCamHandoffsReadinessSummary(report.externalCamHandoffs),
     neutralImport: report.neutralImport ?? null,
@@ -3572,14 +4045,208 @@ function createNativeCamRealOutputAcceptanceReadinessSummary(acceptance) {
     missingCount: Number(acceptance.missingCount ?? 0),
     sourceReportBindingStatus: acceptance.sourceReportBindingStatus ?? null,
     contactValidationStatus: createNativeCamContactValidationReadinessSummary(acceptance.contactValidationStatus),
-    contactValidation: acceptance.contactValidation ?? null,
+    contactValidation: createNativeCamContactValidationDetailSummary(acceptance.contactValidation),
     runnerReadinessStatus: acceptance.runnerReadinessStatus ?? null,
-    runnerReadiness: acceptance.runnerReadiness ?? null,
-    openCamLibRealCandidateStatus: acceptance.openCamLibRealCandidateStatus ?? null,
-    openCamLibRealCandidate: acceptance.openCamLibRealCandidate ?? null,
-    sourceReportHandoffAudit: acceptance.sourceReportHandoffAudit ?? null,
+    runnerReadiness: createOpenCamLibRunnerReadinessStatus(acceptance.runnerReadiness),
+    openCamLibRealCandidateStatus: createOpenCamLibRealCandidateReadinessSummary(acceptance.openCamLibRealCandidateStatus),
+    openCamLibRealCandidate: createOpenCamLibRealCandidateReadinessSummary(acceptance.openCamLibRealCandidate),
+    sourceReportHandoffAudit: acceptance.sourceReportHandoffAudit ? {
+      schema: acceptance.sourceReportHandoffAudit.schema ?? null,
+      productionCandidateCount: Number(acceptance.sourceReportHandoffAudit.productionCandidateCount ?? 0),
+      unsafeCount: Number(acceptance.sourceReportHandoffAudit.unsafeCount ?? 0),
+      missingCount: Number(acceptance.sourceReportHandoffAudit.missingCount ?? 0),
+      unboundProductionCandidateCount: Number(acceptance.sourceReportHandoffAudit.unboundProductionCandidateCount ?? 0),
+      summary: acceptance.sourceReportHandoffAudit.summary ?? null
+    } : null,
     targetMachineBoundaryStatus: acceptance.targetMachineBoundaryStatus ?? null,
     apiArtifacts: acceptance.apiArtifacts ?? null
+  };
+}
+
+function createCompactV3RunbookResultForReadiness(result) {
+  if (!result || typeof result !== "object") return null;
+  return {
+    schema: result.schema ?? "hediao3d.v3-acceptance-runbook-result.v1",
+    ok: Boolean(result.ok),
+    exitCode: Number(result.exitCode ?? 0),
+    levelAtReport: result.levelAtReport ?? null,
+    acceptanceAtReport: result.acceptanceAtReport ?? null,
+    productionSafe: Boolean(result.productionSafe),
+    productionSafeReason: result.productionSafeReason ?? null,
+    runbookReviewSafe: Boolean(result.runbookReviewSafe),
+    identityValid: Boolean(result.identityValid),
+    linkedReadinessReportExists: Boolean(result.linkedReadinessReportExists),
+    failedCount: Number(result.failedCount ?? 0),
+    blockingFailedCount: Number(result.blockingFailedCount ?? 0),
+    stepCount: Number(result.stepCount ?? 0),
+    blockingStepCountAtReport: Number(result.blockingStepCountAtReport ?? 0),
+    commandCount: Number(result.commandCount ?? 0),
+    readinessReportId: result.readinessReportId ?? null,
+    createdAt: result.createdAt ?? null,
+    readinessCreatedAt: result.readinessCreatedAt ?? null,
+    runbookGeneratedAt: result.runbookGeneratedAt ?? null,
+    artifactPath: result.artifactPath ?? null,
+    environment: result.environment && typeof result.environment === "object" ? {
+      nodeVersion: result.environment.nodeVersion ?? null,
+      platform: result.environment.platform ?? null,
+      apiBase: result.environment.apiBase ?? null
+    } : null,
+    failedSteps: Array.isArray(result.failedSteps) ? result.failedSteps.slice(0, 4) : [],
+    linuxEvidence: result.linuxEvidence ? {
+      schema: result.linuxEvidence.schema ?? "hediao3d.v3-runbook-linux-evidence.v1",
+      status: result.linuxEvidence.status ?? "unknown",
+      foundCount: Number(result.linuxEvidence.foundCount ?? 0),
+      requiredFoundCount: Number(result.linuxEvidence.requiredFoundCount ?? 0),
+      missingRequired: Array.isArray(result.linuxEvidence.missingRequired) ? result.linuxEvidence.missingRequired.slice(0, 4) : [],
+      validationIssues: Array.isArray(result.linuxEvidence.validationIssues) ? result.linuxEvidence.validationIssues.slice(0, 6) : [],
+      files: Array.isArray(result.linuxEvidence.files) ? result.linuxEvidence.files.slice(0, 6).map((file) => ({
+        filename: file.filename ?? null,
+        required: Boolean(file.required),
+        status: file.status ?? "unknown",
+        schema: file.schema ?? null,
+        sizeBytes: Number(file.sizeBytes ?? 0)
+      })) : [],
+      evidenceChain: compactRunbookLinuxEvidenceChainForReadiness(result.linuxEvidence.evidenceChain)
+    } : null
+  };
+}
+
+function compactRunbookLinuxEvidenceChainForReadiness(chain) {
+  if (!chain || typeof chain !== "object") return null;
+  const openCamLib = chain.openCamLib && typeof chain.openCamLib === "object" ? chain.openCamLib : null;
+  const camotics = chain.camotics && typeof chain.camotics === "object" ? chain.camotics : null;
+  const upstream = camotics?.upstreamEvidence && typeof camotics.upstreamEvidence === "object" ? camotics.upstreamEvidence : null;
+  return {
+    schema: chain.schema ?? null,
+    status: chain.status ?? "unknown",
+    blockingCount: Number(chain.blockingCount ?? 0),
+    firstBlocking: chain.firstBlocking ?? null,
+    crossChecks: chain.crossChecks ? {
+      materialRemovalBoundToUpstreamCam: chain.crossChecks.materialRemovalBoundToUpstreamCam ?? null,
+      camoticsUpstreamMaterialReadinessMatched: chain.crossChecks.camoticsUpstreamMaterialReadinessMatched ?? null,
+      candidatePackageStep: chain.crossChecks.candidatePackageStep ?? null
+    } : null,
+    nativeCam: chain.nativeCam ? {
+      status: chain.nativeCam.status ?? null,
+      sourceReportBindingStatus: chain.nativeCam.sourceReportBindingStatus ?? null,
+      contactValidationStatus: chain.nativeCam.contactValidationStatus ?? null,
+      targetMachineBoundaryStatus: chain.nativeCam.targetMachineBoundaryStatus ?? null,
+      productionCandidateCount: Number(chain.nativeCam.productionCandidateCount ?? 0)
+    } : null,
+    openCamLib: openCamLib ? {
+      realCandidateReady: Boolean(openCamLib.realCandidateReady),
+      realCandidateKnown: Boolean(openCamLib.realCandidateKnown),
+      contactPathCoverage: openCamLib.contactPathCoverage ? {
+        status: openCamLib.contactPathCoverage.status ?? null,
+        ready: openCamLib.contactPathCoverage.ready ?? null
+      } : null,
+      protectedZones: openCamLib.protectedZones ? {
+        status: openCamLib.protectedZones.status ?? null,
+        ready: openCamLib.protectedZones.ready ?? null,
+        violationCount: Number(openCamLib.protectedZones.violationCount ?? 0)
+      } : null,
+      candidatePackageLevel: openCamLib.candidatePackageLevel ?? null,
+      candidatePackageReadyForImport: Boolean(openCamLib.candidatePackageReadyForImport),
+      candidatePackageStep: openCamLib.candidatePackageStep ?? null,
+      candidatePackageBlockedReason: openCamLib.candidatePackageBlockedReason ?? null,
+      firstBlocking: openCamLib.firstBlocking ?? null,
+      candidatePackage: openCamLib.candidatePackage ? {
+        status: openCamLib.candidatePackage.status ?? null,
+        exists: Boolean(openCamLib.candidatePackage.exists),
+        generatedArtifacts: openCamLib.candidatePackage.generatedArtifacts ? {
+          status: openCamLib.candidatePackage.generatedArtifacts.status ?? null,
+          bundleShaMatches: Boolean(openCamLib.candidatePackage.generatedArtifacts.bundleShaMatches)
+        } : null
+      } : null,
+      candidateMachineFit: openCamLib.candidateMachineFit ? {
+        level: openCamLib.candidateMachineFit.level ?? null,
+        coverage: openCamLib.candidateMachineFit.coverage ? {
+          rotarySpanDeg: openCamLib.candidateMachineFit.coverage.rotarySpanDeg ?? null,
+          expectedRotaryCoverageDeg: openCamLib.candidateMachineFit.coverage.expectedRotaryCoverageDeg ?? null
+        } : null,
+        riskCounts: openCamLib.candidateMachineFit.riskCounts ? {
+          holdZonePointCount: Number(openCamLib.candidateMachineFit.riskCounts.holdZonePointCount ?? 0),
+          deepPointCount: Number(openCamLib.candidateMachineFit.riskCounts.deepPointCount ?? 0),
+          missingRotaryCount: Number(openCamLib.candidateMachineFit.riskCounts.missingRotaryCount ?? 0)
+        } : null
+      } : null,
+      materialRemovalReadiness: openCamLib.materialRemovalReadiness ? {
+        level: openCamLib.materialRemovalReadiness.level ?? null,
+        readyForMaterialRemovalSimulation: Boolean(openCamLib.materialRemovalReadiness.readyForMaterialRemovalSimulation),
+        productionResidualEvidenceReady: Boolean(openCamLib.materialRemovalReadiness.productionResidualEvidenceReady),
+        unsafeProductionClaim: Boolean(openCamLib.materialRemovalReadiness.unsafeProductionClaim),
+        residualProofSource: openCamLib.materialRemovalReadiness.residualProofSource ? {
+          status: openCamLib.materialRemovalReadiness.residualProofSource.status ?? null,
+          ready: Boolean(openCamLib.materialRemovalReadiness.residualProofSource.ready),
+          upstreamStatus: openCamLib.materialRemovalReadiness.residualProofSource.upstreamStatus ?? null
+        } : null,
+        simulationQuality: openCamLib.materialRemovalReadiness.simulationQuality ? {
+          level: openCamLib.materialRemovalReadiness.simulationQuality.level ?? null,
+          riskCount: Number(openCamLib.materialRemovalReadiness.simulationQuality.riskCount ?? 0)
+        } : null,
+        missingForProduction: Array.isArray(openCamLib.materialRemovalReadiness.missingForProduction)
+          ? openCamLib.materialRemovalReadiness.missingForProduction.slice(0, 4)
+          : []
+      } : null,
+      productionCandidatePromotion: openCamLib.productionCandidatePromotion ? {
+        status: openCamLib.productionCandidatePromotion.status ?? null,
+        productionCandidateReady: Boolean(openCamLib.productionCandidatePromotion.productionCandidateReady),
+        productionUnlockReady: Boolean(openCamLib.productionCandidatePromotion.productionUnlockReady),
+        blockingCount: Number(openCamLib.productionCandidatePromotion.blockingCount ?? 0),
+        firstBlockingCriterion: openCamLib.productionCandidatePromotion.firstBlockingCriterion ? {
+          id: openCamLib.productionCandidatePromotion.firstBlockingCriterion.id ?? null,
+          summary: openCamLib.productionCandidatePromotion.firstBlockingCriterion.summary ?? null
+        } : null,
+        nextAction: openCamLib.productionCandidatePromotion.nextAction ?? null
+      } : null,
+      productionGapReview: openCamLib.productionGapReview ? {
+        level: openCamLib.productionGapReview.level ?? null,
+        productionCandidateReady: Boolean(openCamLib.productionGapReview.productionCandidateReady),
+        downstreamProductionEvidenceReady: Boolean(openCamLib.productionGapReview.downstreamProductionEvidenceReady),
+        productionUnlockReady: Boolean(openCamLib.productionGapReview.productionUnlockReady),
+        criticalCount: Number(openCamLib.productionGapReview.criticalCount ?? 0),
+        productionBlockerCount: Number(openCamLib.productionGapReview.productionBlockerCount ?? 0),
+        reviewCount: Number(openCamLib.productionGapReview.reviewCount ?? 0),
+        gapCount: Number(openCamLib.productionGapReview.gapCount ?? openCamLib.productionGapReview.topGaps?.length ?? 0),
+        topGaps: Array.isArray(openCamLib.productionGapReview.topGaps)
+          ? openCamLib.productionGapReview.topGaps.slice(0, 1).map((gap) => ({ summary: gap.summary ?? null }))
+          : []
+      } : null,
+      downstreamEvidencePlan: openCamLib.downstreamEvidencePlan ? {
+        status: openCamLib.downstreamEvidencePlan.status ?? null,
+        productionUnlockReady: Boolean(openCamLib.downstreamEvidencePlan.productionUnlockReady),
+        residualClosed: Boolean(openCamLib.downstreamEvidencePlan.residualClosed),
+        unsafeResidualClaim: Boolean(openCamLib.downstreamEvidencePlan.unsafeResidualClaim),
+        openGateCount: Number(openCamLib.downstreamEvidencePlan.openGateCount ?? 0),
+        gates: Array.isArray(openCamLib.downstreamEvidencePlan.gates)
+          ? openCamLib.downstreamEvidencePlan.gates.slice(0, 1).map((gate) => ({
+            status: gate.status ?? null,
+            title: gate.title ?? null
+          }))
+          : []
+      } : null
+    } : null,
+    camotics: camotics ? {
+      upstreamEvidenceStatus: camotics.upstreamEvidenceStatus ?? null,
+      upstreamMaterialUnsafeProductionClaim: Boolean(camotics.upstreamMaterialUnsafeProductionClaim),
+      upstreamEvidence: upstream ? {
+        status: upstream.status ?? null,
+        expectedCount: Number(upstream.expectedCount ?? 0),
+        matchedCount: Number(upstream.matchedCount ?? 0),
+        mismatchCount: Number(upstream.mismatchCount ?? 0),
+        candidatePackageValidationBound: Boolean(upstream.candidatePackageValidationBound),
+        candidatePackageBundleBound: Boolean(upstream.candidatePackageBundleBound),
+        candidatePackage: upstream.candidatePackage ? {
+          status: upstream.candidatePackage.status ?? null,
+          bundleShaMatches: Boolean(upstream.candidatePackage.bundleShaMatches)
+        } : null,
+        materialRemovalReadiness: upstream.materialRemovalReadiness ? {
+          readyForMaterialRemovalSimulation: Boolean(upstream.materialRemovalReadiness.readyForMaterialRemovalSimulation),
+          productionResidualEvidenceReady: Boolean(upstream.materialRemovalReadiness.productionResidualEvidenceReady),
+          unsafeProductionClaim: Boolean(upstream.materialRemovalReadiness.unsafeProductionClaim)
+        } : null
+      } : null
+    } : null
   };
 }
 
@@ -3608,6 +4275,104 @@ function createNativeCamContactValidationReadinessSummary(status) {
       summary: status.protectedZones.summary ?? null,
       violationCount: Number(status.protectedZones.violationCount ?? status.protectedZones.violations?.length ?? 0)
     } : null
+  };
+}
+
+function createNativeCamContactValidationDetailSummary(validation) {
+  if (!validation || typeof validation !== "object") return null;
+  return {
+    schema: validation.schema ?? null,
+    status: validation.status ?? validation.level ?? null,
+    ready: Boolean(validation.ready),
+    summary: validation.summary ?? null,
+    firstError: validation.firstError ?? validation.topErrors?.[0] ?? null,
+    topErrors: Array.isArray(validation.topErrors) ? validation.topErrors.slice(0, 4) : [],
+    failedChecks: Array.isArray(validation.failedChecks)
+      ? validation.failedChecks.slice(0, 6).map((check) => ({
+        id: check.id ?? null,
+        status: check.status ?? null,
+        summary: check.summary ?? check.reason ?? null
+      }))
+      : [],
+    pathCoverage: validation.pathCoverage ? {
+      status: validation.pathCoverage.status ?? null,
+      summary: validation.pathCoverage.summary ?? null
+    } : null,
+    protectedZones: validation.protectedZones ? {
+      status: validation.protectedZones.status ?? null,
+      summary: validation.protectedZones.summary ?? null
+    } : null
+  };
+}
+
+function createOpenCamLibRealCandidateReadinessSummary(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  return {
+    schema: candidate.schema ?? null,
+    status: candidate.status ?? candidate.level ?? null,
+    level: candidate.level ?? null,
+    ready: Boolean(candidate.ready),
+    blockingCount: Number(candidate.blockingCount ?? candidate.blockers?.length ?? 0),
+    productionLocked: candidate.productionLocked !== false,
+    summary: candidate.summary ?? null,
+    contactValidationStatus: candidate.contactValidationStatus ?? null,
+    contactValidationPathCoverage: compactOpenCamLibReadinessStatus(candidate.contactValidationPathCoverage ?? candidate.pathCoverage),
+    protectedZones: compactOpenCamLibReadinessStatus(candidate.protectedZones),
+    productionCandidatePromotion: createOpenCamLibProductionCandidatePromotionReadinessSummary(candidate.productionCandidatePromotion),
+    contactValidationTopErrors: Array.isArray(candidate.contactValidationTopErrors) ? candidate.contactValidationTopErrors.slice(0, 4) : [],
+    contactValidationFailedChecks: Array.isArray(candidate.contactValidationFailedChecks)
+      ? candidate.contactValidationFailedChecks.slice(0, 6).map((check) => ({
+        id: check.id ?? null,
+        status: check.status ?? null,
+        summary: check.summary ?? check.reason ?? null
+      }))
+      : [],
+    productionGapReview: createOpenCamLibProductionGapReviewSummary(candidate.productionGapReview),
+    downstreamEvidencePlan: createOpenCamLibDownstreamEvidencePlanSummary(candidate.downstreamEvidencePlan),
+    nextProductionCandidateActions: createOpenCamLibNextProductionCandidateActionsReadinessSummary(candidate.nextProductionCandidateActions),
+    materialRemovalReadiness: summarizeOpenCamLibMaterialRemovalReadiness(candidate.materialRemovalReadiness),
+    candidateMachineFit: candidate.candidateMachineFit ? createRunbookMachineFitSummary(candidate.candidateMachineFit) : null
+  };
+}
+
+function compactOpenCamLibReadinessStatus(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    schema: value.schema ?? null,
+    status: value.status ?? null,
+    ready: Boolean(value.ready),
+    summary: value.summary ?? null
+  };
+}
+
+function createOpenCamLibNextProductionCandidateActionsReadinessSummary(actions) {
+  const summary = createOpenCamLibNextProductionCandidateActionsSummary(actions);
+  if (!summary) return null;
+  return {
+    schema: summary.schema,
+    status: summary.status,
+    productionCandidateReady: summary.productionCandidateReady,
+    productionUnlockReady: summary.productionUnlockReady,
+    blockerCount: summary.blockerCount,
+    downstreamOpenGateCount: summary.downstreamOpenGateCount,
+    firstBlockingReason: summary.blockingReasons[0] ?? null,
+    commands: summary.commands.slice(0, 1),
+    expectedArtifacts: summary.expectedArtifacts.slice(0, 4)
+  };
+}
+
+function createOpenCamLibProductionCandidatePromotionReadinessSummary(promotion) {
+  const summary = createOpenCamLibProductionCandidatePromotionSummary(promotion);
+  if (!summary) return null;
+  return {
+    schema: summary.schema,
+    status: summary.status,
+    productionCandidateReady: summary.productionCandidateReady,
+    productionUnlockReady: summary.productionUnlockReady,
+    evidenceClass: summary.evidenceClass,
+    blockingCount: summary.blockingCount,
+    firstBlockingCriterion: summary.firstBlockingCriterion,
+    nextAction: summary.nextActions[0] ?? null
   };
 }
 
@@ -3650,6 +4415,10 @@ function createReadinessEvidenceDossierPublicSummary(dossier) {
   const productionReadinessAudit = crossChecks.productionReadinessAudit && typeof crossChecks.productionReadinessAudit === "object"
     ? crossChecks.productionReadinessAudit
     : null;
+  const productionReadinessGates = Array.isArray(productionReadinessAudit?.gates) ? productionReadinessAudit.gates : [];
+  const productionReadinessGateById = new Map(productionReadinessGates.map((gate) => [gate.id, gate]));
+  const fieldPackageGateSummary = productionReadinessAudit?.fieldPackageGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("field-package-proof"));
   return {
     schema: dossier.schema ?? "hediao3d.production-evidence-dossier.v1",
     jobId: dossier.jobId ?? null,
@@ -3673,6 +4442,13 @@ function createReadinessEvidenceDossierPublicSummary(dossier) {
       camoticsMotionConsistencyStatus: crossChecks.camoticsMotionConsistencyStatus ?? "missing",
       camoticsMachineContextStatus: crossChecks.camoticsMachineContextStatus ?? "missing",
       camoticsArtifactEvidenceStatus: crossChecks.camoticsArtifactEvidenceStatus ?? "missing",
+      fieldEvidenceCompletenessStatus: crossChecks.fieldEvidenceCompletenessStatus ?? fieldPackageGateSummary?.fieldCompletenessStatus ?? "missing",
+      fieldEvidenceCompletenessMissingCount: Number(crossChecks.fieldEvidenceCompletenessMissingCount ?? fieldPackageGateSummary?.fieldCompletenessMissingCount ?? 0),
+      fieldEvidenceCompletenessMissingChecks: Array.isArray(crossChecks.fieldEvidenceCompletenessMissingChecks)
+        ? crossChecks.fieldEvidenceCompletenessMissingChecks.slice(0, 8)
+        : Array.isArray(fieldPackageGateSummary?.fieldCompletenessMissingChecks)
+          ? fieldPackageGateSummary.fieldCompletenessMissingChecks.slice(0, 8)
+          : [],
       productionReadinessAudit: productionReadinessAudit ? {
         schema: productionReadinessAudit.schema ?? "hediao3d.production-readiness-audit.v1",
         status: productionReadinessAudit.status ?? null,
@@ -3681,7 +4457,13 @@ function createReadinessEvidenceDossierPublicSummary(dossier) {
         allowAirRunPackage: Boolean(productionReadinessAudit.allowAirRunPackage),
         blockerCount: Number(productionReadinessAudit.blockerCount ?? productionReadinessAudit.blockers?.length ?? 0),
         warningCount: Number(productionReadinessAudit.warningCount ?? productionReadinessAudit.warnings?.length ?? 0),
-        summary: productionReadinessAudit.summary ?? null
+        summary: productionReadinessAudit.summary ?? null,
+        materialRemovalGate: productionReadinessAudit.materialRemovalGate
+          ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("material-removal-proof")),
+        airRunGate: productionReadinessAudit.airRunGate
+          ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("air-run-proof")),
+        fieldPackageGate: productionReadinessAudit.fieldPackageGate
+          ?? fieldPackageGateSummary
       } : null
     }
   };
@@ -3692,13 +4474,13 @@ function createNativeCamServerPackageSummary(nativeCam) {
   if (!Array.isArray(files) || files.length === 0) return null;
   return {
     schema: nativeCam.packageArtifacts.schema ?? "hediao3d.native-cam-server-package.v1",
+    fileCount: files.length,
     files: files.map((file) => ({
       filename: file.filename,
-      role: file.role,
-      url: file.url ?? null
+      role: file.role
     })),
     commands: Array.isArray(nativeCam.packageArtifacts.commands)
-      ? nativeCam.packageArtifacts.commands.slice(0, 6)
+      ? nativeCam.packageArtifacts.commands.slice(0, 4)
       : []
   };
 }
@@ -3748,7 +4530,21 @@ function getV3ReadinessRunbookResultArtifact(filename, res) {
   res.end(content);
 }
 
+function formatReadinessMaterialRemovalGate(gate) {
+  if (!gate) return "missing";
+  return `${gate.status ?? "unknown"} / residual=${gate.residualClosureStatus ?? "missing"} / localResidual=${gate.residualLocalValidationBindingStatus ?? "missing"} / proofCrossCheck=${gate.residualProofCrossCheckStatus ?? gate.residualProofCrossCheck?.status ?? "missing"} / unsafe=${gate.residualUnsafeProductionClaim ? "yes" : "no"}`;
+}
+
 function createV3ReadinessMarkdown(report) {
+  const productionReadinessAudit = report.latestEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const productionReadinessGates = Array.isArray(productionReadinessAudit?.gates) ? productionReadinessAudit.gates : [];
+  const productionReadinessGateById = new Map(productionReadinessGates.map((gate) => [gate.id, gate]));
+  const materialRemovalGate = productionReadinessAudit?.materialRemovalGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("material-removal-proof"));
+  const airRunGate = productionReadinessAudit?.airRunGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("air-run-proof"));
+  const fieldPackageGate = productionReadinessAudit?.fieldPackageGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("field-package-proof"));
   const lines = [
     "# HeDiao3D V3 Readiness Report",
     "",
@@ -3810,7 +4606,7 @@ function createV3ReadinessMarkdown(report) {
     `- Adapter validation: ${report.adapterValidation ? `${report.adapterValidation.overall.generatedPlans} plans, ${report.adapterValidation.overall.failed} failed` : "missing"}`,
     `- Native CAM real output acceptance: ${report.nativeCamRealOutputAcceptance ? `${report.nativeCamRealOutputAcceptance.level} / productionCandidate=${report.nativeCamRealOutputAcceptance.productionCandidateCount} / unsafe=${report.nativeCamRealOutputAcceptance.unsafeCount} / missing=${report.nativeCamRealOutputAcceptance.missingCount}` : "missing"}`,
     `- OpenCAMLib production gap review: ${report.nativeCamRealOutputAcceptance?.openCamLibRealCandidate?.productionGapReview ? `${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.level} / critical=${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.criticalCount} / productionBlocker=${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.productionBlockerCount} / gaps=${report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview.gapCount}` : "missing"}`,
-    `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / blocking=${report.runbookResult.blockingFailedCount ?? "unknown"} / identity=${report.runbookResult.identityValid ? "valid" : "invalid"} / productionSafe=${report.runbookResult.productionSafe ? "yes" : "no"} / report=${report.runbookResult.readinessReportId ?? "missing"}` : "missing"}`,
+    `- Runbook result: ${report.runbookResult ? `${report.runbookResult.ok ? "ok" : "failed"} / ${report.runbookResult.failedCount} failed / blocking=${report.runbookResult.blockingFailedCount ?? "unknown"} / identity=${report.runbookResult.identityValid ? "valid" : "invalid"} / reviewSafe=${report.runbookResult.runbookReviewSafe ? "yes" : "no"} / productionSafe=${report.runbookResult.productionSafe ? "yes" : "no"} / report=${report.runbookResult.readinessReportId ?? "missing"}` : "missing"}`,
     `- External handoff: ${report.externalHandoff ? `${report.externalHandoff.id} / ${report.externalHandoff.resultEngine} / ${report.externalHandoff.simulationEngine}` : "missing"}`,
     `- External CAM handoffs: ${report.externalCamHandoffs ? `${report.externalCamHandoffs.completedEngines.length}/${report.externalCamHandoffs.requiredEngines.length} engines (${report.externalCamHandoffs.completedEngines.join(", ") || "none"})` : "missing"}`,
     `- Neutral import: ${report.neutralImport ? `${report.neutralImport.status} / imported=${report.neutralImport.imported} / eligible=${report.neutralImport.postprocessEligible}` : "missing"}`,
@@ -3822,12 +4618,24 @@ function createV3ReadinessMarkdown(report) {
     `- Latest machine acceptance: ${report.latestMachineAcceptance ? `${report.latestMachineAcceptance.recordCount} records / ${report.latestMachineAcceptance.latestOutcome ?? "unknown"} / required=${report.latestMachineAcceptance.latestAllRequiredPassed ? "pass" : "review"}` : "missing"}`,
     `- Production evidence dossier: ${report.latestEvidenceDossier ? `${report.latestEvidenceDossier.status} / pass=${report.latestEvidenceDossier.passedCount} review=${report.latestEvidenceDossier.reviewCount} block=${report.latestEvidenceDossier.blockedCount}` : "missing"}`,
     `- Evidence cross checks: ${report.latestEvidenceDossier ? formatProductionEvidenceCrossChecksForReadiness(report.latestEvidenceDossier.crossChecks) : "missing"}`,
+    `- Material-removal production gate: ${formatReadinessMaterialRemovalGate(materialRemovalGate)}`,
+    `- Air-run production gate: ${airRunGate ? `${airRunGate.status ?? "unknown"} / evidence=${airRunGate.airRunEvidenceStatus ?? airRunGate.evidenceStatus ?? "missing"} / packageBinding=${airRunGate.airRunPackageBindingStatus ?? airRunGate.packageBindingStatus ?? "missing"}` : "missing"}`,
+    `- Field package gate: ${fieldPackageGate ? `${fieldPackageGate.status ?? "unknown"} / binding=${fieldPackageGate.fieldBindingStatus ?? fieldPackageGate.bindingStatus ?? "missing"} / machine=${fieldPackageGate.machineBindingStatus ?? "missing"} / trial=${fieldPackageGate.trialBindingStatus ?? "missing"}` : "missing"}`,
     ""
   ];
   return `${lines.join("\n")}\n`;
 }
 
 function createV3AcceptanceRunbookShell(report) {
+  const productionReadinessAudit = report.latestEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const productionReadinessGates = Array.isArray(productionReadinessAudit?.gates) ? productionReadinessAudit.gates : [];
+  const productionReadinessGateById = new Map(productionReadinessGates.map((gate) => [gate.id, gate]));
+  const materialRemovalGate = productionReadinessAudit?.materialRemovalGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("material-removal-proof"));
+  const airRunGate = productionReadinessAudit?.airRunGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("air-run-proof"));
+  const fieldPackageGate = productionReadinessAudit?.fieldPackageGate
+    ?? createEvidenceReviewAuditGateSummary(productionReadinessGateById.get("field-package-proof"));
   const lines = [
     "#!/usr/bin/env bash",
     "set -u",
@@ -3885,6 +4693,9 @@ function createV3AcceptanceRunbookShell(report) {
     "echo \"API_BASE=${API_BASE}\"",
     "echo \"RESULT_JSON=${RESULT_JSON}\"",
     "echo \"RESULT_BUNDLE_ZIP=${RESULT_BUNDLE_ZIP}\"",
+    "echo " + shellQuote(`Material-removal production gate: ${formatReadinessMaterialRemovalGate(materialRemovalGate)}`),
+    "echo " + shellQuote(`Air-run production gate: ${airRunGate ? `${airRunGate.status ?? "unknown"} / evidence=${airRunGate.airRunEvidenceStatus ?? airRunGate.evidenceStatus ?? "missing"} / packageBinding=${airRunGate.airRunPackageBindingStatus ?? airRunGate.packageBindingStatus ?? "missing"}` : "missing"}`),
+    "echo " + shellQuote(`Field package gate: ${fieldPackageGate ? `${fieldPackageGate.status ?? "unknown"} / binding=${fieldPackageGate.fieldBindingStatus ?? fieldPackageGate.bindingStatus ?? "missing"} / machine=${fieldPackageGate.machineBindingStatus ?? "missing"} / trial=${fieldPackageGate.trialBindingStatus ?? "missing"}` : "missing"}`),
     "echo \"This script only runs checks; it does not enable production switches.\"",
     "",
     "overall=0"
@@ -3931,7 +4742,9 @@ function createV3AcceptanceRunbookShell(report) {
     "  ok: Number(process.env.RESULT_OVERALL) === 0,",
     "  failedCount: failed.length,",
     "  blockingFailedCount: blockingFailed.length,",
-    "  productionSafe: Number(process.env.RESULT_OVERALL) === 0 && blockingFailed.length === 0,",
+    "  runbookReviewSafe: Number(process.env.RESULT_OVERALL) === 0 && blockingFailed.length === 0,",
+    "  productionSafe: false,",
+    "  productionSafeReason: 'Runbook execution only proves review-safe Linux evidence. Production remains locked until HeDiao3D validates same-job material-removal, residual/gouge, air-run, trial feedback and machine acceptance evidence.',",
     "  failedSteps: failed.map((step) => ({ id: step.id, title: step.title, exitCode: step.exitCode, blocksProduction: step.blocksProduction })),",
     "  steps",
     "};",
@@ -3974,6 +4787,7 @@ function createV3AcceptanceRunbookShell(report) {
     "      'Optional Linux CAM evidence files are included only when they exist beside the runbook execution directory.',",
     "      '',",
     "      'This bundle is evidence for readiness gates only. It does not unlock production NC by itself.',",
+    "      'runbookReviewSafe=true means the script checks passed for review; productionSafe remains false until HeDiao3D validates the full same-job production evidence chain.',",
     "      ''",
     "    ].join('\\n'), 'utf8')",
     "  }",
@@ -6745,6 +7559,7 @@ async function processOrchestratorJob(job, settings) {
     machineAcceptanceChecklist
   });
   await writeFile(join(job.workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+  await writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier);
   const safeTrialExecutionPlan = createSafeTrialExecutionPlan({
     job,
     settings,
@@ -6887,6 +7702,7 @@ async function processOrchestratorJob(job, settings) {
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-runbook.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-unlock-matrix.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-evidence-dossier.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "field-evidence-proof-chain.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "mvp-operator-status.json"));
@@ -9005,11 +9821,17 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
     materialReadiness?.readyForMaterialRemovalSimulation
     ?? materialReadiness?.importedReadyForMaterialRemovalSimulation
   );
-  const upstreamProductionResidualEvidenceReady = Boolean(
+  const upstreamUnsafeProductionClaim = Boolean(
+    materialReadiness?.unsafeProductionClaim
+    ?? materialReadiness?.imported?.unsafeProductionClaim
+  );
+  const localUnsafeProductionClaim = Boolean(residualValidation?.unsafeProductionClaim);
+  const upstreamDeclaredProductionResidualEvidenceReady = Boolean(
     materialReadiness?.productionResidualEvidenceReady
     ?? materialReadiness?.imported?.productionResidualEvidenceReady
   );
-  const localProductionResidualEvidenceReady = Boolean(residualValidation?.productionResidualEvidenceReady);
+  const upstreamProductionResidualEvidenceReady = upstreamDeclaredProductionResidualEvidenceReady && !upstreamUnsafeProductionClaim;
+  const localProductionResidualEvidenceReady = Boolean(residualValidation?.productionResidualEvidenceReady) && !localUnsafeProductionClaim;
   const productionResidualEvidenceReady = upstreamProductionResidualEvidenceReady || localProductionResidualEvidenceReady;
   const engineeringSimulationAllowed = Boolean(simulationQuality?.engineeringSimulationAllowed);
   const productionEvidenceAllowed = Boolean(simulationQuality?.productionEvidenceAllowed);
@@ -9053,9 +9875,22 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
       status: productionResidualEvidenceReady ? "pass" : "review",
       summary: productionResidualEvidenceReady
         ? "残料/过切证据已由测量或扫掠体积验证闭合。"
-        : "残料/过切仍缺少测量或扫掠体积验证，不能单独作为生产放行依据。"
+        : upstreamUnsafeProductionClaim || localUnsafeProductionClaim
+          ? "存在危险生产残料声明：声明已闭合，但缺少匹配的测量或扫掠体积验证。"
+          : "残料/过切仍缺少测量或扫掠体积验证，不能单独作为生产放行依据。"
     }
   ];
+  if (upstreamUnsafeProductionClaim || localUnsafeProductionClaim) {
+    checks.push({
+      id: "unsafe-residual-production-claim",
+      status: "block",
+      summary: upstreamUnsafeProductionClaim && localUnsafeProductionClaim
+        ? "OpenCAMLib 上游材料准备度和 CAMotics residualValidation 都包含危险生产残料声明。"
+        : upstreamUnsafeProductionClaim
+          ? "OpenCAMLib 上游材料准备度包含危险生产残料声明。"
+          : "CAMotics residualValidation 包含危险生产残料声明。"
+    });
+  }
   const topBlockers = [
     ...checks.filter((check) => check.status !== "pass").map((check) => `${check.id}: ${check.summary}`),
     ...missingForProduction.map((item) => `missing: ${item}`),
@@ -9081,8 +9916,11 @@ function createResidualClosureReviewFromCamoticsEvidence({ realMaterialRemovalVe
     engineeringSimulationAllowed,
     productionEvidenceAllowed,
     productionResidualEvidenceReady,
+    upstreamDeclaredProductionResidualEvidenceReady,
     upstreamProductionResidualEvidenceReady,
     localProductionResidualEvidenceReady,
+    upstreamUnsafeProductionClaim,
+    localUnsafeProductionClaim,
     residualValidation,
     residualBasis: productionResidualEvidenceReady
       ? localProductionResidualEvidenceReady
@@ -10174,6 +11012,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     || latestMachineAcceptanceRecord?.rotaryCalibration?.status === "pass";
   const airRunEvidence = createAirRunEvidence(latestMachineAcceptanceRecord);
   const fieldEvidencePackageBinding = createFieldEvidencePackageBinding(latestMachineAcceptanceRecord, latestTrialFeedbackRecord);
+  const fieldEvidenceCompleteness = createFieldEvidenceCompletenessAudit(latestMachineAcceptanceRecord, latestTrialFeedbackRecord);
   const trialFeedbackPassed = trialFeedbackLog?.recordCount > 0
     && trialFeedbackLog.latestOutcome === "success"
     && trialFeedbackIntegrityBound;
@@ -10182,6 +11021,17 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     && machineAcceptanceLog.latestAllRequiredPassed === true
     && machineAcceptanceIntegrityBound
     && rotaryCalibrationPassed;
+  const fieldEvidenceProofChain = createFieldEvidenceProofChain({
+    machineRecord: latestMachineAcceptanceRecord,
+    trialRecord: latestTrialFeedbackRecord,
+    airRunEvidence,
+    fieldEvidencePackageBinding,
+    fieldEvidenceCompleteness,
+    machineAcceptancePassed,
+    trialFeedbackPassed,
+    rotaryCalibrationPassed
+  });
+  const camoticsResidualProofCrossCheck = createCamoticsResidualProofCrossCheck(job);
   const productionReadinessAudit = createProductionReadinessAudit({
     productionGate,
     camHandoffQuality,
@@ -10192,9 +11042,13 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     controllerDialectReport,
     machineAcceptancePassed,
     trialFeedbackPassed,
+    airRunEvidence,
     airRunPassed: airRunEvidence.status === "pass",
     rotaryCalibrationPassed,
-    fieldEvidencePackageBinding
+    fieldEvidencePackageBinding,
+    fieldEvidenceCompleteness,
+    fieldEvidenceProofChain,
+    camoticsResidualProofCrossCheck
   });
   const evidenceItems = [
     {
@@ -10379,12 +11233,15 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
     blockedCount,
     evidenceItems,
     missingEvidence,
+    productionReadinessAudit: summarizePackageIndexProductionReadinessAudit(productionReadinessAudit),
     crossChecks: {
       unlockMatrixPass: unlockByMatrix,
       realMaterialRemovalVerified: Boolean(simulationEvidence?.realMaterialRemovalVerified),
       residualClosureReview: simulationEvidence?.residualClosureReview ?? null,
       residualClosureStatus: simulationEvidence?.residualClosureReview?.status ?? "missing",
       residualProductionEvidenceReady: Boolean(simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady),
+      residualLocalValidationBindingStatus: getResidualLocalValidationBindingStatus(simulationEvidence?.residualClosureReview),
+      residualLocalValidationBinding: getResidualLocalValidationBinding(simulationEvidence?.residualClosureReview),
       camoticsInputIdentityStatus: camoticsIdentity.inputIdentityStatus,
       camoticsCliRunPackageBindingStatus: camoticsIdentity.cliRunPackageBindingStatus,
       camoticsMotionConsistencyStatus: camoticsIdentity.motionConsistencyStatus,
@@ -10426,6 +11283,8 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
       trialFeedbackPassed,
       trialFeedbackIntegrityBound,
       fieldEvidencePackageBinding,
+      fieldEvidenceCompleteness,
+      fieldEvidenceProofChain,
       productionReadinessAudit,
       optimizationStatus: processOptimizationPlan?.status ?? null
     },
@@ -10441,7 +11300,7 @@ function createProductionEvidenceDossier({ job, productionGate, productionUnlock
   };
 }
 
-function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, airRunPassed, rotaryCalibrationPassed, fieldEvidencePackageBinding }) {
+function createProductionReadinessAudit({ productionGate, camHandoffQuality, neutralBinding, externalGcodeBinding, simulationEvidence, ncStaticAnalysis, controllerDialectReport, machineAcceptancePassed, trialFeedbackPassed, airRunEvidence, airRunPassed, rotaryCalibrationPassed, fieldEvidencePackageBinding, fieldEvidenceCompleteness, fieldEvidenceProofChain, camoticsResidualProofCrossCheck = null }) {
   const externalSourceReady = camHandoffQuality?.level === "ready"
     && camHandoffQuality?.source === "external-adapter"
     && camHandoffQuality?.externalToolpathUsed === true
@@ -10453,12 +11312,20 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
     || (neutralBinding?.required === true && neutralBinding?.status === "pass")
   );
   const realCamReady = externalSourceReady && externalBindingReady;
-  const residualEvidenceReady = Boolean(simulationEvidence?.residualClosureReview?.productionResidualEvidenceReady);
+  const residualClosureReview = simulationEvidence?.residualClosureReview ?? null;
+  const residualEvidenceReady = Boolean(residualClosureReview?.productionResidualEvidenceReady);
+  const residualUnsafeProductionClaim = Boolean(residualClosureReview?.upstreamUnsafeProductionClaim || residualClosureReview?.localUnsafeProductionClaim);
+  const residualLocalValidationBinding = getResidualLocalValidationBinding(residualClosureReview);
+  const residualLocalValidationBindingStatus = residualLocalValidationBinding?.status ?? "not-required";
+  const residualValidationPresent = Boolean(residualClosureReview?.residualValidation?.present);
+  const residualProofCrossCheckStatus = camoticsResidualProofCrossCheck?.status ?? "missing";
+  const residualProofCrossCheckOk = residualProofCrossCheckStatus !== "mismatch";
   const realSimulationReady = Boolean(
     simulationEvidence?.realMaterialRemovalVerified
     && simulationEvidence?.productionUnlockEligible
     && simulationEvidence?.level === "material-removal-verified"
     && residualEvidenceReady
+    && residualProofCrossCheckOk
   );
   const ncReady = ncStaticAnalysis?.level === "ready" && controllerDialectReport?.level === "ready";
   const fieldReady = Boolean(
@@ -10467,6 +11334,8 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
     && airRunPassed
     && rotaryCalibrationPassed
     && fieldEvidencePackageBinding?.status === "matched"
+    && fieldEvidenceCompleteness?.status === "pass"
+    && fieldEvidenceProofChain?.productionFieldEvidenceReady === true
   );
   const gates = [
     {
@@ -10481,8 +11350,21 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
       id: "material-removal-proof",
       label: "真实材料去除仿真",
       status: realSimulationReady ? "pass" : "review",
+      residualClosureStatus: residualClosureReview?.status ?? "missing",
+      residualUnsafeProductionClaim,
+      residualTopBlockers: Array.isArray(residualClosureReview?.topBlockers) ? residualClosureReview.topBlockers.slice(0, 6) : [],
+      residualLocalValidationBindingStatus,
+      residualLocalValidationBinding,
+      residualProofCrossCheckStatus,
+      residualProofCrossCheck: camoticsResidualProofCrossCheck,
       summary: realSimulationReady
         ? "CAMotics/等效材料去除仿真已绑定当前输入，且残料/过切证据已闭合。"
+        : !residualProofCrossCheckOk
+          ? camoticsResidualProofCrossCheck?.summary ?? "Linux 上传报告与 CAMotics 导入审计的残料 proof chain 口径不一致。"
+        : residualUnsafeProductionClaim
+          ? "材料去除仿真已回填，但存在危险生产残料声明：声明已闭合却缺少匹配的测量或扫掠体积验证。"
+        : simulationEvidence?.realMaterialRemovalVerified && residualValidationPresent && residualLocalValidationBindingStatus !== "matched"
+          ? "材料去除仿真已绑定当前输入，residualValidation 已填写，但缺少或不匹配 camotics-result-local-validation.json 的残料校验证明。"
         : simulationEvidence?.realMaterialRemovalVerified && !residualEvidenceReady
           ? "材料去除仿真已绑定当前输入，但残料/过切证据尚未通过测量或扫掠体积验证。"
           : simulationEvidence?.summary ?? "缺少真实材料去除仿真证据。"
@@ -10499,6 +11381,7 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
       id: "air-run-proof",
       label: "离料空跑验证",
       status: airRunPassed ? "pass" : "review",
+      airRunEvidence: airRunEvidence ?? null,
       summary: airRunPassed
         ? "旋转标定空跑和整条离料空跑已通过，并绑定当前加工包哈希。"
         : "缺少旋转标定空跑/整条离料空跑通过记录，或空跑文件哈希未绑定。"
@@ -10515,9 +11398,14 @@ function createProductionReadinessAudit({ productionGate, camHandoffQuality, neu
       id: "field-package-proof",
       label: "现场证据同包绑定",
       status: fieldReady ? "pass" : "review",
+      machineAcceptancePassed: Boolean(machineAcceptancePassed),
+      trialFeedbackPassed: Boolean(trialFeedbackPassed),
+      fieldEvidencePackageBinding: fieldEvidencePackageBinding ?? null,
+      fieldEvidenceCompleteness: fieldEvidenceCompleteness ?? null,
+      fieldEvidenceProofChain: fieldEvidenceProofChain ?? null,
       summary: fieldReady
-        ? "试雕反馈和机床验收均通过，并绑定同一组加工包文件哈希。"
-        : fieldEvidencePackageBinding?.summary ?? "缺少试雕反馈、机床验收或同包哈希绑定。"
+        ? "试雕反馈和机床验收均通过，现场记录完整，并绑定同一组加工包文件哈希。"
+        : fieldEvidenceProofChain?.summary ?? fieldEvidenceCompleteness?.summary ?? fieldEvidencePackageBinding?.summary ?? "缺少试雕反馈、机床验收或同包哈希绑定。"
     }
   ];
   const blockCount = gates.filter((gate) => gate.status === "block").length;
@@ -10614,6 +11502,208 @@ function createFieldEvidencePackageBinding(machineRecord, trialRecord) {
   };
 }
 
+function createFieldEvidenceCompletenessAudit(machineRecord, trialRecord) {
+  const machineSteps = Array.isArray(machineRecord?.steps) ? machineRecord.steps : [];
+  const machineStepById = new Map(machineSteps.map((step) => [step.id, step]));
+  const hasText = (value, min = 1) => typeof value === "string" && value.trim().length >= min;
+  const passedStepWithNote = (id) => {
+    const step = machineStepById.get(id);
+    return Boolean(step?.status === "pass" && hasText(step.evidenceNote, 6));
+  };
+  const checks = [
+    {
+      id: "machine-operator-identity",
+      status: hasText(machineRecord?.operator, 2) && hasText(machineRecord?.machineSerial, 2) ? "pass" : "missing",
+      operator: machineRecord?.operator ?? null,
+      machineSerial: machineRecord?.machineSerial ?? null
+    },
+    {
+      id: "machine-download-review",
+      status: machineRecord?.downloadIntegrity?.packageIntegrityReviewed === true
+        && machineRecord?.downloadIntegrity?.operatorChecklistReviewed === true
+        && machineRecord?.downloadIntegrity?.neverMachineConfirmed === true ? "pass" : "missing",
+      packageIntegrityReviewed: Boolean(machineRecord?.downloadIntegrity?.packageIntegrityReviewed),
+      operatorChecklistReviewed: Boolean(machineRecord?.downloadIntegrity?.operatorChecklistReviewed),
+      neverMachineConfirmed: Boolean(machineRecord?.downloadIntegrity?.neverMachineConfirmed)
+    },
+    {
+      id: "machine-photo-attachments",
+      status: Array.isArray(machineRecord?.attachments) && machineRecord.attachments.length > 0 ? "pass" : "missing",
+      attachmentCount: Array.isArray(machineRecord?.attachments) ? machineRecord.attachments.length : 0
+    },
+    {
+      id: "machine-step-evidence-notes",
+      status: ["rotary-calibration-airrun", "air-run", "soft-material-trial"].every(passedStepWithNote) ? "pass" : "missing",
+      requiredStepIds: ["rotary-calibration-airrun", "air-run", "soft-material-trial"]
+    },
+    {
+      id: "trial-operator-context",
+      status: hasText(trialRecord?.machineName, 2)
+        && hasText(trialRecord?.toolName, 2)
+        && hasText(trialRecord?.materialName, 2) ? "pass" : "missing",
+      machineName: trialRecord?.machineName ?? null,
+      toolName: trialRecord?.toolName ?? null,
+      materialName: trialRecord?.materialName ?? null
+    },
+    {
+      id: "trial-download-review",
+      status: trialRecord?.downloadIntegrity?.packageIntegrityReviewed === true
+        && trialRecord?.downloadIntegrity?.operatorChecklistReviewed === true
+        && trialRecord?.downloadIntegrity?.neverMachineConfirmed === true ? "pass" : "missing",
+      packageIntegrityReviewed: Boolean(trialRecord?.downloadIntegrity?.packageIntegrityReviewed),
+      operatorChecklistReviewed: Boolean(trialRecord?.downloadIntegrity?.operatorChecklistReviewed),
+      neverMachineConfirmed: Boolean(trialRecord?.downloadIntegrity?.neverMachineConfirmed)
+    },
+    {
+      id: "trial-photo-evidence",
+      status: trialRecord?.photoAttached === true ? "pass" : "missing",
+      photoName: trialRecord?.photoName ?? null
+    },
+    {
+      id: "trial-runtime-and-notes",
+      status: Number.isFinite(Number(trialRecord?.actualMinutes)) && Number(trialRecord?.actualMinutes) > 0 && hasText(trialRecord?.notes, 12) ? "pass" : "missing",
+      actualMinutes: trialRecord?.actualMinutes ?? null
+    }
+  ];
+  const missing = checks.filter((check) => check.status !== "pass");
+  return {
+    schema: "hediao3d.field-evidence-completeness.v1",
+    status: missing.length === 0 ? "pass" : "missing",
+    complete: missing.length === 0,
+    missingCount: missing.length,
+    checks,
+    missingChecks: missing.map((check) => check.id),
+    summary: missing.length === 0
+      ? "现场证据记录完整：操作员复核、下载包核验、照片/附件、步骤说明和试雕耗时均已填写。"
+      : `现场证据记录缺少 ${missing.length} 个完整性项，正式生产包保持锁定。`
+  };
+}
+
+function createFieldEvidenceProofChain({ machineRecord, trialRecord, airRunEvidence, fieldEvidencePackageBinding, fieldEvidenceCompleteness, machineAcceptancePassed, trialFeedbackPassed, rotaryCalibrationPassed }) {
+  const machineBinding = machineRecord?.downloadIntegrity?.packageBinding ?? null;
+  const trialBinding = trialRecord?.downloadIntegrity?.packageBinding ?? null;
+  const airRunReady = airRunEvidence?.status === "pass";
+  const sharedFiles = Array.isArray(fieldEvidencePackageBinding?.sharedFiles)
+    ? fieldEvidencePackageBinding.sharedFiles
+    : [];
+  const mismatchedFiles = sharedFiles.filter((file) => file.status !== "matched");
+  const requiredChecks = [
+    {
+      id: "machine-acceptance-success",
+      status: machineAcceptancePassed ? "pass" : machineRecord ? "review" : "missing",
+      recordId: machineRecord?.id ?? null,
+      outcome: machineRecord?.outcome ?? null
+    },
+    {
+      id: "trial-feedback-success",
+      status: trialFeedbackPassed ? "pass" : trialRecord ? "review" : "missing",
+      recordId: trialRecord?.id ?? null,
+      outcome: trialRecord?.outcome ?? null
+    },
+    {
+      id: "air-run-proof",
+      status: airRunReady ? "pass" : airRunEvidence?.status === "failed" ? "failed" : "missing",
+      evidenceStatus: airRunEvidence?.status ?? "missing",
+      packageBindingStatus: airRunEvidence?.packageBindingStatus ?? "missing"
+    },
+    {
+      id: "rotary-calibration-proof",
+      status: rotaryCalibrationPassed ? "pass" : machineRecord?.rotaryCalibration ? "review" : "missing",
+      evidenceStatus: machineRecord?.rotaryCalibration?.status ?? "missing"
+    },
+    {
+      id: "machine-package-binding",
+      status: machineBinding?.status === "matched" ? "pass" : machineBinding ? "failed" : "missing",
+      packageBindingStatus: machineBinding?.status ?? "missing",
+      mismatchCount: Number(machineBinding?.mismatchCount ?? 0)
+    },
+    {
+      id: "trial-package-binding",
+      status: trialBinding?.status === "matched" ? "pass" : trialBinding ? "failed" : "missing",
+      packageBindingStatus: trialBinding?.status ?? "missing",
+      mismatchCount: Number(trialBinding?.mismatchCount ?? 0)
+    },
+    {
+      id: "shared-package-hashes",
+      status: fieldEvidencePackageBinding?.status === "matched" ? "pass" : fieldEvidencePackageBinding ? "failed" : "missing",
+      matchedSharedFileCount: Number(fieldEvidencePackageBinding?.matchedSharedFileCount ?? 0),
+      mismatchCount: Number(fieldEvidencePackageBinding?.mismatchCount ?? 0)
+    },
+    {
+      id: "field-evidence-completeness",
+      status: fieldEvidenceCompleteness?.status === "pass" ? "pass" : fieldEvidenceCompleteness ? "review" : "missing",
+      missingCount: Number(fieldEvidenceCompleteness?.missingCount ?? 0),
+      missingChecks: Array.isArray(fieldEvidenceCompleteness?.missingChecks) ? fieldEvidenceCompleteness.missingChecks.slice(0, 12) : []
+    }
+  ];
+  const missing = requiredChecks.filter((check) => check.status === "missing");
+  const failed = requiredChecks.filter((check) => check.status === "failed");
+  const review = requiredChecks.filter((check) => check.status === "review");
+  const productionFieldEvidenceReady = missing.length === 0 && failed.length === 0 && review.length === 0;
+  const status = productionFieldEvidenceReady
+    ? "production-field-evidence-bound"
+    : failed.length > 0
+      ? "field-evidence-binding-mismatch"
+      : missing.length > 0
+        ? "missing-field-evidence"
+        : "field-evidence-review";
+  return {
+    schema: "hediao3d.field-evidence-proof-chain.v1",
+    status,
+    productionFieldEvidenceReady,
+    machineAcceptanceRecordId: machineRecord?.id ?? null,
+    trialFeedbackRecordId: trialRecord?.id ?? null,
+    machineBindingStatus: machineBinding?.status ?? "missing",
+    trialBindingStatus: trialBinding?.status ?? "missing",
+    airRunEvidenceStatus: airRunEvidence?.status ?? "missing",
+    airRunPackageBindingStatus: airRunEvidence?.packageBindingStatus ?? "missing",
+    rotaryCalibrationStatus: machineRecord?.rotaryCalibration?.status ?? "missing",
+    fieldBindingStatus: fieldEvidencePackageBinding?.status ?? "missing",
+    fieldCompletenessStatus: fieldEvidenceCompleteness?.status ?? "missing",
+    fieldCompleteness: fieldEvidenceCompleteness ?? null,
+    matchedSharedFileCount: Number(fieldEvidencePackageBinding?.matchedSharedFileCount ?? 0),
+    mismatchCount: Number(fieldEvidencePackageBinding?.mismatchCount ?? 0),
+    mismatchedFiles: mismatchedFiles.slice(0, 12).map((file) => ({
+      filename: file.filename ?? "unknown",
+      issues: Array.isArray(file.issues) ? file.issues.slice(0, 8) : [],
+      machineSha256: file.machineSha256 ?? null,
+      trialSha256: file.trialSha256 ?? null
+    })),
+    checks: requiredChecks,
+    productionBoundary: {
+      unlocksProductionByItself: false,
+      requiresRealCam: true,
+      requiresMaterialRemovalResidualClosure: true,
+      requiresNcAndControllerChecks: true
+    },
+    summary: productionFieldEvidenceReady
+      ? "现场证据链已闭合：离料空跑、旋转标定、软料试雕反馈和机床验收均绑定同一加工包哈希，且现场记录完整。"
+      : failed.length > 0
+        ? `现场证据链存在 ${failed.length} 个绑定失败项，正式生产包保持锁定。`
+        : missing.length > 0
+          ? `现场证据链缺少 ${missing.length} 个必需项，正式生产包保持锁定。`
+          : "现场证据链仍需人工复核，正式生产包保持锁定。"
+  };
+}
+
+async function writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier, writer = null) {
+  const proofChain = productionEvidenceDossier?.crossChecks?.fieldEvidenceProofChain;
+  if (!job?.workDir || !proofChain || typeof proofChain !== "object") return null;
+  const artifact = {
+    ...proofChain,
+    jobId: productionEvidenceDossier.jobId ?? job.id,
+    artifact: "field-evidence-proof-chain.json",
+    sourceDossier: "production-evidence-dossier.json"
+  };
+  const content = JSON.stringify(artifact, null, 2);
+  if (writer) {
+    await writer("field-evidence-proof-chain.json", content);
+  } else {
+    await writeFile(join(job.workDir, "field-evidence-proof-chain.json"), content, "utf8");
+  }
+  return artifact;
+}
+
 function createAirRunEvidence(machineRecord) {
   const steps = Array.isArray(machineRecord?.steps) ? machineRecord.steps : [];
   const stepById = new Map(steps.map((step) => [step.id, step]));
@@ -10675,7 +11765,23 @@ function createAirRunEvidence(machineRecord) {
       ? "旋转标定空跑和整条离料空跑已通过，并且 air-run 文件哈希绑定当前加工包。"
       : status === "failed"
         ? `离料空跑证据存在 ${failed.length} 个失败项。`
-        : `离料空跑证据缺少 ${missing.length} 个必需项。`
+      : `离料空跑证据缺少 ${missing.length} 个必需项。`
+  };
+}
+
+function summarizePackageIndexProductionReadinessAudit(productionReadinessAudit) {
+  if (!productionReadinessAudit || typeof productionReadinessAudit !== "object") return null;
+  const gates = Array.isArray(productionReadinessAudit.gates) ? productionReadinessAudit.gates : [];
+  const gateById = new Map(gates.map((gate) => [gate.id, gate]));
+  return {
+    status: productionReadinessAudit.status ?? "unknown",
+    allowProductionPackage: Boolean(productionReadinessAudit.allowProductionPackage),
+    passCount: Number(productionReadinessAudit.passCount ?? 0),
+    reviewCount: Number(productionReadinessAudit.reviewCount ?? 0),
+    blockCount: Number(productionReadinessAudit.blockCount ?? 0),
+    materialRemovalGate: createEvidenceReviewAuditGateSummary(gateById.get("material-removal-proof")),
+    airRunGate: createEvidenceReviewAuditGateSummary(gateById.get("air-run-proof")),
+    fieldPackageGate: createEvidenceReviewAuditGateSummary(gateById.get("field-package-proof"))
   };
 }
 
@@ -10707,6 +11813,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
       mismatchCount: 0,
       candidatePackageValidationBound: false,
       candidatePackageBundleBound: false,
+      candidatePackage: summarizeCamoticsUpstreamCandidatePackage(null),
       machineFit: summarizeCamoticsUpstreamMachineFit(null),
       materialRemovalReadiness: summarizeCamoticsUpstreamMaterialRemovalReadiness(null),
       summary: "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
@@ -10727,6 +11834,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
   const hasMatchedKey = (key) => normalizedFiles.some((file) => file.key === key && file.matched);
   const candidatePackageValidationBound = Boolean(upstream.candidatePackageValidationBound ?? hasMatchedKey("opencamlibCandidatePackageValidation"));
   const candidatePackageBundleBound = Boolean(upstream.candidatePackageBundleBound ?? hasMatchedKey("opencamlibCandidatePackageBundle"));
+  const candidatePackage = summarizeCamoticsUpstreamCandidatePackage(upstream.candidatePackage);
   const machineFit = summarizeCamoticsUpstreamMachineFit(upstream.machineFit ?? upstream.candidateMachineFit);
   const materialRemovalReadiness = summarizeCamoticsUpstreamMaterialRemovalReadiness(upstream.materialRemovalReadiness);
   return {
@@ -10737,6 +11845,7 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
     mismatchCount,
     candidatePackageValidationBound,
     candidatePackageBundleBound,
+    candidatePackage,
     machineFit,
     materialRemovalReadiness,
     files: normalizedFiles,
@@ -10745,6 +11854,40 @@ function summarizeCamoticsUpstreamCamEvidenceForReports(upstream) {
       : status === "not-required"
         ? "CAMotics 材料去除结果未要求绑定上游 Native CAM/OpenCAMLib 证据。"
         : `CAMotics 上游 CAM/OpenCAMLib 证据未匹配：${matchedCount}/${expectedCount}，mismatch=${mismatchCount}。`
+  };
+}
+
+function summarizeCamoticsUpstreamCandidatePackage(candidatePackage) {
+  if (!candidatePackage || typeof candidatePackage !== "object") {
+    return {
+      required: false,
+      status: "not-required",
+      level: "missing",
+      readyForImport: false,
+      bundleShaMatches: false,
+      summary: "CAMotics 上游证据未包含 OpenCAMLib 候选包 generated-artifact 摘要。"
+    };
+  }
+  const status = candidatePackage.status ?? (candidatePackage.ok === true ? "matched" : candidatePackage.bundleShaOk === false || candidatePackage.bundleShaMatches === false ? "mismatch" : "matched");
+  return {
+    required: Boolean(candidatePackage.required ?? true),
+    status,
+    schema: candidatePackage.schema ?? "hediao3d.opencamlib-candidate-package-summary.v1",
+    level: candidatePackage.importedLevel ?? candidatePackage.level ?? "missing",
+    expectedLevel: candidatePackage.expectedLevel ?? null,
+    importedLevel: candidatePackage.importedLevel ?? candidatePackage.level ?? null,
+    readyForImport: Boolean(candidatePackage.readyForImport),
+    productionCandidateReady: Boolean(candidatePackage.productionCandidateReady),
+    bundleShaMatches: Boolean(candidatePackage.bundleShaOk ?? candidatePackage.bundleShaMatches),
+    validationReportContentSha256: candidatePackage.validationReportContentSha256 ?? null,
+    expectedBundleSha256: candidatePackage.expectedBundleSha256 ?? candidatePackage.candidatePackageBundleSha256 ?? null,
+    importedBundleSha256: candidatePackage.importedBundleSha256 ?? candidatePackage.candidatePackageBundleSha256 ?? null,
+    actualBundleSha256: candidatePackage.importedActualBundleSha256 ?? candidatePackage.actualBundleSha256 ?? null,
+    summary: candidatePackage.summary ?? (
+      status === "matched"
+        ? "OpenCAMLib 候选包报告与证据包 generated-artifact 身份已匹配。"
+        : "OpenCAMLib 候选包报告与证据包 generated-artifact 身份不匹配。"
+    )
   };
 }
 
@@ -10790,8 +11933,25 @@ function summarizeCamoticsUpstreamMaterialRemovalReadiness(readiness) {
       summary: simulationQualitySource.summary ?? null
     } : null,
     productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady ?? imported?.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(readiness.unsafeProductionClaim ?? imported?.unsafeProductionClaim),
+    residualProofSource: summarizeBoundResidualProofSource(readiness.residualProofSource ?? imported?.residualProofSource ?? null),
     missingForProduction: missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 8),
     summary: readiness.summary ?? `CAMotics 上游材料去除准备度：${level}。`
+  };
+}
+
+function summarizeBoundResidualProofSource(source) {
+  if (!source || typeof source !== "object") return null;
+  return {
+    schema: source.schema ?? "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: source.status ?? "unknown",
+    ready: Boolean(source.ready),
+    proofStatus: source.proofStatus ?? null,
+    localValidationOk: Boolean(source.localValidationOk),
+    productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(source.unsafeProductionClaim),
+    upstreamStatus: source.upstreamStatus ?? null,
+    upstreamCandidatePackageStatus: source.upstreamCandidatePackageStatus ?? null
   };
 }
 
@@ -10832,6 +11992,7 @@ function createProductionEvidenceDossierPublicSummary(dossier) {
     summary: dossier.summary,
     crossChecks: dossier.crossChecks ?? null,
     camoticsUpstreamCamEvidence: dossier.crossChecks?.camoticsUpstreamCamEvidence ?? null,
+    productionReadinessAudit: summarizePackageIndexProductionReadinessAudit(dossier.crossChecks?.productionReadinessAudit),
     missingEvidenceCount: Array.isArray(dossier.missingEvidence) ? dossier.missingEvidence.length : 0,
     missingEvidenceTop: Array.isArray(dossier.missingEvidence)
       ? dossier.missingEvidence.slice(0, 6).map((item) => ({
@@ -10916,6 +12077,13 @@ function createProductionClosureAudit({ job, productionGate, productionUnlockMat
   const airRunProof = gateById.get("air-run-proof");
   const rotaryProof = gateById.get("rotary-calibration-proof");
   const fieldProof = gateById.get("field-package-proof");
+  const camoticsResidualProofCrossCheck = createCamoticsResidualProofCrossCheck(job);
+  const camoticsStepStatus = camoticsResidualProofCrossCheck.status === "mismatch"
+    ? "review"
+    : simulationProof?.status ?? passIf(false, "尚未回填非 synthetic 且绑定当前 camotics-preview.nc 的材料去除结果。").status;
+  const camoticsStepSummary = camoticsResidualProofCrossCheck.status === "mismatch"
+    ? `${simulationProof?.summary ?? "CAMotics 材料去除证据需复核。"} ${camoticsResidualProofCrossCheck.summary}`.trim()
+    : simulationProof?.summary ?? passIf(false, "尚未回填非 synthetic 且绑定当前 camotics-preview.nc 的材料去除结果。").summary;
   const requiredFiles = [
     "toolpath.nc",
     "air-run.nc",
@@ -10924,6 +12092,7 @@ function createProductionClosureAudit({ job, productionGate, productionUnlockMat
     "camotics-cli-run-package.json",
     "production-gate.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "machine-file-policy.json",
     "package-integrity.json"
   ];
@@ -10942,7 +12111,9 @@ function createProductionClosureAudit({ job, productionGate, productionUnlockMat
       id: "camotics-material-removal",
       layer: "仿真层",
       title: "CAMotics 材料去除",
-      ...(simulationProof ? { status: simulationProof.status, summary: simulationProof.summary } : passIf(false, "尚未回填非 synthetic 且绑定当前 camotics-preview.nc 的材料去除结果。")),
+      status: camoticsStepStatus,
+      summary: camoticsStepSummary,
+      residualProofCrossCheck: camoticsResidualProofCrossCheck,
       requiredArtifacts: ["camotics-cli-run-package.json", "camotics-result.json", "camotics-result-local-validation.json", "camotics-result-bundle.zip", "camotics-preview.png", "camotics-material-removal.stl"],
       operatorAction: "执行 camotics-linux-run.sh 或等效 CAMotics 命令，运行 camotics-result-validate.js 后回填结果包。",
       commandOrEndpoint: "POST /api/orchestrator/jobs/:id/camotics-result",
@@ -10966,6 +12137,7 @@ function createProductionClosureAudit({ job, productionGate, productionUnlockMat
       summary: airRunProof?.status === "pass" && rotaryProof?.status === "pass"
         ? "旋转标定和整条离料空跑均已通过。"
         : `${airRunProof?.summary ?? "缺少整条离料空跑记录。"} ${rotaryProof?.summary ?? "缺少旋转夹具实测标定。"}`.trim(),
+      airRunEvidence: airRunProof?.airRunEvidence ?? null,
       requiredArtifacts: ["air-run.nc", "rotary-calibration-airrun.nc", "machine-acceptance-record.json", "machine-acceptance-log.json"],
       operatorAction: "先运行 rotary-calibration-airrun.nc，再运行 air-run.nc；主轴关闭，Z 在安全高度，回填机床验收。",
       commandOrEndpoint: "POST /api/orchestrator/jobs/:id/machine-acceptance",
@@ -10976,7 +12148,11 @@ function createProductionClosureAudit({ job, productionGate, productionUnlockMat
       layer: "现场验证",
       title: "低风险试雕反馈与同包验收",
       ...(fieldProof ? { status: fieldProof.status, summary: fieldProof.summary } : passIf(false, "尚未回填试雕反馈、机床验收或同包哈希绑定。")),
-      requiredArtifacts: ["trial-feedback-template.json", "trial-feedback-log.json", "machine-acceptance-checklist.json", "machine-acceptance-log.json", "package-integrity.json"],
+      machineAcceptancePassed: Boolean(fieldProof?.machineAcceptancePassed),
+      trialFeedbackPassed: Boolean(fieldProof?.trialFeedbackPassed),
+      fieldEvidencePackageBinding: fieldProof?.fieldEvidencePackageBinding ?? null,
+      fieldEvidenceProofChain: fieldProof?.fieldEvidenceProofChain ?? null,
+      requiredArtifacts: ["trial-feedback-template.json", "trial-feedback-log.json", "machine-acceptance-checklist.json", "machine-acceptance-log.json", "field-evidence-proof-chain.json", "package-integrity.json"],
       operatorAction: "低倍率软料/废料试雕后，回填 trial-feedback 和 machine-acceptance，并确认 package-integrity 哈希匹配。",
       commandOrEndpoint: "POST /api/orchestrator/jobs/:id/trial-feedback + POST /api/orchestrator/jobs/:id/machine-acceptance",
       blocksProduction: true
@@ -11048,6 +12224,67 @@ function createProductionClosureAudit({ job, productionGate, productionUnlockMat
   };
 }
 
+function createCamoticsResidualProofCrossCheck(job) {
+  const workDir = job?.workDir;
+  const uploadReport = workDir ? readJsonFileSafe(join(workDir, "linux-cam-evidence-upload-report.json")) : null;
+  const importAudit = workDir ? readJsonFileSafe(join(workDir, "camotics-result-import.json")) : null;
+  const uploadProof = uploadReport?.localValidationSummary?.residualProofChain ?? null;
+  const importProof = importAudit?.localValidation?.residualProofChain ?? null;
+  const uploadSummary = summarizeResidualProofForCrossCheck(uploadProof);
+  const importSummary = summarizeResidualProofForCrossCheck(importProof);
+  const uploadPresent = Boolean(uploadProof);
+  const importPresent = Boolean(importProof);
+  const matched = uploadPresent && importPresent
+    && uploadSummary.schema === importSummary.schema
+    && uploadSummary.status === importSummary.status
+    && uploadSummary.productionResidualEvidenceReady === importSummary.productionResidualEvidenceReady
+    && uploadSummary.unsafeProductionClaim === importSummary.unsafeProductionClaim;
+  return {
+    schema: "hediao3d.camotics-residual-proof-cross-check.v1",
+    status: matched
+      ? "matched"
+      : uploadPresent && importPresent
+        ? "mismatch"
+        : uploadPresent || importPresent
+          ? "partial"
+          : "missing",
+    uploadReport: {
+      artifact: uploadReport ? "linux-cam-evidence-upload-report.json" : null,
+      residualProofChain: uploadSummary
+    },
+    importAudit: {
+      artifact: importAudit ? "camotics-result-import.json" : null,
+      residualProofChain: importSummary
+    },
+    summary: matched
+      ? "Linux 上传报告与 CAMotics 导入审计的 residualProofChain 状态一致。"
+      : uploadPresent && importPresent
+        ? "Linux 上传报告与 CAMotics 导入审计的 residualProofChain 状态不一致，请重新上传 camotics-result-bundle.zip 或复核本地校验报告。"
+        : uploadPresent
+          ? "仅找到 Linux 上传报告 residualProofChain，尚未找到 CAMotics 导入审计 proof chain。"
+          : importPresent
+            ? "仅找到 CAMotics 导入审计 residualProofChain；若使用 Linux 整单上传，建议同时回填上传报告。"
+            : "尚未找到 Linux 上传报告或 CAMotics 导入审计 residualProofChain。"
+  };
+}
+
+function summarizeResidualProofForCrossCheck(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      schema: null,
+      status: "missing",
+      productionResidualEvidenceReady: false,
+      unsafeProductionClaim: false
+    };
+  }
+  return {
+    schema: value.schema ?? null,
+    status: value.status ?? "unknown",
+    productionResidualEvidenceReady: Boolean(value.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(value.unsafeProductionClaim)
+  };
+}
+
 function createProductionClosureAuditMarkdown(audit) {
   const lines = [
     "# HeDiao3D V3 生产闭环审计",
@@ -11066,6 +12303,21 @@ function createProductionClosureAuditMarkdown(audit) {
       `- 层级: ${step.layer}`,
       `- 状态: ${step.status}`,
       `- 说明: ${step.summary}`,
+      ...(step.airRunEvidence ? [
+        `- 离料空跑证据: ${step.airRunEvidence.status ?? "unknown"} / 同包绑定 ${step.airRunEvidence.packageBindingStatus ?? "missing"}`
+      ] : []),
+      ...(step.fieldEvidencePackageBinding ? [
+        `- 现场同包绑定: ${step.fieldEvidencePackageBinding.status ?? "unknown"} / 机床验收 ${step.fieldEvidencePackageBinding.machineBindingStatus ?? "missing"} / 试雕反馈 ${step.fieldEvidencePackageBinding.trialBindingStatus ?? "missing"}`,
+        ...(Array.isArray(step.fieldEvidencePackageBinding.sharedFiles) && step.fieldEvidencePackageBinding.sharedFiles.some((file) => file.status !== "matched")
+          ? [`- 不匹配文件: ${step.fieldEvidencePackageBinding.sharedFiles.filter((file) => file.status !== "matched").slice(0, 6).map((file) => file.filename).join(", ")}`]
+          : [])
+      ] : []),
+      ...(step.fieldEvidenceProofChain ? [
+        `- 现场证据链: ${step.fieldEvidenceProofChain.status ?? "unknown"} / productionFieldEvidenceReady=${step.fieldEvidenceProofChain.productionFieldEvidenceReady ? "true" : "false"}`
+      ] : []),
+      ...(step.residualProofCrossCheck ? [
+        `- 残料proof交叉核验: ${step.residualProofCrossCheck.status ?? "unknown"} / ${step.residualProofCrossCheck.summary ?? "未提供摘要。"}`
+      ] : []),
       `- 动作: ${step.operatorAction}`,
       `- 命令/API: ${step.commandOrEndpoint}`,
       `- 证据: ${step.requiredArtifacts.join(", ")}`
@@ -11090,7 +12342,10 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
   const trialNcAllowed = Boolean(productionGate?.allowTrialNc);
   const airRunAllowed = Boolean(productionGate?.allowAirRun);
   const machineName = "三轴控制器 + Y轴旋转夹具";
-  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null);
+  const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
+  const airRunGate = createLockedProductionAirRunGuidance(productionAudit);
+  const fieldEvidenceGate = createLockedProductionFieldEvidenceGuidance(productionAudit);
   const requiredHashFiles = [
     ...(trialNcAllowed ? ["toolpath.nc"] : []),
     "air-run.nc",
@@ -11206,7 +12461,9 @@ function createSafeTrialExecutionPlan({ job, settings, productionGate, postproce
       currentDossierSummary: productionEvidenceDossier?.summary ?? null
     },
     productionReadiness: {
-      materialRemovalGate
+      materialRemovalGate,
+      airRunGate,
+      fieldEvidenceGate
     },
     nextActions: trialNcAllowed
       ? ["下载安全试雕包并核验哈希。", "先运行旋转标定空跑，再运行整条离料空跑。", "低倍率软料试雕后回填试雕反馈和机床验收。"]
@@ -11221,7 +12478,10 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
   const linuxOpenCamLibEvidence = createLinuxOpenCamLibEvidenceOfflineSummary(runbookResult, nativeCamRealOutputAcceptance);
   const nativeCamBoundaryStatus = nativeCamRealOutputAcceptance?.targetMachineBoundaryStatus ?? null;
   const camoticsUpstreamEvidence = productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidence ?? null;
-  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null);
+  const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
+  const airRunGate = createLockedProductionAirRunGuidance(productionAudit);
+  const fieldEvidenceGate = createLockedProductionFieldEvidenceGuidance(productionAudit);
   const blockedRows = Array.isArray(productionUnlockMatrix?.rows)
     ? productionUnlockMatrix.rows.filter((row) => row.status === "block" || row.blocksProduction)
     : [];
@@ -11252,6 +12512,8 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
     `- 生产门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
     `- 仿真证据: ${productionGate?.simulationEvidence?.level ?? "missing"} / ${productionGate?.simulationEvidence?.summary ?? "未生成"}`,
     `- 材料去除/残料门禁: ${materialRemovalGate.status} / ${materialRemovalGate.summary}`,
+    `- 离料空跑门禁: ${airRunGate.status} / ${airRunGate.summary}`,
+    `- 现场同包门禁: ${fieldEvidenceGate.status} / ${fieldEvidenceGate.summary}`,
     `- CAMotics上游绑定: ${formatCamoticsUpstreamEvidenceLine(camoticsUpstreamEvidence)}`,
     `- Native CAM机型边界: ${nativeCamBoundaryStatus?.status ?? "missing"} / ${nativeCamBoundaryStatus?.summary ?? "未回填 native-cam-real-output-bundle.zip，尚未证明真实 CAM 输出适配当前三轴控制器 + Y轴旋转夹具。"}`,
     `- Linux OpenCAMLib: ${formatLinuxOpenCamLibEvidenceOfflineLine(linuxOpenCamLibEvidence)}`,
@@ -11290,6 +12552,8 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
         ...(reviewRows.slice(0, 6).map((row) => `- 矩阵复核: ${row.label ?? row.id} / ${row.summary ?? row.status}`)),
         ...(dossierItems.slice(0, 8).map((item) => `- 证据缺口: ${item.label ?? item.id} / ${item.summary ?? item.status}`)),
         ...(materialRemovalGate.residualEvidenceRequired ? [`- 证据缺口: 材料去除/残料门禁 / ${materialRemovalGate.nextActions?.[0] ?? materialRemovalGate.summary}`] : []),
+        ...(airRunGate.status === "pass" ? [] : [`- 证据缺口: 离料空跑门禁 / ${airRunGate.nextActions?.[0] ?? airRunGate.summary}`]),
+        ...(fieldEvidenceGate.status === "pass" ? [] : [`- 证据缺口: 现场同包门禁 / ${fieldEvidenceGate.nextActions?.[0] ?? fieldEvidenceGate.summary}`]),
         ...(linuxOpenCamLibEvidence.status === "ready-for-review" ? [] : [`- 证据缺口: Linux OpenCAMLib真实候选 / ${linuxOpenCamLibEvidence.summary}`]),
         ...(nativeCamBoundaryStatus?.status === "matched" ? [] : [`- 证据缺口: Native CAM 机型边界 / ${nativeCamBoundaryStatus?.summary ?? "缺少 target-machine-boundary.json 绑定。"}`])
       ]),
@@ -11309,6 +12573,8 @@ function createNextActionChecklistMarkdown({ job, productionGate, productionUnlo
 function createMvpOperatorStatus({ job, productionGate, productionUnlockMatrix, productionEvidenceDossier, productionClosureAudit, safeTrialExecutionPlan, machineControllerProfile, deliveryManifest, packageIntegrity }) {
   const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
   const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
+  const airRunGate = createLockedProductionAirRunGuidance(productionAudit);
+  const fieldEvidenceGate = createLockedProductionFieldEvidenceGuidance(productionAudit);
   const allowedFiles = safeTrialExecutionPlan?.filePolicy?.allowedOnMachine ?? [];
   const neverRunOnMachine = safeTrialExecutionPlan?.filePolicy?.neverRunOnMachine ?? [];
   const rows = Array.isArray(productionUnlockMatrix?.rows) ? productionUnlockMatrix.rows : [];
@@ -11398,6 +12664,8 @@ function createMvpOperatorStatus({ job, productionGate, productionUnlockMatrix, 
     },
     requiredEvidence,
     materialRemovalGate,
+    airRunGate,
+    fieldEvidenceGate,
     blockers: blockers.slice(0, 16),
     nextActions: productionReady
       ? ["下载正式生产包前复核 package-integrity.json、production-evidence-dossier.json 和现场验收记录。"]
@@ -11455,6 +12723,20 @@ function createMvpOperatorStatusMarkdown(status) {
     `- 是否仍需残料/过切证据: ${status.materialRemovalGate?.residualEvidenceRequired === false ? "否" : "是"}`,
     ...((status.materialRemovalGate?.nextActions ?? []).slice(0, 3).map((item) => `- 下一步: ${item}`)),
     "",
+    "## 离料空跑门禁",
+    "",
+    `- 状态: ${status.airRunGate?.status ?? "review"}`,
+    `- 摘要: ${status.airRunGate?.summary ?? "未生成离料空跑门禁摘要"}`,
+    `- 同包绑定: ${status.airRunGate?.packageBindingStatus ?? "missing"}`,
+    ...((status.airRunGate?.failedChecks ?? []).slice(0, 3).map((item) => `- 失败项: ${item.id ?? "unknown"} / ${item.status ?? "unknown"}`)),
+    "",
+    "## 现场同包门禁",
+    "",
+    `- 状态: ${status.fieldEvidenceGate?.status ?? "review"}`,
+    `- 摘要: ${status.fieldEvidenceGate?.summary ?? "未生成现场同包门禁摘要"}`,
+    `- 同包绑定: ${status.fieldEvidenceGate?.bindingStatus ?? "missing"}，机床验收 ${status.fieldEvidenceGate?.machineBindingStatus ?? "missing"}，试雕反馈 ${status.fieldEvidenceGate?.trialBindingStatus ?? "missing"}`,
+    ...((status.fieldEvidenceGate?.mismatchedFiles ?? []).slice(0, 3).map((item) => `- 不匹配文件: ${item.filename ?? "unknown"}`)),
+    "",
     "## 当前阻断/复核",
     "",
     ...(status.blockers.length ? status.blockers.map((item) => `- ${item.summary}`) : ["- 暂无阻断项。"]),
@@ -11478,6 +12760,10 @@ function createJobLinuxCamClosedLoopHandoffMarkdown({ job, productionGate, produ
   });
   const allowedFiles = safeTrialExecutionPlan?.filePolicy?.allowedOnMachine ?? ["air-run.nc", "rotary-calibration-airrun.nc"];
   const neverFiles = safeTrialExecutionPlan?.filePolicy?.neverRunOnMachine ?? ["camotics-preview.nc"];
+  const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
+  const airRunGate = createLockedProductionAirRunGuidance(productionAudit);
+  const fieldEvidenceGate = createLockedProductionFieldEvidenceGuidance(productionAudit);
   const lines = [
     "# HeDiao3D V3 Linux CAM 与安全试雕闭环交接说明",
     "",
@@ -11487,6 +12773,8 @@ function createJobLinuxCamClosedLoopHandoffMarkdown({ job, productionGate, produ
     `轴映射: ${axisInstruction}`,
     `当前门禁: ${productionGate?.level ?? "missing"} / ${productionGate?.summary ?? "未生成"}`,
     `证据档案: ${productionEvidenceDossier?.status ?? "missing"} / ${productionEvidenceDossier?.summary ?? "未生成"}`,
+    `离料空跑门禁: ${airRunGate.status} / ${airRunGate.summary}`,
+    `现场同包门禁: ${fieldEvidenceGate.status} / ${fieldEvidenceGate.summary}`,
     "",
     "## 1. 这份文件解决什么",
     "",
@@ -11534,6 +12822,8 @@ function createJobLinuxCamClosedLoopHandoffMarkdown({ job, productionGate, produ
     "- `camotics-preview.nc` 仅用于展开三轴仿真，禁止上机。",
     "- `camotics-linux-run.sh`、`camotics-result-validate.js` 等只在 Linux CAM 服务器执行，不是机床文件。",
     "- 正式生产包返回 423 时，这是预期安全行为，不是下载故障。",
+    `- 离料空跑门禁: ${airRunGate.status} / 同包绑定 ${airRunGate.packageBindingStatus ?? "missing"}。`,
+    `- 现场同包门禁: ${fieldEvidenceGate.status} / 机床验收 ${fieldEvidenceGate.machineBindingStatus ?? "missing"} / 试雕反馈 ${fieldEvidenceGate.trialBindingStatus ?? "missing"}。`,
     "- 未完成真实外部 CAM、真实材料去除仿真、离料空跑、软料试雕、试雕反馈和机床验收同包哈希绑定前，不允许成品生产。",
     ""
   ];
@@ -12703,13 +13993,18 @@ function formatCamoticsUpstreamEvidenceLine(evidence) {
   const matched = `${Number(evidence.matchedCount ?? 0)}/${Number(evidence.expectedCount ?? 0)}`;
   const candidateValidation = evidence.candidatePackageValidationBound ? "候选包预检已绑定" : "候选包预检未绑定";
   const candidateBundle = evidence.candidatePackageBundleBound ? "候选包证据包已绑定" : "候选包证据包未绑定";
+  const candidateGenerated = evidence.candidatePackage?.bundleShaMatches
+    ? "候选包generatedArtifacts已匹配"
+    : evidence.candidatePackage?.status === "mismatch"
+      ? "候选包generatedArtifacts不匹配"
+      : "";
   const machineFit = evidence.machineFit
     ? ` / 机床适配 ${evidence.machineFit.level ?? evidence.machineFit.status ?? "missing"}`
     : "";
   const material = evidence.materialRemovalReadiness
     ? ` / 材料准备 ${evidence.materialRemovalReadiness.readyForMaterialRemovalSimulation ? "可进仿真" : evidence.materialRemovalReadiness.status ?? "未就绪"} / 残料证据${evidence.materialRemovalReadiness.productionResidualEvidenceReady ? "已闭合" : "未闭合"}`
     : "";
-  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}${machineFit}${material}`;
+  return `${status} / 哈希 ${matched} / ${candidateValidation} / ${candidateBundle}${candidateGenerated ? ` / ${candidateGenerated}` : ""}${machineFit}${material}`;
 }
 
 function createCamoticsPreviewGcode(points, settings, estimatedMinutes) {
@@ -13038,6 +14333,7 @@ function createMachiningPackageIndex({ job, toolpath, productionGate, postproces
             evidence: item.evidence
           }))
         : [],
+      productionReadinessAudit: summarizePackageIndexProductionReadinessAudit(productionEvidenceDossier.crossChecks?.productionReadinessAudit),
       crossChecks: productionEvidenceDossier.crossChecks ?? null,
       camoticsUpstreamCamEvidence: productionEvidenceDossier.crossChecks?.camoticsUpstreamCamEvidence ?? null,
       artifact: "production-evidence-dossier.json"
@@ -13237,6 +14533,7 @@ function createDeliveryManifest(job, toolpath, productionGate, repairExecution =
     createDeliveryFile(job.id, "production-gate.json", "生产门禁", "report", true, "说明是否允许生产 NC 下载。"),
     createDeliveryFile(job.id, "production-unlock-matrix.json", "生产解锁条件矩阵", "report", true, "逐项列出生产 NC 解锁所需条件、证据文件和阻断/复核状态。"),
     createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", true, "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
+    createDeliveryFile(job.id, "field-evidence-proof-chain.json", "现场证据链", "report", true, "独立记录离料空跑、旋转标定、试雕反馈和机床验收是否绑定同一加工包哈希；不单独解锁生产。"),
     createDeliveryFile(job.id, "production-closure-audit.json", "生产闭环审计", "report", true, "按真实 CAM、CAMotics、后处理和现场验收分层列出生产放行缺口、回填接口和证据文件。"),
     createDeliveryFile(job.id, "production-closure-audit.md", "生产闭环审计说明", "report", true, "面向操作者的生产闭环缺口说明，列出下一步需要执行的最小动作。"),
     createDeliveryFile(job.id, "machine-controller-profile.json", "机床控制器配置", "report", true, "显式记录三轴控制器、Y/A旋转夹具、允许 G/M 指令和轴字规则。"),
@@ -13572,6 +14869,10 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
   const neverMachineFiles = fileRows.filter((file) => file.machineUse?.allowedOnMachine === false);
   const missing = integrityFiles.filter((file) => file.downloadable && !file.exists);
   const camoticsUpstreamEvidence = productionEvidenceDossier?.crossChecks?.camoticsUpstreamCamEvidence ?? null;
+  const productionAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
+  const airRunGate = createLockedProductionAirRunGuidance(productionAudit);
+  const fieldEvidenceGate = createLockedProductionFieldEvidenceGuidance(productionAudit);
   const axisInstruction = createOperatorAxisInstruction({
     camMode: machineControllerProfile?.camMode,
     coordinateMapping: machineControllerProfile?.axisMapping
@@ -13597,6 +14898,9 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
     "- [ ] 已确认刀具与 `tool-setup-sheet.json` 一致，尤其是 4mm 25度平底尖刀、进给、转速和最大切深。",
     `- [ ] 已核对 CAMotics 上游绑定：${formatCamoticsUpstreamEvidenceLine(camoticsUpstreamEvidence)}。`,
     "- [ ] 如果上游绑定显示候选包预检/证据包未绑定，当前材料去除仿真不能作为生产证据。",
+    `- [ ] 已核对材料去除/残料门禁：${materialRemovalGate.status} / ${materialRemovalGate.summary} / proofCrossCheck=${materialRemovalGate.residualProofCrossCheckStatus ?? "missing"}。`,
+    `- [ ] 已核对离料空跑门禁：${airRunGate.status} / ${airRunGate.summary} / 同包绑定 ${airRunGate.packageBindingStatus ?? "missing"}。`,
+    `- [ ] 已核对现场同包门禁：${fieldEvidenceGate.status} / ${fieldEvidenceGate.summary} / 机床验收 ${fieldEvidenceGate.machineBindingStatus ?? "missing"} / 试雕反馈 ${fieldEvidenceGate.trialBindingStatus ?? "missing"}。`,
     "- [ ] 先运行 `rotary-calibration-airrun.nc`，再运行 `air-run.nc`，两者都必须主轴关闭、Z 保持安全高度。",
     productionGate.allowProductionNc
       ? "- [ ] 生产门禁已放行；仍需完成离料空跑、低进给试雕和现场验收后再运行 `toolpath.nc`。"
@@ -13643,13 +14947,15 @@ function createOperatorDownloadChecklistMarkdown({ job, deliveryManifest, packag
 
 async function refreshEvidenceDeliveryArtifacts(job) {
   if (!job?.workDir) return null;
+  const writeArtifact = (filename, content, encoding = "utf8") => writeJobArtifactWithRetry(job.workDir, filename, content, encoding);
   await refreshNextActionChecklistArtifact(job);
   const nativeCamRealOutputSnapshot = await ensureNativeCamRealOutputSnapshotArtifact(job);
   let refreshedProductionEvidenceDossier = null;
   if (nativeCamRealOutputSnapshot && existsSync(join(job.workDir, "production-gate.json"))) {
     const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job);
     if (productionEvidenceDossier) {
-      await writeFile(join(job.workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+      await writeArtifact("production-evidence-dossier.json", JSON.stringify(productionEvidenceDossier, null, 2));
+      await writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier, writeArtifact);
       refreshedProductionEvidenceDossier = productionEvidenceDossier;
     }
   }
@@ -13703,7 +15009,8 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     createDeliveryFile(job.id, "process-optimization-plan.json", "工艺优化建议", "report", existsSync(join(job.workDir, "process-optimization-plan.json")), "根据试雕反馈生成的下一轮参数复核和调整建议。"),
     createDeliveryFile(job.id, "machine-acceptance-record.json", "最新机床验收记录", "report", existsSync(join(job.workDir, "machine-acceptance-record.json")), "现场离料空跑、软料试雕和正式试雕的最新验收记录。"),
     createDeliveryFile(job.id, "machine-acceptance-log.json", "机床验收日志", "report", existsSync(join(job.workDir, "machine-acceptance-log.json")), "按时间保存机床现场验收记录，用于生产证据链。"),
-    createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", existsSync(join(job.workDir, "production-evidence-dossier.json")), "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。")
+    createDeliveryFile(job.id, "production-evidence-dossier.json", "生产证据档案", "report", existsSync(join(job.workDir, "production-evidence-dossier.json")), "汇总外部CAM、仿真、NC分析、控制器、验收和试雕反馈证据，说明生产缺口。"),
+    createDeliveryFile(job.id, "field-evidence-proof-chain.json", "现场证据链", "report", existsSync(join(job.workDir, "field-evidence-proof-chain.json")), "独立记录离料空跑、旋转标定、试雕反馈和机床验收是否绑定同一加工包哈希；不单独解锁生产。")
   ];
   for (const file of evidenceFiles) {
     deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, file);
@@ -13720,10 +15027,10 @@ async function refreshEvidenceDeliveryArtifacts(job) {
   if (machineFilePolicy) {
     deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "machine-file-policy.json", "机床文件使用策略", "report", true, "机器可读地列出可空跑、可试雕/生产、永远禁止上机和需要门禁的文件。"));
   }
-  await writeFile(manifestPath, JSON.stringify(deliveryManifest, null, 2), "utf8");
-  await writeFile(join(job.workDir, "operator-download-checklist.md"), "# HeDiao3D V3 操作员下载核验清单\n\n更新中，请以最终 package-integrity.json 为准。\n", "utf8");
+  await writeArtifact("delivery-manifest.json", JSON.stringify(deliveryManifest, null, 2));
+  await writeArtifact("operator-download-checklist.md", "# HeDiao3D V3 操作员下载核验清单\n\n更新中，请以最终 package-integrity.json 为准。\n");
   let packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
-  await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+  await writeArtifact("package-integrity.json", JSON.stringify(packageIntegrity, null, 2));
   const productionClosureAudit = createProductionClosureAudit({
     job,
     productionGate,
@@ -13735,11 +15042,11 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     machineFilePolicy,
     packageIntegrity
   });
-  await writeFile(join(job.workDir, "production-closure-audit.json"), JSON.stringify(productionClosureAudit, null, 2), "utf8");
-  await writeFile(join(job.workDir, "production-closure-audit.md"), createProductionClosureAuditMarkdown(productionClosureAudit), "utf8");
+  await writeArtifact("production-closure-audit.json", JSON.stringify(productionClosureAudit, null, 2));
+  await writeArtifact("production-closure-audit.md", createProductionClosureAuditMarkdown(productionClosureAudit));
   const refreshedSafeTrialExecutionPlan = createRefreshedSafeTrialExecutionPlan(job, productionGate, readJsonFile(join(job.workDir, "production-evidence-dossier.json")));
   if (refreshedSafeTrialExecutionPlan) {
-    await writeFile(join(job.workDir, "safe-trial-execution-plan.json"), JSON.stringify(refreshedSafeTrialExecutionPlan, null, 2), "utf8");
+    await writeArtifact("safe-trial-execution-plan.json", JSON.stringify(refreshedSafeTrialExecutionPlan, null, 2));
     deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "safe-trial-execution-plan.json", "安全试雕执行计划", "report", true, "结构化记录导入模型、生成安全数据、下载核验、空跑/软料试雕和证据回填步骤。"));
   }
   await refreshNextActionChecklistArtifact(job);
@@ -13754,12 +15061,12 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     deliveryManifest,
     packageIntegrity
   });
-  await writeFile(join(job.workDir, "mvp-operator-status.json"), JSON.stringify(mvpOperatorStatus, null, 2), "utf8");
-  await writeFile(join(job.workDir, "mvp-operator-status.md"), createMvpOperatorStatusMarkdown(mvpOperatorStatus), "utf8");
+  await writeArtifact("mvp-operator-status.json", JSON.stringify(mvpOperatorStatus, null, 2));
+  await writeArtifact("mvp-operator-status.md", createMvpOperatorStatusMarkdown(mvpOperatorStatus));
   deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "mvp-operator-status.json", "基本可用版状态", "report", true, "面向操作员和验收脚本的一页式 MVP 状态报告，说明当前能做什么、不能做什么和生产解锁缺口。"));
   deliveryManifest = upsertDeliveryManifestFile(deliveryManifest, createDeliveryFile(job.id, "mvp-operator-status.md", "基本可用版状态说明", "report", true, "中文说明当前安全试雕包状态、目标机床、允许上机文件和下一步最短路径。"));
-  await writeFile(manifestPath, JSON.stringify(deliveryManifest, null, 2), "utf8");
-  await writeFile(join(job.workDir, "operator-download-checklist.md"), createOperatorDownloadChecklistMarkdown({
+  await writeArtifact("delivery-manifest.json", JSON.stringify(deliveryManifest, null, 2));
+  await writeArtifact("operator-download-checklist.md", createOperatorDownloadChecklistMarkdown({
     job,
     deliveryManifest,
     packageIntegrity,
@@ -13768,12 +15075,13 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     camHandoffQuality: readJsonFile(join(job.workDir, "cam-handoff-quality.json")),
     simulationSummary: readJsonFile(join(job.workDir, "simulation-summary.json")),
     productionEvidenceDossier: readJsonFile(join(job.workDir, "production-evidence-dossier.json"))
-  }), "utf8");
+  }));
   packageIntegrity = createPackageIntegrityReport(job, deliveryManifest);
-  await writeFile(join(job.workDir, "package-integrity.json"), JSON.stringify(packageIntegrity, null, 2), "utf8");
+  await writeArtifact("package-integrity.json", JSON.stringify(packageIntegrity, null, 2));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "delivery-manifest.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "operator-download-checklist.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "package-integrity.json"));
+  pushUnique(job.artifacts, publicArtifactUrl(job.id, "field-evidence-proof-chain.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.json"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "production-closure-audit.md"));
   pushUnique(job.artifacts, publicArtifactUrl(job.id, "mvp-operator-status.json"));
@@ -13785,6 +15093,20 @@ async function refreshEvidenceDeliveryArtifacts(job) {
     productionEvidenceDossier: refreshedProductionEvidenceDossier ?? readJsonFile(join(job.workDir, "production-evidence-dossier.json")),
     nativeCamRealOutputSnapshot
   };
+}
+
+async function writeJobArtifactWithRetry(workDir, filename, content, encoding = "utf8", attempts = 6) {
+  const target = join(workDir, filename);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await writeFile(target, content, encoding);
+      return;
+    } catch (error) {
+      const retryable = ["EBUSY", "EPERM", "EACCES"].includes(error?.code);
+      if (!retryable || attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 80 * attempt));
+    }
+  }
 }
 
 function createRefreshedSafeTrialExecutionPlan(job, productionGate, productionEvidenceDossier) {
@@ -14337,6 +15659,7 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   await writeFile(join(workDir, "process-optimization-plan.json"), JSON.stringify(optimizationPlan, null, 2), "utf8");
   if (productionEvidenceDossier) {
     await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+    await writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier);
   }
   await writeTrialFeedbackGlobalRecord(record);
   job.workDir = workDir;
@@ -14394,6 +15717,7 @@ async function createOrchestratorTrialFeedback(req, jobId, res) {
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "delivery-manifest.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "package-integrity.json"));
   if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "production-evidence-dossier.json"));
+  if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "field-evidence-proof-chain.json"));
   pushIfArtifactExists(job, "production-closure-audit.json");
   pushIfArtifactExists(job, "production-closure-audit.md");
   orchestratorJobs.set(safeJobId, job);
@@ -14457,6 +15781,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
   await writeFile(logPath, JSON.stringify(updatedLog, null, 2), "utf8");
   if (productionEvidenceDossier) {
     await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+    await writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier);
   }
   await writeMachineAcceptanceGlobalRecord(record);
   job.workDir = workDir;
@@ -14507,6 +15832,7 @@ async function createOrchestratorMachineAcceptance(req, jobId, res) {
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "delivery-manifest.json"));
   pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "package-integrity.json"));
   if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "production-evidence-dossier.json"));
+  if (productionEvidenceDossier) pushUnique(job.artifacts, publicArtifactUrl(safeJobId, "field-evidence-proof-chain.json"));
   pushIfArtifactExists(job, "production-closure-audit.json");
   pushIfArtifactExists(job, "production-closure-audit.md");
   orchestratorJobs.set(safeJobId, job);
@@ -14583,10 +15909,13 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
         artifact: importBundle.localValidationFilename,
         ok: importBundle.localValidation.ok,
         productionEvidenceEligible: importBundle.localValidation.productionEvidenceEligible,
+        residualValidation: importBundle.localValidation.residualValidation ?? null,
+        residualProofChain: importBundle.localValidation.residualProofChain ?? null,
         missing: importBundle.localValidation.missing,
         summary: importBundle.localValidation.summary
       }
     : null;
+  await bindCamoticsResidualValidationToLocalProof(adapterReport, join(workDir, "camotics-result.json"));
   adapterReport.exitCode = run.status;
   adapterReport.stdout = String(run.stdout ?? "").slice(-6000);
   adapterReport.stderr = String(run.stderr ?? "").slice(-6000);
@@ -14637,6 +15966,7 @@ async function importOrchestratorCamoticsResult(req, jobId, res) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
     "open-source-cam-execution-plan.json",
@@ -14788,6 +16118,7 @@ async function importOrchestratorLinuxCamEvidenceUploadReport(req, jobId, res) {
     uploadCount: report.uploads.length,
     uploadedCount: report.uploads.filter((item) => item.status === "uploaded").length,
     plannedCount: report.uploads.filter((item) => item.status === "planned").length,
+    localValidationSummary: report.localValidationSummary,
     summary: report.summary
   };
   await writeFile(join(workDir, "linux-cam-evidence-upload-report-import.json"), JSON.stringify(importAudit, null, 2), "utf8");
@@ -14814,6 +16145,7 @@ async function importOrchestratorLinuxCamEvidenceUploadReport(req, jobId, res) {
       uploadCount: report.uploads.length,
       uploadedCount: report.uploads.filter((item) => item.status === "uploaded").length,
       plannedCount: report.uploads.filter((item) => item.status === "planned").length,
+      localValidationSummary: report.localValidationSummary,
       productionUnlockEligible: false,
       artifact: "linux-cam-evidence-upload-report.json",
       importAudit: "linux-cam-evidence-upload-report-import.json"
@@ -14896,6 +16228,7 @@ function normalizeLinuxCamEvidenceUploadReport(value, jobId) {
     productionUnlockEligible: false,
     summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null,
     uploadPlan: value.uploadPlan && typeof value.uploadPlan === "object" ? normalizeLinuxCamEvidenceUploadPlan(value.uploadPlan) : null,
+    localValidationSummary: normalizeLinuxCamUploadLocalValidationSummary(value.localValidationSummary),
     uploads,
     error: value.error && typeof value.error === "object"
       ? {
@@ -14903,6 +16236,27 @@ function normalizeLinuxCamEvidenceUploadReport(value, jobId) {
           status: Number.isFinite(Number(value.error.status)) ? Number(value.error.status) : null
         }
       : null
+  };
+}
+
+function normalizeLinuxCamUploadLocalValidationSummary(value) {
+  if (!value || typeof value !== "object") return null;
+  const proof = value.residualProofChain && typeof value.residualProofChain === "object" ? value.residualProofChain : null;
+  return {
+    schema: "hediao3d.v3-linux-cam-upload-local-validation-summary.v1",
+    status: typeof value.status === "string" ? value.status.slice(0, 80) : "unknown",
+    ok: Boolean(value.ok),
+    productionEvidenceEligible: false,
+    camoticsLocalValidationStatus: typeof value.camoticsLocalValidationStatus === "string" ? value.camoticsLocalValidationStatus.slice(0, 80) : "unknown",
+    candidatePackageStatus: typeof value.candidatePackageStatus === "string" ? value.candidatePackageStatus.slice(0, 80) : "unknown",
+    candidatePackageBundleShaMatches: Boolean(value.candidatePackageBundleShaMatches),
+    residualProofChain: proof ? {
+      schema: typeof proof.schema === "string" ? proof.schema.slice(0, 120) : null,
+      status: typeof proof.status === "string" ? proof.status.slice(0, 80) : "unknown",
+      productionResidualEvidenceReady: Boolean(proof.productionResidualEvidenceReady),
+      unsafeProductionClaim: Boolean(proof.unsafeProductionClaim)
+    } : null,
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 500) : null
   };
 }
 
@@ -15925,6 +17279,7 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "open-source-cam-execution-plan.json",
     "machining-package-index.json",
     "delivery-manifest.json",
@@ -15949,6 +17304,100 @@ async function importOrchestratorNeutralToolpath(req, jobId, res) {
       adapterReport: publicArtifactUrl(safeJobId, "adapter-report.json")
     }
   });
+}
+
+function getResidualLocalValidationBindingStatus(residualClosureReview) {
+  return getResidualLocalValidationBinding(residualClosureReview)?.status ?? "not-required";
+}
+
+function getResidualLocalValidationBinding(residualClosureReview) {
+  const binding = residualClosureReview?.residualValidation?.localValidationBinding;
+  if (!binding || typeof binding !== "object") return null;
+  return {
+    status: typeof binding.status === "string" ? binding.status : "unknown",
+    localValidationOk: Boolean(binding.localValidationOk),
+    localProductionEvidenceEligible: Boolean(binding.localProductionEvidenceEligible),
+    localProductionResidualEvidenceReady: Boolean(binding.localProductionResidualEvidenceReady),
+    summary: typeof binding.summary === "string" ? binding.summary : null
+  };
+}
+
+async function bindCamoticsResidualValidationToLocalProof(adapterReport, resultPath) {
+  const localValidation = adapterReport.localValidation;
+  let changed = false;
+  const bindEvidenceQuality = (evidenceQuality) => {
+    const residualValidation = evidenceQuality?.residualValidation;
+    if (!evidenceQuality || !residualValidation?.productionResidualEvidenceReady) return false;
+    const localResidual = localValidation?.residualValidation;
+    const localProofOk = Boolean(
+      localValidation?.ok
+        && localValidation?.productionEvidenceEligible
+        && localResidual?.productionResidualEvidenceReady
+        && localResidualValidationMatchesResult(localResidual, residualValidation)
+    );
+    const bindingStatus = !localValidation
+      ? "missing-local-validation"
+      : !localResidual
+        ? "missing-local-residual-validation"
+        : !localValidation.ok || !localValidation.productionEvidenceEligible
+          ? "local-validation-not-eligible"
+          : !localResidual.productionResidualEvidenceReady
+            ? "local-residual-not-ready"
+            : !localResidualValidationMatchesResult(localResidual, residualValidation)
+              ? "local-residual-mismatch"
+              : "matched";
+    residualValidation.localValidationBinding = {
+      status: bindingStatus,
+      localValidationOk: Boolean(localValidation?.ok),
+      localProductionEvidenceEligible: Boolean(localValidation?.productionEvidenceEligible),
+      localProductionResidualEvidenceReady: Boolean(localResidual?.productionResidualEvidenceReady),
+      localResidualProofChainStatus: localValidation?.residualProofChain?.status ?? null,
+      localResidualProofChainReady: Boolean(localValidation?.residualProofChain?.productionResidualEvidenceReady),
+      summary: localProofOk
+        ? "CAMotics result residualValidation is backed by the imported local validation report."
+        : "CAMotics result residualValidation is not backed by a matching local validation report, so production residual evidence remains open."
+    };
+    if (localProofOk) return true;
+
+    residualValidation.status = "review";
+    residualValidation.productionResidualEvidenceReady = false;
+    residualValidation.topBlockers = dedupeStrings([
+      ...(Array.isArray(residualValidation.topBlockers) ? residualValidation.topBlockers : []),
+      `local-validation-binding: ${residualValidation.localValidationBinding.summary}`
+    ]).slice(0, 8);
+    residualValidation.summary = "Residual/gouge metrics were supplied, but the local validation report does not provide matching production residual proof.";
+    return true;
+  };
+
+  changed = bindEvidenceQuality(adapterReport?.evidenceQuality) || changed;
+  const result = readJsonFileSafe(resultPath);
+  if (result?.evidenceQuality) {
+    changed = bindEvidenceQuality(result.evidenceQuality) || changed;
+    if (changed) {
+      await writeFile(resultPath, JSON.stringify(result, null, 2), "utf8");
+    }
+  }
+}
+
+function localResidualValidationMatchesResult(localResidual, resultResidual) {
+  const numericFields = ["maxGougeMm", "maxUndercutMm", "maxResidualStockMm"];
+  for (const field of numericFields) {
+    const expected = Number(resultResidual?.[field]);
+    const actual = Number(localResidual?.[field]);
+    if (Number.isFinite(expected) || Number.isFinite(actual)) {
+      if (!Number.isFinite(expected) || !Number.isFinite(actual)) return false;
+      if (Math.abs(expected - actual) > 0.000001) return false;
+    }
+  }
+  for (const field of ["status", "validationBasis", "evidenceClass"]) {
+    const expected = String(resultResidual?.[field] ?? "").trim().toLowerCase();
+    const actual = String(localResidual?.[field] ?? "").trim().toLowerCase();
+    if (expected && expected !== actual) return false;
+  }
+  for (const field of ["present", "measured"]) {
+    if (typeof resultResidual?.[field] === "boolean" && localResidual?.[field] !== resultResidual[field]) return false;
+  }
+  return true;
 }
 
 async function writeImportedCamoticsResultBundle(workDir, input) {
@@ -16074,6 +17523,8 @@ function createCamoticsResultImportAudit({ workDir, input, result, localValidati
     localValidation: localValidation ? {
       ok: Boolean(localValidation.ok),
       productionEvidenceEligible: Boolean(localValidation.productionEvidenceEligible),
+      residualValidation: summarizeResidualValidationForAudit(localValidation.residualValidation),
+      residualProofChain: summarizeResidualProofChainForAudit(localValidation.residualProofChain),
       missing: Array.isArray(localValidation.missing) ? localValidation.missing.slice(0, 20) : [],
       summary: localValidation.summary ?? null
     } : null,
@@ -16170,6 +17621,24 @@ function createCamoticsResultBundleManifestIntegrity({ manifest, entries, result
   if (manifest.localValidation?.ok !== undefined && localValidation && Boolean(manifest.localValidation.ok) !== Boolean(localValidation.ok)) {
     mismatches.push({ id: "localValidation.ok", reason: "local-validation-ok-mismatch", expected: Boolean(localValidation.ok), actual: Boolean(manifest.localValidation.ok) });
   }
+  const resultResidualMismatch = compareManifestResidualValidation(
+    manifest.result?.residualValidation,
+    result?.residualValidation ?? result?.metrics?.residualValidation,
+    "result.residualValidation"
+  );
+  if (resultResidualMismatch) mismatches.push(resultResidualMismatch);
+  const localResidualMismatch = compareManifestResidualValidation(
+    manifest.localValidation?.residualValidation,
+    localValidation?.residualValidation,
+    "localValidation.residualValidation"
+  );
+  if (localResidualMismatch) mismatches.push(localResidualMismatch);
+  const localResidualProofMismatch = compareManifestResidualProofChain(
+    manifest.localValidation?.residualProofChain,
+    localValidation?.residualProofChain,
+    "localValidation.residualProofChain"
+  );
+  if (localResidualProofMismatch) mismatches.push(localResidualProofMismatch);
   if (manifest.safetyLocks?.productionUnlockFromBundle === true) {
     mismatches.push({ id: "safetyLocks.productionUnlockFromBundle", reason: "unsafe-production-unlock-claim", expected: false, actual: true });
   }
@@ -16186,6 +17655,54 @@ function createCamoticsResultBundleManifestIntegrity({ manifest, entries, result
       ? "CAMotics 回填包 manifest 与 ZIP 条目、result/local validation 声明一致。"
       : `CAMotics 回填包 manifest 存在 ${mismatches.length} 个一致性问题。`
   };
+}
+
+function compareManifestResidualValidation(manifestResidual, actualResidual, id) {
+  if (!manifestResidual && !actualResidual) return null;
+  if (manifestResidual && !actualResidual) {
+    return { id, reason: "unexpected-residual-validation-claim", expected: null, actual: summarizeResidualValidationForAudit(manifestResidual) };
+  }
+  if (!manifestResidual && actualResidual) {
+    return { id, reason: "missing-residual-validation-claim", expected: summarizeResidualValidationForAudit(actualResidual), actual: null };
+  }
+  const manifestSummary = summarizeResidualValidationForAudit(manifestResidual);
+  const actualSummary = summarizeResidualValidationForAudit(actualResidual);
+  for (const field of ["status", "productionResidualEvidenceReady", "unsafeProductionClaim", "present", "measured", "validationBasis", "evidenceClass", "maxGougeMm", "maxUndercutMm", "maxResidualStockMm"]) {
+    if (manifestSummary?.[field] !== actualSummary?.[field]) {
+      return {
+        id,
+        reason: "residual-validation-summary-mismatch",
+        field,
+        expected: actualSummary?.[field] ?? null,
+        actual: manifestSummary?.[field] ?? null
+      };
+    }
+  }
+  return null;
+}
+
+function compareManifestResidualProofChain(manifestProof, actualProof, id) {
+  if (!manifestProof && !actualProof) return null;
+  if (manifestProof && !actualProof) {
+    return { id, reason: "unexpected-residual-proof-chain", expected: null, actual: summarizeResidualProofChainForAudit(manifestProof) };
+  }
+  if (!manifestProof && actualProof) {
+    return { id, reason: "missing-residual-proof-chain", expected: summarizeResidualProofChainForAudit(actualProof), actual: null };
+  }
+  const manifestSummary = summarizeResidualProofChainForAudit(manifestProof);
+  const actualSummary = summarizeResidualProofChainForAudit(actualProof);
+  for (const field of ["status", "productionResidualEvidenceReady", "unsafeProductionClaim", "resultSha256", "runPackageSha256"]) {
+    if (manifestSummary?.[field] !== actualSummary?.[field]) {
+      return {
+        id,
+        reason: "residual-proof-chain-summary-mismatch",
+        field,
+        expected: actualSummary?.[field] ?? null,
+        actual: manifestSummary?.[field] ?? null
+      };
+    }
+  }
+  return null;
 }
 
 function summarizeCamoticsResultBundleManifest(manifest, integrity = null) {
@@ -16207,6 +17724,8 @@ function summarizeCamoticsResultBundleManifest(manifest, integrity = null) {
     localValidation: {
       ok: manifest.localValidation?.ok === true,
       productionEvidenceEligible: manifest.localValidation?.productionEvidenceEligible === true,
+      residualValidation: summarizeResidualValidationForAudit(manifest.localValidation?.residualValidation),
+      residualProofChain: summarizeResidualProofChainForAudit(manifest.localValidation?.residualProofChain),
       missing: Array.isArray(manifest.localValidation?.missing) ? manifest.localValidation.missing.slice(0, 20).map(String) : []
     },
     result: {
@@ -16214,7 +17733,8 @@ function summarizeCamoticsResultBundleManifest(manifest, integrity = null) {
       riskLevel: manifest.result?.riskLevel ?? null,
       preferredGcodeSha256: typeof manifest.result?.preferredGcodeSha256 === "string" ? manifest.result.preferredGcodeSha256.toLowerCase() : null,
       camoticsCliRunPackageSha256: typeof manifest.result?.camoticsCliRunPackageSha256 === "string" ? manifest.result.camoticsCliRunPackageSha256.toLowerCase() : null,
-      machineContext: manifest.result?.machineContext ?? null
+      machineContext: manifest.result?.machineContext ?? null,
+      residualValidation: summarizeResidualValidationForAudit(manifest.result?.residualValidation)
     },
     safetyLocks: {
       productionUnlockFromBundle: manifest.safetyLocks?.productionUnlockFromBundle === true,
@@ -16223,6 +17743,53 @@ function summarizeCamoticsResultBundleManifest(manifest, integrity = null) {
       note: typeof manifest.safetyLocks?.note === "string" ? manifest.safetyLocks.note.slice(0, 500) : null
     },
     integrity
+  };
+}
+
+function summarizeResidualValidationForAudit(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    schema: value.schema ?? "hediao3d.residual-validation.v1",
+    status: typeof value.status === "string" ? value.status.slice(0, 80) : null,
+    productionResidualEvidenceReady: Boolean(value.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(value.unsafeProductionClaim),
+    present: Boolean(value.present),
+    measured: Boolean(value.measured),
+    validationBasis: typeof value.validationBasis === "string" ? value.validationBasis.slice(0, 160) : null,
+    evidenceClass: typeof value.evidenceClass === "string" ? value.evidenceClass.slice(0, 160) : null,
+    maxGougeMm: Number.isFinite(Number(value.maxGougeMm)) ? Number(value.maxGougeMm) : null,
+    maxUndercutMm: Number.isFinite(Number(value.maxUndercutMm)) ? Number(value.maxUndercutMm) : null,
+    maxResidualStockMm: Number.isFinite(Number(value.maxResidualStockMm)) ? Number(value.maxResidualStockMm) : null,
+    topBlockers: Array.isArray(value.topBlockers) ? value.topBlockers.map((item) => String(item).slice(0, 300)).slice(0, 8) : [],
+    checks: Array.isArray(value.checks) ? value.checks.slice(0, 8).map((check) => ({
+      id: typeof check?.id === "string" ? check.id.slice(0, 120) : null,
+      status: typeof check?.status === "string" ? check.status.slice(0, 80) : null,
+      summary: typeof check?.summary === "string" ? check.summary.slice(0, 300) : null
+    })) : [],
+    summary: typeof value.summary === "string" ? value.summary.slice(0, 500) : null
+  };
+}
+
+function summarizeResidualProofChainForAudit(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    schema: value.schema ?? "hediao3d.camotics-residual-proof-chain.v1",
+    status: typeof value.status === "string" ? value.status.slice(0, 100) : null,
+    productionResidualEvidenceReady: Boolean(value.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(value.unsafeProductionClaim),
+    resultSha256: typeof value.result?.sha256 === "string" ? value.result.sha256.toLowerCase().slice(0, 128) : null,
+    runPackageSha256: typeof value.runPackage?.sha256 === "string" ? value.runPackage.sha256.toLowerCase().slice(0, 128) : null,
+    upstreamCamEvidenceStatus: typeof value.upstreamCamEvidence?.status === "string" ? value.upstreamCamEvidence.status.slice(0, 80) : null,
+    candidatePackageStatus: typeof value.upstreamCamEvidence?.candidatePackageStatus === "string" ? value.upstreamCamEvidence.candidatePackageStatus.slice(0, 80) : null,
+    machineFitStatus: typeof value.upstreamCamEvidence?.machineFitStatus === "string" ? value.upstreamCamEvidence.machineFitStatus.slice(0, 80) : null,
+    materialReadinessStatus: typeof value.upstreamCamEvidence?.materialReadinessStatus === "string" ? value.upstreamCamEvidence.materialReadinessStatus.slice(0, 80) : null,
+    residualValidationStatus: typeof value.residualValidation?.status === "string" ? value.residualValidation.status.slice(0, 80) : null,
+    measured: Boolean(value.residualValidation?.measured),
+    validationBasis: typeof value.residualValidation?.validationBasis === "string" ? value.residualValidation.validationBasis.slice(0, 160) : null,
+    maxGougeMm: Number.isFinite(Number(value.residualValidation?.maxGougeMm)) ? Number(value.residualValidation.maxGougeMm) : null,
+    maxUndercutMm: Number.isFinite(Number(value.residualValidation?.maxUndercutMm)) ? Number(value.residualValidation.maxUndercutMm) : null,
+    hasScreenshot: Boolean(value.artifactEvidence?.hasScreenshot),
+    hasMaterialMesh: Boolean(value.artifactEvidence?.hasMaterialMesh)
   };
 }
 
@@ -16388,6 +17955,12 @@ function normalizeLinuxCamJobEvidenceStatus(value) {
   const missingUploads = Array.isArray(value.missingUploads)
     ? value.missingUploads.slice(0, 20).map((item) => String(item).slice(0, 160))
     : [];
+  const localValidationDetail = value.camoticsLocalValidationDetail && typeof value.camoticsLocalValidationDetail === "object"
+    ? value.camoticsLocalValidationDetail
+    : null;
+  const residualProofChain = localValidationDetail?.residualProofChain && typeof localValidationDetail.residualProofChain === "object"
+    ? localValidationDetail.residualProofChain
+    : null;
   return {
     schema: "hediao3d.v3-linux-cam-job-evidence-status.v1",
     phase: typeof value.phase === "string" ? value.phase.slice(0, 80) : "unknown",
@@ -16400,6 +17973,22 @@ function normalizeLinuxCamJobEvidenceStatus(value) {
     requiredFileCount: Number.isFinite(Number(value.requiredFileCount)) ? Number(value.requiredFileCount) : null,
     presentRequiredFileCount: Number.isFinite(Number(value.presentRequiredFileCount)) ? Number(value.presentRequiredFileCount) : null,
     hashMismatchCount: Number.isFinite(Number(value.hashMismatchCount)) ? Number(value.hashMismatchCount) : null,
+    camoticsLocalValidationDetail: localValidationDetail ? {
+      status: typeof localValidationDetail.status === "string" ? localValidationDetail.status.slice(0, 80) : "unknown",
+      ok: Boolean(localValidationDetail.ok),
+      productionEvidenceEligible: Boolean(localValidationDetail.productionEvidenceEligible),
+      upstreamEvidenceStatus: typeof localValidationDetail.upstreamEvidenceStatus === "string" ? localValidationDetail.upstreamEvidenceStatus.slice(0, 80) : "unknown",
+      candidatePackageStatus: typeof localValidationDetail.candidatePackageStatus === "string" ? localValidationDetail.candidatePackageStatus.slice(0, 80) : "unknown",
+      candidatePackageBundleShaMatches: Boolean(localValidationDetail.candidatePackageBundleShaMatches),
+      residualProofChain: residualProofChain ? {
+        schema: typeof residualProofChain.schema === "string" ? residualProofChain.schema.slice(0, 120) : null,
+        status: typeof residualProofChain.status === "string" ? residualProofChain.status.slice(0, 80) : "unknown",
+        productionResidualEvidenceReady: Boolean(residualProofChain.productionResidualEvidenceReady),
+        unsafeProductionClaim: Boolean(residualProofChain.unsafeProductionClaim)
+      } : null,
+      missing: Array.isArray(localValidationDetail.missing) ? localValidationDetail.missing.slice(0, 8).map((item) => String(item).slice(0, 120)) : [],
+      summary: typeof localValidationDetail.summary === "string" ? localValidationDetail.summary.slice(0, 500) : null
+    } : null,
     summary: typeof value.summary === "string" ? value.summary.slice(0, 1000) : null
   };
 }
@@ -16458,6 +18047,7 @@ async function refreshCamoticsEvidenceArtifacts(job, adapterReport) {
   const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job);
   if (productionEvidenceDossier) {
     await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+    await writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier);
   }
 
   const refreshedDelivery = await refreshEvidenceDeliveryArtifacts(job);
@@ -16800,6 +18390,7 @@ async function refreshImportedToolpathArtifacts(job, settings, selectedEngine, a
   const productionEvidenceDossier = createProductionEvidenceDossierFromJobArtifacts(job);
   if (productionEvidenceDossier) {
     await writeFile(join(workDir, "production-evidence-dossier.json"), JSON.stringify(productionEvidenceDossier, null, 2), "utf8");
+    await writeFieldEvidenceProofChainArtifact(job, productionEvidenceDossier);
   }
 
   const deliveryManifest = createDeliveryManifest(job, toolpath, productionGate, repairExecution);
@@ -17817,6 +19408,7 @@ async function getOrchestratorLinuxCamJobPackage(jobId, res) {
     "machining-package-index.json",
     "production-gate.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
     "mvp-operator-status.json",
@@ -18288,6 +19880,7 @@ function getOrchestratorEvidenceReviewPackage(jobId, res) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "production-readiness-audit.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
@@ -18416,6 +20009,20 @@ function getOrchestratorProductionPackage(jobId, res) {
   }
 
   const packageManifest = createProductionPackageManifest(safeJobId, manifest, productionGate, productionFiles);
+  if (packageManifest.evidenceProofs?.complete !== true) {
+    return json(res, 409, {
+      error: "正式生产包缺少关键证据证明文件，请刷新证据交付物后重试",
+      evidenceProofs: packageManifest.evidenceProofs,
+      missingEvidenceProofs: packageManifest.evidenceProofs?.files
+        ?.filter((file) => file.required && !file.included)
+        ?.map((file) => file.filename) ?? [],
+      nextActions: [
+        "重新生成或刷新 production-evidence-dossier.json、field-evidence-proof-chain.json、camotics-result-local-validation.json、camotics-result-import.json、linux-cam-evidence-upload-report.json、production-closure-audit.json 和 package-integrity.json。",
+        "重新运行相关证据回填接口或 V3 小闭环，确认 delivery-manifest.json 中关键证据文件 exists=true。",
+        "再次请求 production-package。"
+      ]
+    });
+  }
   const files = productionFiles.map((file) => ({
     name: `hediao3d-v3-production/${file.kind}/${file.filename}`,
     content: readFileSync(join(workDir, file.filename))
@@ -18446,6 +20053,9 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
   const missingEvidence = Array.isArray(evidenceDossier?.missingEvidence) ? evidenceDossier.missingEvidence : [];
   const closureActions = Array.isArray(productionClosureAudit?.nextActions) ? productionClosureAudit.nextActions : [];
   const materialRemovalGate = createLockedProductionMaterialRemovalGuidance(productionAudit);
+  const airRunGate = createLockedProductionAirRunGuidance(productionAudit);
+  const fieldEvidenceGate = createLockedProductionFieldEvidenceGuidance(productionAudit);
+  const runbookBoundary = createRunbookProductionBoundarySummary(readLatestV3RunbookResultSummary());
   const neverMachineFiles = Array.isArray(manifest?.files)
     ? manifest.files
       .filter((file) => file.filename === "camotics-preview.nc" || file.machineUse?.allowedOnMachine === false || file.machineUse?.class === "simulation-only-never-machine")
@@ -18467,6 +20077,7 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
       "machining-package-index.json",
       "production-gate.json",
       "production-evidence-dossier.json",
+      "field-evidence-proof-chain.json",
       "production-closure-audit.json",
       "production-closure-audit.md",
       "next-action-checklist.md",
@@ -18486,6 +20097,9 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
       }))
     } : null,
     materialRemovalGate,
+    airRunGate,
+    fieldEvidenceGate,
+    runbookBoundary,
     allowedBeforeUnlock: [
       "下载安全试雕包。",
       "核验 package-integrity.json 与 operator-download-checklist.md。",
@@ -18502,6 +20116,92 @@ function createLockedProductionPackageOperatorGuidance(jobId, manifest, producti
     productionGateLevel: productionGate?.level ?? manifest?.packageLevel ?? "unknown",
     productionAuditAllowed: Boolean(productionAudit?.allowProductionPackage),
     summary: productionClosureAudit?.summary ?? "正式生产包被锁定时，先走安全试雕包和证据回填流程；不要把仿真文件或报告文件上机。"
+  };
+}
+
+function createLockedProductionAirRunGuidance(productionAudit) {
+  const gate = Array.isArray(productionAudit?.gates)
+    ? productionAudit.gates.find((item) => item?.id === "air-run-proof")
+    : null;
+  const evidence = gate?.airRunEvidence && typeof gate.airRunEvidence === "object" ? gate.airRunEvidence : null;
+  return {
+    id: "air-run-proof",
+    label: gate?.label ?? "离料空跑验证",
+    status: gate?.status ?? "review",
+    summary: gate?.summary ?? "缺少旋转标定空跑/整条离料空跑通过记录，或空跑文件哈希未绑定。",
+    evidenceStatus: evidence?.status ?? "missing",
+    packageBindingStatus: evidence?.packageBindingStatus ?? "missing",
+    allRequiredHashesVerified: Boolean(evidence?.allRequiredHashesVerified),
+    failedChecks: Array.isArray(evidence?.checks)
+      ? evidence.checks
+        .filter((check) => check?.status && check.status !== "pass")
+        .slice(0, 8)
+        .map((check) => ({
+          id: check.id ?? "unknown",
+          status: check.status ?? "unknown",
+          sha256: check.sha256 ?? null,
+          summary: check.evidenceNote ?? check.label ?? null
+        }))
+      : [],
+    nextActions: gate?.status === "pass"
+      ? ["继续核验试雕反馈、机床验收和生产包哈希是否绑定同一作业。"]
+      : [
+          "重新核对 package-integrity.json 中 air-run.nc 和 rotary-calibration-airrun.nc 的 SHA-256。",
+          "重新执行旋转标定空跑和整条离料空跑，主轴关闭、Z 在安全高度。",
+          "重新 POST /api/orchestrator/jobs/:id/machine-acceptance，并上传/填写当前加工包的哈希校验结果。"
+        ]
+  };
+}
+
+function createLockedProductionFieldEvidenceGuidance(productionAudit) {
+  const gate = Array.isArray(productionAudit?.gates)
+    ? productionAudit.gates.find((item) => item?.id === "field-package-proof")
+    : null;
+  const binding = gate?.fieldEvidencePackageBinding && typeof gate.fieldEvidencePackageBinding === "object"
+    ? gate.fieldEvidencePackageBinding
+    : null;
+  const proofChain = gate?.fieldEvidenceProofChain && typeof gate.fieldEvidenceProofChain === "object"
+    ? gate.fieldEvidenceProofChain
+    : null;
+  const completeness = gate?.fieldEvidenceCompleteness && typeof gate.fieldEvidenceCompleteness === "object"
+    ? gate.fieldEvidenceCompleteness
+    : proofChain?.fieldCompleteness && typeof proofChain.fieldCompleteness === "object"
+      ? proofChain.fieldCompleteness
+      : null;
+  const sharedFiles = Array.isArray(binding?.sharedFiles) ? binding.sharedFiles : [];
+  return {
+    id: "field-package-proof",
+    label: gate?.label ?? "现场证据同包绑定",
+    status: gate?.status ?? "review",
+    summary: gate?.summary ?? "缺少试雕反馈、机床验收或同包哈希绑定。",
+    proofChainStatus: proofChain?.status ?? "missing",
+    productionFieldEvidenceReady: Boolean(proofChain?.productionFieldEvidenceReady),
+    fieldCompletenessStatus: completeness?.status ?? proofChain?.fieldCompletenessStatus ?? "missing",
+    fieldCompletenessMissingChecks: Array.isArray(completeness?.missingChecks) ? completeness.missingChecks.slice(0, 12) : [],
+    machineAcceptancePassed: Boolean(gate?.machineAcceptancePassed),
+    trialFeedbackPassed: Boolean(gate?.trialFeedbackPassed),
+    bindingStatus: binding?.status ?? "missing",
+    machineBindingStatus: binding?.machineBindingStatus ?? "missing",
+    trialBindingStatus: binding?.trialBindingStatus ?? "missing",
+    matchedSharedFileCount: Number(binding?.matchedSharedFileCount ?? 0),
+    mismatchCount: Number(binding?.mismatchCount ?? 0),
+    mismatchedFiles: sharedFiles
+      .filter((file) => file?.status !== "matched")
+      .slice(0, 8)
+      .map((file) => ({
+        filename: file.filename ?? "unknown",
+        machineSha256: file.machineSha256 ?? null,
+        trialSha256: file.trialSha256 ?? null,
+        issues: Array.isArray(file.issues) ? file.issues.slice(0, 8) : []
+      })),
+    nextActions: gate?.status === "pass"
+      ? ["继续保持 trial-feedback、machine-acceptance 与当前 package-integrity.json 同包绑定。"]
+      : [
+          "确认最新 trial-feedback 和 machine-acceptance 都来自当前 job 的同一套下载文件。",
+          "补齐现场完整性证据：操作员/机床编号、下载包复核、不可上机文件确认、照片/附件、步骤 evidenceNote、试雕耗时和 notes。",
+          "核对 toolpath.nc、air-run.nc、rotary-calibration-airrun.nc 与 package-integrity.json 的 SHA-256。",
+          "如果最新现场记录绑定错误，重新回填当前加工包的 trial-feedback 和 machine-acceptance。"
+        ]
   };
 }
 
@@ -18523,16 +20223,34 @@ function createLockedProductionMaterialRemovalGuidance(productionAudit) {
     };
   }
   const residualClosed = /残料\/过切证据已闭合|残料.*已闭合|gouge.*closed|residual.*closed/i.test(gate.summary ?? "");
+  const residualLocalBindingStatus = gate.residualLocalValidationBindingStatus ?? gate.residualLocalValidationBinding?.status ?? "not-required";
+  const residualUnsafeProductionClaim = Boolean(gate.residualUnsafeProductionClaim);
+  const residualProofCrossCheckStatus = gate.residualProofCrossCheckStatus ?? gate.residualProofCrossCheck?.status ?? "missing";
+  const needsLocalResidualProof = gate.status !== "pass" && !["matched", "not-required"].includes(residualLocalBindingStatus);
+  const needsResidualProofCrossCheck = residualProofCrossCheckStatus === "mismatch";
   return {
     id: gate.id,
     label: gate.label ?? "真实材料去除仿真",
     status: gate.status ?? "review",
     summary: gate.summary ?? "材料去除仿真和残料/过切证据仍需复核。",
     residualEvidenceRequired: gate.status !== "pass" || !residualClosed,
+    residualUnsafeProductionClaim,
+    residualClosureStatus: gate.residualClosureStatus ?? "missing",
+    residualTopBlockers: Array.isArray(gate.residualTopBlockers) ? gate.residualTopBlockers.slice(0, 6) : [],
+    residualLocalValidationBindingStatus: residualLocalBindingStatus,
+    residualProofCrossCheckStatus,
+    residualProofCrossCheck: gate.residualProofCrossCheck ? {
+      schema: gate.residualProofCrossCheck.schema ?? null,
+      status: gate.residualProofCrossCheck.status ?? "unknown",
+      summary: gate.residualProofCrossCheck.summary ?? null
+    } : null,
     nextActions: gate.status === "pass"
       ? ["继续核验 NC/控制器、离料空跑、试雕反馈和机床验收是否与同一加工包哈希绑定。"]
       : [
           "确认材料去除仿真结果绑定当前 job、当前 toolpath 和当前机床上下文。",
+          ...(residualUnsafeProductionClaim ? ["撤销 productionResidualEvidenceReady=true 的危险残料声明；只有 measured 或 swept-volume/material-removal validated 且 gouge/undercut 在容差内时才可重新声明。"] : []),
+          ...(needsLocalResidualProof ? ["重新运行 camotics-result-validate.js，确保 camotics-result-local-validation.json 携带与 camotics-result.json 一致的 residualValidation 残料/过切校验证明。"] : []),
+          ...(needsResidualProofCrossCheck ? ["重新上传 camotics-result-bundle.zip，或复核 linux-cam-evidence-upload-report.json 与 camotics-result-import.json 中的 residualProofChain 是否来自同一次本地校验。"] : []),
           "补齐残料/过切 residualValidation，要求 maxGougeMm/maxUndercutMm 在容差内且依据为 measured 或 swept-volume/material-removal validated。",
           "重新上传 camotics-result-bundle.zip 或等效材料去除证据包。"
         ]
@@ -18549,6 +20267,7 @@ function isSafeTrialPackageDeliveryFile(file, allowTrialNc) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
     "mvp-operator-status.json",
@@ -19274,6 +20993,26 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "  return `data:application/zip;base64,${bytes.toString('base64')}`;",
     "}",
     "",
+    "function readJsonSafe(relativePath) {",
+    "  try { return JSON.parse(readFileSync(join(root, relativePath), 'utf8')); } catch { return null; }",
+    "}",
+    "",
+    "function summarizeLocalValidation(report) {",
+    "  if (!report || typeof report !== 'object') return { status: 'missing', ok: false, productionEvidenceEligible: false, residualProofChain: null, summary: 'linux-cam-job-local-validation.json has not been generated yet.' };",
+    "  const detail = report.evidenceStatus?.camoticsLocalValidationDetail && typeof report.evidenceStatus.camoticsLocalValidationDetail === 'object' ? report.evidenceStatus.camoticsLocalValidationDetail : null;",
+    "  const residualProofChain = detail?.residualProofChain && typeof detail.residualProofChain === 'object' ? detail.residualProofChain : null;",
+    "  return {",
+    "    status: report.level ?? report.evidenceStatus?.phase ?? 'unknown',",
+    "    ok: report.packageIntegrityOk === true && report.evidenceStatus?.readyForUpload === true,",
+    "    productionEvidenceEligible: false,",
+    "    camoticsLocalValidationStatus: detail?.status ?? report.evidenceStatus?.camoticsLocalValidation ?? 'missing',",
+    "    candidatePackageStatus: detail?.candidatePackageStatus ?? 'unknown',",
+    "    candidatePackageBundleShaMatches: Boolean(detail?.candidatePackageBundleShaMatches),",
+    "    residualProofChain: residualProofChain ? { schema: residualProofChain.schema ?? null, status: residualProofChain.status ?? 'unknown', productionResidualEvidenceReady: Boolean(residualProofChain.productionResidualEvidenceReady), unsafeProductionClaim: Boolean(residualProofChain.unsafeProductionClaim) } : null,",
+    "    summary: report.summary ?? null",
+    "  };",
+    "}",
+    "",
     "async function postJson(path, body) {",
     "  if (!apiBase) throw new Error('HEDIAO3D_V3_API_BASE is required unless --dry-run is used.');",
     "  const response = await fetch(`${apiBase}${path}`, {",
@@ -19297,6 +21036,7 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "const validation = fileInfo('linux-cam-job-local-validation.json', true);",
     "const nativeBundle = fileInfo('native-cam-real-output-bundle.zip', true);",
     "const camoticsBundle = fileInfo('camotics-result-bundle.zip', true);",
+    "const localValidationSummary = summarizeLocalValidation(readJsonSafe('linux-cam-job-local-validation.json'));",
     "const uploadPlan = {",
     "  schema: 'hediao3d.v3-linux-cam-evidence-upload-plan.v1',",
     "  jobId: manifest.jobId,",
@@ -19325,6 +21065,7 @@ function createLinuxCamJobEvidenceUploadScript(manifest) {
     "  productionUnlockEligible: false,",
     "  dryRun,",
     "  uploadPlan,",
+    "  localValidationSummary,",
     "  uploads: [],",
     "  phase: uploadPlan.readyForUpload ? (dryRun ? 'dry-run-pending' : 'pending-upload') : 'missing-upload-files',",
     "  completedCount: 0,",
@@ -19443,6 +21184,37 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "  return { relativePath, required, exists: true, status: 'present', sizeBytes: statSync(fullPath).size, sha256: createHash('sha256').update(bytes).digest('hex') };",
     "}",
     "",
+    "function readJsonSafe(relativePath) {",
+    "  try { return JSON.parse(readFileSync(join(root, relativePath), 'utf8')); } catch { return null; }",
+    "}",
+    "",
+    "function summarizeCamoticsLocalValidation(report, exists) {",
+    "  if (!exists) return { status: 'missing', ok: false, productionEvidenceEligible: false, upstreamEvidenceStatus: 'missing', candidatePackageStatus: 'missing', candidatePackageBundleShaMatches: false, summary: 'camotics-result-local-validation.json has not been copied into camotics-work.' };",
+    "  if (!report || typeof report !== 'object') return { status: 'invalid-json', ok: false, productionEvidenceEligible: false, upstreamEvidenceStatus: 'invalid-json', candidatePackageStatus: 'invalid-json', candidatePackageBundleShaMatches: false, summary: 'camotics-result-local-validation.json is not valid JSON.' };",
+    "  const upstream = report.upstreamCamEvidence && typeof report.upstreamCamEvidence === 'object'",
+    "    ? report.upstreamCamEvidence",
+    "    : report.expected?.upstreamCamEvidence && typeof report.expected.upstreamCamEvidence === 'object'",
+    "      ? report.expected.upstreamCamEvidence",
+    "      : null;",
+    "  const candidate = upstream?.candidatePackage && typeof upstream.candidatePackage === 'object' ? upstream.candidatePackage : null;",
+    "  const candidateCheck = Array.isArray(report.checks) ? report.checks.find((check) => check.id === 'upstream-candidate-package') ?? null : null;",
+    "  const residualProofChain = report.residualProofChain && typeof report.residualProofChain === 'object' ? report.residualProofChain : null;",
+    "  return {",
+    "    status: report.ok === true && report.productionEvidenceEligible === true ? 'ready' : 'not-eligible',",
+    "    schema: report.schema ?? null,",
+    "    ok: report.ok === true,",
+    "    productionEvidenceEligible: report.productionEvidenceEligible === true,",
+    "    upstreamEvidenceStatus: upstream?.status ?? 'missing',",
+    "    upstreamCandidatePackageCheck: candidateCheck,",
+    "    candidatePackageStatus: candidateCheck?.ok === true ? 'matched' : candidate?.status ?? 'missing',",
+    "    candidatePackageBundleShaMatches: Boolean(candidate?.bundleShaOk ?? candidate?.bundleShaMatches),",
+    "    candidatePackageSummary: candidate?.summary ?? null,",
+    "    residualProofChain: residualProofChain ? { schema: residualProofChain.schema ?? null, status: residualProofChain.status ?? 'unknown', productionResidualEvidenceReady: Boolean(residualProofChain.productionResidualEvidenceReady), unsafeProductionClaim: Boolean(residualProofChain.unsafeProductionClaim) } : null,",
+    "    missing: Array.isArray(report.missing) ? report.missing.map(String).slice(0, 20) : [],",
+    "    summary: report.summary ?? null",
+    "  };",
+    "}",
+    "",
     "function normalizeManifestPath(name) {",
     "  const prefix = 'hediao3d-v3-linux-cam-job/';",
     "  return String(name ?? '').startsWith(prefix) ? String(name).slice(prefix.length) : String(name ?? '');",
@@ -19488,6 +21260,8 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "const nativeBundle = checks.find((check) => check.relativePath === 'native-cam-real-output-bundle.zip');",
     "const camoticsBundle = checks.find((check) => check.relativePath === 'camotics-result-bundle.zip');",
     "const camoticsLocalValidation = checks.find((check) => check.relativePath === 'camotics-work/camotics-result-local-validation.json');",
+    "const camoticsLocalValidationReport = readJsonSafe('camotics-work/camotics-result-local-validation.json');",
+    "const camoticsLocalValidationDetail = summarizeCamoticsLocalValidation(camoticsLocalValidationReport, Boolean(camoticsLocalValidation?.exists));",
     "const depsInstallFile = checks.find((check) => check.relativePath === 'linux-cam-deps-install-report.json');",
     "let depsInstallReport = null;",
     "if (depsInstallFile?.exists) {",
@@ -19499,10 +21273,12 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "  try { preflight = JSON.parse(readFileSync(join(root, 'linux-cam-job-preflight.json'), 'utf8')); } catch { preflight = { level: 'invalid-json', blockers: ['linux-cam-job-preflight.json:invalid-json'] }; }",
     "}",
     "const packageIntegrityOk = missingRequired.length === 0 && hashMismatches.length === 0;",
-    "const productionEvidenceReady = Boolean(packageIntegrityOk && nativeBundle?.exists && camoticsBundle?.exists);",
+    "const camoticsLocalValidationReady = camoticsLocalValidationDetail.status === 'ready';",
+    "const productionEvidenceReady = Boolean(packageIntegrityOk && nativeBundle?.exists && camoticsBundle?.exists && camoticsLocalValidationReady);",
     "const missingUploads = [",
     "  ...(nativeBundle?.exists ? [] : ['native-cam-real-output-bundle.zip']),",
-    "  ...(camoticsBundle?.exists ? [] : ['camotics-result-bundle.zip'])",
+    "  ...(camoticsBundle?.exists ? [] : ['camotics-result-bundle.zip']),",
+    "  ...(camoticsLocalValidationReady ? [] : ['camotics-work/camotics-result-local-validation.json:ready'])",
     "];",
     "const requiredChecks = checks.filter((check) => check.required);",
     "const evidenceStatus = {",
@@ -19513,6 +21289,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "  nativeCamBundle: nativeBundle?.exists ? 'present' : 'missing',",
     "  camoticsBundle: camoticsBundle?.exists ? 'present' : 'missing',",
     "  camoticsLocalValidation: camoticsLocalValidation?.exists ? 'present' : 'missing',",
+    "  camoticsLocalValidationDetail,",
     "  dependencyInstallReport: depsInstallReport ? { status: depsInstallReport.status ?? 'unknown', mode: depsInstallReport.mode ?? null, summary: depsInstallReport.summary ?? null } : { status: 'not-run', mode: null, summary: 'Run bash install-linux-cam-deps.sh before preflight when dependencies are missing.' },",
     "  preflight: preflight ? { level: preflight.level ?? 'unknown', blockerCount: Array.isArray(preflight.blockers) ? preflight.blockers.length : 0, summary: preflight.summary ?? null } : { level: 'not-run', blockerCount: null, summary: 'Run node preflight-linux-cam-job.mjs . before Linux CAM execution.' },",
     "  missingUploads,",
@@ -19522,7 +21299,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "  summary: productionEvidenceReady",
     "    ? 'Linux evidence bundles are present and ready to upload back to HeDiao3D V3.'",
     "    : packageIntegrityOk",
-    "      ? `Package inputs verified; missing upload bundle(s): ${missingUploads.join(', ') || 'none'}.`",
+    "      ? `Package inputs verified; missing or invalid upload evidence: ${missingUploads.join(', ') || 'none'}.`",
     "      : 'Package integrity must be fixed before running Linux CAM evidence.'",
     "};",
     "const uploadPlanItems = [",
@@ -19548,7 +21325,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "    endpoint: `/api/orchestrator/jobs/${manifest.jobId}/camotics-result`,",
     "    unifiedEndpoint: `/api/orchestrator/jobs/${manifest.jobId}/linux-cam-evidence-bundle`,",
     "    inputField: 'bundleDataUrl',",
-    "    summary: camoticsBundle?.exists ? 'Ready to upload through the unified Linux CAM evidence endpoint.' : 'Run CAMotics/equivalent material-removal validation to create this bundle.'",
+    "    summary: camoticsBundle?.exists && camoticsLocalValidationReady ? 'Ready to upload through the unified Linux CAM evidence endpoint.' : 'Run CAMotics/equivalent material-removal validation and pass camotics-result-local-validation.json before upload.'",
     "  }",
     "];",
     "const uploadPlan = {",
@@ -19573,7 +21350,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
     "      ? `Package has ${hashMismatches.length} manifest hash mismatch(es).`",
     "    : productionEvidenceReady",
     "      ? 'Native CAM and CAMotics upload bundles are present; upload them to HeDiao3D V3 for gate evaluation.'",
-    "      : 'Package inputs are present, but one or more Linux evidence bundles are still missing.',",
+    "      : 'Package inputs are present, but one or more Linux evidence bundles or local validation reports are still missing/not eligible.',",
     "  packageIntegrityOk,",
     "  evidenceStatus,",
     "  preflight: evidenceStatus.preflight,",
@@ -19599,6 +21376,7 @@ function createLinuxCamJobLocalValidatorScript(manifest) {
 function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, missing, productionEvidenceDossier = null) {
   const productionGate = deliveryManifest?.productionGate ?? {};
   const evidenceGapSummary = createEvidenceGapSummary(productionEvidenceDossier);
+  const runbookBoundary = createRunbookProductionBoundarySummary(readLatestV3RunbookResultSummary());
   return {
     schema: "hediao3d.v3-evidence-review-package.v1",
     jobId,
@@ -19621,6 +21399,7 @@ function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, 
     },
     files: included,
     missing,
+    runbookBoundary,
     productionEvidenceDossier: evidenceGapSummary,
     nextEvidence: [
       "确认 production-evidence-dossier.json 的 blocked/review 项。",
@@ -19631,10 +21410,36 @@ function createEvidenceReviewPackageManifest(jobId, deliveryManifest, included, 
   };
 }
 
+function createRunbookProductionBoundarySummary(runbookResult) {
+  if (!runbookResult || typeof runbookResult !== "object") {
+    return {
+      schema: "hediao3d.runbook-production-boundary.v1",
+      status: "missing",
+      readinessReportId: null,
+      runbookReviewSafe: false,
+      productionSafe: false,
+      linuxEvidenceStatus: "missing",
+      productionSafeReason: "尚未导入可审查的 Linux runbook 结果；即使 runbook 后续通过，也不能单独解锁正式生产 NC。"
+    };
+  }
+  return {
+    schema: "hediao3d.runbook-production-boundary.v1",
+    status: runbookResult.runbookReviewSafe ? "review-safe" : "blocked",
+    readinessReportId: runbookResult.readinessReportId ?? null,
+    runbookReviewSafe: Boolean(runbookResult.runbookReviewSafe),
+    productionSafe: Boolean(runbookResult.productionSafe),
+    linuxEvidenceStatus: runbookResult.linuxEvidence?.status ?? "missing",
+    productionSafeReason: runbookResult.productionSafeReason ?? "Runbook result is review evidence only; production remains locked until the full same-job evidence chain is validated."
+  };
+}
+
 function createEvidenceGapSummary(productionEvidenceDossier) {
   const missingEvidence = Array.isArray(productionEvidenceDossier?.missingEvidence)
     ? productionEvidenceDossier.missingEvidence
     : [];
+  const productionReadinessAudit = productionEvidenceDossier?.crossChecks?.productionReadinessAudit ?? null;
+  const readinessGates = Array.isArray(productionReadinessAudit?.gates) ? productionReadinessAudit.gates : [];
+  const gateById = new Map(readinessGates.map((gate) => [gate.id, gate]));
   return {
     status: productionEvidenceDossier?.status ?? "missing",
     summary: productionEvidenceDossier?.summary ?? "未找到 production-evidence-dossier.json。",
@@ -19642,7 +21447,72 @@ function createEvidenceGapSummary(productionEvidenceDossier) {
     missingEvidenceTop: missingEvidence.slice(0, 8).map(createEvidenceGapItemSummary),
     fieldEvidenceGaps: missingEvidence
       .filter((item) => ["air-run-evidence", "rotary-calibration-evidence", "machine-acceptance", "trial-feedback"].includes(item.id))
-      .map(createEvidenceGapItemSummary)
+      .map(createEvidenceGapItemSummary),
+    productionReadinessAudit: productionReadinessAudit ? {
+      status: productionReadinessAudit.status ?? "unknown",
+      allowProductionPackage: Boolean(productionReadinessAudit.allowProductionPackage),
+      passCount: Number(productionReadinessAudit.passCount ?? 0),
+      reviewCount: Number(productionReadinessAudit.reviewCount ?? 0),
+      blockCount: Number(productionReadinessAudit.blockCount ?? 0),
+      materialRemovalGate: createEvidenceReviewAuditGateSummary(gateById.get("material-removal-proof")),
+      airRunGate: createEvidenceReviewAuditGateSummary(gateById.get("air-run-proof")),
+      fieldPackageGate: createEvidenceReviewAuditGateSummary(gateById.get("field-package-proof"))
+    } : null
+  };
+}
+
+function createEvidenceReviewAuditGateSummary(gate) {
+  if (!gate || typeof gate !== "object") return null;
+  const binding = gate.fieldEvidencePackageBinding && typeof gate.fieldEvidencePackageBinding === "object"
+    ? gate.fieldEvidencePackageBinding
+    : null;
+  const fieldProofChain = gate.fieldEvidenceProofChain && typeof gate.fieldEvidenceProofChain === "object"
+    ? gate.fieldEvidenceProofChain
+    : null;
+  const fieldCompleteness = gate.fieldEvidenceCompleteness && typeof gate.fieldEvidenceCompleteness === "object"
+    ? gate.fieldEvidenceCompleteness
+    : fieldProofChain?.fieldCompleteness && typeof fieldProofChain.fieldCompleteness === "object"
+      ? fieldProofChain.fieldCompleteness
+      : null;
+  const airRunEvidence = gate.airRunEvidence && typeof gate.airRunEvidence === "object"
+    ? gate.airRunEvidence
+    : null;
+  return {
+    id: gate.id ?? null,
+    label: gate.label ?? null,
+    status: gate.status ?? "unknown",
+    summary: gate.summary ?? null,
+    residualClosureStatus: gate.residualClosureStatus ?? null,
+    residualUnsafeProductionClaim: Object.hasOwn(gate, "residualUnsafeProductionClaim") ? Boolean(gate.residualUnsafeProductionClaim) : null,
+    residualLocalValidationBindingStatus: gate.residualLocalValidationBindingStatus ?? gate.residualLocalValidationBinding?.status ?? null,
+    residualProofCrossCheckStatus: gate.residualProofCrossCheckStatus ?? gate.residualProofCrossCheck?.status ?? null,
+    residualProofCrossCheck: gate.residualProofCrossCheck ? {
+      schema: gate.residualProofCrossCheck.schema ?? null,
+      status: gate.residualProofCrossCheck.status ?? "unknown",
+      summary: gate.residualProofCrossCheck.summary ?? null
+    } : null,
+    residualTopBlockers: Array.isArray(gate.residualTopBlockers) ? gate.residualTopBlockers.slice(0, 6) : [],
+    airRunEvidenceStatus: airRunEvidence?.status ?? null,
+    airRunPackageBindingStatus: airRunEvidence?.packageBindingStatus ?? null,
+    fieldProofChainStatus: fieldProofChain?.status ?? null,
+    productionFieldEvidenceReady: Object.hasOwn(fieldProofChain ?? {}, "productionFieldEvidenceReady")
+      ? Boolean(fieldProofChain.productionFieldEvidenceReady)
+      : null,
+    fieldCompletenessStatus: fieldCompleteness?.status ?? fieldProofChain?.fieldCompletenessStatus ?? null,
+    fieldCompletenessMissingCount: Number(fieldCompleteness?.missingCount ?? 0),
+    fieldCompletenessMissingChecks: Array.isArray(fieldCompleteness?.missingChecks) ? fieldCompleteness.missingChecks.slice(0, 8) : [],
+    fieldBindingStatus: binding?.status ?? null,
+    machineBindingStatus: binding?.machineBindingStatus ?? null,
+    trialBindingStatus: binding?.trialBindingStatus ?? null,
+    mismatchedFiles: Array.isArray(binding?.sharedFiles)
+      ? binding.sharedFiles
+        .filter((file) => file.status !== "matched")
+        .slice(0, 8)
+        .map((file) => ({
+          filename: file.filename,
+          issues: Array.isArray(file.issues) ? file.issues.slice(0, 8) : []
+        }))
+      : []
   };
 }
 
@@ -19697,6 +21567,57 @@ function createSafeTrialPackageManifest(jobId, deliveryManifest, files) {
 }
 
 function createProductionPackageManifest(jobId, deliveryManifest, productionGate, files) {
+  const included = new Set(files.map((file) => file.filename));
+  const evidenceProofFiles = [
+    {
+      id: "production-evidence-dossier",
+      filename: "production-evidence-dossier.json",
+      required: true,
+      summary: "生产证据档案，汇总真实 CAM、材料去除、NC/控制器和现场证据门禁。"
+    },
+    {
+      id: "field-evidence-proof-chain",
+      filename: "field-evidence-proof-chain.json",
+      required: true,
+      summary: "现场证据链，证明离料空跑、旋转标定、试雕反馈和机床验收绑定同一加工包哈希。"
+    },
+    {
+      id: "camotics-local-validation",
+      filename: "camotics-result-local-validation.json",
+      required: true,
+      summary: "CAMotics/等效材料去除本地校验报告，包含残料/过切 proof chain 绑定。"
+    },
+    {
+      id: "camotics-import-audit",
+      filename: "camotics-result-import.json",
+      required: true,
+      summary: "CAMotics 结果导入审计，记录 ZIP 来源、输入哈希绑定和导入侧 residualProofChain。"
+    },
+    {
+      id: "linux-cam-evidence-upload-report",
+      filename: "linux-cam-evidence-upload-report.json",
+      required: true,
+      summary: "Linux CAM 证据上传报告，记录上传侧 localValidationSummary 与 residualProofChain。"
+    },
+    {
+      id: "linux-cam-evidence-upload-report-import",
+      filename: "linux-cam-evidence-upload-report-import.json",
+      required: true,
+      summary: "Linux CAM 证据上传报告导入审计，证明上传报告本身已进入当前 job 证据链。"
+    },
+    {
+      id: "production-closure-audit",
+      filename: "production-closure-audit.json",
+      required: true,
+      summary: "生产闭环审计，列出正式生产前各层证据是否通过。"
+    },
+    {
+      id: "package-integrity",
+      filename: "package-integrity.json",
+      required: true,
+      summary: "加工包完整性报告，用于核对各文件 SHA-256。"
+    }
+  ];
   return {
     schema: "hediao3d.v3-production-package.v1",
     jobId,
@@ -19720,6 +21641,14 @@ function createProductionPackageManifest(jobId, deliveryManifest, productionGate
       blockers: productionGate?.blockers ?? [],
       warnings: productionGate?.warnings ?? []
     },
+    evidenceProofs: {
+      schema: "hediao3d.production-package-evidence-proofs.v1",
+      complete: evidenceProofFiles.every((file) => included.has(file.filename)),
+      files: evidenceProofFiles.map((file) => ({
+        ...file,
+        included: included.has(file.filename)
+      }))
+    },
     files: files.map((file) => ({
       filename: file.filename,
       label: file.label,
@@ -19736,6 +21665,8 @@ function createProductionPackageManifest(jobId, deliveryManifest, productionGate
     requiredBeforeRun: [
       "按 operator-download-checklist.md 核验 toolpath.nc、air-run.nc、rotary-calibration-airrun.nc 的 SHA-256。",
       "确认 production-gate.json 为 allowProductionNc=true。",
+      "确认 production-package-manifest.json 的 evidenceProofs.complete=true。",
+      "确认 camotics-result-import.json 与 linux-cam-evidence-upload-report.json 的 residualProofChain 交叉核验为 matched。",
       "确认 machine-acceptance-log.json 和 trial-feedback-log.json 绑定当前 package-integrity。",
       "正式加工前仍建议保留 air-run.nc 与 rotary-calibration-airrun.nc 的现场记录。"
     ]
@@ -19838,6 +21769,14 @@ function createEvidenceReviewPackageReadme(packageManifest) {
   const fieldGaps = Array.isArray(dossier.fieldEvidenceGaps) && dossier.fieldEvidenceGaps.length
     ? dossier.fieldEvidenceGaps.map((item) => `- ${item.label}: ${item.status} / ${item.summary}`).join("\n")
     : "- 无";
+  const productionAudit = dossier.productionReadinessAudit ?? null;
+  const runbookBoundary = packageManifest.runbookBoundary ?? null;
+  const materialGate = productionAudit?.materialRemovalGate ?? null;
+  const airRunGate = productionAudit?.airRunGate ?? null;
+  const fieldGate = productionAudit?.fieldPackageGate ?? null;
+  const fieldMismatchFiles = Array.isArray(fieldGate?.mismatchedFiles) && fieldGate.mismatchedFiles.length
+    ? fieldGate.mismatchedFiles.map((file) => `${file.filename}${file.issues?.length ? ` (${file.issues.join(",")})` : ""}`).join(", ")
+    : "无";
   return [
     "# HeDiao3D V3 证据审查包",
     "",
@@ -19852,6 +21791,7 @@ function createEvidenceReviewPackageReadme(packageManifest) {
     "- 本包只用于审查 V3 证据链、定位缺失项和复核哈希。",
     "- 本包不是安全试雕包，也不是正式生产包。",
     "- 本包不应作为上机加工交付物；上机必须使用安全试雕包或总门禁放行后的正式生产包。",
+    "- Linux runbook 结果只用于审查服务器侧证据链；即使审查 ready，也不会单独解锁 production-package。",
     "",
     "## 已包含证据",
     "",
@@ -19874,6 +21814,21 @@ function createEvidenceReviewPackageReadme(packageManifest) {
     "### 现场证据缺口",
     "",
     fieldGaps,
+    "",
+    "## 生产审计现场门禁",
+    "",
+    `生产审计: ${productionAudit?.status ?? "missing"} / allowProductionPackage=${productionAudit?.allowProductionPackage ? "true" : "false"}`,
+    `材料去除/残料门禁: ${materialGate?.status ?? "missing"} / residual=${materialGate?.residualClosureStatus ?? "missing"} / localResidual=${materialGate?.residualLocalValidationBindingStatus ?? "missing"} / proofCrossCheck=${materialGate?.residualProofCrossCheckStatus ?? "missing"}`,
+    `材料去除说明: ${materialGate?.summary ?? "缺少材料去除/残料门禁摘要。"}`,
+    `离料空跑门禁: ${airRunGate?.status ?? "missing"} / evidence=${airRunGate?.airRunEvidenceStatus ?? "missing"} / packageBinding=${airRunGate?.airRunPackageBindingStatus ?? "missing"}`,
+    `现场同包门禁: ${fieldGate?.status ?? "missing"} / binding=${fieldGate?.fieldBindingStatus ?? "missing"} / machine=${fieldGate?.machineBindingStatus ?? "missing"} / trial=${fieldGate?.trialBindingStatus ?? "missing"}`,
+    `现场不匹配文件: ${fieldMismatchFiles}`,
+    "",
+    "## Runbook 审查边界",
+    "",
+    `Runbook 审查: ${runbookBoundary?.status ?? "missing"} / reviewSafe=${runbookBoundary?.runbookReviewSafe ? "true" : "false"} / productionSafe=${runbookBoundary?.productionSafe ? "true" : "false"}`,
+    `Runbook 证据: ${runbookBoundary?.linuxEvidenceStatus ?? "missing"} / readiness=${runbookBoundary?.readinessReportId ?? "missing"}`,
+    `生产锁原因: ${runbookBoundary?.productionSafeReason ?? "Linux runbook 不是生产包解锁证据。"}`,
     "",
     "## 下一步",
     "",
@@ -19908,7 +21863,8 @@ function createProductionPackageReadme(packageManifest) {
     "",
     "## 门禁摘要",
     "",
-    packageManifest.productionGate.summary ?? "production-gate.json 未提供摘要。"
+    packageManifest.productionGate.summary ?? "production-gate.json 未提供摘要。",
+    `evidenceProofs.complete=${packageManifest.evidenceProofs?.complete ? "true" : "false"}`
   ].join("\n");
 }
 

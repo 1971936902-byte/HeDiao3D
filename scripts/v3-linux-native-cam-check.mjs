@@ -1034,8 +1034,11 @@ check("opencamlib-real-candidate-schema", openCamRealCandidate.includes("hediao3
 check("opencamlib-real-candidate-fail-closed", openCamRealCandidate.includes("productionLocked: true") && openCamRealCandidate.includes("opencamlib-candidate-package-validate.mjs"), "OpenCAMLib real candidate runner must stay fail-closed and run candidate package validation.");
 check("opencamlib-validator-schema", openCamValidator.includes("hediao3d.opencamlib-contact-output-validation.v1"), "OpenCAMLib validator must emit the contact output validation schema.");
 check("opencamlib-validator-residual-evidence-gate", openCamValidator.includes("contact-residual-measured-or-validated") && openCamValidator.includes("residualMaterial must be measured or backed by swept-volume/material-removal/validated evidence") && openCamValidator.includes("swept-volume|material-removal|validated|measured"), "OpenCAMLib validator must require residual material to be measured or backed by swept-volume/material-removal/validated evidence.");
+check("opencamlib-validator-residual-production-claim-gate", openCamValidator.includes("contact-residual-production-claim") && openCamValidator.includes("unsafeProductionClaim") && openCamValidator.includes("production residual evidence until measured or swept-volume/material-removal validation is within tolerance"), "OpenCAMLib validator must reject unsafe production residual claims when measured/material-removal proof is incomplete.");
+check("opencamlib-validator-promotion-audit", openCamValidator.includes("productionCandidatePromotion") && openCamValidator.includes("hediao3d.opencamlib-production-candidate-promotion.v1"), "OpenCAMLib validator must emit production-candidate promotion criteria diagnostics.");
 check("opencamlib-candidate-validator-schema", openCamCandidateValidator.includes("hediao3d.opencamlib-candidate-package-validation.v1"), "OpenCAMLib candidate package validator must emit the package validation schema.");
 check("opencamlib-candidate-validator-bundle", openCamCandidateValidator.includes("opencamlib-candidate-package-bundle.zip"), "OpenCAMLib candidate package validator must generate a lightweight bundle.");
+check("opencamlib-candidate-validator-unsafe-residual-gap", openCamCandidateValidator.includes("unsafe-residual-production-claim") && openCamCandidateValidator.includes("unsafeProductionClaim"), "OpenCAMLib candidate package validator must surface unsafe residual production claims in production gap review.");
 check("camotics-runner-schema", camoticsRunner.includes("hediao3d.camotics-material-removal-run.v1"), "CAMotics runner must emit the material-removal run schema.");
 check("camotics-runner-fail-closed", camoticsRunner.includes("productionLocked: true") && camoticsRunner.includes("camotics-material-removal-validate.mjs"), "CAMotics runner must stay production-locked and call the validator.");
 check("camotics-runner-real-command", camoticsRunner.includes("HEDIAO3D_CAMOTICS_COMMAND") && camoticsRunner.includes("camotics-result-bundle.zip"), "CAMotics runner must use a real/equivalent simulator command and produce the upload bundle only after validation.");
@@ -1052,6 +1055,8 @@ check("real-output-real-candidate", realOutputCheck.includes("opencamlib-real-ca
 check("real-candidate-path-coverage", openCamRealCandidate.includes("pathCoverage") && openCamRealCandidate.includes("createContactPathCoverageSummary"), "OpenCAMLib real candidate runner must summarize contact pathCoverage diagnostics.");
 check("real-candidate-protected-zones", openCamRealCandidate.includes("protectedZones") && openCamRealCandidate.includes("createProtectedZonesSummary"), "OpenCAMLib real candidate runner must summarize protected end-zone diagnostics.");
 check("real-candidate-production-gap-review", openCamRealCandidate.includes("productionGapReview") && openCamRealCandidate.includes("createFallbackProductionGapReview"), "OpenCAMLib real candidate runner must summarize production candidate gap review diagnostics.");
+check("real-candidate-downstream-evidence-plan", openCamRealCandidate.includes("downstreamEvidencePlan") && openCamRealCandidate.includes("summarizeDownstreamEvidencePlan"), "OpenCAMLib real candidate runner must summarize downstream evidence plan diagnostics.");
+check("real-candidate-next-actions", openCamRealCandidate.includes("nextProductionCandidateActions") && openCamRealCandidate.includes("hediao3d.opencamlib-next-production-candidate-actions.v1"), "OpenCAMLib real candidate runner must emit operator-facing next production candidate actions.");
 check("closed-loop-check-schema", closedLoopCheck.includes("hediao3d.native-cam-closed-loop-check.v1"), "closed-loop checker must emit the closed-loop check schema.");
 check("closed-loop-check-fail-closed", closedLoopCheck.includes("productionLocked: true"), "closed-loop checker must keep production locked.");
 check("closed-loop-check-evidence-chain", closedLoopCheck.includes("hediao3d.native-cam-linux-evidence-chain.v1") && closedLoopCheck.includes("camoticsUpstreamEvidenceMatched"), "closed-loop checker must summarize Native CAM/OpenCAMLib/CAMotics evidence chain and upstream binding.");
@@ -1234,7 +1239,9 @@ function createEvidenceChain(root, steps) {
   const nativeAcceptance = readJsonIfExists(join(root, "native-cam-real-output-acceptance.json"));
   const realCandidate = readJsonIfExists(join(root, "opencamlib-real-candidate-run.json"));
   const contactValidation = readJsonIfExists(join(root, "opencamlib-contact-output-validation.json"));
+  const contactReport = readJsonIfExists(join(root, "opencamlib-cutter-contact-report.json"));
   const candidatePackage = readJsonIfExists(join(root, "opencamlib-candidate-package-validation.json"));
+  const candidatePackageBundle = inspectFile(join(root, "opencamlib-candidate-package-bundle.zip"));
   const camoticsResult = readJsonIfExists(join(root, "camotics-result.json"));
   const camoticsLocalValidation = readJsonIfExists(join(root, "camotics-result-local-validation.json"));
   const camoticsRunPackage = readJsonIfExists(join(root, "camotics-cli-run-package.json"));
@@ -1299,6 +1306,31 @@ function createEvidenceChain(root, steps) {
     ?? candidatePackage?.productionGapReview
     ?? null
   );
+  const downstreamEvidencePlan = summarizeDownstreamEvidencePlan(
+    realCandidate?.downstreamEvidencePlan
+    ?? realCandidate?.candidatePackage?.downstreamEvidencePlan
+    ?? nativeAcceptance?.openCamLibRealCandidate?.downstreamEvidencePlan
+    ?? candidatePackage?.downstreamEvidencePlan
+    ?? null
+  );
+  const productionCandidatePromotion = summarizeProductionCandidatePromotion(
+    realCandidate?.contactValidation?.productionCandidatePromotion
+    ?? realCandidate?.productionCandidatePromotion
+    ?? nativeAcceptance?.openCamLibRealCandidate?.productionCandidatePromotion
+    ?? candidatePackage?.contactValidation?.productionCandidatePromotion
+    ?? contactValidation?.productionCandidatePromotion
+    ?? null
+  );
+  const materialRemovalReadiness = summarizeMaterialRemovalReadiness(
+    realCandidate?.materialRemovalReadiness
+    ?? realCandidate?.candidatePackage?.materialRemovalReadiness
+    ?? nativeAcceptance?.openCamLibRealCandidate?.materialRemovalReadiness
+    ?? candidatePackage?.materialRemovalReadiness
+    ?? contactValidation?.materialRemovalReadiness
+    ?? contactReport?.materialRemovalReadiness
+    ?? null
+  );
+  const candidatePackageGeneratedArtifacts = summarizeCandidatePackageGeneratedArtifacts(candidatePackage, candidatePackageBundle);
   const camoticsReady = camoticsLocalValidation?.ok === true
     && camoticsLocalValidation?.productionEvidenceEligible === true
     && (!upstreamRequired || upstreamStatus === "matched")
@@ -1342,8 +1374,15 @@ function createEvidenceChain(root, steps) {
       candidatePackageReadyForImport,
       candidatePackageBlockedReason,
       candidateMachineFit: summarizeMachineFit(candidateMachineFit),
+      productionCandidatePromotion,
+      materialRemovalReadiness,
       productionGapReview,
-      candidatePackage: summarizeJson("opencamlib-candidate-package-validation.json", candidatePackage),
+      downstreamEvidencePlan,
+      candidatePackage: candidatePackage ? {
+        ...summarizeJson("opencamlib-candidate-package-validation.json", candidatePackage),
+        readyForImport: candidatePackageReadyForImport,
+        generatedArtifacts: candidatePackageGeneratedArtifacts
+      } : summarizeJson("opencamlib-candidate-package-validation.json", candidatePackage),
       contactValidation: summarizeJson("opencamlib-contact-output-validation.json", contactValidation)
     },
     camotics: {
@@ -1381,7 +1420,9 @@ function summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsRe
     : null;
   const validation = camoticsLocalValidation?.upstreamCamEvidence && typeof camoticsLocalValidation.upstreamCamEvidence === "object"
     ? camoticsLocalValidation.upstreamCamEvidence
-    : null;
+    : camoticsLocalValidation?.expected?.upstreamCamEvidence && typeof camoticsLocalValidation.expected.upstreamCamEvidence === "object"
+      ? camoticsLocalValidation.expected.upstreamCamEvidence
+      : null;
   const required = expected?.required === true;
   const status = validation?.status ?? (required ? "missing" : "not-required");
   const expectedFiles = Array.isArray(expected?.files) ? expected.files.filter((file) => file.exists && file.sha256) : [];
@@ -1399,6 +1440,7 @@ function summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsRe
   const matchedCount = files.filter((file) => file.matched).length;
   const hasMatchedKey = (key) => files.some((file) => file.key === key && file.matched);
   const materialRemovalReadiness = summarizeUpstreamMaterialReadiness(validation?.materialRemovalReadiness, imported?.materialRemovalReadiness, expected?.materialRemovalReadiness);
+  const candidatePackage = summarizeUpstreamCandidatePackage(validation?.candidatePackage, imported?.candidatePackage, expected?.candidatePackage);
   return {
     required,
     status,
@@ -1409,9 +1451,86 @@ function summarizeCamoticsUpstreamEvidence({ camoticsLocalValidation, camoticsRe
     mismatchCount: Math.max(files.length - matchedCount, 0),
     candidatePackageValidationBound: hasMatchedKey("opencamlibCandidatePackageValidation"),
     candidatePackageBundleBound: hasMatchedKey("opencamlibCandidatePackageBundle"),
+    candidatePackage,
     materialRemovalReadiness,
     files
   };
+}
+
+function summarizeCandidatePackageGeneratedArtifacts(candidatePackage, bundleIdentity) {
+  if (!candidatePackage || typeof candidatePackage !== "object") return null;
+  const generated = candidatePackage.generatedArtifacts && typeof candidatePackage.generatedArtifacts === "object"
+    ? candidatePackage.generatedArtifacts
+    : candidatePackage.artifactManifest?.generatedArtifacts && typeof candidatePackage.artifactManifest.generatedArtifacts === "object"
+      ? candidatePackage.artifactManifest.generatedArtifacts
+      : {};
+  const validationReport = generated.validationReport && typeof generated.validationReport === "object"
+    ? generated.validationReport
+    : null;
+  const bundle = generated.candidatePackageBundle && typeof generated.candidatePackageBundle === "object"
+    ? generated.candidatePackageBundle
+    : null;
+  const expectedBundleSha = normalizeSha(bundle?.sha256);
+  const actualBundleSha = normalizeSha(bundleIdentity?.sha256);
+  const bundleShaMatches = Boolean(expectedBundleSha && actualBundleSha && expectedBundleSha === actualBundleSha);
+  return {
+    schema: "hediao3d.opencamlib-candidate-generated-artifacts-summary.v1",
+    generatedArtifactsSchema: generated.schema ?? null,
+    validationReportContentSha256: validationReport?.contentSha256 ?? null,
+    validationReportDigestBasis: validationReport?.digestBasis ?? null,
+    candidatePackageBundleSha256: bundle?.sha256 ?? null,
+    candidatePackageBundleSizeBytes: Number.isFinite(Number(bundle?.sizeBytes)) ? Number(bundle.sizeBytes) : null,
+    actualBundleSha256: bundleIdentity?.sha256 ?? null,
+    actualBundleSizeBytes: bundleIdentity?.sizeBytes ?? null,
+    bundleExists: Boolean(bundleIdentity?.exists),
+    bundleShaMatches,
+    status: bundleShaMatches ? "matched" : "mismatch",
+    summary: bundleShaMatches
+      ? "OpenCAMLib candidate package report is bound to the local candidate package bundle sha256."
+      : "OpenCAMLib candidate package report is missing or mismatching the local candidate package bundle sha256."
+  };
+}
+
+function summarizeUpstreamCandidatePackage(validationPackage, importedPackage, expectedPackage) {
+  const source = validationPackage && typeof validationPackage === "object"
+    ? validationPackage
+    : importedPackage && typeof importedPackage === "object"
+      ? importedPackage
+      : expectedPackage && typeof expectedPackage === "object"
+        ? expectedPackage
+        : null;
+  if (!source) {
+    return {
+      required: false,
+      status: "not-required",
+      bundleShaMatches: false,
+      summary: "No upstream OpenCAMLib candidate package generated-artifact summary was captured."
+    };
+  }
+  const status = source.status ?? (source.ok === true ? "matched" : source.bundleShaOk === false || source.bundleShaMatches === false ? "mismatch" : "matched");
+  return {
+    required: Boolean(source.required ?? expectedPackage),
+    status,
+    schema: source.schema ?? "hediao3d.opencamlib-candidate-package-summary.v1",
+    level: source.importedLevel ?? source.level ?? "missing",
+    readyForImport: Boolean(source.readyForImport),
+    productionCandidateReady: Boolean(source.productionCandidateReady),
+    bundleShaMatches: Boolean(source.bundleShaOk ?? source.bundleShaMatches),
+    validationReportContentSha256: source.validationReportContentSha256 ?? null,
+    candidatePackageBundleSha256: source.importedBundleSha256 ?? source.candidatePackageBundleSha256 ?? source.expectedBundleSha256 ?? null,
+    actualBundleSha256: source.importedActualBundleSha256 ?? source.actualBundleSha256 ?? source.expectedActualBundleSha256 ?? null,
+    summary: source.summary ?? (
+      status === "matched"
+        ? "OpenCAMLib candidate package report and bundle generated-artifact identity match."
+        : "OpenCAMLib candidate package report and bundle generated-artifact identity are not matched."
+    )
+  };
+}
+
+function normalizeSha(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value.trim())
+    ? value.trim().toLowerCase()
+    : "";
 }
 
 function summarizeUpstreamMaterialReadiness(validationReadiness, importedReadiness, expectedReadiness) {
@@ -1446,8 +1565,38 @@ function summarizeUpstreamMaterialReadiness(validationReadiness, importedReadine
     level,
     readyForMaterialRemovalSimulation: Boolean(source.importedReadyForMaterialRemovalSimulation ?? imported?.readyForMaterialRemovalSimulation ?? source.readyForMaterialRemovalSimulation),
     productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady ?? imported?.productionResidualEvidenceReady),
+    residualProofSource: summarizeResidualProofSource(source.residualProofSource ?? imported?.residualProofSource ?? null),
     missingForProduction: missingForProduction.map((item) => String(item)).filter(Boolean).slice(0, 12),
     summary: source.summary ?? ("OpenCAMLib material-removal readiness: " + level + ".")
+  };
+}
+
+function summarizeMaterialRemovalReadiness(readiness) {
+  if (!readiness || typeof readiness !== "object") return null;
+  return {
+    schema: readiness.schema ?? "hediao3d.opencamlib-material-removal-readiness.v1",
+    level: readiness.level ?? "missing",
+    readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
+    productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(readiness.unsafeProductionClaim),
+    residualProofSource: summarizeResidualProofSource(readiness.residualProofSource),
+    missingForProduction: Array.isArray(readiness.missingForProduction) ? readiness.missingForProduction.map((item) => String(item)).slice(0, 12) : [],
+    summary: readiness.summary ?? null
+  };
+}
+
+function summarizeResidualProofSource(source) {
+  if (!source || typeof source !== "object") return null;
+  return {
+    schema: source.schema ?? "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: source.status ?? "unknown",
+    ready: Boolean(source.ready),
+    proofStatus: source.proofStatus ?? null,
+    localValidationOk: Boolean(source.localValidationOk),
+    productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(source.unsafeProductionClaim),
+    upstreamStatus: source.upstreamStatus ?? null,
+    upstreamCandidatePackageStatus: source.upstreamCandidatePackageStatus ?? null
   };
 }
 
@@ -1510,6 +1659,8 @@ function summarizeProductionGapReview(review) {
     schema: review.schema ?? "hediao3d.opencamlib-production-gap-review.v1",
     level: review.level ?? "blocked",
     productionCandidateReady: Boolean(review.productionCandidateReady),
+    downstreamProductionEvidenceReady: Boolean(review.downstreamProductionEvidenceReady),
+    productionUnlockReady: Boolean(review.productionUnlockReady),
     criticalCount: Number(review.criticalCount ?? gaps.filter((gap) => gap?.severity === "critical").length),
     reviewCount: Number(review.reviewCount ?? gaps.filter((gap) => gap?.severity === "review").length),
     productionBlockerCount: Number(review.productionBlockerCount ?? gaps.filter((gap) => gap?.severity === "production-blocker").length),
@@ -1523,6 +1674,54 @@ function summarizeProductionGapReview(review) {
     })),
     nextActions: Array.isArray(review.nextActions) ? review.nextActions.slice(0, 4).map((item) => String(item)) : [],
     productionBoundary: review.productionBoundary ?? "This review never unlocks production NC by itself."
+  };
+}
+
+function summarizeProductionCandidatePromotion(promotion) {
+  if (!promotion || typeof promotion !== "object") return null;
+  const blockingCriteria = Array.isArray(promotion.blockingCriteria) ? promotion.blockingCriteria : [];
+  return {
+    schema: promotion.schema ?? "hediao3d.opencamlib-production-candidate-promotion.v1",
+    status: promotion.status ?? "unknown",
+    productionCandidateReady: Boolean(promotion.productionCandidateReady),
+    productionUnlockReady: Boolean(promotion.productionUnlockReady),
+    evidenceClass: promotion.evidenceClass ?? null,
+    criterionCount: Number(promotion.criterionCount ?? 0),
+    passedCount: Number(promotion.passedCount ?? 0),
+    blockingCount: Number(promotion.blockingCount ?? blockingCriteria.length),
+    blockingCriteria: blockingCriteria.slice(0, 8).map((item) => ({
+      id: item?.id ?? "unknown-criterion",
+      layer: item?.layer ?? "unknown",
+      status: item?.status ?? "fail",
+      summary: item?.summary ?? ""
+    })),
+    nextActions: Array.isArray(promotion.nextActions) ? promotion.nextActions.slice(0, 4).map((item) => String(item)) : [],
+    productionBoundary: promotion.productionBoundary ?? "This promotion audit never unlocks production NC by itself."
+  };
+}
+
+function summarizeDownstreamEvidencePlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  const gates = Array.isArray(plan.gates) ? plan.gates : [];
+  return {
+    schema: plan.schema ?? "hediao3d.opencamlib-downstream-evidence-plan.v1",
+    status: plan.status ?? "unknown",
+    productionUnlockReady: Boolean(plan.productionUnlockReady),
+    candidateReady: Boolean(plan.candidateReady),
+    materialSimulationReady: Boolean(plan.materialSimulationReady),
+    residualClosed: Boolean(plan.residualClosed),
+    unsafeResidualClaim: Boolean(plan.unsafeResidualClaim),
+    gateCount: Number(plan.gateCount ?? gates.length),
+    openGateCount: Number(plan.openGateCount ?? gates.filter((gate) => !["pass", "ready"].includes(String(gate?.status ?? ""))).length),
+    gates: gates.slice(0, 8).map((gate) => ({
+      id: gate?.id ?? "unknown-gate",
+      title: gate?.title ?? gate?.id ?? "unknown gate",
+      status: gate?.status ?? "unknown",
+      summary: gate?.summary ?? "",
+      requiredEvidence: Array.isArray(gate?.requiredEvidence) ? gate.requiredEvidence.slice(0, 8).map((item) => String(item)) : []
+    })),
+    nextUploads: Array.isArray(plan.nextUploads) ? plan.nextUploads.slice(0, 8).map((item) => String(item)) : [],
+    productionBoundary: plan.productionBoundary ?? "This plan does not unlock production NC by itself."
   };
 }
 
@@ -2137,6 +2336,7 @@ fi
 
 function createOpenCamLibRealCandidateRunScript() {
   return `#!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -2221,6 +2421,7 @@ if (existsSync(neutralPath) && existsSync(join(root, "opencamlib-candidate-packa
 const contactValidation = readJsonIfExists(contactValidationPath);
 const contactReport = readJsonIfExists(contactPath);
 const candidatePackage = readJsonIfExists(join(root, "opencamlib-candidate-package-validation.json"));
+const candidatePackageBundle = inspectFile(join(root, "opencamlib-candidate-package-bundle.zip"));
 const requiredFailures = steps.filter((step) => step.required && step.status !== "pass");
 const productionCandidate = Boolean(
   contactValidation?.productionCandidateEligible &&
@@ -2228,6 +2429,20 @@ const productionCandidate = Boolean(
   candidatePackage?.level === "ready" &&
   candidatePackage?.handoffContract?.status === "ready-for-hediao3d-import"
 );
+const downstreamEvidencePlan = summarizeDownstreamEvidencePlan(candidatePackage?.downstreamEvidencePlan)
+  ?? createFallbackDownstreamEvidencePlan({ productionCandidate, contactValidation, contactReport, candidatePackage, requiredFailures });
+const productionGapReview = summarizeProductionGapReview(candidatePackage?.productionGapReview)
+  ?? createFallbackProductionGapReview({ productionCandidate, requiredFailures, contactValidation, contactReport, candidatePackage });
+const materialRemovalReadiness = summarizeMaterialRemovalReadiness(candidatePackage?.materialRemovalReadiness ?? contactReport?.materialRemovalReadiness);
+const nextProductionCandidateActions = createNextProductionCandidateActions({
+  productionCandidate,
+  requiredFailures,
+  contactValidation,
+  contactReport,
+  candidatePackage,
+  productionGapReview,
+  downstreamEvidencePlan
+});
 const report = {
   schema: "hediao3d.opencamlib-real-candidate-run.v1",
   createdAt: new Date().toISOString(),
@@ -2243,6 +2458,7 @@ const report = {
   level: productionCandidate ? "production-candidate-ready-for-import" : "blocked",
   productionLocked: true,
   productionBoundary: "This script creates and validates OpenCAMLib candidate evidence only. It does not unlock HeDiao3D production NC; material-removal simulation, air-run, trial feedback and machine acceptance must still pass.",
+  materialRemovalReadiness,
   inputs: {
     jobJson: jobPath,
     kernelPlan: planPath,
@@ -2256,7 +2472,8 @@ const report = {
     productionCandidateEligible: Boolean(contactValidation.productionCandidateEligible),
     failedCheckCount: Array.isArray(contactValidation.checks) ? contactValidation.checks.filter((check) => check.status === "fail").length : null,
     pathCoverage: createContactPathCoverageSummary(contactValidation),
-    protectedZones: createProtectedZonesSummary(contactValidation)
+    protectedZones: createProtectedZonesSummary(contactValidation),
+    productionCandidatePromotion: summarizeProductionCandidatePromotion(contactValidation.productionCandidatePromotion)
   } : null,
   openCamLibContactReport: contactReport ? {
     schema: contactReport.schema ?? null,
@@ -2270,10 +2487,15 @@ const report = {
     readyForImport: candidatePackage.handoffContract?.status === "ready-for-hediao3d-import",
     blockedReason: candidatePackage.blockedReason ?? candidatePackage.handoffContract?.blockedReason ?? null,
     machineFit: summarizeMachineFit(candidatePackage.machineFit),
+    materialRemovalReadiness: summarizeMaterialRemovalReadiness(candidatePackage.materialRemovalReadiness),
     productionGapReview: summarizeProductionGapReview(candidatePackage.productionGapReview),
-    bundle: candidatePackage.bundlePath ?? "opencamlib-candidate-package-bundle.zip"
+    downstreamEvidencePlan,
+    bundle: candidatePackage.bundlePath ?? "opencamlib-candidate-package-bundle.zip",
+    generatedArtifacts: summarizeCandidatePackageGeneratedArtifacts(candidatePackage, candidatePackageBundle)
   } : null,
-  productionGapReview: summarizeProductionGapReview(candidatePackage?.productionGapReview) ?? createFallbackProductionGapReview({ productionCandidate, requiredFailures, contactValidation, contactReport, candidatePackage }),
+  productionGapReview,
+  downstreamEvidencePlan,
+  nextProductionCandidateActions,
   steps,
   blocking: [
     ...requiredFailures.map((step) => step.id + ":" + step.status),
@@ -2335,6 +2557,17 @@ function readJsonIfExists(path) {
   }
 }
 
+function inspectFile(path) {
+  if (!existsSync(path)) return { path, exists: false, sizeBytes: null, sha256: null };
+  const bytes = readFileSync(path);
+  return {
+    path,
+    exists: true,
+    sizeBytes: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex")
+  };
+}
+
 function summarizeMachineFit(machineFit) {
   if (!machineFit || typeof machineFit !== "object") return null;
   return {
@@ -2378,9 +2611,66 @@ function summarizeMaterialRemovalReadiness(readiness) {
     level: readiness.level ?? "missing",
     readyForMaterialRemovalSimulation: Boolean(readiness.readyForMaterialRemovalSimulation),
     productionResidualEvidenceReady: Boolean(readiness.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(readiness.unsafeProductionClaim),
+    residualProofSource: summarizeResidualProofSource(readiness.residualProofSource),
     missingForProduction: Array.isArray(readiness.missingForProduction) ? readiness.missingForProduction.slice(0, 12) : [],
     summary: readiness.summary ?? null
   };
+}
+
+function summarizeResidualProofSource(source) {
+  if (!source || typeof source !== "object") return null;
+  return {
+    schema: source.schema ?? "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: source.status ?? "unknown",
+    ready: Boolean(source.ready),
+    proofStatus: source.proofStatus ?? null,
+    localValidationOk: Boolean(source.localValidationOk),
+    productionResidualEvidenceReady: Boolean(source.productionResidualEvidenceReady),
+    unsafeProductionClaim: Boolean(source.unsafeProductionClaim),
+    upstreamStatus: source.upstreamStatus ?? null,
+    upstreamCandidatePackageStatus: source.upstreamCandidatePackageStatus ?? null
+  };
+}
+
+function summarizeCandidatePackageGeneratedArtifacts(candidatePackage, bundleIdentity) {
+  if (!candidatePackage || typeof candidatePackage !== "object") return null;
+  const generated = candidatePackage.generatedArtifacts && typeof candidatePackage.generatedArtifacts === "object"
+    ? candidatePackage.generatedArtifacts
+    : candidatePackage.artifactManifest?.generatedArtifacts && typeof candidatePackage.artifactManifest.generatedArtifacts === "object"
+      ? candidatePackage.artifactManifest.generatedArtifacts
+      : {};
+  const validationReport = generated.validationReport && typeof generated.validationReport === "object"
+    ? generated.validationReport
+    : null;
+  const bundle = generated.candidatePackageBundle && typeof generated.candidatePackageBundle === "object"
+    ? generated.candidatePackageBundle
+    : null;
+  const expectedBundleSha = normalizeSha(bundle?.sha256);
+  const actualBundleSha = normalizeSha(bundleIdentity?.sha256);
+  const bundleShaMatches = Boolean(expectedBundleSha && actualBundleSha && expectedBundleSha === actualBundleSha);
+  return {
+    schema: "hediao3d.opencamlib-candidate-generated-artifacts-summary.v1",
+    generatedArtifactsSchema: generated.schema ?? null,
+    validationReportContentSha256: validationReport?.contentSha256 ?? null,
+    validationReportDigestBasis: validationReport?.digestBasis ?? null,
+    candidatePackageBundleSha256: bundle?.sha256 ?? null,
+    candidatePackageBundleSizeBytes: Number.isFinite(Number(bundle?.sizeBytes)) ? Number(bundle.sizeBytes) : null,
+    actualBundleSha256: bundleIdentity?.sha256 ?? null,
+    actualBundleSizeBytes: bundleIdentity?.sizeBytes ?? null,
+    bundleExists: Boolean(bundleIdentity?.exists),
+    bundleShaMatches,
+    status: bundleShaMatches ? "matched" : "mismatch",
+    summary: bundleShaMatches
+      ? "OpenCAMLib candidate package report is bound to the local candidate package bundle sha256."
+      : "OpenCAMLib candidate package report is missing or mismatching the local candidate package bundle sha256."
+  };
+}
+
+function normalizeSha(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value.trim())
+    ? value.trim().toLowerCase()
+    : "";
 }
 
 function summarizeProductionGapReview(review) {
@@ -2389,6 +2679,8 @@ function summarizeProductionGapReview(review) {
     schema: review.schema ?? "hediao3d.opencamlib-production-gap-review.v1",
     level: review.level ?? "blocked",
     productionCandidateReady: Boolean(review.productionCandidateReady),
+    downstreamProductionEvidenceReady: Boolean(review.downstreamProductionEvidenceReady),
+    productionUnlockReady: Boolean(review.productionUnlockReady),
     criticalCount: Number(review.criticalCount ?? 0),
     reviewCount: Number(review.reviewCount ?? 0),
     productionBlockerCount: Number(review.productionBlockerCount ?? 0),
@@ -2404,6 +2696,182 @@ function summarizeProductionGapReview(review) {
       : [],
     nextActions: Array.isArray(review.nextActions) ? review.nextActions.slice(0, 4) : [],
     productionBoundary: review.productionBoundary ?? "This review never unlocks production NC by itself."
+  };
+}
+
+function summarizeProductionCandidatePromotion(promotion) {
+  if (!promotion || typeof promotion !== "object") return null;
+  const blockingCriteria = Array.isArray(promotion.blockingCriteria) ? promotion.blockingCriteria : [];
+  return {
+    schema: promotion.schema ?? "hediao3d.opencamlib-production-candidate-promotion.v1",
+    status: promotion.status ?? "unknown",
+    productionCandidateReady: Boolean(promotion.productionCandidateReady),
+    productionUnlockReady: Boolean(promotion.productionUnlockReady),
+    evidenceClass: promotion.evidenceClass ?? null,
+    criterionCount: Number(promotion.criterionCount ?? 0),
+    passedCount: Number(promotion.passedCount ?? 0),
+    blockingCount: Number(promotion.blockingCount ?? blockingCriteria.length),
+    blockingCriteria: blockingCriteria.slice(0, 8).map((item) => ({
+      id: item?.id ?? "unknown-criterion",
+      layer: item?.layer ?? "unknown",
+      status: item?.status ?? "fail",
+      summary: item?.summary ?? ""
+    })),
+    nextActions: Array.isArray(promotion.nextActions) ? promotion.nextActions.slice(0, 4).map((item) => String(item)) : [],
+    productionBoundary: promotion.productionBoundary ?? "This promotion audit never unlocks production NC by itself."
+  };
+}
+
+function summarizeDownstreamEvidencePlan(plan) {
+  if (!plan || typeof plan !== "object") return null;
+  const gates = Array.isArray(plan.gates) ? plan.gates : [];
+  return {
+    schema: plan.schema ?? "hediao3d.opencamlib-downstream-evidence-plan.v1",
+    status: plan.status ?? "unknown",
+    productionUnlockReady: Boolean(plan.productionUnlockReady),
+    candidateReady: Boolean(plan.candidateReady),
+    materialSimulationReady: Boolean(plan.materialSimulationReady),
+    residualClosed: Boolean(plan.residualClosed),
+    unsafeResidualClaim: Boolean(plan.unsafeResidualClaim),
+    gateCount: gates.length,
+    openGateCount: gates.filter((gate) => !["pass", "ready"].includes(String(gate?.status ?? ""))).length,
+    gates: gates.slice(0, 8).map((gate) => ({
+      id: gate?.id ?? "unknown-gate",
+      title: gate?.title ?? gate?.id ?? "unknown gate",
+      status: gate?.status ?? "unknown",
+      summary: gate?.summary ?? "",
+      requiredEvidence: Array.isArray(gate?.requiredEvidence) ? gate.requiredEvidence.slice(0, 8).map((item) => String(item)) : []
+    })),
+    nextUploads: Array.isArray(plan.nextUploads) ? plan.nextUploads.slice(0, 8).map((item) => String(item)) : [],
+    productionBoundary: plan.productionBoundary ?? "This plan does not unlock production NC by itself."
+  };
+}
+
+function createNextProductionCandidateActions({ productionCandidate, requiredFailures, contactValidation, contactReport, candidatePackage, productionGapReview, downstreamEvidencePlan }) {
+  const blockingReasons = [];
+  const commands = [];
+  const expectedArtifacts = [];
+  const uploadSequence = [];
+  const addUnique = (target, value) => {
+    if (value && !target.includes(value)) target.push(value);
+  };
+  for (const step of requiredFailures) {
+    addUnique(blockingReasons, step.id + ":" + step.status);
+  }
+  for (const gap of productionGapReview?.topGaps ?? []) {
+    addUnique(blockingReasons, [gap.id, gap.status, gap.summary].filter(Boolean).join(" / "));
+  }
+  if (!contactValidation || !contactValidation.productionCandidateEligible) {
+    addUnique(commands, "node opencamlib-contact-output-validate.mjs --neutral neutral-toolpath.json --plan opencamlib-kernel-plan.json --model repaired-model.stl --contact opencamlib-cutter-contact-report.json --out opencamlib-contact-output-validation.json");
+    addUnique(expectedArtifacts, "opencamlib-contact-output-validation.json");
+  }
+  if (!candidatePackage || candidatePackage.level !== "ready" || candidatePackage.handoffContract?.status !== "ready-for-hediao3d-import") {
+    addUnique(commands, "node opencamlib-candidate-package-validate.mjs --root .");
+    addUnique(expectedArtifacts, "opencamlib-candidate-package-validation.json");
+    addUnique(expectedArtifacts, "opencamlib-candidate-package-bundle.zip");
+    addUnique(uploadSequence, "Upload/import opencamlib-candidate-package-bundle.zip only after candidate-package validation is ready-for-hediao3d-import.");
+  }
+  if (!productionCandidate) {
+    addUnique(commands, "node opencamlib-real-candidate-run.mjs .");
+    addUnique(expectedArtifacts, "opencamlib-real-candidate-run.json");
+  }
+  const materialReady = Boolean(contactReport?.materialRemovalReadiness?.readyForMaterialRemovalSimulation);
+  if (productionCandidate && materialReady) {
+    addUnique(commands, "bash native-cam-real-output-check.sh");
+    addUnique(expectedArtifacts, "native-cam-real-output-check.json");
+    addUnique(expectedArtifacts, "native-cam-real-output-bundle.zip");
+    addUnique(uploadSequence, "Upload/import native-cam-real-output-bundle.zip before CAMotics/material-removal evidence.");
+  }
+  addUnique(commands, "node native-cam-closed-loop-check.mjs .");
+  addUnique(expectedArtifacts, "native-cam-closed-loop-check.json");
+  for (const upload of downstreamEvidencePlan?.nextUploads ?? []) addUnique(uploadSequence, String(upload));
+  return {
+    schema: "hediao3d.opencamlib-next-production-candidate-actions.v1",
+    productionCandidateReady: Boolean(productionCandidate),
+    productionUnlockReady: false,
+    status: productionCandidate ? "candidate-ready-downstream-evidence-required" : "blocked-before-candidate-import",
+    blockerCount: blockingReasons.length + (productionCandidate ? 0 : 1),
+    blockingReasons: blockingReasons.slice(0, 10),
+    commands: commands.slice(0, 8),
+    expectedArtifacts: expectedArtifacts.slice(0, 10),
+    uploadSequence: uploadSequence.slice(0, 10),
+    downstreamOpenGateCount: Number(downstreamEvidencePlan?.openGateCount ?? 0),
+    productionBoundary: "These actions only create or bind OpenCAMLib candidate evidence. They do not unlock HeDiao3D production NC."
+  };
+}
+
+function createFallbackDownstreamEvidencePlan({ productionCandidate, contactValidation, contactReport, candidatePackage, requiredFailures }) {
+  const materialReadiness = contactReport?.materialRemovalReadiness && typeof contactReport.materialRemovalReadiness === "object"
+    ? contactReport.materialRemovalReadiness
+    : null;
+  const candidateReady = Boolean(productionCandidate && candidatePackage?.level === "ready");
+  const materialSimulationReady = Boolean(materialReadiness?.readyForMaterialRemovalSimulation);
+  const residualClosed = Boolean(materialReadiness?.productionResidualEvidenceReady) && !materialReadiness?.unsafeProductionClaim;
+  const unsafeResidualClaim = Boolean(materialReadiness?.unsafeProductionClaim);
+  const gate = (id, title, status, summary, requiredEvidence = []) => ({
+    id,
+    title,
+    status,
+    summary,
+    requiredEvidence: requiredEvidence.filter(Boolean).map((item) => String(item)).slice(0, 8)
+  });
+  const gates = [
+    gate(
+      "opencamlib-candidate-import",
+      "OpenCAMLib production-candidate import",
+      candidateReady ? "pass" : "blocked",
+      candidateReady
+        ? "OpenCAMLib candidate can enter HeDiao3D import review."
+        : "OpenCAMLib candidate is not production-candidate ready.",
+      requiredFailures.map((step) => step.id + ":" + step.status)
+    ),
+    gate(
+      "material-removal-simulation",
+      "CAMotics/equivalent material-removal simulation",
+      candidateReady && materialSimulationReady ? "ready-to-run" : "blocked",
+      materialSimulationReady
+        ? "Candidate can feed CAMotics/equivalent material-removal simulation."
+        : "OpenCAMLib material-removal simulation readiness is missing or blocked.",
+      ["camotics-result.json", "camotics-result-local-validation.json", "upstreamCamEvidence sha256 binding"]
+    ),
+    gate(
+      "residual-gouge-validation",
+      "Measured or swept-volume residual/gouge validation",
+      residualClosed ? "pass" : unsafeResidualClaim ? "blocked" : "needs-evidence",
+      residualClosed
+        ? "Residual/gouge proof is closed for production review."
+        : unsafeResidualClaim
+          ? "Unsafe residual production claim must be removed and regenerated."
+          : "Residual/gouge proof still requires measured or swept-volume/material-removal validation.",
+      ["residualValidation.maxGougeMm", "residualValidation.maxUndercutMm", "validationBasis=measured or swept-volume-validated"]
+    ),
+    gate("air-run-evidence", "Rotary calibration and full air-run evidence", "needs-field-evidence", "Same-package rotary calibration and full air-run evidence is still required.", ["rotary-calibration-airrun.nc", "air-run.nc", "operator confirmation"]),
+    gate("trial-feedback", "Low-risk soft-material trial feedback", "needs-field-evidence", "Same-job soft-material trial feedback is still required.", ["trial photos/notes", "defects", "runtime/feed overrides"]),
+    gate("machine-acceptance", "Machine/controller acceptance", "needs-field-evidence", "Machine/controller acceptance is still required for the actual target controller and rotary-Y mapping.", ["machine profile", "controller dialect", "rotary wrap calibration"])
+  ];
+  return {
+    schema: "hediao3d.opencamlib-downstream-evidence-plan.v1",
+    status: candidateReady
+      ? residualClosed
+        ? "candidate-ready-field-evidence-required"
+        : "candidate-ready-material-removal-required"
+      : "blocked-at-candidate-preflight",
+    productionUnlockReady: false,
+    candidateReady,
+    materialSimulationReady,
+    residualClosed,
+    unsafeResidualClaim,
+    gateCount: gates.length,
+    openGateCount: gates.filter((gate) => !["pass", "ready"].includes(gate.status)).length,
+    gates,
+    nextUploads: [
+      "native-cam-real-output-bundle.zip",
+      "camotics-result-bundle.zip",
+      "air-run evidence",
+      "trial-feedback evidence",
+      "machine-acceptance evidence"
+    ],
+    productionBoundary: "This plan is generated by the OpenCAMLib real-candidate runner and does not unlock production NC."
   };
 }
 
@@ -2425,6 +2893,9 @@ function createFallbackProductionGapReview({ productionCandidate, requiredFailur
     addGap("strict-contact-not-production-eligible", "cam-contact", "critical", contactValidation.level ?? "contact validation is not ready");
   }
   const materialReady = contactReport?.materialRemovalReadiness;
+  if (materialReady?.unsafeProductionClaim) {
+    addGap("unsafe-residual-production-claim", "residual-gouge", "critical", "OpenCAMLib evidence declares production residual closure before measured/swept-volume material-removal proof is complete.");
+  }
   if (!materialReady?.readyForMaterialRemovalSimulation) {
     addGap("material-removal-input-not-ready", "simulation", "production-blocker", "OpenCAMLib output is not ready for CAMotics/equivalent material-removal validation.");
   }
@@ -2439,6 +2910,8 @@ function createFallbackProductionGapReview({ productionCandidate, requiredFailur
     schema: "hediao3d.opencamlib-production-gap-review.v1",
     level: productionCandidate && criticalCount === 0 ? "candidate-ready-for-downstream-evidence" : "blocked",
     productionCandidateReady: Boolean(productionCandidate && criticalCount === 0),
+    downstreamProductionEvidenceReady: false,
+    productionUnlockReady: false,
     criticalCount,
     reviewCount: gaps.filter((gap) => gap.severity === "review").length,
     productionBlockerCount: gaps.filter((gap) => gap.severity === "production-blocker").length,

@@ -54,13 +54,13 @@ const checks = [
   },
   {
     id: "linux-opencamlib-evidence-visible",
-    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage") && source.includes("protectedZones") && source.includes("端部保护") && source.includes("materialRemovalReadiness") && source.includes("formatLinuxOpenCamLibMaterialRemovalReadiness") && source.includes("productionGapReview") && source.includes("OpenCAMLib差距审查：") && source.includes("formatOpenCamLibProductionGapReview") && source.includes("严格接触失败：") && source.includes("formatNativeOpenCamLibStrictContactFailure") && source.includes("contactValidationFailedChecks") && source.includes("productionBlocker") && source.includes("预检") && source.includes("证据JSON已回填"),
-    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, material-removal readiness, production gap review, candidate package preflight step, evidence JSON, and blocker diagnostics."
+    ok: source.includes("Linux OpenCAMLib：") && source.includes("formatLinuxOpenCamLibEvidence") && source.includes("candidatePackageBlockedReason") && source.includes("contactPathCoverage") && source.includes("protectedZones") && source.includes("端部保护") && source.includes("materialRemovalReadiness") && source.includes("formatLinuxOpenCamLibMaterialRemovalReadiness") && source.includes("unsafeProductionClaim") && source.includes("危险残料声明") && source.includes("productionGapReview") && source.includes("OpenCAMLib差距审查：") && source.includes("formatOpenCamLibProductionGapReview") && source.includes("downstreamProductionEvidenceReady") && source.includes("下游证据未闭合") && source.includes("downstreamEvidencePlan") && source.includes("OpenCAMLib下游计划：") && source.includes("formatOpenCamLibDownstreamEvidencePlan") && source.includes("productionUnlockReady") && source.includes("不解锁生产") && source.includes("严格接触失败：") && source.includes("formatNativeOpenCamLibStrictContactFailure") && source.includes("contactValidationFailedChecks") && source.includes("productionBlocker") && source.includes("预检") && source.includes("证据JSON已回填") && source.includes("候选包generatedArtifacts已匹配") && source.includes("候选包generatedArtifacts不匹配"),
+    summary: "Focused readiness UI should expose Linux OpenCAMLib path coverage, protected end zones, material-removal readiness, unsafe residual claims, production gap review, downstream evidence boundary, candidate package preflight step, generatedArtifacts binding, evidence JSON, and blocker diagnostics."
   },
   {
     id: "linux-camotics-upstream-binding-visible",
-    ok: source.includes("Linux CAMotics绑定：") && source.includes("formatLinuxCamoticsUpstreamEvidence") && source.includes("candidatePackageValidationBound") && source.includes("candidatePackageBundleBound") && source.includes("候选包预检已绑定") && source.includes("候选包证据包已绑定"),
-    summary: "Focused readiness UI should expose CAMotics upstream binding to OpenCAMLib candidate package validation and bundle evidence."
+    ok: source.includes("Linux CAMotics绑定：") && source.includes("formatLinuxCamoticsUpstreamEvidence") && source.includes("candidatePackageValidationBound") && source.includes("candidatePackageBundleBound") && source.includes("候选包预检已绑定") && source.includes("候选包证据包已绑定") && source.includes("上游危险残料声明"),
+    summary: "Focused readiness UI should expose CAMotics upstream binding to OpenCAMLib candidate package validation, bundle evidence, and unsafe upstream residual claims."
   },
   {
     id: "residual-closure-review-visible",
@@ -95,8 +95,73 @@ const checks = [
       && source.includes("material-removal-proof")
       && source.includes("材料去除/残料门禁")
       && source.includes("需补残料/过切闭环证据")
+      && source.includes("residualUnsafeProductionClaim")
+      && source.includes("危险残料声明")
+      && source.includes("productionResidualEvidenceReady=true")
+      && source.includes("measured/swept-volume")
+      && source.includes("residualLocalValidationBindingStatus")
+      && source.includes("本地残料校验绑定")
+      && source.includes("camotics-result-validate.js")
       && /formatLockedProductionPackageGuidance[\s\S]{0,600}formatProductionReadinessMaterialRemovalGate/.test(source),
-    summary: "Locked production-package guidance should surface the material-removal residual/gouge gate separately from generic evidence gaps."
+    summary: "Locked production-package guidance should surface the material-removal residual/gouge gate and unsafe residual production claims separately from generic evidence gaps."
+  },
+  {
+    id: "runbook-review-vs-production-safe-visible",
+    ok: source.includes("runbookReviewSafe")
+      && source.includes("productionSafeReason")
+      && source.includes("审查")
+      && source.includes("ready")
+      && source.includes("blocked")
+      && source.includes("生产")
+      && source.includes("locked"),
+    summary: "Focused readiness UI should distinguish review-safe Linux runbook evidence from production-safe unlock state and show the production-safe reason."
+  },
+  {
+    id: "locked-production-field-evidence-gates-visible",
+    ok: source.includes("formatLockedProductionAirRunGuidance")
+      && source.includes("formatLockedProductionFieldEvidenceGuidance")
+      && source.includes("formatLockedProductionRunbookBoundary")
+      && source.includes("guidance?.airRunGate")
+      && source.includes("guidance?.fieldEvidenceGate")
+      && source.includes("guidance?.runbookBoundary")
+      && source.includes("离料空跑门禁")
+      && source.includes("现场同包证据")
+      && source.includes("Runbook审查")
+      && source.includes("同包绑定")
+      && source.includes("证据链")
+      && source.includes("proofChainStatus")
+      && source.includes("不匹配文件")
+      && source.includes("machineBindingStatus")
+      && source.includes("trialBindingStatus")
+      && source.includes("failedChecks")
+      && source.includes("mismatchedFiles"),
+    summary: "Locked production-package guidance should surface air-run, runbook boundary, and field package-binding mismatch details, not only material-removal blockers."
+  },
+  {
+    id: "readiness-goal-audit-field-gates-visible",
+    ok: source.includes("getGoalAuditFieldGateEvidence")
+      && source.includes("field-evidence-closure")
+      && source.includes("v3GoalAuditFieldGateEvidence")
+      && source.includes("现场门禁")
+      && source.includes("材料去除/残料门禁")
+      && source.includes("离料空跑门禁")
+      && source.includes("现场同包门禁"),
+    summary: "Focused readiness UI should surface material-removal, air-run and field evidence gate details from goalAudit, not only the weakest layer and next action."
+  },
+  {
+    id: "job-evidence-dossier-production-audit-gates-visible",
+    ok: source.includes("productionEvidenceDossier.productionReadinessAudit")
+      && source.includes("生产审计门禁")
+      && source.includes("materialRemovalGate?.status")
+      && source.includes("残料闭合")
+      && source.includes("airRunGate?.status")
+      && source.includes("fieldPackageGate?.status")
+      && source.includes("空跑绑定")
+      && source.includes("现场绑定")
+      && source.includes("现场完整性")
+      && source.includes("fieldCompletenessStatus")
+      && source.includes("fieldCompletenessMissingCount"),
+    summary: "Focused job evidence dossier UI should surface productionReadinessAudit material-removal, air-run and field package gates, not only generic cross-check tiles."
   },
   {
     id: "locked-production-task-actions",
@@ -125,7 +190,7 @@ const checks = [
   },
   {
     id: "linux-cam-job-validation-import",
-    ok: source.includes("handleImportV3LinuxCamJobValidation") && source.includes("linux-cam-job-validation") && source.includes("linux-cam-job-local-validation.json") && source.includes("整单校验JSON") && source.includes("回填整单校验") && source.includes("Linux证据进度") && source.includes("formatLinuxCamJobEvidenceStatus") && source.includes("Linux上传计划") && source.includes("formatLinuxCamJobUploadPlan") && source.includes("handleImportV3LinuxCamEvidenceBundle") && source.includes("智能回填结果包") && source.includes("linux-cam-evidence-bundle") && source.includes("Linux执行三步") && source.includes("upload-linux-cam-evidence.mjs") && source.includes("HEDIAO3D_V3_API_BASE") && source.includes("Linux上传报告") && source.includes("formatLinuxCamEvidenceUploadReport") && source.includes("Linux预检") && source.includes("formatLinuxCamJobPreflight") && source.includes("Linux依赖安装") && source.includes("formatLinuxCamDepsInstallReport") && source.includes("linuxCamDepsInstallReport") && source.includes("resourceProfile") && source.includes("installPlan"),
+    ok: source.includes("handleImportV3LinuxCamJobValidation") && source.includes("linux-cam-job-validation") && source.includes("linux-cam-job-local-validation.json") && source.includes("整单校验JSON") && source.includes("回填整单校验") && source.includes("Linux证据进度") && source.includes("formatLinuxCamJobEvidenceStatus") && source.includes("残料proof") && source.includes("Linux上传计划") && source.includes("formatLinuxCamJobUploadPlan") && source.includes("handleImportV3LinuxCamEvidenceBundle") && source.includes("智能回填结果包") && source.includes("linux-cam-evidence-bundle") && source.includes("Linux执行三步") && source.includes("upload-linux-cam-evidence.mjs") && source.includes("HEDIAO3D_V3_API_BASE") && source.includes("Linux上传报告") && source.includes("formatLinuxCamEvidenceUploadReport") && source.includes("Linux预检") && source.includes("formatLinuxCamJobPreflight") && source.includes("Linux依赖安装") && source.includes("formatLinuxCamDepsInstallReport") && source.includes("linuxCamDepsInstallReport") && source.includes("resourceProfile") && source.includes("installPlan"),
     summary: "Focused operator UI should accept Linux CAM job local validation evidence after running the unified package."
   },
   {
@@ -143,7 +208,7 @@ const checks = [
     id: "core-api-request-error-guidance",
     ok: source.includes("function requestJson")
       && source.includes("无法连接本地后端 API")
-      && source.includes('requestJson<{\n        modelUrl: string;')
+      && /requestJson<\{\s*modelUrl:\s*string;/.test(source)
       && source.includes("requestJson<V3OrchestratorJob>")
       && source.includes("requestJson<GeneratedToolpath>")
       && source.includes("selectedAiProvider.name}任务创建失败"),

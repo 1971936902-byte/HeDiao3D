@@ -58,12 +58,15 @@ try {
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-real-candidate-schema" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate schema");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-real-candidate-fail-closed" && check.status === "pass"), "self-check should verify OpenCAMLib real candidate production lock");
   assert(readyReport.checks?.some((check) => check.id === "opencamlib-validator-residual-evidence-gate" && check.status === "pass"), "self-check should verify OpenCAMLib validator requires measured or validated residual evidence");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-validator-residual-production-claim-gate" && check.status === "pass"), "self-check should verify OpenCAMLib validator rejects unsafe residual production claims");
+  assert(readyReport.checks?.some((check) => check.id === "opencamlib-candidate-validator-unsafe-residual-gap" && check.status === "pass"), "self-check should verify OpenCAMLib candidate package surfaces unsafe residual production claims");
   assert(readyReport.checks?.some((check) => check.id === "real-output-runner-readiness" && check.status === "pass"), "self-check should verify real-output bundle carries OpenCAMLib runner readiness");
   assert(readyReport.checks?.some((check) => check.id === "real-output-real-candidate" && check.status === "pass"), "self-check should verify real-output bundle carries OpenCAMLib real candidate evidence");
   assert(readyReport.checks?.some((check) => check.id === "real-output-contact-path-coverage" && check.status === "pass"), "self-check should verify real-output bundle preserves contact pathCoverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "real-candidate-path-coverage" && check.status === "pass"), "self-check should verify real candidate runner summarizes contact pathCoverage diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "real-candidate-protected-zones" && check.status === "pass"), "self-check should verify real candidate runner summarizes protected-zone diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "real-candidate-production-gap-review" && check.status === "pass"), "self-check should verify real candidate runner summarizes production gap review diagnostics");
+  assert(readyReport.checks?.some((check) => check.id === "real-candidate-downstream-evidence-plan" && check.status === "pass"), "self-check should verify real candidate runner summarizes downstream evidence plan diagnostics");
   assert(readyReport.checks?.some((check) => check.id === "manifest-file:native-cam-server-package.json" && check.status === "pass"), "self-check should require manifest to list itself");
   assert(existsSync(join(workDir, "native-cam-server-package-self-check.json")), "self-check should write JSON report");
 
@@ -95,6 +98,13 @@ try {
   assert(realCandidateReport.productionLocked === true, "real candidate runner must keep production locked");
   assert(realCandidateReport.blocking?.includes("opencamlib-production-candidate-not-proven"), "real candidate runner should block when production candidate is not proven");
   assert(realCandidateReport.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "real candidate runner should expose production gap review");
+  assert(realCandidateReport.productionGapReview?.productionUnlockReady === false, "real candidate runner production gap review must preserve production unlock boundary");
+  assert(realCandidateReport.downstreamEvidencePlan?.schema === "hediao3d.opencamlib-downstream-evidence-plan.v1", "real candidate runner should expose downstream evidence plan");
+  assert(realCandidateReport.downstreamEvidencePlan?.productionUnlockReady === false, "real candidate runner downstream evidence plan must never unlock production");
+  assert(realCandidateReport.nextProductionCandidateActions?.schema === "hediao3d.opencamlib-next-production-candidate-actions.v1", "real candidate runner should expose next production candidate actions");
+  assert(realCandidateReport.nextProductionCandidateActions?.productionUnlockReady === false, "next production candidate actions must preserve production lock");
+  assert(realCandidateReport.nextProductionCandidateActions?.commands?.some((command) => command.includes("opencamlib-real-candidate-run.mjs")), "missing-input next actions should tell Linux operator to rerun the real candidate chain");
+  assert(realCandidateReport.nextProductionCandidateActions?.expectedArtifacts?.includes("opencamlib-real-candidate-run.json"), "missing-input next actions should name the real candidate report artifact");
   assert(realCandidateReport.productionGapReview?.criticalCount >= 1, "missing-input real candidate gap review should explain critical gaps");
   assert(existsSync(join(workDir, "opencamlib-real-candidate-run.json")), "real candidate runner should write JSON report");
 
@@ -110,7 +120,17 @@ try {
   assert(realCandidateWithContactReport.openCamLibContactReport?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "real candidate runner should preserve raw contact machine-fit rotary axis");
   assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "real candidate runner should summarize material-removal readiness");
   assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.productionResidualEvidenceReady === true, "validated contact fixture should preserve production residual readiness summary");
+  assert(realCandidateWithContactReport.openCamLibContactReport?.materialRemovalReadiness?.unsafeProductionClaim === false, "validated contact fixture should preserve safe residual production-claim summary");
+  assert(realCandidateWithContactReport.materialRemovalReadiness?.residualProofSource?.ready === true, "real candidate runner should preserve bound residual proof source");
+  assert(realCandidateWithContactReport.contactValidation?.productionCandidatePromotion?.schema === "hediao3d.opencamlib-production-candidate-promotion.v1", "real candidate runner should preserve contact promotion audit");
+  assert(realCandidateWithContactReport.contactValidation?.productionCandidatePromotion?.productionUnlockReady === false, "contact promotion audit must preserve production lock");
   assert(realCandidateWithContactReport.candidatePackage?.productionGapReview?.productionCandidateReady === true, "real candidate runner should preserve ready candidate package production gap review");
+  assert(realCandidateWithContactReport.candidatePackage?.downstreamEvidencePlan?.schema === "hediao3d.opencamlib-downstream-evidence-plan.v1", "real candidate runner should preserve candidate package downstream evidence plan");
+  assert(realCandidateWithContactReport.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "machine-acceptance" && gate.status === "needs-field-evidence"), "real candidate runner should keep downstream machine acceptance gate open");
+  assert(realCandidateWithContactReport.nextProductionCandidateActions?.status === "candidate-ready-downstream-evidence-required", "ready candidate next actions should shift to downstream evidence");
+  assert(realCandidateWithContactReport.nextProductionCandidateActions?.commands?.some((command) => command.includes("native-cam-real-output-check")), "ready candidate next actions should name Native CAM real-output check");
+  assert(realCandidateWithContactReport.nextProductionCandidateActions?.expectedArtifacts?.includes("native-cam-real-output-bundle.zip"), "ready candidate next actions should name Native CAM upload bundle");
+  assert(realCandidateWithContactReport.nextProductionCandidateActions?.uploadSequence?.some((item) => item.includes("camotics-result-bundle.zip")), "ready candidate next actions should preserve CAMotics upload sequence");
   const candidateClosedLoop = spawnSync(node, [closedLoopPath, workDir], {
     cwd: workDir,
     encoding: "utf8",
@@ -124,7 +144,14 @@ try {
   assert(candidatePackageReport.productionGapReview?.productionCandidateReady === true, "ready candidate fixture should clear OpenCAMLib production gap review");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionGapReview?.schema === "hediao3d.opencamlib-production-gap-review.v1", "closed-loop evidence chain should preserve OpenCAMLib production gap review");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionGapReview?.productionCandidateReady === true, "closed-loop evidence chain should preserve ready production gap review");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionCandidatePromotion?.schema === "hediao3d.opencamlib-production-candidate-promotion.v1", "closed-loop evidence chain should preserve OpenCAMLib promotion audit");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionCandidatePromotion?.productionCandidateReady === true, "closed-loop evidence chain should preserve ready promotion audit");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.productionCandidatePromotion?.productionUnlockReady === false, "closed-loop promotion audit must preserve production lock");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.downstreamEvidencePlan?.productionUnlockReady === false, "closed-loop evidence chain should preserve downstream evidence production lock");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "air-run-evidence"), "closed-loop evidence chain should preserve downstream air-run gate");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.level === "ready", `closed-loop evidence chain should read candidate package validation level: ${JSON.stringify(candidatePackageReport, null, 2)}`);
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.generatedArtifacts?.status === "matched", "closed-loop evidence chain should preserve candidate package generated-artifact status");
+  assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackage?.generatedArtifacts?.bundleShaMatches === true, "closed-loop evidence chain should verify candidate package bundle generated-artifact hash");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidatePackageReadyForImport === true, "closed-loop evidence chain should mark candidate package ready for import");
   assert(candidateClosedLoopReport.evidenceChain?.openCamLib?.candidateMachineFit?.level === candidatePackageReport.machineFit?.level, "closed-loop evidence chain should preserve candidate machine-fit preflight");
   assert(candidateClosedLoopReport.evidenceChain?.crossChecks?.candidatePackageStep === "pass", "closed-loop cross-checks should expose candidate package validation step");
@@ -182,10 +209,13 @@ try {
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.status === "matched", "closed-loop should summarize matched CAMotics upstream evidence");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageValidationBound === true, "closed-loop should show CAMotics is bound to OpenCAMLib candidate package validation");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackageBundleBound === true, "closed-loop should show CAMotics is bound to OpenCAMLib candidate package bundle");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackage?.status === "matched", "closed-loop should preserve CAMotics candidate package generated-artifact status");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.candidatePackage?.bundleShaMatches === true, "closed-loop should preserve CAMotics candidate package generated-artifact binding");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamMaterialReadinessStatus === "matched", "closed-loop should expose matched upstream material readiness");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamMaterialReadyForSimulation === true, "closed-loop should expose material readiness for simulation");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamMaterialResidualEvidenceReady === false, "closed-loop should preserve residual production boundary");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.materialRemovalReadiness?.status === "matched", "closed-loop upstream evidence should include material readiness detail");
+  assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.materialRemovalReadiness?.residualProofSource?.ready === true, "closed-loop upstream evidence should preserve bound residual proof source");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.crossChecks?.camoticsUpstreamMaterialReadinessMatched === true, "closed-loop cross-checks should mark material readiness matched");
   assert(camoticsBoundClosedLoopReport.evidenceChain?.camotics?.upstreamEvidence?.matchedCount >= 4, "closed-loop should count matched upstream CAM evidence files");
 
@@ -419,6 +449,7 @@ function createOpenCamLibContact({ modelSha, planSha, neutralSha }) {
       level: "ready-for-camotics-or-equivalent",
       readyForMaterialRemovalSimulation: true,
       productionResidualEvidenceReady: true,
+      residualProofSource: createResidualProofSource(),
       missingForProduction: [],
       summary: "Fixture contact has swept-volume validated residual metrics and can enter material-removal validation."
     },
@@ -494,12 +525,16 @@ function createUpstreamCamEvidence() {
     schema: "hediao3d.camotics-upstream-cam-evidence.v1",
     status: "hash-bound",
     required: true,
-    presentCount: 2,
+    presentCount: 4,
+    candidatePackage: createCandidatePackageSummary(),
+    candidateMachineFit: createCandidateMachineFit(),
     materialRemovalReadiness: {
       schema: "hediao3d.opencamlib-material-removal-readiness.v1",
       level: "ready-for-camotics-or-equivalent",
       readyForMaterialRemovalSimulation: true,
+      simulationQuality: createSimulationQuality(),
       productionResidualEvidenceReady: false,
+      residualProofSource: createResidualProofSource(),
       missingForProduction: ["residual-stock-map", "verified-material-removal-volume"],
       summary: "Fixture upstream material readiness can enter CAMotics/equivalent simulation."
     },
@@ -538,6 +573,79 @@ function createUpstreamCamEvidence() {
       }
     ],
     summary: "Fixture upstream CAM evidence for CAMotics runner self-check."
+  };
+}
+
+function createCandidatePackageSummary({
+  level = "ready",
+  readyForImport = true,
+  validationReportContentSha256 = sha256Text("candidate-package-report-content"),
+  candidatePackageBundleSha256 = sha256Text("candidate-package-bundle-fixture"),
+  actualBundleSha256 = sha256Text("candidate-package-bundle-fixture"),
+  bundleShaMatches = true
+} = {}) {
+  return {
+    schema: "hediao3d.opencamlib-candidate-package-summary.v1",
+    validationSchema: "hediao3d.opencamlib-candidate-package-validation.v1",
+    level,
+    readyForImport,
+    evidenceClass: "production-candidate",
+    contactValidationLevel: "ready",
+    machineFitLevel: "ok",
+    productionGapLevel: "candidate-ready-needs-downstream-evidence",
+    productionCandidateReady: true,
+    generatedArtifactsSchema: "hediao3d.opencamlib-candidate-generated-artifacts.v1",
+    validationReportContentSha256,
+    validationReportDigestBasis: "report-json-without-generatedArtifacts",
+    candidatePackageBundleSha256,
+    candidatePackageBundleSizeBytes: 42,
+    actualBundleSha256,
+    actualBundleSizeBytes: 42,
+    bundleShaMatches,
+    productionBoundary: "OpenCAMLib candidate package preflight does not unlock production NC by itself.",
+    summary: "Fixture OpenCAMLib candidate package report is bound to the bundle sha256."
+  };
+}
+
+function createCandidateMachineFit() {
+  return {
+    schema: "hediao3d.opencamlib-candidate-machine-fit.v1",
+    level: "ok",
+    readyForMachine: true,
+    machine: {
+      rotaryOutputAxis: "Y",
+      rotaryWrapAxis: "Y",
+      rotaryWrapPerRevolutionMm: 100
+    },
+    checks: [
+      { id: "rotary-output-axis", status: "pass", expected: "Y", actual: "Y" },
+      { id: "rotary-wrap-pitch", status: "pass", expectedMm: 100, actualMm: 100 }
+    ],
+    summary: "Fixture OpenCAMLib candidate machine-fit preflight passed."
+  };
+}
+
+function createSimulationQuality() {
+  return {
+    schema: "hediao3d.opencamlib-simulation-quality.v1",
+    level: "ready-for-downstream-material-removal",
+    readyForMaterialRemovalSimulation: true,
+    productionEvidenceAllowed: false,
+    summary: "Fixture OpenCAMLib contact evidence is sufficient for downstream CAMotics/equivalent simulation only."
+  };
+}
+
+function createResidualProofSource() {
+  return {
+    schema: "hediao3d.opencamlib-bound-residual-proof-source.v1",
+    status: "bound",
+    ready: true,
+    proofStatus: "production-residual-proof-bound",
+    localValidationOk: true,
+    productionResidualEvidenceReady: true,
+    unsafeProductionClaim: false,
+    upstreamStatus: "matched",
+    upstreamCandidatePackageStatus: "matched"
   };
 }
 

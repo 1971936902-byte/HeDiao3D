@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {
@@ -208,6 +208,12 @@ async function main() {
   assert(zipImported.openCamLibRealCandidate?.protectedZones?.status === "ready", "zip import should preserve real candidate protected-zone summary");
   assert(zipImported.openCamLibRealCandidate?.candidateMachineFit?.level === "ok", "zip import should preserve real candidate machine-fit summary");
   assert(zipImported.openCamLibRealCandidate?.materialRemovalReadiness?.readyForMaterialRemovalSimulation === true, "zip import should preserve real candidate material-removal readiness");
+  assert(zipImported.openCamLibRealCandidate?.productionCandidatePromotion?.status === "blocked", "zip import should preserve real candidate production promotion audit");
+  assert(zipImported.openCamLibRealCandidateStatus?.productionCandidatePromotion?.productionUnlockReady === false, "zip import status should preserve promotion production lock");
+  assert(zipImported.openCamLibRealCandidate?.downstreamEvidencePlan?.status === "candidate-ready-material-removal-required", "zip import should preserve real candidate downstream evidence plan");
+  assert(zipImported.openCamLibRealCandidateStatus?.downstreamEvidencePlan?.productionUnlockReady === false, "zip import status should preserve downstream production lock");
+  assert(zipImported.openCamLibRealCandidate?.nextProductionCandidateActions?.status === "candidate-ready-downstream-evidence-required", "zip import should preserve real candidate next production actions");
+  assert(zipImported.openCamLibRealCandidateStatus?.nextProductionCandidateActions?.productionUnlockReady === false, "zip import status should preserve next-actions production lock");
   assert(zipImported.openCamLibRealCandidate?.candidatePackageBlockedReason === "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence.", "zip import should preserve candidate package blocked reason");
   assert(zipImported.apiArtifacts?.zipBundle?.includes("imported-native-cam-real-output-bundle.zip"), "zip import should expose source bundle artifact");
   const zipArtifact = await getJson(zipImported.apiArtifacts.json);
@@ -221,6 +227,9 @@ async function main() {
   assert(zipArtifact.openCamLibRealCandidate?.protectedZones?.status === "ready", "zip import artifact should preserve OpenCAMLib real candidate protected-zone summary");
   assert(zipArtifact.openCamLibRealCandidate?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "zip import artifact should preserve OpenCAMLib real candidate machine-fit");
   assert(zipArtifact.openCamLibRealCandidate?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "zip import artifact should preserve OpenCAMLib material-removal production boundary");
+  assert(zipArtifact.openCamLibRealCandidate?.productionCandidatePromotion?.firstBlockingCriterion?.id === "experimental-real-api-boundary", "zip import artifact should preserve first OpenCAMLib promotion blocker");
+  assert(zipArtifact.openCamLibRealCandidate?.downstreamEvidencePlan?.gates?.some((gate) => gate.id === "air-run-evidence" && gate.status === "needs-field-evidence"), "zip import artifact should preserve downstream air-run evidence gate");
+  assert(zipArtifact.openCamLibRealCandidate?.nextProductionCandidateActions?.expectedArtifacts?.includes("native-cam-real-output-bundle.zip"), "zip import artifact should preserve OpenCAMLib next-action artifacts");
   assert(zipArtifact.openCamLibRealCandidateStatus?.summary?.includes("OpenCAMLib one-command real candidate"), "zip import artifact should preserve OpenCAMLib real candidate status summary");
   const zipImportReport = await getJson(zipImported.apiArtifacts.importJson);
   assert(zipImportReport.zipBundle === "imported-native-cam-real-output-bundle.zip", "zip import report should preserve source bundle filename");
@@ -241,7 +250,10 @@ async function main() {
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.status === "blocked", "readiness should expose imported OpenCAMLib real candidate status");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.contactValidationPathCoverage?.status === "ready", "readiness should expose imported real candidate path coverage");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.protectedZones?.status === "ready", "readiness should expose imported real candidate protected zones");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.downstreamEvidencePlan?.openGateCount >= 1, "readiness should expose imported downstream evidence plan");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidateStatus?.productionCandidatePromotion?.blockingCount >= 1, "readiness should expose imported OpenCAMLib promotion blocker count");
   assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidate?.blockingCount === 1, "readiness should expose imported OpenCAMLib real candidate summary");
+  assert(readiness.nativeCamRealOutputAcceptance.openCamLibRealCandidate?.nextProductionCandidateActions?.commands?.some((command) => command.includes("native-cam-real-output-check.sh")), "readiness should expose imported OpenCAMLib next Linux action command");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.productionCandidateCount === 1, "readiness should expose bound source report handoff audit");
   assert(readiness.nativeCamRealOutputAcceptance.sourceReportHandoffAudit?.unsafeCount === 0, "readiness should expose clean bound source report handoff audit");
   assert(readiness.acceptancePlan?.steps?.some((step) => step.id === "native-cam-real-output-acceptance"), "readiness plan should include real output acceptance step");
@@ -457,6 +469,26 @@ function createRealCandidateFixture() {
       level: "ready",
       evidenceClass: "production-candidate",
       productionCandidateEligible: true,
+      productionCandidatePromotion: {
+        schema: "hediao3d.opencamlib-production-candidate-promotion.v1",
+        status: "blocked",
+        productionCandidateReady: false,
+        productionUnlockReady: false,
+        evidenceClass: "experimental-real-api",
+        criterionCount: 22,
+        passedCount: 21,
+        blockingCount: 1,
+        blockingCriteria: [
+          {
+            id: "experimental-real-api-boundary",
+            layer: "runtime-boundary",
+            status: "fail",
+            summary: "experimental OpenCAMLib real API output is not production-candidate evidence until residual/material-removal/machine evidence is complete"
+          }
+        ],
+        nextActions: ["Promote the OpenCAMLib runner out of experimental-real-api only after residual/material-removal and machine-boundary evidence are validated."],
+        productionBoundary: "This promotion audit never unlocks production NC by itself."
+      },
       pathCoverage: {
         schema: "hediao3d.opencamlib-contact-path-coverage-summary.v1",
         required: true,
@@ -510,12 +542,55 @@ function createRealCandidateFixture() {
         productionResidualEvidenceReady: false,
         missingForProduction: ["measured or swept-volume validated residual material metrics"],
         summary: "Fixture is ready for engineering material-removal simulation but not production residual evidence."
+      },
+      downstreamEvidencePlan: {
+        schema: "hediao3d.opencamlib-downstream-evidence-plan.v1",
+        status: "candidate-ready-material-removal-required",
+        productionUnlockReady: false,
+        candidateReady: true,
+        materialSimulationReady: true,
+        residualClosed: false,
+        unsafeResidualClaim: false,
+        gates: [
+          {
+            id: "material-removal-simulation",
+            title: "CAMotics/equivalent material-removal simulation",
+            status: "ready-to-run",
+            summary: "Run material-removal simulation against this same candidate."
+          },
+          {
+            id: "residual-gouge-validation",
+            title: "Measured or swept-volume residual/gouge validation",
+            status: "needs-evidence",
+            summary: "Residual proof is still open."
+          },
+          {
+            id: "air-run-evidence",
+            title: "Rotary calibration and full air-run evidence",
+            status: "needs-field-evidence",
+            summary: "Air-run evidence is still required."
+          }
+        ],
+        productionBoundary: "This plan does not unlock production NC."
       }
     },
     candidatePackage: {
       level: "critical",
       readyForImport: false,
       blockedReason: "OpenCAMLib real API output is experimental and lacks production residual/material-removal/machine evidence."
+    },
+    nextProductionCandidateActions: {
+      schema: "hediao3d.opencamlib-next-production-candidate-actions.v1",
+      status: "candidate-ready-downstream-evidence-required",
+      productionCandidateReady: true,
+      productionUnlockReady: false,
+      blockerCount: 1,
+      downstreamOpenGateCount: 3,
+      blockingReasons: ["production residual/material-removal/machine evidence is still open"],
+      commands: ["bash native-cam-real-output-check.sh", "node native-cam-closed-loop-check.mjs ."],
+      expectedArtifacts: ["native-cam-real-output-bundle.zip", "camotics-result-bundle.zip", "native-cam-closed-loop-check.json"],
+      uploadSequence: ["native-cam-real-output-bundle.zip", "camotics-result-bundle.zip", "air-run evidence"],
+      productionBoundary: "These actions do not unlock production NC."
     },
     blocking: ["opencamlib-production-candidate-not-proven"]
   };

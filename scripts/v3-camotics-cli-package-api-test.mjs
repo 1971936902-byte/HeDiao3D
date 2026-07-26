@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {
@@ -58,12 +58,46 @@ async function main() {
   const previewText = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-preview.nc`);
   const previewSha256 = createHash("sha256").update(previewText).digest("hex");
   const previewMotionProfile = createPreviewMotionProfile(previewText);
+  const candidatePackageBundleText = "PK fixture candidate package bundle";
+  const candidatePackageBundleSha = createHash("sha256").update(candidatePackageBundleText).digest("hex");
+  const candidatePackageReportContentSha = createHash("sha256").update("fixture-candidate-package-report-content").digest("hex");
   const candidatePackageValidationText = JSON.stringify({
     schema: "hediao3d.opencamlib-candidate-package-validation.v1",
     level: "ready",
     handoffContract: { status: "ready-for-hediao3d-import" },
     contactValidation: { level: "ready", evidenceClass: "production-candidate", checkCount: 27 },
-    artifactManifest: { readyForImport: true, evidenceClass: "production-candidate" },
+    generatedArtifacts: {
+      schema: "hediao3d.opencamlib-candidate-generated-artifacts.v1",
+      validationReport: {
+        filename: "opencamlib-candidate-package-validation.json",
+        contentSha256: candidatePackageReportContentSha,
+        digestBasis: "report-json-without-generatedArtifacts"
+      },
+      candidatePackageBundle: {
+        filename: "opencamlib-candidate-package-bundle.zip",
+        exists: true,
+        sizeBytes: Buffer.byteLength(candidatePackageBundleText),
+        sha256: candidatePackageBundleSha
+      }
+    },
+    artifactManifest: {
+      readyForImport: true,
+      evidenceClass: "production-candidate",
+      generatedArtifacts: {
+        schema: "hediao3d.opencamlib-candidate-generated-artifacts.v1",
+        validationReport: {
+          filename: "opencamlib-candidate-package-validation.json",
+          contentSha256: candidatePackageReportContentSha,
+          digestBasis: "report-json-without-generatedArtifacts"
+        },
+        candidatePackageBundle: {
+          filename: "opencamlib-candidate-package-bundle.zip",
+          exists: true,
+          sizeBytes: Buffer.byteLength(candidatePackageBundleText),
+          sha256: candidatePackageBundleSha
+        }
+      }
+    },
     machineFit: {
       schema: "hediao3d.opencamlib-candidate-machine-fit-preflight.v1",
       level: "ok",
@@ -93,7 +127,6 @@ async function main() {
       summary: "Fixture OpenCAMLib contact output is ready for CAMotics/equivalent material-removal simulation."
     }
   }, null, 2);
-  const candidatePackageBundleText = "PK fixture candidate package bundle";
   const nativeSnapshotText = JSON.stringify({
     schema: "hediao3d.native-cam-real-output-snapshot.v1",
     jobId: job.id,
@@ -116,7 +149,6 @@ async function main() {
   writeFileSync(join(jobDir, "opencamlib-candidate-package-bundle.zip"), candidatePackageBundleText, "utf8");
   let nativeSnapshotSha = createHash("sha256").update(nativeSnapshotText).digest("hex");
   const candidatePackageValidationSha = createHash("sha256").update(candidatePackageValidationText).digest("hex");
-  const candidatePackageBundleSha = createHash("sha256").update(candidatePackageBundleText).digest("hex");
 
   const prepared = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-cli-package`, {});
   assert(prepared.ok === true, `CAMotics CLI package should be ready, got ${prepared.status}`);
@@ -137,6 +169,10 @@ async function main() {
   assert(runPackage.upstreamCamEvidence?.schema === "hediao3d.camotics-upstream-cam-evidence.v1", "run package should expose upstream CAM evidence binding");
   assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.schema === "hediao3d.native-cam-real-output-snapshot.v1", "run package should summarize job-local Native CAM snapshot");
   assert(runPackage.upstreamCamEvidence?.nativeCamRealOutputSnapshot?.productionUnlockEligible === false, "Native CAM snapshot summary must not unlock production");
+  assert(runPackage.upstreamCamEvidence?.candidatePackage?.schema === "hediao3d.opencamlib-candidate-package-summary.v1", "run package should summarize OpenCAMLib candidate package generated artifacts");
+  assert(runPackage.upstreamCamEvidence?.candidatePackage?.candidatePackageBundleSha256 === candidatePackageBundleSha, "candidate package summary should bind generated bundle sha");
+  assert(runPackage.upstreamCamEvidence?.candidatePackage?.actualBundleSha256 === candidatePackageBundleSha, "candidate package summary should bind actual bundle sha");
+  assert(runPackage.upstreamCamEvidence?.candidatePackage?.bundleShaMatches === true, "candidate package summary should mark bundle sha matched");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.level === "ok", "run package should carry OpenCAMLib candidate machine-fit");
   assert(runPackage.upstreamCamEvidence?.candidateMachineFit?.targetMachine?.rotaryOutputAxis === "Y", "run package should carry machine-fit rotary axis");
   assert(runPackage.upstreamCamEvidence?.materialRemovalReadiness?.schema === "hediao3d.opencamlib-material-removal-readiness.v1", "run package should carry OpenCAMLib material readiness");
@@ -167,6 +203,7 @@ async function main() {
   assert(template.inputs?.upstreamCamEvidence?.materialRemovalReadiness?.productionResidualEvidenceReady === false, "result template should preserve material residual boundary");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageValidation" && file.sha256 === candidatePackageValidationSha), "result template should carry candidate package validation evidence hash");
   assert(template.inputs?.upstreamCamEvidence?.files?.some((file) => file.key === "opencamlibCandidatePackageBundle" && file.sha256 === candidatePackageBundleSha), "result template should carry candidate package bundle evidence hash");
+  assert(template.inputs?.upstreamCamEvidence?.candidatePackage?.bundleShaMatches === true, "result template should carry candidate package generated-artifact bundle binding");
   assert(template.metrics?.materialRemovedMm3 === null, "result template must require real material volume");
   assert(template.residualValidation?.schema === "hediao3d.residual-validation.v1", "result template should include residual validation schema");
   assert(template.residualValidation?.maxGougeMm === null, "result template should require max gouge metric");
@@ -201,7 +238,9 @@ async function main() {
   assert(validatorScript.includes("residualValidation"), "validator should summarize residual validation evidence");
   assert(validatorScript.includes("maxGougeMm"), "validator should inspect residual max gouge");
   assert(validatorScript.includes("maxUndercutMm"), "validator should inspect residual max undercut");
-  const camoticsResultBundleDataUrl = runLocalValidatorFixture({
+  assert(validatorScript.includes("residual-production-claim"), "validator should reject unsafe residual production claims");
+  assert(validatorScript.includes("unsafeProductionClaim"), "validator should expose unsafe residual production claims");
+  const camoticsResultFixture = runLocalValidatorFixture({
     jobId: job.id,
     validatorScript,
     previewSha256,
@@ -209,6 +248,7 @@ async function main() {
     previewMotionProfile,
     upstreamCamEvidence: runPackage.upstreamCamEvidence
   });
+  const camoticsResultBundleDataUrl = camoticsResultFixture.bundleDataUrl;
 
   const preflight = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/camotics-execution-preflight`, {});
   assert(preflight.report?.schema === "hediao3d.camotics-execution-preflight.v1", "preflight report schema mismatch");
@@ -424,6 +464,8 @@ async function main() {
   assert(localValidation.evidenceStatus?.dependencyInstallReport?.status === "dry-run", "Linux CAM job evidence status should expose dependency install report");
   assert(localValidation.evidenceStatus?.missingUploads?.includes("native-cam-real-output-bundle.zip"), "Linux CAM job evidence status should list Native CAM upload");
   assert(localValidation.evidenceStatus?.missingUploads?.includes("camotics-result-bundle.zip"), "Linux CAM job evidence status should list CAMotics upload");
+  assert(localValidation.evidenceStatus?.missingUploads?.includes("camotics-work/camotics-result-local-validation.json:ready"), "Linux CAM job evidence status should require passing CAMotics local validation");
+  assert(localValidation.evidenceStatus?.camoticsLocalValidationDetail?.status === "missing", "Linux CAM job evidence status should expose missing CAMotics local validation detail");
   assert(localValidation.uploadPlan?.readyForUpload === false, "Linux CAM job upload plan should start waiting");
   assert(localValidation.uploadPlan?.readyCount === 0, "Linux CAM job upload plan should start with no ready bundles");
   assert(localValidation.uploadPlan?.items?.some((item) => item.id === "native-cam-real-output" && item.endpoint === "/api/orchestrator/native-cam/real-output-acceptance" && item.status === "missing"), "Linux CAM job upload plan should include missing Native CAM upload target");
@@ -435,6 +477,8 @@ async function main() {
 
   writeFileSync(join(linuxCamJobRoot, "native-cam-real-output-bundle.zip"), "PK fixture native cam upload bundle", "utf8");
   writeFileSync(join(linuxCamJobRoot, "camotics-result-bundle.zip"), "PK fixture camotics upload bundle", "utf8");
+  mkdirSync(join(linuxCamJobRoot, "camotics-work"), { recursive: true });
+  writeFileSync(join(linuxCamJobRoot, "camotics-work", "camotics-result-local-validation.json"), camoticsResultFixture.localValidationText, "utf8");
   const readyValidationRun = spawnSync(process.execPath, ["validate-linux-cam-job.mjs", "."], {
     cwd: linuxCamJobRoot,
     encoding: "utf8"
@@ -446,6 +490,11 @@ async function main() {
   assert(readyValidation.evidenceStatus?.readyForUpload === true, "Linux CAM job evidence status should mark readyForUpload");
   assert(readyValidation.evidenceStatus?.nativeCamBundle === "present", "Linux CAM job evidence status should see Native CAM bundle");
   assert(readyValidation.evidenceStatus?.camoticsBundle === "present", "Linux CAM job evidence status should see CAMotics bundle");
+  assert(readyValidation.evidenceStatus?.camoticsLocalValidationDetail?.status === "ready", "Linux CAM job evidence status should require passing CAMotics local validation");
+  assert(readyValidation.evidenceStatus?.camoticsLocalValidationDetail?.candidatePackageStatus === "matched", "Linux CAM job evidence status should expose candidate package binding status");
+  assert(readyValidation.evidenceStatus?.camoticsLocalValidationDetail?.candidatePackageBundleShaMatches === true, "Linux CAM job evidence status should expose candidate package generated-artifact match");
+  assert(readyValidation.evidenceStatus?.camoticsLocalValidationDetail?.residualProofChain?.schema === "hediao3d.camotics-residual-proof-chain.v1", "Linux CAM job evidence status should expose residual proof chain schema");
+  assert(readyValidation.evidenceStatus?.camoticsLocalValidationDetail?.residualProofChain?.productionResidualEvidenceReady === false, "Linux CAM job evidence status should preserve residual proof chain production boundary");
   assert(readyValidation.evidenceStatus?.preflight?.level, "Linux CAM job evidence status should include preflight summary when report exists");
   assert(Array.isArray(readyValidation.evidenceStatus?.missingUploads) && readyValidation.evidenceStatus.missingUploads.length === 0, "ready Linux CAM job evidence status should not list missing uploads");
   assert(readyValidation.uploadPlan?.readyForUpload === true, "ready Linux CAM job upload plan should be upload-ready");
@@ -484,6 +533,10 @@ async function main() {
   assert(uploadDryRunReport.resumeSafe === true, "Linux CAM job upload dry-run should mark rerun as safe");
   assert(uploadDryRunReport.nextActions?.some((action) => action.includes("HEDIAO3D_V3_API_BASE")), "Linux CAM job upload dry-run should include API base guidance");
   assert(uploadDryRunReport.uploadPlan?.readyForUpload === true, "Linux CAM job upload dry-run should see ready files");
+  assert(uploadDryRunReport.localValidationSummary?.camoticsLocalValidationStatus === "ready", "Linux CAM job upload dry-run should summarize local CAMotics validation");
+  assert(uploadDryRunReport.localValidationSummary?.candidatePackageStatus === "matched", "Linux CAM job upload dry-run should preserve candidate package status");
+  assert(uploadDryRunReport.localValidationSummary?.residualProofChain?.schema === "hediao3d.camotics-residual-proof-chain.v1", "Linux CAM job upload dry-run should preserve residual proof chain schema");
+  assert(uploadDryRunReport.localValidationSummary?.residualProofChain?.productionResidualEvidenceReady === false, "Linux CAM job upload dry-run should preserve residual proof chain boundary");
   assert(uploadDryRunReport.uploadPlan?.files?.depsInstallReport?.exists === true, "Linux CAM job upload dry-run should include dependency install report file status");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.depsInstallReport === `/api/orchestrator/jobs/${job.id}/linux-cam-deps-install-report`, "Linux CAM job upload dry-run should plan dependency install report endpoint");
   assert(uploadDryRunReport.uploadPlan?.endpoints?.preflight === `/api/orchestrator/jobs/${job.id}/linux-cam-job-preflight`, "Linux CAM job upload dry-run should plan preflight endpoint");
@@ -502,11 +555,14 @@ async function main() {
   assert(importedUploadDryRunReport.report?.schema === "hediao3d.v3-linux-cam-evidence-upload-report.v1", "Linux CAM evidence upload report import should preserve report schema");
   assert(importedUploadDryRunReport.report?.dryRun === true, "Linux CAM evidence upload report import should preserve dryRun");
   assert(importedUploadDryRunReport.report?.productionUnlockEligible === false, "Linux CAM evidence upload report import must not unlock production");
+  assert(importedUploadDryRunReport.report?.localValidationSummary?.residualProofChain?.productionResidualEvidenceReady === false, "Linux CAM evidence upload report import should preserve residual proof chain boundary");
   assert(importedUploadDryRunReport.importAudit?.schema === "hediao3d.v3-linux-cam-evidence-upload-report-import.v1", "Linux CAM evidence upload report import should write audit schema");
   assert(importedUploadDryRunReport.artifacts?.report?.endsWith("linux-cam-evidence-upload-report.json"), "Linux CAM evidence upload report import should expose report artifact");
   const reloadedAfterUploadReport = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloadedAfterUploadReport.result?.summary?.linuxCamEvidenceUploadReport?.dryRun === true, "job summary should expose Linux CAM evidence upload report");
   assert(reloadedAfterUploadReport.result.summary.linuxCamEvidenceUploadReport.productionUnlockEligible === false, "job summary upload report must not unlock production");
+  assert(reloadedAfterUploadReport.result.summary.linuxCamEvidenceUploadReport.localValidationSummary?.candidatePackageStatus === "matched", "job summary upload report should preserve candidate package status");
+  assert(reloadedAfterUploadReport.result.summary.linuxCamEvidenceUploadReport.localValidationSummary?.residualProofChain?.status, "job summary upload report should preserve residual proof chain status");
   assert(reloadedAfterUploadReport.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-evidence-upload-report.json" && file.exists), "delivery manifest should expose Linux CAM evidence upload report");
   assert(reloadedAfterUploadReport.result.summary.deliveryManifest.files?.some((file) => file.filename === "linux-cam-evidence-upload-report-import.json" && file.exists), "delivery manifest should expose Linux CAM evidence upload report import audit");
   assert(reloadedAfterUploadReport.result.summary.packageIntegrity.files?.some((file) => file.filename === "linux-cam-evidence-upload-report.json" && file.sha256), "package integrity should hash Linux CAM evidence upload report");
@@ -519,6 +575,7 @@ async function main() {
   assert(importedLinuxCamJobValidation.productionUnlockEligible === false, "Linux CAM job validation import must not unlock production");
   assert(importedLinuxCamJobValidation.validation?.level === "ready-for-v3-upload", "Linux CAM job validation import should preserve ready-for-upload level");
   assert(importedLinuxCamJobValidation.validation?.evidenceStatus?.phase === "ready-for-upload", "Linux CAM job validation import should preserve ready evidence phase");
+  assert(importedLinuxCamJobValidation.validation?.evidenceStatus?.camoticsLocalValidationDetail?.residualProofChain?.productionResidualEvidenceReady === false, "Linux CAM job validation import should preserve residual proof chain boundary");
   assert(importedLinuxCamJobValidation.validation?.uploadPlan?.readyForUpload === true, "Linux CAM job validation import should preserve upload plan");
   assert(importedLinuxCamJobValidation.artifacts?.validation?.endsWith("linux-cam-job-local-validation.json"), "Linux CAM job validation import should expose validation artifact");
   assert(importedLinuxCamJobValidation.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "Linux CAM job validation response missing production closure audit");
@@ -526,6 +583,8 @@ async function main() {
   const reloadedAfterLinuxCamJobValidation = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}`);
   assert(reloadedAfterLinuxCamJobValidation.result?.summary?.linuxCamJobValidation?.level === "ready-for-v3-upload", "job summary should expose upload-ready Linux CAM job validation");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.evidenceStatus?.nativeCamBundle === "present", "job summary should expose Linux CAM job evidence status");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.evidenceStatus?.camoticsLocalValidationDetail?.candidatePackageStatus === "matched", "job summary should preserve Linux CAM local validation candidate package detail");
+  assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.evidenceStatus?.camoticsLocalValidationDetail?.residualProofChain?.status, "job summary should preserve Linux CAM local residual proof chain status");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.uploadPlan?.readyCount === 2, "job summary should expose Linux CAM job upload plan");
   assert(reloadedAfterLinuxCamJobValidation.result.summary.linuxCamJobValidation.productionUnlockEligible === false, "job summary Linux CAM job validation must not unlock production");
   assert(reloadedAfterLinuxCamJobValidation.result?.summary?.productionClosureAudit?.schema === "hediao3d.production-closure-audit.v1", "job summary missing production closure audit after Linux CAM job validation import");
@@ -547,8 +606,39 @@ async function main() {
   });
   assert(unifiedCamoticsImport.adapterReport?.importedViaApi === true, "unified Linux CAM evidence endpoint should route CAMotics bundle to CAMotics import");
   assert(unifiedCamoticsImport.adapterReport?.importBundle?.zipBundle === "imported-camotics-result-bundle.zip", "unified Linux CAM evidence endpoint should preserve CAMotics source bundle");
+  assert(unifiedCamoticsImport.adapterReport?.localValidation?.residualProofChain?.schema === "hediao3d.camotics-residual-proof-chain.v1", "unified Linux CAM evidence endpoint should preserve local residual proof chain");
+  assert(unifiedCamoticsImport.adapterReport?.localValidation?.residualProofChain?.productionResidualEvidenceReady === false, "unified Linux CAM evidence endpoint should preserve local residual proof chain boundary");
   assert(unifiedCamoticsImport.simulationEvidence?.productionUnlockEligible === true, "unified Linux CAM evidence endpoint should preserve eligible CAMotics evidence");
   assert(unifiedCamoticsImport.productionGate?.allowProductionNc === false, "unified Linux CAM evidence endpoint must not bypass production gate");
+  const camoticsImportAudit = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/camotics-result-import.json`);
+  assert(camoticsImportAudit.localValidation?.residualProofChain?.schema === "hediao3d.camotics-residual-proof-chain.v1", "CAMotics import audit should preserve local residual proof chain schema");
+  assert(camoticsImportAudit.localValidation?.residualProofChain?.productionResidualEvidenceReady === false, "CAMotics import audit should preserve local residual proof chain boundary");
+  const closureAfterUnifiedCamotics = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/production-closure-audit.json`);
+  const closureCamoticsStep = closureAfterUnifiedCamotics.steps?.find((step) => step.id === "camotics-material-removal");
+  assert(closureCamoticsStep?.residualProofCrossCheck?.schema === "hediao3d.camotics-residual-proof-cross-check.v1", "production closure audit should expose CAMotics residual proof cross-check");
+  assert(closureCamoticsStep.residualProofCrossCheck.status === "matched", "production closure audit should match upload report and CAMotics import residual proof chain");
+  const closureMarkdownAfterUnifiedCamotics = await getText(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/production-closure-audit.md`);
+  assert(closureMarkdownAfterUnifiedCamotics.includes("残料proof交叉核验"), "production closure audit markdown should expose residual proof cross-check");
+
+  const tamperedUploadReport = {
+    ...uploadDryRunReport,
+    localValidationSummary: {
+      ...uploadDryRunReport.localValidationSummary,
+      residualProofChain: {
+        ...uploadDryRunReport.localValidationSummary.residualProofChain,
+        status: "tampered-proof"
+      }
+    }
+  };
+  const importedTamperedUploadReport = await postJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/linux-cam-evidence-upload-report`, {
+    report: tamperedUploadReport,
+    sourceName: "linux-cam-evidence-upload-report-tampered.json"
+  });
+  assert(importedTamperedUploadReport.ok === true, "tampered Linux CAM evidence upload report fixture should import for cross-check regression");
+  const closureAfterTamperedUpload = await getJson(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/artifacts/production-closure-audit.json`);
+  const tamperedCamoticsStep = closureAfterTamperedUpload.steps?.find((step) => step.id === "camotics-material-removal");
+  assert(tamperedCamoticsStep?.residualProofCrossCheck?.status === "mismatch", "production closure audit should flag upload/import residual proof mismatch");
+  assert(tamperedCamoticsStep.status === "review", "production closure audit should downgrade CAMotics step to review on residual proof mismatch");
 
   console.log(JSON.stringify({
     ok: true,
@@ -603,6 +693,7 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
   const dir = join(tmpdir(), `hediao3d-camotics-validator-${Date.now()}`);
   mkdirSync(dir, { recursive: true });
   let passingBundleDataUrl = null;
+  let passingLocalValidationText = null;
   try {
     const validatorPath = join(dir, "camotics-result-validate.js");
     const resultPath = join(dir, "camotics-result.json");
@@ -644,6 +735,7 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(!run.error, `validator spawn failed: ${run.error?.message}`);
     assert(run.status === 0, `validator should pass fixture, exited ${run.status}: ${run.stderr || run.stdout}`);
     const report = JSON.parse(run.stdout);
+    passingLocalValidationText = readFileSync(join(dir, "camotics-result-local-validation.json"), "utf8");
     assert(report.ok === true, "validator report should be ok");
     assert(report.productionEvidenceEligible === true, "validator should mark passing fixture as production evidence eligible");
     assert(Array.isArray(report.missing) && report.missing.length === 0, "passing validator should not list missing checks");
@@ -661,6 +753,55 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(bundleNames.includes("camotics-preview.png"), "CAMotics result bundle missing screenshot");
     assert(bundleNames.includes("camotics-material-removal.stl"), "CAMotics result bundle missing material mesh");
     assert(bundleNames.includes("README-CAMOTICS-RESULT.md"), "CAMotics result bundle missing README");
+    const bundleManifest = JSON.parse(readStoredZipEntry(bundleBytes, "camotics-result-bundle-manifest.json"));
+    assert(bundleManifest.localValidation?.residualValidation?.schema === "hediao3d.residual-validation.v1", "CAMotics result bundle manifest should expose local residual validation schema");
+    assert(bundleManifest.localValidation?.residualValidation?.productionResidualEvidenceReady === false, "CAMotics result bundle manifest should preserve open residual production boundary by default");
+
+    writeFileSync(resultPath, JSON.stringify({
+      schema: "hediao3d.camotics-result.v1",
+      jobId,
+      engine: "camotics",
+      status: "completed",
+      synthetic: false,
+      riskLevel: "ready",
+      summary: "Local validator unsafe residual claim fixture.",
+      inputs: {
+        preferredGcode: "camotics-preview.nc",
+        preferredGcodeSha256: previewSha256,
+        camoticsCliRunPackage: "camotics-cli-run-package.json",
+        camoticsCliRunPackageSha256: runPackageSha256,
+        machineContext: previewMotionProfile.machineContext,
+        upstreamCamEvidence
+      },
+      metrics: {
+        motionLineCount: previewMotionProfile.motionLineCount,
+        zMin: previewMotionProfile.zMin,
+        zMax: previewMotionProfile.zMax,
+        materialRemovedMm3: 3.2
+      },
+      residualValidation: {
+        productionResidualEvidenceReady: true,
+        measured: false,
+        maxGougeMm: 0.012,
+        maxUndercutMm: 0.04,
+        maxResidualStockMm: 0.06
+      },
+      artifacts: {
+        screenshot: "camotics-preview.png",
+        materialMesh: "camotics-material-removal.stl"
+      }
+    }, null, 2), "utf8");
+    const unsafeResidualRun = spawnSync(process.execPath, [validatorPath, resultPath], {
+      cwd: dir,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    assert(unsafeResidualRun.status !== 0, "validator should reject unsafe residual production claim");
+    const unsafeResidualReport = JSON.parse(unsafeResidualRun.stdout);
+    assert(unsafeResidualReport.ok === false, "unsafe residual claim report should not be ok");
+    assert(unsafeResidualReport.productionEvidenceEligible === false, "unsafe residual claim should not be production evidence eligible");
+    assert(unsafeResidualReport.missing?.includes("residual-production-claim"), "unsafe residual claim should list residual-production-claim");
+    assert(unsafeResidualReport.residualValidation?.unsafeProductionClaim === true, "unsafe residual claim should be exposed in generated validator report");
 
     writeFileSync(resultPath, JSON.stringify({
       schema: "hediao3d.camotics-result.v1",
@@ -701,7 +842,10 @@ function runLocalValidatorFixture({ jobId, validatorScript, previewSha256, runPa
     assert(failedReport.missing?.includes("machine-context"), "failed validator should list machine-context");
     assert(failedReport.missing?.includes("visual-or-material-artifact"), "failed validator should list missing artifact evidence");
     assert(/failed/.test(failedReport.summary), "failed validator should include failed summary");
-    return passingBundleDataUrl;
+    return {
+      bundleDataUrl: passingBundleDataUrl,
+      localValidationText: passingLocalValidationText
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

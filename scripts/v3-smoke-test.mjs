@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {
@@ -70,6 +70,10 @@ async function main() {
   assert(job.result.summary.productionUnlockMatrix.rows?.some((row) => row.id === "cam-handoff-quality"), "production unlock matrix missing CAM handoff quality row");
   assert(job.result?.summary?.productionEvidenceDossier?.schema === "hediao3d.production-evidence-dossier.v1", "production evidence dossier missing");
   assert(job.result.summary.productionEvidenceDossier.reviewCount >= 1, "production evidence dossier should show missing evidence in trial-only flow");
+  assert(job.result.summary.productionEvidenceDossier.productionReadinessAudit?.allowProductionPackage === false, "job summary should expose production readiness audit lock state");
+  assert(job.result.summary.productionEvidenceDossier.productionReadinessAudit?.materialRemovalGate?.id === "material-removal-proof", "job summary should expose material-removal production audit gate");
+  assert(job.result.summary.productionEvidenceDossier.productionReadinessAudit?.airRunGate?.id === "air-run-proof", "job summary should expose air-run production audit gate");
+  assert(job.result.summary.productionEvidenceDossier.productionReadinessAudit?.fieldPackageGate?.id === "field-package-proof", "job summary should expose field package production audit gate");
   assert(job.result?.summary?.deliveryManifest?.files?.length > 0, "delivery manifest missing files");
   const summaryManifestFiles = job.result.summary.deliveryManifest.files;
   assert(summaryManifestFiles.every((file) => file.machineUse?.class), "delivery manifest files missing machineUse classification");
@@ -155,6 +159,7 @@ async function main() {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "postprocess-profile.json",
     "machining-package-index.json",
     "delivery-manifest.json",
@@ -208,6 +213,10 @@ async function main() {
   assert(packageIndex.productionEvidenceDossier?.missingEvidenceCount > 0, "package index should expose missing production evidence count");
   assert(packageIndex.productionEvidenceDossier?.missingEvidenceTop?.some((item) => item.id === "material-removal-simulation" || item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose top missing production evidence items");
   assert(packageIndex.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "package index should expose field evidence gaps separately");
+  assert(packageIndex.productionEvidenceDossier?.productionReadinessAudit?.allowProductionPackage === false, "package index should expose production readiness audit lock state");
+  assert(packageIndex.productionEvidenceDossier?.productionReadinessAudit?.materialRemovalGate?.id === "material-removal-proof", "package index should expose material-removal production audit gate");
+  assert(packageIndex.productionEvidenceDossier?.productionReadinessAudit?.airRunGate?.id === "air-run-proof", "package index should expose air-run production audit gate");
+  assert(packageIndex.productionEvidenceDossier?.productionReadinessAudit?.fieldPackageGate?.id === "field-package-proof", "package index should expose field package production audit gate");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "operator-runbook.md"), "readFirst missing operator runbook");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "next-action-checklist.md"), "readFirst missing next action checklist");
   assert(packageIndex.filesByPurpose?.readFirst?.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "readFirst missing Linux CAM closed-loop handoff");
@@ -243,6 +252,7 @@ async function main() {
   assert(deliveryManifest.files?.some((file) => file.filename === "opencamlib-candidate-package-validation.json" && file.machineUse?.class === "report-only"), "delivery manifest should expose OpenCAMLib candidate package validation as report-only evidence");
   assert(deliveryManifest.files?.some((file) => file.filename === "opencamlib-candidate-package-bundle.zip" && file.machineUse?.class === "report-only"), "delivery manifest should expose OpenCAMLib candidate package bundle as report-only evidence");
   assert(deliveryManifest.files?.some((file) => file.filename === "safe-trial-execution-plan.json" && file.downloadable), "delivery manifest should expose safe trial execution plan");
+  assert(deliveryManifest.files?.some((file) => file.filename === "field-evidence-proof-chain.json" && file.downloadable), "delivery manifest should expose field evidence proof chain");
   assert(deliveryManifest.files?.some((file) => file.filename === "operator-download-checklist.md" && file.downloadable), "delivery manifest should expose operator download checklist");
   const safeTrialPackageFiles = deliveryManifest.files.filter((file) => isSafeTrialPackageFile(file, deliveryManifest.allowTrialNc));
   assert(safeTrialPackageFiles.some((file) => file.filename === "air-run.nc"), "safe trial package should include air-run.nc");
@@ -251,6 +261,7 @@ async function main() {
   assert(safeTrialPackageFiles.some((file) => file.filename === "next-action-checklist.md"), "safe trial package should include next action checklist");
   assert(safeTrialPackageFiles.some((file) => file.filename === "linux-cam-closed-loop-handoff.md"), "safe trial package should include Linux CAM closed-loop handoff");
   assert(safeTrialPackageFiles.some((file) => file.filename === "production-closure-audit.json"), "safe trial package should include production closure audit JSON");
+  assert(safeTrialPackageFiles.some((file) => file.filename === "field-evidence-proof-chain.json"), "safe trial package should include field evidence proof chain");
   assert(safeTrialPackageFiles.some((file) => file.filename === "production-closure-audit.md"), "safe trial package should include production closure audit markdown");
   assert(safeTrialPackageFiles.some((file) => file.filename === "mvp-operator-status.json"), "safe trial package should include MVP operator status JSON");
   assert(safeTrialPackageFiles.some((file) => file.filename === "mvp-operator-status.md"), "safe trial package should include MVP operator status markdown");
@@ -266,6 +277,7 @@ async function main() {
   assert(safeTrialZipNames.includes("hediao3d-v3-trial/safe-trial-package-manifest.json"), "safe trial package missing package manifest");
   assert(safeTrialZipNames.some((name) => name.endsWith("/safe-trial-execution-plan.json")), "safe trial package zip missing safe trial execution plan");
   assert(safeTrialZipNames.some((name) => name.endsWith("/production-closure-audit.json")), "safe trial package zip missing production closure audit JSON");
+  assert(safeTrialZipNames.some((name) => name.endsWith("/field-evidence-proof-chain.json")), "safe trial package zip missing field evidence proof chain");
   assert(safeTrialZipNames.some((name) => name.endsWith("/production-closure-audit.md")), "safe trial package zip missing production closure audit markdown");
   assert(safeTrialZipNames.some((name) => name.endsWith("/mvp-operator-status.json")), "safe trial package zip missing MVP operator status JSON");
   assert(safeTrialZipNames.some((name) => name.endsWith("/mvp-operator-status.md")), "safe trial package zip missing MVP operator status markdown");
@@ -312,12 +324,18 @@ async function main() {
   assert(mvpOperatorStatus.machine?.axisMapping === "X=长度方向，Y=旋转夹具，Z=刀深/安全高度", "MVP operator status should state exact axis mapping");
   assert(mvpOperatorStatus.files?.readFirst?.includes("mvp-operator-status.md"), "MVP operator status should list itself as read-first");
   assert(mvpOperatorStatus.materialRemovalGate?.id === "material-removal-proof", "MVP operator status should expose material-removal residual gate");
+  assert(mvpOperatorStatus.airRunGate?.id === "air-run-proof", "MVP operator status should expose air-run production audit gate");
+  assert(mvpOperatorStatus.fieldEvidenceGate?.id === "field-package-proof", "MVP operator status should expose field package production audit gate");
   assert(mvpOperatorStatus.requiredEvidence?.some((item) => item.id === "material-removal" && Object.hasOwn(item, "residualEvidenceRequired")), "MVP required evidence should preserve residual evidence requirement");
   assert(mvpOperatorStatusMd.includes("HeDiao3D V3 基本可用版状态报告"), "MVP operator status markdown missing title");
   assert(mvpOperatorStatusMd.includes("允许上机文件"), "MVP operator status markdown missing machine file section");
   assert(mvpOperatorStatusMd.includes("材料去除/残料门禁"), "MVP operator status markdown should show material-removal residual gate");
+  assert(mvpOperatorStatusMd.includes("离料空跑门禁"), "MVP operator status markdown should show air-run gate");
+  assert(mvpOperatorStatusMd.includes("现场同包门禁"), "MVP operator status markdown should show field package binding gate");
   assert(safeTrialExecutionPlan.machine?.axisMapping === "X=长度方向，Y=旋转夹具，Z=刀深/安全高度", "safe trial execution plan should state wrapY axis mapping");
   assert(safeTrialExecutionPlan.productionReadiness?.materialRemovalGate?.id === "material-removal-proof", "safe trial execution plan should carry material-removal residual gate");
+  assert(safeTrialExecutionPlan.productionReadiness?.airRunGate?.id === "air-run-proof", "safe trial execution plan should carry air-run production audit gate");
+  assert(safeTrialExecutionPlan.productionReadiness?.fieldEvidenceGate?.id === "field-package-proof", "safe trial execution plan should carry field package production audit gate");
   assert(safeTrialExecutionPlan.steps?.some((step) => step.id === "rotary-calibration-airrun" && step.files?.includes("rotary-calibration-airrun.nc")), "safe trial plan missing rotary calibration step");
   assert(safeTrialExecutionPlan.steps?.some((step) => step.id === "feedback-and-acceptance" && step.files?.includes("machine-acceptance-checklist.json")), "safe trial plan missing feedback/acceptance step");
   assert(safeTrialExecutionPlan.filePolicy?.neverRunOnMachine?.includes("camotics-preview.nc"), "safe trial plan should forbid CAMotics preview on machine");
@@ -329,12 +347,16 @@ async function main() {
   assert(!operatorRunbook.includes("X/Y或A/Z"), "operator runbook should not use ambiguous axis wording");
   assert(nextActionChecklist.includes("HeDiao3D V3 下一步行动清单"), "next action checklist missing title");
   assert(nextActionChecklist.includes("材料去除/残料门禁"), "next action checklist should show material-removal residual gate");
+  assert(nextActionChecklist.includes("离料空跑门禁"), "next action checklist should show air-run production audit gate");
+  assert(nextActionChecklist.includes("现场同包门禁"), "next action checklist should show field package production audit gate");
   assert(nextActionChecklist.includes("## 证据状态"), "next action checklist missing evidence status section");
   assert(nextActionChecklist.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "next action checklist should state exact wrapY axis mapping");
   assert(nextActionChecklist.includes("禁止上机文件"), "next action checklist should list forbidden machine files");
   assert(linuxCamClosedLoopHandoff.includes("Linux CAM 与安全试雕闭环交接说明"), "closed-loop handoff missing title");
   assert(linuxCamClosedLoopHandoff.includes("native-cam-real-output-bundle.zip"), "closed-loop handoff missing Native CAM upload bundle");
   assert(linuxCamClosedLoopHandoff.includes("camotics-result-bundle.zip"), "closed-loop handoff missing CAMotics result bundle");
+  assert(linuxCamClosedLoopHandoff.includes("离料空跑门禁"), "closed-loop handoff should show air-run production audit gate");
+  assert(linuxCamClosedLoopHandoff.includes("现场同包门禁"), "closed-loop handoff should show field package production audit gate");
   assert(linuxCamClosedLoopHandoff.includes("camotics-preview.nc` 仅用于展开三轴仿真，禁止上机"), "closed-loop handoff should forbid CAMotics preview on machine");
   assert(linuxCamClosedLoopHandoff.includes("正式生产包返回 423"), "closed-loop handoff should explain locked production package");
   assert(operatorDownloadChecklist.includes("HeDiao3D V3 操作员下载核验清单"), "operator download checklist missing title");
@@ -342,6 +364,8 @@ async function main() {
   assert(operatorDownloadChecklist.includes("生产门禁未放行"), "operator download checklist should warn when production is locked");
   assert(operatorDownloadChecklist.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度"), "operator download checklist should state exact wrapY axis mapping");
   assert(operatorDownloadChecklist.includes("CAMotics 上游绑定"), "operator download checklist should show CAMotics upstream binding check");
+  assert(operatorDownloadChecklist.includes("离料空跑门禁"), "operator download checklist should show air-run production audit gate");
+  assert(operatorDownloadChecklist.includes("现场同包门禁"), "operator download checklist should show field package production audit gate");
   assert(operatorDownloadChecklist.includes("候选包预检"), "operator download checklist should mention candidate package validation binding");
   assert(operatorDownloadChecklist.includes("camotics-preview.nc"), "operator download checklist should list never-machine simulation file");
   assert(packageIndex.recommendedSequence?.some((line) => line.includes("X=长度方向，Y=旋转夹具，Z=刀深/安全高度")), "package index recommended sequence should state exact wrapY axis mapping");
@@ -363,6 +387,7 @@ async function main() {
   assert(packageIntegrity.files?.some((file) => file.filename === "open-source-cam-execution-plan.json" && file.sha256), "package integrity missing open-source CAM execution plan hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-unlock-matrix.json" && file.sha256), "package integrity missing production unlock matrix hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-evidence-dossier.json" && file.sha256), "package integrity missing production evidence dossier hash");
+  assert(packageIntegrity.files?.some((file) => file.filename === "field-evidence-proof-chain.json" && file.sha256), "package integrity missing field evidence proof chain hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.json" && file.sha256), "package integrity missing production closure audit hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "production-closure-audit.md" && file.sha256), "package integrity missing production closure audit markdown hash");
   assert(packageIntegrity.files?.some((file) => file.filename === "mvp-operator-status.json" && file.sha256), "package integrity missing MVP operator status JSON hash");
@@ -459,6 +484,7 @@ function isSafeTrialPackageFile(file, allowTrialNc) {
     "production-gate.json",
     "production-unlock-matrix.json",
     "production-evidence-dossier.json",
+    "field-evidence-proof-chain.json",
     "production-closure-audit.json",
     "production-closure-audit.md",
     "mvp-operator-status.json",

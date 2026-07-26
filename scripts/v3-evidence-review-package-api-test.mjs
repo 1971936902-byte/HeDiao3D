@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const baseUrl = process.env.V3_API_BASE ?? "http://127.0.0.1:8787";
-const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb";
+const modelUrl = process.env.V3_SMOKE_MODEL_URL ?? "/meshy-results/material01-meshy.glb";
 const timeoutMs = Number(process.env.V3_SMOKE_TIMEOUT_MS ?? 120000);
 
 const settings = {
@@ -76,12 +76,20 @@ async function main() {
   assert(manifest.policy?.productionUseAllowed === false, "evidence package must not allow production use");
   assert(manifest.policy?.containsMachineNcForProduction === false, "evidence package must declare no production machine NC");
   assert(manifest.policy?.purpose === "evidence-review-only", "manifest purpose should be evidence-review-only");
+  assert(manifest.runbookBoundary?.schema === "hediao3d.runbook-production-boundary.v1", "manifest should expose runbook production boundary");
+  assert(manifest.runbookBoundary?.productionSafe === false, "evidence review manifest runbook boundary must keep production locked");
+  assert(typeof manifest.runbookBoundary?.productionSafeReason === "string", "evidence review manifest should explain runbook production boundary");
   assert(manifest.files?.some((file) => file.filename === "production-gate.json" && /^[a-f0-9]{64}$/.test(file.sha256)), "manifest missing production gate hash");
   assert(manifest.files?.some((file) => file.filename === "package-integrity.json" && /^[a-f0-9]{64}$/.test(file.sha256)), "manifest missing package integrity hash");
   assert(manifest.missing?.includes("camotics-result.json"), "fresh job should show missing CAMotics result evidence");
   assert(manifest.productionEvidenceDossier?.missingEvidenceCount > 0, "manifest should expose production evidence gap count");
   assert(manifest.productionEvidenceDossier?.missingEvidenceTop?.some((item) => item.id === "material-removal-simulation" || item.id === "machine-acceptance"), "manifest should expose top production evidence gaps");
   assert(manifest.productionEvidenceDossier?.fieldEvidenceGaps?.some((item) => item.id === "machine-acceptance" || item.id === "trial-feedback"), "manifest should expose field evidence gaps");
+  assert(manifest.productionEvidenceDossier?.productionReadinessAudit?.allowProductionPackage === false, "manifest should expose production readiness audit lock state");
+  assert(manifest.productionEvidenceDossier?.productionReadinessAudit?.materialRemovalGate?.id === "material-removal-proof", "manifest should expose material-removal production audit gate");
+  assert(Object.hasOwn(manifest.productionEvidenceDossier.productionReadinessAudit.materialRemovalGate, "residualProofCrossCheckStatus"), "manifest should expose material-removal residual proof cross-check status");
+  assert(manifest.productionEvidenceDossier?.productionReadinessAudit?.airRunGate?.id === "air-run-proof", "manifest should expose air-run production audit gate");
+  assert(manifest.productionEvidenceDossier?.productionReadinessAudit?.fieldPackageGate?.id === "field-package-proof", "manifest should expose field package production audit gate");
   assert(manifest.nextEvidence?.some((item) => item.includes("CAMotics Linux")), "manifest should guide CAMotics Linux evidence flow");
 
   const readme = entries.get("hediao3d-v3-evidence/README-EVIDENCE-REVIEW.md").toString("utf8");
@@ -91,6 +99,13 @@ async function main() {
   assert(readme.includes("camotics-result.json"), "README should list missing CAMotics result");
   assert(readme.includes("证据档案缺口"), "README should include production evidence gap section");
   assert(readme.includes("现场证据缺口"), "README should include field evidence gap section");
+  assert(readme.includes("生产审计现场门禁"), "README should include production audit field gate section");
+  assert(readme.includes("Runbook 审查边界"), "README should include runbook production boundary section");
+  assert(readme.includes("productionSafe=false"), "README should preserve production locked runbook boundary");
+  assert(readme.includes("材料去除/残料门禁:"), "README should expose material-removal gate summary");
+  assert(readme.includes("proofCrossCheck="), "README should expose residual proof cross-check status");
+  assert(readme.includes("离料空跑门禁:"), "README should expose air-run gate summary");
+  assert(readme.includes("现场同包门禁:"), "README should expose field package binding gate summary");
 
   const lockedProductionPackage = await getJsonAllowingStatus(`/api/orchestrator/jobs/${encodeURIComponent(job.id)}/production-package`, 423);
   assert(lockedProductionPackage.allowProductionNc === false, "production package must stay locked after evidence review download");

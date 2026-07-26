@@ -380,8 +380,8 @@ Y = 旋转角度 / 360 * rotaryWrapPerRevolutionMm
 
 - 已选定一个佛头 STL/GLB 作为 V3 回归样件：
   - `public/v3-fixtures/buddha-baseline.json`
-  - `/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.glb`
-  - `/meshy-results/019f6a05-c78b-7c70-b07f-ea857a54bea5.stl`
+  - `/meshy-results/material01-meshy.glb`
+  - `/meshy-results/material01-meshy.stl`
   - 校验：`npm run test:v3:buddha-fixture`
 - 固化用户机床 profile：
   - `desktop-3axis-rotary-y`

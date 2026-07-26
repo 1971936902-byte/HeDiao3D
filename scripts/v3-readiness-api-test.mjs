@@ -16,7 +16,7 @@ async function main() {
   assert(latest.latest, "latest readiness report missing");
   validateReadiness(latest.latest, "GET /api/orchestrator/readiness/latest");
   assert(Array.isArray(latest.reports), "readiness report history missing");
-  assert(JSON.stringify(latest.latest).length < 50000, "latest readiness summary is too large");
+  assert(JSON.stringify(latest.latest).length < 48000, "latest readiness summary is too large");
 
   const runbookResult = await getJson("/api/orchestrator/readiness/runbook-result/latest");
   assert(Object.hasOwn(runbookResult, "latest"), "runbook result latest field missing");
@@ -38,6 +38,11 @@ async function main() {
   assert(full.goalAudit.layers.some((layer) => layer.id === "simulation-layer"), "goal audit missing simulation layer");
   assert(full.goalAudit.layers.some((layer) => layer.id === "postprocess-layer"), "goal audit missing postprocess layer");
   assert(full.goalAudit.layers.some((layer) => layer.id === "field-evidence-closure"), "goal audit missing field evidence layer");
+  const fieldEvidenceLayer = full.goalAudit.layers.find((layer) => layer.id === "field-evidence-closure");
+  assert(fieldEvidenceLayer?.evidence?.some((item) => item.includes("材料去除/残料门禁")), "goal audit field layer missing material-removal gate evidence");
+  assert(fieldEvidenceLayer?.evidence?.some((item) => item.includes("proofCrossCheck=")), "goal audit field layer missing residual proof cross-check evidence");
+  assert(fieldEvidenceLayer?.evidence?.some((item) => item.includes("离料空跑门禁")), "goal audit field layer missing air-run gate evidence");
+  assert(fieldEvidenceLayer?.evidence?.some((item) => item.includes("现场同包门禁")), "goal audit field layer missing field package gate evidence");
   assert(full.goalAudit.keepHiddenOrDeferred?.some((item) => /正式生产/.test(item)), "goal audit should keep unsafe production functions hidden");
   assert(full.camServerConfig?.schema === "hediao3d.cam-server-config.v1", "full readiness artifact missing CAM server config");
   assert(full.camServerConfig.adapters?.some((adapter) => adapter.id === full.camServerConfig.selectedEngine), "CAM server config missing selected adapter");
@@ -108,6 +113,10 @@ async function main() {
   assert(markdown.includes("Latest machine acceptance"), "readiness markdown missing machine acceptance summary");
   assert(markdown.includes("Production evidence dossier"), "readiness markdown missing evidence dossier summary");
   assert(markdown.includes("Evidence cross checks"), "readiness markdown missing evidence cross-check summary");
+  assert(markdown.includes("Material-removal production gate"), "readiness markdown missing material-removal production gate summary");
+  assert(markdown.includes("proofCrossCheck="), "readiness markdown missing residual proof cross-check status");
+  assert(markdown.includes("Air-run production gate"), "readiness markdown missing air-run production gate summary");
+  assert(markdown.includes("Field package gate"), "readiness markdown missing field package gate summary");
   assert(markdown.includes("Goal audit"), "readiness markdown missing goal audit summary");
   assert(markdown.includes("camoticsInput="), "readiness markdown missing CAMotics input cross-check status");
   assert(markdown.includes("productionAudit="), "readiness markdown missing production audit cross-check status");
@@ -119,6 +128,10 @@ async function main() {
   assert(goalAuditMarkdown.includes("CAM 引擎层"), "goal audit markdown missing CAM engine layer");
   assert(goalAuditMarkdown.includes("仿真层"), "goal audit markdown missing simulation layer");
   assert(goalAuditMarkdown.includes("现场证据闭环"), "goal audit markdown missing field evidence layer");
+  assert(goalAuditMarkdown.includes("材料去除/残料门禁"), "goal audit markdown missing material-removal gate evidence");
+  assert(goalAuditMarkdown.includes("proofCrossCheck="), "goal audit markdown missing residual proof cross-check evidence");
+  assert(goalAuditMarkdown.includes("离料空跑门禁"), "goal audit markdown missing air-run gate evidence");
+  assert(goalAuditMarkdown.includes("现场同包门禁"), "goal audit markdown missing field package gate evidence");
   assert(goalAuditMarkdown.includes("Keep Hidden Or Deferred"), "goal audit markdown missing hidden/deferred policy");
 
   const camServerConfigArtifact = await fetch(`${baseUrl}${latest.latest.apiArtifacts.camServerConfig}`);
@@ -160,6 +173,10 @@ async function main() {
   assert(runbook.includes("production-evidence-dossier"), "readiness runbook missing evidence dossier step");
   assert(runbook.includes("rotary-calibration-airrun.nc"), "readiness runbook missing rotary calibration air-run evidence");
   assert(runbook.includes("package-integrity.json"), "readiness runbook missing package integrity evidence");
+  assert(runbook.includes("Material-removal production gate"), "readiness runbook missing material-removal production gate echo");
+  assert(runbook.includes("proofCrossCheck="), "readiness runbook missing residual proof cross-check echo");
+  assert(runbook.includes("Air-run production gate"), "readiness runbook missing air-run production gate echo");
+  assert(runbook.includes("Field package gate"), "readiness runbook missing field package gate echo");
   assert(runbook.includes("RESULT_JSON"), "readiness runbook missing machine-readable result path");
   assert(runbook.includes("RESULT_BUNDLE_ZIP"), "readiness runbook missing uploadable result bundle path");
   assert(runbook.includes("v3-acceptance-runbook-result-bundle.zip"), "readiness runbook missing result bundle filename");
@@ -173,7 +190,11 @@ async function main() {
   assert(runbook.includes("RESULT_READINESS_ID"), "readiness runbook missing readiness identity binding");
   assert(runbook.includes("readinessReportId"), "readiness runbook missing readiness report id result field");
   assert(runbook.includes("blockingFailedCount"), "readiness runbook missing blocking failure result field");
+  assert(runbook.includes("runbookReviewSafe"), "readiness runbook missing review-safe result field");
   assert(runbook.includes("productionSafe"), "readiness runbook missing production safety result field");
+  assert(runbook.includes("productionSafe: false"), "readiness runbook must keep productionSafe false at script source");
+  assert(runbook.includes("Runbook execution only proves review-safe Linux evidence"), "readiness runbook should explain review-safe vs production-safe boundary");
+  assert(runbook.includes("runbookReviewSafe=true means the script checks passed for review"), "readiness runbook README should explain review-safe boundary");
   assert(report.acceptancePlan.steps.some((step) => step.id === "native-cam-package-self-check" && step.command === "node native-cam-server-package-self-check.mjs"), "acceptance plan missing Native CAM package self-check step");
   assert(report.acceptancePlan.steps.some((step) => step.id === "native-cam-closed-loop-check" && step.command === "node native-cam-closed-loop-check.mjs"), "acceptance plan missing Native CAM closed-loop check step");
   assert(report.acceptancePlan.steps.some((step) => step.id === "camotics-material-removal-validate" && step.command.includes("camotics-material-removal-validate.mjs")), "acceptance plan missing CAMotics material-removal validator step");
@@ -237,6 +258,9 @@ function validateReadiness(report, label) {
     const review = report.nativeCamRealOutputAcceptance.openCamLibRealCandidate.productionGapReview;
     assert(review.schema === "hediao3d.opencamlib-production-gap-review.v1", `${label} OpenCAMLib production gap review schema mismatch`);
     assert(typeof review.level === "string", `${label} OpenCAMLib production gap review level missing`);
+    assert(typeof review.productionCandidateReady === "boolean", `${label} OpenCAMLib production candidate readiness missing`);
+    assert(typeof review.downstreamProductionEvidenceReady === "boolean", `${label} OpenCAMLib downstream production evidence readiness missing`);
+    assert(review.productionUnlockReady === false, `${label} OpenCAMLib production gap review must not unlock production by itself`);
     assert(typeof review.criticalCount === "number", `${label} OpenCAMLib production gap review critical count missing`);
     assert(typeof review.productionBlockerCount === "number", `${label} OpenCAMLib production gap review production blocker count missing`);
     assert(Array.isArray(review.topGaps), `${label} OpenCAMLib production gap review top gaps missing`);
@@ -324,7 +348,14 @@ function validateReadiness(report, label) {
     if (report.latestEvidenceDossier.crossChecks.productionReadinessAudit) {
       assert(report.latestEvidenceDossier.crossChecks.productionReadinessAudit.schema === "hediao3d.production-readiness-audit.v1", `${label} production readiness audit schema mismatch`);
       assert(typeof report.latestEvidenceDossier.crossChecks.productionReadinessAudit.allowProductionPackage === "boolean", `${label} production readiness audit package flag missing`);
+      assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks.productionReadinessAudit, "materialRemovalGate"), `${label} production readiness audit missing material-removal gate summary`);
+      assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks.productionReadinessAudit.materialRemovalGate ?? {}, "residualClosureStatus"), `${label} material-removal gate missing residual closure status`);
+      assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks.productionReadinessAudit.materialRemovalGate ?? {}, "residualProofCrossCheckStatus"), `${label} material-removal gate missing residual proof cross-check status`);
+      assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks.productionReadinessAudit, "airRunGate"), `${label} production readiness audit missing air-run gate summary`);
+      assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks.productionReadinessAudit, "fieldPackageGate"), `${label} production readiness audit missing field package gate summary`);
+      assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks.productionReadinessAudit.fieldPackageGate ?? {}, "fieldCompletenessStatus"), `${label} field package gate missing field completeness status`);
     }
+    assert(Object.hasOwn(report.latestEvidenceDossier.crossChecks, "fieldEvidenceCompletenessStatus"), `${label} evidence dossier missing field completeness summary`);
     assert(report.acceptancePlan.steps.some((step) => step.id === "production-evidence-dossier"), `${label} acceptance plan missing evidence dossier step`);
   }
 }
@@ -338,6 +369,8 @@ function validateRunbookResult(result, label) {
   assert(typeof result.stepCount === "number", `${label} stepCount missing`);
   assert(typeof result.commandCount === "number", `${label} commandCount missing`);
   assert(typeof result.productionSafe === "boolean", `${label} productionSafe missing`);
+  assert(typeof result.runbookReviewSafe === "boolean", `${label} runbookReviewSafe missing`);
+  assert(typeof result.productionSafeReason === "string", `${label} productionSafeReason missing`);
   assert(typeof result.identityValid === "boolean", `${label} identityValid missing`);
   assert(Object.hasOwn(result, "readinessReportId"), `${label} readinessReportId missing`);
   assert(Object.hasOwn(result, "readinessCreatedAt"), `${label} readinessCreatedAt missing`);

@@ -41,6 +41,10 @@ try {
   const readyReport = JSON.parse(readFileSync(reportPath, "utf8"));
   assert(readyReport.level === "ready", `expected ready, got ${readyReport.level}`);
   assert(readyReport.productionCandidateEligible === true, "ready report should be production candidate eligible");
+  assert(readyReport.productionCandidatePromotion?.schema === "hediao3d.opencamlib-production-candidate-promotion.v1", "ready report should include production candidate promotion audit");
+  assert(readyReport.productionCandidatePromotion?.status === "production-candidate-ready", "ready promotion audit should be production-candidate-ready");
+  assert(readyReport.productionCandidatePromotion?.productionUnlockReady === false, "promotion audit must never unlock production NC");
+  assert(readyReport.productionCandidatePromotion?.blockingCount === 0, "ready promotion audit should have no blocking criteria");
   assert(readyReport.checks.some((check) => check.id === "identity-neutral" && check.status === "pass"), "neutral identity should pass");
   assert(readyReport.checks.some((check) => check.id === "contact-algorithm-real" && check.status === "pass"), "real contact algorithm evidence should pass");
   assert(readyReport.checks.some((check) => check.id === "contact-residual-gouge" && check.status === "pass"), "residual gouge evidence should pass");
@@ -48,6 +52,43 @@ try {
   assert(readyReport.checks.some((check) => check.id === "contact-path-coverage-cross" && check.status === "pass"), "cross path coverage evidence should pass");
   assert(readyReport.checks.some((check) => check.id === "protected-zones-present" && check.status === "pass"), "protected zone evidence should pass");
   assert(readyReport.checks.some((check) => check.id === "protected-zones-no-violations" && check.status === "pass"), "protected zone violation check should pass");
+
+  const externalProofContactPath = join(workDir, "external-proof-contact-report.json");
+  const externalProofNeutralPath = join(workDir, "external-proof-neutral-toolpath.json");
+  const externalProofValidationPath = join(workDir, "camotics-result-local-validation.json");
+  const externalProofNeutral = createNeutral(externalProofContactPath);
+  const externalProofSha = sha256Json(externalProofNeutral);
+  const externalProofContact = createContact({
+    modelSha: sha256File(modelPath),
+    planSha: sha256File(planPath),
+    neutralSha: externalProofSha,
+    productionCandidate: true,
+    previewScaffold: false,
+    externalResidualProofRequired: true
+  });
+  externalProofNeutral.cutterContactReport = externalProofContact;
+  writeFileSync(externalProofNeutralPath, JSON.stringify(externalProofNeutral, null, 2), "utf8");
+  writeFileSync(externalProofContactPath, JSON.stringify(externalProofContact, null, 2), "utf8");
+  writeFileSync(externalProofValidationPath, JSON.stringify(createCamoticsLocalValidation(), null, 2), "utf8");
+  const externalProof = spawnSync(node, [
+    validator,
+    "--neutral", externalProofNeutralPath,
+    "--plan", planPath,
+    "--model", modelPath,
+    "--contact", externalProofContactPath,
+    "--camotics-local-validation", externalProofValidationPath
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(externalProof.status === 0, `external residual proof should support ready contact promotion, got ${externalProof.status}: ${externalProof.stdout}`);
+  const externalProofReport = JSON.parse(externalProof.stdout);
+  assert(externalProofReport.productionCandidatePromotion?.status === "production-candidate-ready", `bound external residual proof should allow production-candidate promotion: ${JSON.stringify(externalProofReport.productionCandidatePromotion)}`);
+  assert(externalProofReport.productionCandidatePromotion?.productionUnlockReady === false, "external residual proof must not unlock production NC");
+  assert(externalProofReport.checks.some((check) => check.id === "contact-residual-external-proof-chain" && check.status === "pass"), "external residual proof chain should be checked");
+  assert(externalProofReport.checks.some((check) => check.id === "contact-residual-gouge" && check.status === "pass" && check.evidenceSource === "camotics-local-validation"), "external residual proof should supply gouge metric");
+  assert(externalProofReport.checks.some((check) => check.id === "contact-residual-measured-or-validated" && check.status === "pass" && check.externalProofReady === true), "external residual proof should supply measured/material-removal basis");
 
   const previewNeutralPath = join(workDir, "preview-neutral-toolpath.json");
   const previewContactPath = join(workDir, "preview-contact-report.json");
@@ -101,6 +142,34 @@ try {
   assert(weak.status === 3, `weak contact evidence should fail strict mode, got ${weak.status}: ${weak.stdout}`);
   const weakReport = JSON.parse(weak.stdout);
   assert(weakReport.errors.some((error) => /hitRate|过切|gouge|maxGouge|step-to-cutter|pathCoverage|coverage/i.test(error)), "weak contact evidence should report quality metric failures");
+  assert(weakReport.productionCandidatePromotion?.status === "blocked", "weak contact promotion audit should be blocked");
+  assert(weakReport.productionCandidatePromotion?.blockingCriteria?.some((item) => item.id === "contact-sampling-hit-rate"), "weak promotion audit should name failed hit-rate criterion");
+  assert(weakReport.productionCandidatePromotion?.nextActions?.some((item) => /sampling/i.test(item)), "weak promotion audit should provide sampling next action");
+
+  const unsafeResidualClaimContactPath = join(workDir, "unsafe-residual-claim-contact-report.json");
+  const unsafeResidualClaimNeutralPath = join(workDir, "unsafe-residual-claim-neutral-toolpath.json");
+  const unsafeResidualClaimNeutral = createNeutral(unsafeResidualClaimContactPath);
+  const unsafeResidualClaimSha = sha256Json(unsafeResidualClaimNeutral);
+  const unsafeResidualClaimContact = createContact({
+    modelSha: sha256File(modelPath),
+    planSha: sha256File(planPath),
+    neutralSha: unsafeResidualClaimSha,
+    productionCandidate: true,
+    previewScaffold: false,
+    unsafeResidualProductionClaim: true
+  });
+  unsafeResidualClaimNeutral.cutterContactReport = unsafeResidualClaimContact;
+  writeFileSync(unsafeResidualClaimNeutralPath, JSON.stringify(unsafeResidualClaimNeutral, null, 2), "utf8");
+  writeFileSync(unsafeResidualClaimContactPath, JSON.stringify(unsafeResidualClaimContact, null, 2), "utf8");
+  const unsafeResidualClaim = spawnSync(node, [validator, "--neutral", unsafeResidualClaimNeutralPath, "--plan", planPath, "--model", modelPath, "--contact", unsafeResidualClaimContactPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    windowsHide: true
+  });
+  assert(unsafeResidualClaim.status === 3, `unsafe residual production claim should fail strict mode, got ${unsafeResidualClaim.status}: ${unsafeResidualClaim.stdout}`);
+  const unsafeResidualClaimReport = JSON.parse(unsafeResidualClaim.stdout);
+  assert(unsafeResidualClaimReport.checks.some((check) => check.id === "contact-residual-production-claim" && check.status === "fail" && check.unsafeProductionClaim === true), "unsafe residual production claim should be explicit in failed checks");
+  assert(unsafeResidualClaimReport.errors.some((error) => /production residual evidence|measured|swept-volume|material-removal/i.test(error)), "unsafe residual production claim should explain missing measured/material-removal proof");
 
   const missingProtectedContactPath = join(workDir, "missing-protected-contact-report.json");
   const missingProtectedNeutralPath = join(workDir, "missing-protected-neutral-toolpath.json");
@@ -162,6 +231,9 @@ try {
   assert(experimentalReport.level === "review", `experimental real API should be review, got ${experimentalReport.level}`);
   assert(experimentalReport.evidenceClass === "experimental-real-api", "experimental real API evidence class mismatch");
   assert(experimentalReport.productionCandidateEligible === false, "experimental real API must not be production eligible");
+  assert(experimentalReport.productionCandidatePromotion?.status === "blocked", "experimental promotion audit should remain blocked");
+  assert(experimentalReport.productionCandidatePromotion?.evidenceClass === "experimental-real-api", "experimental promotion audit should preserve evidence class");
+  assert(experimentalReport.productionCandidatePromotion?.nextActions?.some((item) => /experimental-real-api/.test(item)), "experimental promotion audit should explain experimental boundary");
   assert(experimentalReport.checks.some((check) => check.id === "experimental-real-api-boundary" && check.status === "pass"), "experimental real API boundary check should pass when production is not expected");
   assert(experimentalReport.warnings.some((warning) => /postprocessEligible|productionCandidate|hitRate|residual|experimental/i.test(warning)), "experimental real API should carry review warnings");
 
@@ -208,7 +280,7 @@ function createNeutral(contactPath) {
   };
 }
 
-function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false, experimental = false, omitProtectedZones = false }) {
+function createContact({ modelSha, planSha, neutralSha, productionCandidate, previewScaffold, weakEvidence = false, experimental = false, omitProtectedZones = false, unsafeResidualProductionClaim = false, externalResidualProofRequired = false }) {
   return {
     schema: "hediao3d.opencamlib-cutter-contact-report.v1",
     jobId: "contact-output-validate-test",
@@ -246,13 +318,27 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
     },
     ...(experimental ? {} : {
       residualMaterial: {
-        measured: true,
-        validationBasis: "swept-volume-validated-fixture",
-        maxGougeMm: weakEvidence ? 0.12 : 0.01,
-        maxUndercutMm: weakEvidence ? 0.18 : 0.03,
+        measured: !unsafeResidualProductionClaim && !externalResidualProofRequired,
+        validationBasis: unsafeResidualProductionClaim || externalResidualProofRequired ? "engineering-estimate" : "swept-volume-validated-fixture",
+        productionResidualEvidenceReady: unsafeResidualProductionClaim,
+        ...(externalResidualProofRequired ? {} : {
+          maxGougeMm: weakEvidence ? 0.12 : 0.01,
+          maxUndercutMm: weakEvidence ? 0.18 : 0.03
+        }),
         residualVolumeMm3: weakEvidence ? 6.5 : 0.4
       }
     }),
+    ...(unsafeResidualProductionClaim ? {
+      materialRemovalReadiness: {
+        schema: "hediao3d.opencamlib-material-removal-readiness.v1",
+        readyForMaterialRemovalSimulation: true,
+        productionResidualEvidenceReady: true,
+        simulationQuality: {
+          productionEvidenceAllowed: false
+        },
+        missingForProduction: ["camotics-result.json or equivalent material-removal result"]
+      }
+    } : {}),
     tolerances: {
       maxGougeMm: 0.03,
       maxUndercutMm: 0.08
@@ -278,6 +364,47 @@ function createContact({ modelSha, planSha, neutralSha, productionCandidate, pre
       postprocessEligible: productionCandidate,
       productionCandidate,
       summary: "OpenCAMLib contact output validation fixture."
+    }
+  };
+}
+
+function createCamoticsLocalValidation() {
+  return {
+    schema: "hediao3d.camotics-result-local-validation.v1",
+    ok: true,
+    level: "ready",
+    residualValidation: {
+      schema: "hediao3d.residual-validation.v1",
+      status: "ready",
+      productionResidualEvidenceReady: true,
+      unsafeProductionClaim: false,
+      measured: false,
+      validationBasis: "material-removal-validated",
+      evidenceClass: "swept-volume",
+      maxGougeMm: 0.01,
+      maxUndercutMm: 0.03,
+      maxResidualStockMm: 0.06
+    },
+    residualProofChain: {
+      schema: "hediao3d.camotics-residual-proof-chain.v1",
+      status: "production-residual-proof-bound",
+      productionResidualEvidenceReady: true,
+      unsafeProductionClaim: false,
+      upstreamCamEvidence: {
+        status: "matched",
+        candidatePackageStatus: "matched",
+        machineFitStatus: "matched",
+        materialReadinessStatus: "matched"
+      },
+      residualValidation: {
+        status: "ready",
+        measured: false,
+        validationBasis: "material-removal-validated",
+        evidenceClass: "swept-volume",
+        maxGougeMm: 0.01,
+        maxUndercutMm: 0.03,
+        maxResidualStockMm: 0.06
+      }
     }
   };
 }
